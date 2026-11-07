@@ -1,8 +1,11 @@
 # M0 agent task contracts
 
-Document ID: `UDG-CONTRACTS-M0-001`  
-Version: 1.0, repository edition 1  
-Scope: UDG-001 through UDG-SPIKE-003 only  
+Document ID: `UDG-CONTRACTS-M0-001`
+
+Version: 1.0, repository edition 1
+
+Scope: UDG-001 through UDG-SPIKE-003 only
+
 Planning content is available. Game implementation has not begun and no validation gate has run.
 
 ## Start an agent assignment

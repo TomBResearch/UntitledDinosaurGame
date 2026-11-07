@@ -1,7 +1,9 @@
 # Contracts adoption record
 
-Status: **Pending technical adoption**  
-Implementation assignment: **None**  
+Status: **Pending technical adoption**
+
+Implementation assignment: **None**
+
 Integration owner: **Not assigned**
 
 The user authorised creating and publishing this repository planning structure. That is not a signature accepting each proposed technical refinement or permission to begin the game implementation. Preserve this distinction when assigning tasks.
