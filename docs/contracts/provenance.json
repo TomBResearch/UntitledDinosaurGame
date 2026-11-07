@@ -1,0 +1,27 @@
+{
+  "documentId": "UDG-CONTRACTS-M0-001",
+  "version": "1.0",
+  "repositoryEdition": 1,
+  "sourceContractsSha256": "e4f44bb295c869485d6ebc8b13ed94fdf5111de3c96b55e4f9f8f2537cf86bc7",
+  "baseline": {
+    "documentId": "UDG-SPEC-M0-002",
+    "path": "docs/specifications/UDG-SPEC-M0-002.md",
+    "sha256": "b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf",
+    "originalGitBlob": "f0f39faabd1fc8602f41d738784c5294781878ca",
+    "originalCommit": "26f9dc854dc160bae18b582222fd73ae095cae82",
+    "originalPath": "README.md"
+  },
+  "packagingChanges": [
+    "Split monograph into task/shared-contract files",
+    "Replace numbered cross references with repository links",
+    "Add root and local scoped agent instructions",
+    "Add truthful adoption/gate status and templates",
+    "Relocate baseline byte-for-byte and provide root navigation"
+  ],
+  "implementationStarted": false,
+  "gateDecisions": {
+    "A": "Not Run",
+    "B": "Not Run",
+    "C": "Not Run"
+  }
+}

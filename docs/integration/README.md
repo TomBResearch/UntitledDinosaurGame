@@ -1,0 +1,16 @@
+# Third party integration validation
+
+- [Colyseus validation](colyseus.md): exact package/API probes, acknowledgement and prediction lifecycle, safe mode handoff.
+- [Rapier and Recast validation](engines.md): engine identity, state adoption, construction order and binary compatibility.
+- [Gate A task](../contracts/UDG-SPIKE-001.md), [Gate B task](../contracts/UDG-SPIKE-002.md), [Gate C task](../contracts/UDG-SPIKE-003.md).
+- [Official reference sources](../references.md).
+
+## Current gate status
+
+| Gate | Status | Decision record to be produced by its task |
+| --- | --- | --- |
+| A | Not Run | `docs/integration/gate-a.md` |
+| B | Not Run | `docs/integration/gate-b.md` |
+| C | Not Run | `docs/integration/gate-c.md` |
+
+The future decision files do not exist yet. Creating a placeholder PASS would misrepresent evidence. Pin dependencies in the assigned foundation tasks and record installed declarations plus runtime probes. Documentation references establish candidates, not successful project integration.
