@@ -8,6 +8,8 @@ Scope: UDG-001 through UDG-SPIKE-003 only
 
 Planning content is available. Game implementation has not begun and no validation gate has run.
 
+These contracts elaborate the current v0.2 architecture baseline. Their v1.0 number belongs to the contracts document series and does not replace the specification. See the [current plan and version guide](../specifications/README.md) and [adoption record](adoption.md) before treating a proposed refinement as approved.
+
 ## Start an agent assignment
 
 1. Read the root [AGENTS.md](../../AGENTS.md).

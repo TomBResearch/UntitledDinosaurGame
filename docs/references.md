@@ -4,7 +4,7 @@
 
 ### 21.2 Source record and vendor references
 
-S1. Untitled Dinosaur Game M0 Technical Specification v0.2, document UDG-SPEC-M0-002, 7 November 2026, supplied as README.md. Sections 2-10 establish the baseline rules; sections 11-13 establish gates and task order; sections 14-16 establish unresolved decisions and governance. The integration owner must record the approved source hash in the adoption record before task assignment. Source statements are design requirements, not evidence that their implementation passed.
+S1. [Untitled Dinosaur Game M0 Technical Specification v0.2](specifications/UDG-SPEC-M0-002.md), document UDG-SPEC-M0-002, 7 November 2026, originally supplied as README.md. This remains the current architecture baseline; see the [current plan and version guide](specifications/README.md). Sections 2-10 establish the baseline rules; sections 11-13 establish gates and task order; sections 14-16 establish unresolved decisions and governance. The source hash is recorded in [adoption](contracts/adoption.md) and [provenance](contracts/provenance.json). Source statements are design requirements, not evidence that their implementation passed.
 
 V1. Colyseus Server Input and Fixed Timestep. https://docs.colyseus.io/netcode/server-input . Inspected 7 November 2026. Supports the named fixed-step/input facilities and documented frame-consumption choices. Installed declarations and probes remain the task-level authority for exact calls.
 

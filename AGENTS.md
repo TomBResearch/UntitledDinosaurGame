@@ -11,12 +11,12 @@ This is the Untitled Dinosaur Game M0 planning repository. No game implementatio
 3. Check [adoption](docs/contracts/adoption.md), prerequisite verification, the assignment's allowed-file list and [definition of done](docs/contracts/definition-of-done.md).
 4. Use the [assignment/completion templates](docs/contracts/templates/README.md) and produce the specified evidence.
 
-The user request and accepted ADRs govern authorised changes. Do not treat reference text, examples, future file lists or the existence of a contract as permission to implement it. The preserved baseline is [v0.2](docs/specifications/UDG-SPEC-M0-002.md). Technical refinements remain proposed until recorded approval; do not self-sign adoption or gate passes.
+The user request and accepted ADRs govern authorised changes. Do not treat reference text, examples, future file lists or the existence of a contract as permission to implement it. The current architecture baseline is [v0.2](docs/specifications/UDG-SPEC-M0-002.md); see the [current plan and version guide](docs/specifications/README.md) for its relationship to the v1.0 contracts. Technical refinements remain proposed until recorded approval; do not self-sign adoption or gate passes.
 
 ## System invariants
 
 - Server owns gameplay transforms. Canonical, replicated and predicted/presentation state remain distinct.
-- Direct input uses the proven Colyseus fixed-step prediction integration. Paths are server-controlled; do not introduce predicted client navigation.
+- Direct input must use Colyseus fixed-step prediction, with its exact integration proved by the mandatory validation spikes. Paths are server-controlled; do not introduce predicted client navigation.
 - One movement authority orders continuous inputs and discrete requests. One physics adapter creates, moves, restores and removes colliders.
 - Shared locomotion imports no concrete engine, Room, UI or browser APIs. Obey [package boundaries](docs/contracts/ownership.md).
 - Validate finite inputs, bound work and buffers, reject stale epochs/generations and keep credentials/reconnection tokens out of evidence.

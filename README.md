@@ -8,7 +8,7 @@ Browser-based prehistoric RPG planning repository.
 
 - **For an agent:** read [AGENTS.md](AGENTS.md), then the specific [task contract](docs/contracts/README.md) you are assigned. Each task links only to the shared rules it needs.
 - **For the project owner:** review [adoption status](docs/contracts/adoption.md) and assign [UDG-001](docs/contracts/UDG-001.md) when its planning decisions are accepted. Publishing this bundle does not assign implementation work.
-- **For architecture context:** read the preserved [M0 Technical Specification v0.2](docs/specifications/UDG-SPEC-M0-002.md).
+- **For the current project plan:** read the [plan and version guide](docs/specifications/README.md). The [M0 Technical Specification v0.2](docs/specifications/UDG-SPEC-M0-002.md) is the current architecture baseline; the v1.0 agent contracts elaborate it into work packages.
 
 ## Repository map
 
@@ -19,7 +19,7 @@ Browser-based prehistoric RPG planning repository.
 | [docs/integration/](docs/integration/README.md) | Colyseus, Rapier and Recast validation rules and gate status |
 | [docs/validation/](docs/validation/README.md) | Fixtures, thresholds, workloads and evidence requirements |
 | [docs/adr/](docs/adr/README.md) | Architecture-conflict escalation and decision template |
-| [docs/specifications/](docs/specifications/README.md) | Preserved source baseline and identity |
+| [docs/specifications/](docs/specifications/README.md) | Current plan, document version guide and preserved architecture baseline |
 | apps/, packages/, tools/, assets/, tests/ | Scoped AGENTS.md instructions for future implementation work |
 
 ## Scope and commands

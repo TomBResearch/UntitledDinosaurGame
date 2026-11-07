@@ -27,4 +27,6 @@ The proposal definitions and deadlines have one owner: [scope and authority](sco
 
 Baseline SHA-256: `b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf`
 
+The baseline is [M0 Technical Specification v0.2](../specifications/UDG-SPEC-M0-002.md). The [current plan and version guide](../specifications/README.md) distinguishes that architecture baseline from these v1.0 agent contracts. Restoring the baseline and clarifying navigation on 7 November 2026 does not change the pending decisions above, assign implementation work or pass a gate.
+
 The [contract checksum manifest](checksums.json) identifies this edition's planning files. Future approvals pin a Git commit and manifest digest rather than claiming an unchanged bundle after edits. Task assignment and completion records are outside this edition's immutable manifest; they must pin their own reviewed commits.

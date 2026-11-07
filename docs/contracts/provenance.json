@@ -23,5 +23,25 @@
     "A": "Not Run",
     "B": "Not Run",
     "C": "Not Run"
-  }
+  },
+  "currentPlanPath": "docs/specifications/README.md",
+  "maintenanceRevision": 1,
+  "maintenance": [
+    {
+      "date": "2026-11-07",
+      "reason": "Restore the current architecture baseline after accidental removal and clarify independent specification and contracts version series",
+      "baselineRestoredFromCommit": "98bba21e74617d91cddece3e62f61e938a978280",
+      "reviewedRepositoryHead": "8c484cd4e8967c5520316f206b448aaacb715a27",
+      "baselineContentChanged": false,
+      "technicalRefinementsApproved": false,
+      "implementationStarted": false,
+      "changes": [
+        "Restore UDG-SPEC-M0-002 byte-for-byte",
+        "Expand specification README into current plan and version guide",
+        "Align repository entry points, scope, source references and adoption status",
+        "Clarify that Colyseus integration still requires validation",
+        "Refresh planning-file checksums"
+      ]
+    }
+  ]
 }

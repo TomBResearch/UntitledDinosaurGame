@@ -8,6 +8,6 @@
 | [Movement authority](movement-authority.md) | Input cutoff/order, generations, transitions, pending routes and arbitration fixtures |
 | [Navigation](navigation.md) | Navigation and asset contract entry points; ownership map |
 
-These are proposed UDG contracts. They are not vendor SDK method declarations. Concrete Colyseus/Rapier/Recast signatures must be validated in the pinned-package probes. The preserved [v0.2 baseline](../specifications/UDG-SPEC-M0-002.md) remains historical design authority; operational refinements are tracked in [adoption](../contracts/adoption.md).
+These are proposed UDG contracts. They are not vendor SDK method declarations. Concrete Colyseus/Rapier/Recast signatures must be validated in the pinned-package probes. The preserved [v0.2 baseline](../specifications/UDG-SPEC-M0-002.md) remains the current architecture baseline; operational refinements are tracked in [adoption](../contracts/adoption.md). The [current plan and version guide](../specifications/README.md) explains the separate specification and contracts versions.
 
 Each requirement has a single operational owner. Link to it when writing task/local instructions. Do not maintain copied versions in applications or package READMEs.

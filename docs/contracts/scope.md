@@ -14,6 +14,8 @@ All implementation paths are proposed paths relative to this repository root. Ex
 
 MUST is mandatory; SHOULD requires a recorded reason for deviation; MAY is optional. v0.2 is the adopted design baseline. This document supplies proposed executable refinements where v0.2 leaves details open. Refinements are labelled P01 to P10. They become binding for assigned work after the integration owner approves a contracts adoption record. An agent must not silently reinterpret a contradiction as permission to change the baseline.
 
+The specification and contracts have separate version series. Contracts v1.0 elaborate specification v0.2 and do not supersede it. The [current plan and version guide](../specifications/README.md) identifies the maintained documents; [adoption](adoption.md) records which proposed refinements actually take effect.
+
 The precedence order is the current authorised task and approved ADRs, the adopted contracts revision, then v0.2 for matters not refined here. A genuine conflict must block only the affected task and its descendants until resolved. Vendor declarations and executable behaviour establish what an SDK supports; they do not grant authority to change UDG requirements.
 
 ### 1.3 Proposed refinements requiring adoption
