@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "taskId": "UDG-001",
-  "runId": "UDG-001-2026-11-08T11-31-12-682Z-c5acde09",
-  "generatedAt": "2026-11-08T11:35:22.722Z",
-  "generatorCommand": "pnpm evidence:summary -- --run <bundle> --out <file> (bundle UDG-001-2026-11-08T11-31-12-682Z-c5acde09)",
+  "runId": "UDG-001-2026-11-08T11-36-22-801Z-50205c0b",
+  "generatedAt": "2026-11-08T11:36:36.605Z",
+  "generatorCommand": "pnpm evidence:summary -- --run <bundle> --out <file> (bundle UDG-001-2026-11-08T11-36-22-801Z-50205c0b)",
   "durableStorage": {
-    "location": "/workspace/udg-evidence/UDG-001-2026-11-08T11-31-12-682Z-c5acde09",
+    "location": "/workspace/udg-evidence/UDG-001-2026-11-08T11-36-22-801Z-50205c0b",
     "note": "Raw bundle retained outside Git per clarification C-03. The hashes below identify the retained bytes; a mismatch means the stored bundle is not the run this summary describes."
   },
   "verification": {
@@ -14,7 +14,7 @@
     "issueCount": 0
   },
   "status": "PASS",
-  "implementationSha": "c5acde09e96c009aaaad88ff556b9a52b087eace",
+  "implementationSha": "50205c0b8c9a0c8731d5c390029c2d1f8adac6e2",
   "branch": "main",
   "workingTreeDirty": false,
   "prerequisiteShas": [
@@ -42,7 +42,7 @@
     "UDG-001-strict-type-errors": "bd4d0988ddb11b9239904ef5f6bb381d9bccff8167a111c83b012fb44738ffb8:da4b844063b8abb6"
   },
   "testCounts": {
-    "tests": 41,
+    "tests": 42,
     "failures": 0,
     "errors": 0,
     "skipped": 0
@@ -50,7 +50,7 @@
   "suites": [
     {
       "name": "vitest",
-      "tests": 41,
+      "tests": 42,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
@@ -62,42 +62,42 @@
     {
       "label": "install-frozen",
       "exitCode": 0,
-      "durationMs": 55
+      "durationMs": 53
     },
     {
       "label": "typecheck",
       "exitCode": 0,
-      "durationMs": 2677
+      "durationMs": 2687
     },
     {
       "label": "lint",
       "exitCode": 0,
-      "durationMs": 1475
+      "durationMs": 1417
     },
     {
       "label": "test",
       "exitCode": 0,
-      "durationMs": 2328
+      "durationMs": 2332
     },
     {
       "label": "build",
       "exitCode": 0,
-      "durationMs": 1493
+      "durationMs": 1518
     },
     {
       "label": "test-boundaries",
       "exitCode": 0,
-      "durationMs": 840
+      "durationMs": 824
     },
     {
       "label": "test-fixtures",
       "exitCode": 0,
-      "durationMs": 832
+      "durationMs": 845
     },
     {
       "label": "test-contract-UDG-001",
       "exitCode": 0,
-      "durationMs": 2323
+      "durationMs": 2353
     }
   ],
   "measured": {
@@ -190,7 +190,9 @@
       "rejectsPathEscape": true,
       "rejectsSelfReportedSanitisationFailure": true,
       "machinePathAliasing": true,
-      "junitParser": true
+      "junitParser": true,
+      "summaryCommitted": true,
+      "summaryArtefacts": 21
     },
     "planning": {
       "checksumsMatch": true,
@@ -205,7 +207,7 @@
       "failingCommands": [],
       "sanitisationFailures": [],
       "pnpmStoreRecorded": true,
-      "totalDurationMs": 12023,
+      "totalDurationMs": 12029,
       "keepGoing": false
     }
   },
@@ -216,33 +218,33 @@
   "artifacts": [
     {
       "path": "boundary-report.json",
-      "sha256": "a03048511c96f3e274b8312c3152d76c9b4560eab40eedf7321e9a669bf21d32",
+      "sha256": "7f29d6bcc43eecdbce07312c5f18dd3b16dca9b7e0a8021a27657cb19dc75412",
       "bytes": 253
     },
     {
       "path": "build.log",
-      "sha256": "86d8c46dd9d88e4ca50637b5bb8e7eaac4a0c28c05bbda732f071aee64df617f",
+      "sha256": "ac0d2926294f09809b444819bdac13d38a35c24c58bbd4a04a79ada068540480",
       "bytes": 774
     },
     {
       "path": "checksums.sha256",
-      "sha256": "ec19a0fa031e202356583139910953e49ab0f37720599d28fc09056cf5cc10a3",
+      "sha256": "001f5527f0190c8794f7df7545a0a8152ce41020661e01efcf6d87b5bbad84c8",
       "bytes": 1802
     },
     {
       "path": "commands.json",
-      "sha256": "159b1b10bd8ffa3e44a243214b34a1c41b1132067fb9e54d594e9f90d8966b4d",
+      "sha256": "645f457a8a76cd625faed4601464716059eb408aaacd4c029ab316a17cfe7a2f",
       "bytes": 3759
     },
     {
       "path": "environment.json",
-      "sha256": "da34e2634f02de0a6c96194e555259ac1980b09202ffc8a3568271b6d075be65",
+      "sha256": "1934a276422b24cb9484fb4eee1447fe7cd07cecffac0b7362b7c32118a4e0b5",
       "bytes": 656
     },
     {
       "path": "junit.xml",
-      "sha256": "fac19d37b7930b807e097069379748c58c3906a787cdc654be771686883ef133",
-      "bytes": 8947
+      "sha256": "86b389d37678ffd0360748018e3be54ef7aeb6bdd32a218821c4939da285cc3a",
+      "bytes": 9195
     },
     {
       "path": "logs/install-frozen.stderr.log",
@@ -251,7 +253,7 @@
     },
     {
       "path": "logs/install-frozen.stdout.log",
-      "sha256": "a203d4a838216678ba9fbd409a700ea43a4e8e671146b88bf52f250a02b19ea6",
+      "sha256": "2f52c63c7cc25ca610b9cebc5e8867fc08d17c1f6ac9d5301f147488a03c2318",
       "bytes": 383
     },
     {
@@ -281,7 +283,7 @@
     },
     {
       "path": "logs/test-contract-UDG-001.stdout.log",
-      "sha256": "e7f7eac276a08b37abf390f5a4dda52210c1c7c9cc2bf5b1df9631150c12abc9",
+      "sha256": "08078c3d5c2cc58b66aec31a12d986c177d624f980129b39f3ca91ee143b9fa4",
       "bytes": 271
     },
     {
@@ -301,8 +303,8 @@
     },
     {
       "path": "logs/test.stdout.log",
-      "sha256": "22113147f0fb8aecec67b95c8db5d013b14588b331d6d236af2967b00a63803f",
-      "bytes": 260
+      "sha256": "12c0c0f294fe0282edaa053683ba770e165ed90d048a606f74a101d04d19353d",
+      "bytes": 355
     },
     {
       "path": "logs/typecheck.stderr.log",
@@ -311,13 +313,13 @@
     },
     {
       "path": "logs/typecheck.stdout.log",
-      "sha256": "7da428fbb9e3194afd70d4bb2ca94dc50971071b1e89c6afc287ee2be6665c4b",
+      "sha256": "2fb331fd03af113193407169ae5cc6accd0d055f6840861e65d543b6a259bbb2",
       "bytes": 712
     },
     {
       "path": "report.json",
-      "sha256": "7ecf76fbfcb5c83190094c17e3b7363d8fb3dae4793fc9568900db4eb5d86dea",
-      "bytes": 11670
+      "sha256": "9fb9ba9df66d8ccd865a805cc508d76b2eed4ba0af02d4ae5bcc90c9ffddb48d",
+      "bytes": 11821
     }
   ]
 }
