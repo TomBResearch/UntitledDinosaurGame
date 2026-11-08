@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "1.0.0",
+  "fixtureId": "UDG-001-boundaries-forbidden-engine",
+  "kind": "dependency-boundaries",
+  "ownerTask": "UDG-001",
+  "configHash": "141ad56e3f81c2321515769ba93353dd2e3982c1749e8a3dbc6d44170bbf71af",
+  "seed": null,
+  "note": "Shared locomotion may not import a concrete engine, and only @udg/server, @udg/client and @udg/load-test may touch the schema entry point. Babylon is prohibited inside the physics adapter.",
+  "expectation": "reject",
+  "expectedRuleIds": [
+    "BOUNDARY-ENGINE-FORBIDDEN",
+    "BOUNDARY-SCHEMA-INTO-DOMAIN"
+  ],
+  "files": [
+    {
+      "path": "packages/physics/package.json",
+      "sha256": "8c914a849935779e22167f351c249c3684ead3edbe746a5a1beaf658dc19ec78"
+    },
+    {
+      "path": "packages/physics/src/move.ts",
+      "sha256": "01d7541945e64483aa81a53b0d5a76196dd856560aac5ed8bae9026da8166cb2"
+    },
+    {
+      "path": "packages/simulation/package.json",
+      "sha256": "e423ad7724839fdde8e01f7ac0031bf1158af28cc539dab9e7cdf197b5b78a6a"
+    },
+    {
+      "path": "packages/simulation/src/state.ts",
+      "sha256": "03cc502fdcb6231edd154e516d5a45a87126c96024ad522d6256f205ca8783f0"
+    },
+    {
+      "path": "packages/simulation/src/step.ts",
+      "sha256": "c427e74656d59c71ed1cc1e8831e13a2fca422540e112d3163cc125e484f7688"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "1.0.0",
+  "fixtureId": "UDG-001-boundaries-forbidden-client-server",
+  "kind": "dependency-boundaries",
+  "ownerTask": "UDG-001",
+  "configHash": "141ad56e3f81c2321515769ba93353dd2e3982c1749e8a3dbc6d44170bbf71af",
+  "seed": null,
+  "note": "ownership.md 2.3: the server may not depend on client or browser UI, and the client may not depend on the server or on filesystem modules. The reciprocal server<->client edges are also reported as a package cycle, because a permitted dependency graph is a DAG.",
+  "expectation": "reject",
+  "expectedRuleIds": [
+    "BOUNDARY-FIRST-PARTY-FORBIDDEN",
+    "BOUNDARY-NODE-BUILTIN-FORBIDDEN",
+    "BOUNDARY-PACKAGE-CYCLE"
+  ],
+  "files": [
+    {
+      "path": "apps/client/package.json",
+      "sha256": "0853829847fea4271819e729b0862220ebd46f1e14bd33c94c1b8a3f394c1297"
+    },
+    {
+      "path": "apps/client/src/Connection.ts",
+      "sha256": "ffb0926bb8d02537a0940a94e75740a816e42fa4f33a6968fd4c23ca92dd998e"
+    },
+    {
+      "path": "apps/client/src/FsProbe.ts",
+      "sha256": "6a22f613ce46d50c4b499548cf10ae73711ee3e8db7aa52aefc53370f4792b75"
+    },
+    {
+      "path": "apps/server/package.json",
+      "sha256": "e387069f37cc1f3fb237cd831aa3915629b1ea2d6232309759602c4dc72c3648"
+    },
+    {
+      "path": "apps/server/src/RegionRoom.ts",
+      "sha256": "8606751d52a51016cf2d4854e3a195e10dbf54a416b4551f5ae631d39a16269a"
+    }
+  ]
+}

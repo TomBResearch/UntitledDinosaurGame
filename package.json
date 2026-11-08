@@ -1,0 +1,46 @@
+{
+  "name": "@udg/workspace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Untitled Dinosaur Game M0 monorepo root. Foundation created by UDG-001; no game behaviour exists yet.",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": "24.22.2",
+    "pnpm": "12.18.0"
+  },
+  "scripts": {
+    "clean": "node --input-type=module -e \"import{globSync,rmSync}from'node:fs';for(const p of globSync('{packages,apps,tools}/*/dist'))rmSync(p,{recursive:true,force:true});\"",
+    "build": "pnpm run clean && pnpm -r build",
+    "typecheck": "pnpm --filter @udg/checks build && pnpm run typecheck:root && pnpm -r typecheck",
+    "typecheck:root": "tsc -p tsconfig.json --noEmit",
+    "lint": "pnpm run lint:source && pnpm run lint:boundaries",
+    "lint:source": "eslint .",
+    "lint:boundaries": "pnpm --filter @udg/checks build && node tools/checks/dist/boundaries.js --workspace-root .",
+    "test": "pnpm --filter @udg/checks build && vitest run",
+    "test:boundaries": "pnpm --filter @udg/checks build && node tools/checks/dist/boundaries.js --fixtures tests/fixtures/boundaries",
+    "test:fixtures": "pnpm --filter @udg/checks build && node tools/checks/dist/fixtures.js --root tests/fixtures",
+    "test:unit": "pnpm --filter @udg/checks build && node tools/checks/dist/dispatch.js test:unit",
+    "test:contract": "pnpm --filter @udg/checks build && node tools/checks/dist/run-contract.js",
+    "test:e2e": "pnpm --filter @udg/checks build && node tools/checks/dist/dispatch.js test:e2e",
+    "test:spike": "pnpm --filter @udg/checks build && node tools/checks/dist/dispatch.js test:spike",
+    "assets:build": "pnpm --filter @udg/checks build && node tools/checks/dist/dispatch.js assets:build",
+    "assets:verify": "pnpm --filter @udg/checks build && node tools/checks/dist/dispatch.js assets:verify",
+    "dependencies:record": "pnpm --filter @udg/checks build && node tools/checks/dist/evidence.js dependencies",
+    "dependencies:verify": "pnpm --filter @udg/checks build && node tools/checks/dist/evidence.js dependencies --verify",
+    "evidence:capture": "pnpm --filter @udg/checks build && node tools/checks/dist/evidence.js capture",
+    "evidence:verify": "pnpm --filter @udg/checks build && node tools/checks/dist/evidence.js verify",
+    "contracts:checksums": "pnpm --filter @udg/checks build && node tools/checks/dist/evidence.js checksums"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@udg/checks": "workspace:*",
+    "@playwright/test": "1.65.0",
+    "@types/node": "24.19.2",
+    "eslint": "10.14.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.1",
+    "vitest": "5.1.0"
+  }
+}

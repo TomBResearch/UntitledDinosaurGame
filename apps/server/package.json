@@ -1,0 +1,31 @@
+{
+  "name": "@udg/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "UDG @udg/server workspace. Colyseus region room, fixed-step authority, input admission and replication. Implemented by UDG-003; intentionally empty in the UDG-001 foundation.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": "24.22.2",
+    "pnpm": "12.18.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "24.19.2"
+  }
+}

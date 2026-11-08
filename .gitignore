@@ -1,0 +1,25 @@
+# Dependencies and build output
+node_modules/
+dist/
+*.tsbuildinfo
+.eslintcache
+coverage/
+
+# Evidence bundles are large raw artifacts and stay out of Git (owner clarification C-03).
+# A sanitised machine-readable summary with hashes is committed instead, under
+# docs/contracts/assignments/.
+artifacts/
+
+# Local process noise
+*.log
+
+# Secrets never belong in this repository. .env.example is the committed template.
+.env
+.env.*
+!.env.example
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

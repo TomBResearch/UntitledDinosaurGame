@@ -1,0 +1,11 @@
+/**
+ * @udg/physics - intentionally empty workspace skeleton created by UDG-001.
+ *
+ * Nothing is exported on purpose. UDG-006 implements the single CharacterPhysics collision owner over Rapier
+ * (see docs/contracts/UDG-006.md). An empty module keeps the workspace reproducible and
+ * buildable without pretending that unassigned functionality exists.
+ *
+ * Compiler policy: strict ESM, target ES2024, lib ["ES2024"],
+ * types []. No DOM library and no ambient @types are visible here, so neither browser nor Node globals can leak in.
+ */
+export {};

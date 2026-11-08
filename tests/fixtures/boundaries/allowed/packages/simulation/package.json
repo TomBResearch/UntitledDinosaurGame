@@ -1,0 +1,12 @@
+{
+  "name": "@udg/simulation",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@udg/config": "workspace:*",
+    "@udg/protocol": "workspace:*"
+  },
+  "devDependencies": {}
+}

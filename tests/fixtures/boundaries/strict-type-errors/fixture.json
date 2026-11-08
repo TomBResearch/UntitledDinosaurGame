@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "1.0.0",
+  "fixtureId": "UDG-001-strict-type-errors",
+  "kind": "strict-compile",
+  "ownerTask": "UDG-001",
+  "configHash": "da4b844063b8abb6f48677c87c8996accf9e77cf1f7e5792827cd811edcb394d",
+  "seed": null,
+  "note": "TypeScript diagnostics that must appear when this fixture is compiled with tsconfig.base.json: implicit any (noImplicitAny, TS7006), unchecked index access (noUncheckedIndexedAccess, TS2532), optional-property mismatch (exactOptionalPropertyTypes, TS2375), a DOM global that the lib list does not provide (TS2304) and a missing return path (noImplicitReturns, TS2366).",
+  "expectation": "reject",
+  "expectedDiagnosticCodes": [
+    "TS7006",
+    "TS2532",
+    "TS2375",
+    "TS2304",
+    "TS2366"
+  ],
+  "files": [
+    {
+      "path": "src/bad.ts",
+      "sha256": "c4df748b7425ae19b29dfae0bb5ac3281d95d21692ebaa0eb11020a28597a701"
+    },
+    {
+      "path": "tsconfig.json",
+      "sha256": "68f117b0b2f173480ed280516ffded4cedf5ca17605908c7a778b8f1aa61923d"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+# Workspace membership is discovered from these globs only. Order is resolved by pnpm in
+# dependency (topological) order, so central scripts are deterministic without hard-coded lists.
+# tools/asset-pipeline and tools/load-test join this list when their owning tasks create a
+# package.json there; UDG-001 must not create empty placeholders for them.
+packages:
+  - packages/*
+  - apps/*
+  - tools/*
+
+# Exact pinning is a repository rule (repository.md 3.1). Never widen these to ranges.
+savePrefix: ""
+
+# Dependency lifecycle scripts are blocked by default in pnpm 10+. The allowlist is empty because
+# no dependency in the current graph needs a build script; verified behaviour is that an unlisted
+# script aborts the install with ERR_PNPM_IGNORED_BUILDS rather than running silently. Adding an
+# entry here is a reviewed supply-chain change, and docs/integration/dependencies.json records the
+# licence and source of everything that is installed.
+onlyBuiltDependencies: []

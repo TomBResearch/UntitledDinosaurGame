@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "1.0.0",
+  "fixtureId": "UDG-001-boundaries-cycle",
+  "kind": "dependency-boundaries",
+  "ownerTask": "UDG-001",
+  "configHash": "141ad56e3f81c2321515769ba93353dd2e3982c1749e8a3dbc6d44170bbf71af",
+  "seed": null,
+  "note": "ownership.md 2.3 requires no cycles, including cycles hidden by barrels: navigation a<->b is a direct pair and simulation index<->direct is a barrel pair.",
+  "expectation": "reject",
+  "expectedRuleIds": [
+    "BOUNDARY-CYCLE"
+  ],
+  "files": [
+    {
+      "path": "packages/navigation/package.json",
+      "sha256": "0add784d9b08dab972a796c5449c3f964911b1e90625abdd727960c3edc6e39c"
+    },
+    {
+      "path": "packages/navigation/src/a.ts",
+      "sha256": "9cf7faad0832a803ebc41085a8b801e58a87e14a9f7e1f4c6e460a730a66b1b0"
+    },
+    {
+      "path": "packages/navigation/src/b.ts",
+      "sha256": "888b74a4006e1e1cea61320b9cf7d44d0614871428874a9eb780133590f8b571"
+    },
+    {
+      "path": "packages/simulation/package.json",
+      "sha256": "e423ad7724839fdde8e01f7ac0031bf1158af28cc539dab9e7cdf197b5b78a6a"
+    },
+    {
+      "path": "packages/simulation/src/direct.ts",
+      "sha256": "e31c3cdd2c3289d58d2fde3767042b019f771e4b7a7f4d73530416f24962fe1c"
+    },
+    {
+      "path": "packages/simulation/src/index.ts",
+      "sha256": "c88d244679398c16a75e4248e0516aeaf091a3f49b34c5d4260a3e96647226c4"
+    }
+  ]
+}

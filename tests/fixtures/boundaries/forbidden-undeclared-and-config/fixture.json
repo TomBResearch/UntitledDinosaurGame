@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "1.0.0",
+  "fixtureId": "UDG-001-boundaries-forbidden-undeclared-and-config",
+  "kind": "dependency-boundaries",
+  "ownerTask": "UDG-001",
+  "configHash": "141ad56e3f81c2321515769ba93353dd2e3982c1749e8a3dbc6d44170bbf71af",
+  "seed": null,
+  "note": "Dependency hygiene and compiler policy: an undeclared third-party import, a devDependency reached from runtime source, a cross-package relative path into another workspace internals, a DOM library enabled outside the client, ambient Node types enabled in a shared package, and a workspace with no ownership rule.",
+  "expectation": "reject",
+  "expectedRuleIds": [
+    "BOUNDARY-CROSS-PACKAGE-RELATIVE",
+    "BOUNDARY-RUNTIME-DEV-DEPENDENCY",
+    "BOUNDARY-TSCONFIG-AMBIENT-TYPES",
+    "BOUNDARY-TSCONFIG-DOM",
+    "BOUNDARY-UNDECLARED-DEPENDENCY",
+    "BOUNDARY-UNKNOWN-PACKAGE"
+  ],
+  "files": [
+    {
+      "path": "packages/config/package.json",
+      "sha256": "865dd83a43a833d7eb328775c7653bde4b068b3c6a772cde521c031258ad49ce"
+    },
+    {
+      "path": "packages/config/src/index.ts",
+      "sha256": "5d8f65d2774e206bc9f7a7a4ad39ca2dc563b5c31e46ab57ef4874961237ce29"
+    },
+    {
+      "path": "packages/config/tsconfig.json",
+      "sha256": "eff5b93ad66a5244d73d0f5741d856e7c51c688112532094190c0f340af35b1b"
+    },
+    {
+      "path": "packages/mystery/package.json",
+      "sha256": "47a5aa876607e98181515e83e518687fe5473a81cfdcd8e934a2e2abaffbbcbe"
+    },
+    {
+      "path": "packages/mystery/src/index.ts",
+      "sha256": "613ac746f6587b087842d84c0a989ab8bc935a2e022dd622e009744a4af9f5ae"
+    },
+    {
+      "path": "packages/physics/package.json",
+      "sha256": "fd4889420453c7352031646974ef5722d82c8f1d1e777847e4470a1cbedf1a5f"
+    },
+    {
+      "path": "packages/physics/src/net.ts",
+      "sha256": "61b96a973a796e5645e25726e594586edd9bcb129ec8cfaddfe0c486474cbc9f"
+    },
+    {
+      "path": "packages/physics/src/onlydev.ts",
+      "sha256": "1fcf8f05d1b3ba95105c3a49a56e3351ead04bddd3e867e36e4ef11e4d918fba"
+    },
+    {
+      "path": "packages/physics/src/reach.ts",
+      "sha256": "77da378ae0852a5a0603b5041e98bf66fc0172e1ea2d686f686b57d3cc3299ba"
+    },
+    {
+      "path": "packages/simulation/package.json",
+      "sha256": "e423ad7724839fdde8e01f7ac0031bf1158af28cc539dab9e7cdf197b5b78a6a"
+    },
+    {
+      "path": "packages/simulation/tsconfig.json",
+      "sha256": "3d7211dbe67be0d59f7b73df3c19d369b1ab4c837179fe637b176ef424616247"
+    }
+  ]
+}

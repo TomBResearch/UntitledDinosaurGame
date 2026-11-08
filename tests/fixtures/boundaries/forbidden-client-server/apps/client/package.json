@@ -1,0 +1,11 @@
+{
+  "name": "@udg/client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@udg/server": "workspace:*"
+  },
+  "devDependencies": {}
+}

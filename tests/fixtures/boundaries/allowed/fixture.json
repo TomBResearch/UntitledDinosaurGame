@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "1.0.0",
+  "fixtureId": "UDG-001-boundaries-allowed",
+  "kind": "dependency-boundaries",
+  "ownerTask": "UDG-001",
+  "configHash": "141ad56e3f81c2321515769ba93353dd2e3982c1749e8a3dbc6d44170bbf71af",
+  "seed": null,
+  "note": "Positive control. Legitimate ownership edges (config and simulation on protocol/domain, client on config) and DOM use inside @udg/client must produce no violation. tricky.ts proves import-shaped text in comments, strings and a regex literal is ignored.",
+  "expectation": "allow",
+  "expectedRuleIds": [],
+  "files": [
+    {
+      "path": "apps/client/package.json",
+      "sha256": "1f4d05fb3611c18fab31621ac021113306883b943bddcffa09ff40150c6bbd0e"
+    },
+    {
+      "path": "apps/client/src/view.ts",
+      "sha256": "e3b637f09f107e39ab0e15907e34bd6ffc2dab96536ccc7d9364798042bde163"
+    },
+    {
+      "path": "apps/client/tsconfig.json",
+      "sha256": "0a66a1bd253d94644a46439f528dd2e6f95d8303acd27f5f3bbe0143f6069a88"
+    },
+    {
+      "path": "packages/config/package.json",
+      "sha256": "3cb98f2a9647b31e63091c77863e7465e7d0ef52870cd14883f55c61841dc483"
+    },
+    {
+      "path": "packages/config/src/index.ts",
+      "sha256": "261a647110034b18bfcbf550f06fdc611381584111bb97b9d639cfef9c99cfbb"
+    },
+    {
+      "path": "packages/config/tsconfig.json",
+      "sha256": "be83e1cfcded8a02c7599bbb2275076af3d046f442e0a2c650a9610c7d495beb"
+    },
+    {
+      "path": "packages/protocol/package.json",
+      "sha256": "fdc06505b7edc343b9d8d238335382bf6773e8df28cc7e01701eab5be6b27f30"
+    },
+    {
+      "path": "packages/protocol/src/domain.ts",
+      "sha256": "80aa57f9764686ac8da28240087d0458b2d6fe1a80b0f9f83fd7ed65e9ad33fc"
+    },
+    {
+      "path": "packages/protocol/src/index.ts",
+      "sha256": "7a052ec24ad191edc6119e0fa9db27c6c3bf7745b36fcbc93cc025e8ad2a27a2"
+    },
+    {
+      "path": "packages/simulation/package.json",
+      "sha256": "0406abe40767a799c7252cdb390686731d7f2e20ab036eb6495f10a79582d7db"
+    },
+    {
+      "path": "packages/simulation/src/step.ts",
+      "sha256": "d86649bcf3df79dbc22246f6bd8ee34e0cd905d82a196df4ecf1482544fdee4a"
+    },
+    {
+      "path": "packages/simulation/src/tricky.ts",
+      "sha256": "e39215c616a1eb17651b771ec5aa517df9f5d5a351f99b6a3e95579f0681cbe2"
+    },
+    {
+      "path": "packages/simulation/tsconfig.json",
+      "sha256": "be83e1cfcded8a02c7599bbb2275076af3d046f442e0a2c650a9610c7d495beb"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "1.0.0",
+  "fixtureId": "UDG-001-boundaries-forbidden-browser-global",
+  "kind": "dependency-boundaries",
+  "ownerTask": "UDG-001",
+  "configHash": "141ad56e3f81c2321515769ba93353dd2e3982c1749e8a3dbc6d44170bbf71af",
+  "seed": null,
+  "note": "UDG-001 requires that a runtime browser global in simulation is detected. @udg/client is the negative control: DOM use there is legitimate and must not be reported.",
+  "expectation": "reject",
+  "expectedRuleIds": [
+    "BOUNDARY-BROWSER-GLOBAL"
+  ],
+  "files": [
+    {
+      "path": "apps/client/package.json",
+      "sha256": "78f868df64dc51d58f0d917950bda2d7d0ac706c32048bc7d4be5161c3223728"
+    },
+    {
+      "path": "apps/client/src/view.ts",
+      "sha256": "06674bbc0b0b1eb311e4ce747f849b67f744744a880c60702dda3f01c9aead9e"
+    },
+    {
+      "path": "apps/client/tsconfig.json",
+      "sha256": "3d7211dbe67be0d59f7b73df3c19d369b1ab4c837179fe637b176ef424616247"
+    },
+    {
+      "path": "packages/config/package.json",
+      "sha256": "865dd83a43a833d7eb328775c7653bde4b068b3c6a772cde521c031258ad49ce"
+    },
+    {
+      "path": "packages/config/src/store.ts",
+      "sha256": "1d8e7c38ee362bae773f186e27a875421fc3f1af45bda26eb1a2ded779b61059"
+    },
+    {
+      "path": "packages/simulation/package.json",
+      "sha256": "e423ad7724839fdde8e01f7ac0031bf1158af28cc539dab9e7cdf197b5b78a6a"
+    },
+    {
+      "path": "packages/simulation/src/clock.ts",
+      "sha256": "b64eb84085fc9109d3c695e3a941403dceb6ccbb83de1dafdff65300ed80525d"
+    }
+  ]
+}
