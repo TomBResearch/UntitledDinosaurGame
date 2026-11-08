@@ -7,7 +7,7 @@
   ],
   "files": {
     "AGENTS.md": "09f283643fbc9db3d9192d7ae227207452eac756b3503dfa04d4bd875580fec3",
-    "README.md": "912d1300524c2fa6e4087f16cb108ca9ac021e87b3748b57c726b087990d606b",
+    "README.md": "11ed10fec2e4ac4570e3ed980d43917f58e9053048c12431b69fb0759ff11e20",
     "apps/client/AGENTS.md": "572516ef3ef5ca07b9477129bd5fab5fd12c5ca1b9d3578652a0a1a28849f7dd",
     "apps/server/AGENTS.md": "5867f7487b1124d63be75b3e8c969fc97541d1df8753763511d39b31f3daf3fe",
     "assets/AGENTS.md": "15c1871247241eaef1a36a3be4daddbc3a44711e9317ccf2d62c2c874d675d3e",
@@ -15,7 +15,7 @@
     "docs/adr/0000-template.md": "4cddc0471025479043882c3efb792c548e35812f59bef9d38d7b756f48284abd",
     "docs/adr/README.md": "5339e9f5911de2356e1ace7af17cdb5a28f55e9be35fdb8925925a2006c3edae",
     "docs/contracts/README.md": "255e7b2cb8fd64c41e2e5beb2a56b03bb62b08e0ca11089299d81a2e540a5943",
-    "docs/contracts/UDG-001.md": "8f2842f4edb4f4c959c525b63fd6b218919052919272dda97309de9a4ade6635",
+    "docs/contracts/UDG-001.md": "7b181f958fa54cfeceaaaa838e3743ea485266e5e075c51f8ee3f605e97efbb8",
     "docs/contracts/UDG-002.md": "0760f8d09579ecfaa92c48ebbc6aa1dc0773743a55b0e0b534298845ef9a52ec",
     "docs/contracts/UDG-003.md": "096f3ff0755569230b884cf4138be035845e28d44ad7332dc6bbd0c9e0cafaf5",
     "docs/contracts/UDG-004.md": "c6abc27b3268a2c3118dbd61cc24af111bcf911b088653057f8d7273736e1889",

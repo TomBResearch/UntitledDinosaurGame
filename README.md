@@ -115,10 +115,11 @@ a real hole â€” verification had accepted a bundle that recorded a failing run â
 non-PASS bundle is now refused outright.
 
 Per owner clarification C-05 the workflow has to run green on the pushed commit before UDG-001 can
-be Verified. It has: run [42479920170](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42479920170)
-on commit `13089be` completed with 17 of 17 steps success on `ubuntu-24.04`. The task stays
-**In Review** until the reviewer records acceptance; the local reproduction of the identical command
-sequence and the CI bundle are both retained and verified.
+be Verified. It has: run [42510445695](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42510445695)
+on commit `1c735c2` completed with 19 of 19 steps success on `ubuntu-24.04`, and its published
+evidence bundle verifies with zero issues. The task stays **In Review** until the reviewer records
+acceptance; the local reproduction of the identical command sequence and the CI bundle are both
+retained and verified.
 
 ## Evidence
 

@@ -7,7 +7,7 @@ Reviewer and gate decisions are left pending on purpose; they are the owner's to
 ```text
 Task ID and final implementation SHA:
   UDG-001 Workspace and CI.
-  Final implementation commit: 13089be842b12d2906f2eeb1a355ad71478d9d84
+  Final implementation commit: 1c735c2d845e399cc8b3cc33adac4ba7a6081387
   Implementation commits, oldest first:
     1a136ab7d5dccdbc48912b1469a68e68e7ea4efb  workspace, pins, workspaces, @udg/checks, contract suite
     99021b5691e9523b5f24b611c81820f414123c9c  .github/workflows/ci.yml
@@ -17,9 +17,13 @@ Task ID and final implementation SHA:
     0faf872cbd0197bd7cfec51c351690a994ed89ab  ci: full-history checkout (CI finding, see below)
     9472fa50e033b6ae3787f2d698157ae9968caa23  fix(checks): host-independent dependency register (CI finding)
     13089be842b12d2906f2eeb1a355ad71478d9d84  feat(checks): summary records its CI outcome
+    50c6cee34d07e946837cb161cc7b27b18394e877  fix(ci): evidence checks must be able to fail the run
+    1c735c2d845e399cc8b3cc33adac4ba7a6081387  fix(evidence): a bundle that did not pass is never
+                                             verified or summarised
   The commit that contains this record adds only planning documents (this file, the updated
-  assignment record, the UDG-001 metadata CI line, the regenerated evidence summary and the
-  refreshed checksum manifest). No source file changes after 13089be8.
+  assignment record, the UDG-001 metadata evidence and CI lines, the regenerated evidence summary,
+  the README evidence-policy text and the refreshed checksum manifest). No source file changes after
+  1c735c2.
 
 CI verification (published, executed on GitHub-hosted runners):
   Pushed to github.com/TomBResearch/UntitledDinosaurGame branch main as a fast-forward from the
@@ -48,16 +52,63 @@ CI verification (published, executed on GitHub-hosted runners):
       evidence directory even on failure. Runner reported linux/x64; the checkout recorded
       ci true and gitDirty false in the captured bundle.
 
+Scoped reviewer correction (evidence checks must be able to fail the run):
+  The reviewer returned the submission with one scoped finding: "Capture the foundation evidence
+  bundle" and "Verify the captured evidence bundle" both ran with continue-on-error: true, and the
+  upload step used if-no-files-found: warn, so a workflow could finish green while its evidence
+  capture or verification failed, or while no evidence was published at all. Fixed in 50c6cee:
+    - no step in the job sets continue-on-error; every step's exit status now decides the run, and
+      tests/contracts/UDG-001.test.ts asserts that no step may declare the key at all;
+    - the evidence steps keep if: !cancelled(), which is what keeps them running after an earlier
+      failure so a red run still produces diagnostics rather than a skip;
+    - a new step, "Assert the required evidence artefacts exist", fails when the run pointer is
+      absent, when any of report.json, environment.json, commands.json, junit.xml,
+      boundary-report.json, build.log or checksums.sha256 is missing or empty, or when no command
+      log under logs/ has any bytes;
+    - the publication step now uploads the pointer plus the run directory and treats a missing
+      artefact as an error (if-no-files-found: error), verified to fail on a real runner;
+    - the same step now also publishes the per-run sanitised summary, which the verify step writes
+      only after verification succeeds.
+  Demonstrated on GitHub-hosted runners, not only locally:
+    Run 42508948276  commit 50c6cee  conclusion success  19/19 steps  artifact udg-001-evidence
+      (id 13627784376, 20,556 bytes) - the corrected workflow is green on its own merits, including
+      the new assertion step and the stricter upload policy.
+      https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42508948276
+    Run 42509775271  negative probe  conclusion failure (by design). Three jobs on the throwaway
+      branch udg-001-ci-negative-probe at 24cc93bd518631bbf3d2fac3c5175b845ab4c9b7, deleted after
+      the run; main was never moved by it and its workflow file was the probe file only on that
+      branch. PROBE 1 started no capture: the step failed, the assertion reported "evidence capture
+      wrote no run pointer", verification reported EVIDENCE-REPORT-MISSING and the upload errored -
+      job failure. PROBE 3 published nothing: "No files were found with the provided path:
+      artifacts/latest-UDG-001.txt" - job failure. PROBE 2 corrupted a captured bundle: job failure
+      while the diagnostic upload still succeeded.
+      https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42509775271
+  The probe exposed a second, real hole, fixed in 1c735c2. In PROBE 2 the capture step failed because
+  one of its own commands failed, the bundle honestly recorded status FAIL with 7 failing tests, and
+  the verification step still printed "PASS evidence verify
+  artifacts/UDG-001-2026-11-08T18-23-42-322Z-24cc93bd (0 issue(s))". Verification audited integrity -
+  hashes, artefacts, counts, sanitisation - but never the recorded gate outcome, so a self-consistent
+  record of a failing run was accepted as verified evidence. verify now refuses any status other than
+  PASS with EVIDENCE-GATE-NOT-PASS, and evidence:summary refuses to write a completion claim for such
+  a bundle at all. Re-running the verifier over that retained probe bundle reproduces the change
+  directly: it now returns exactly one issue, EVIDENCE-GATE-NOT-PASS.
+    Run 42510445695  commit 1c735c2  conclusion success  19/19 steps, no failed step, artifact
+      udg-001-evidence; the published bundle UDG-001-2026-11-08T18-32-23-165Z-1c735c2d verifies with
+      0 issues after download.
+      https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42510445695
+
 Contract revision and prerequisite SHAs:
   UDG-CONTRACTS-M0-001 v1.0, repository edition 1.
   docs/contracts/README.md            255e7b2cb8fd64c41e2e5beb2a56b03bb62b08e0ca11089299d81a2e540a5943
   docs/contracts/UDG-001.md           d0fd0e24220c80f06cb9e3fc99cfaffb06e233680abf774162e5e0daefc0c171
                                       (the bytes at assignment). Its In Review edition,
                                       8d14ed5eda08b7b151069576dae18decaeb0403e0d4c20b902f2f298ccb15d80,
-                                      is what report.json and the committed summary pin, because that
-                                      is the file both foundation runs read. The commit carrying this
-                                      record edits only that file's CI and evidence bullets, giving
-                                      8f2842f4edb4f4c959c525b63fd6b218919052919272dda97309de9a4ade6635.
+                                      is what the 13089be foundation runs read. The edition the
+                                      authoritative 1c735c2 runs read is
+                                      8f2842f4edb4f4c959c525b63fd6b218919052919272dda97309de9a4ade6635;
+                                      the commit carrying this record edits only that file's evidence
+                                      and CI metadata bullets, giving
+                                      7b181f958fa54cfeceaaaa838e3743ea485266e5e075c51f8ee3f605e97efbb8.
                                       No requirement text moved in any of these editions.)
   Baseline UDG-SPEC-M0-002 v0.2       b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf
   Prerequisite commit (no prerequisite task): 555735b6b3b2b72ec23fb99f2db26cbe3cef67a2
@@ -139,26 +190,30 @@ Actual package and WASM versions/hashes:
   ERR_PNPM_IGNORED_BUILDS, demonstrated during this task).
 
 Commands with exit codes and test counts:
-  Authoritative local foundation run UDG-001-2026-11-08T12-37-46-915Z-13089be8, captured by
-  pnpm evidence:capture on commit 13089be with a clean working tree (linux/arm64, Node v24.22.2,
-  pnpm 12.18.0), 12:37:46.950Z to 12:37:58.115Z:
-    install-frozen          pnpm install --frozen-lockfile   exit 0     45 ms
-    typecheck               pnpm typecheck                   exit 0   2,388 ms
-    lint                    pnpm lint                        exit 0   1,261 ms
-    test                    pnpm test                        exit 0   2,281 ms
-    build                   pnpm build                       exit 0   1,357 ms
-    test-boundaries         pnpm test:boundaries             exit 0     733 ms
-    test-fixtures           pnpm test:fixtures               exit 0     729 ms
-    test-contract-UDG-001   pnpm test:contract -- --task …   exit 0   2,369 ms
+  Authoritative local foundation run UDG-001-2026-11-08T18-31-49-723Z-1c735c2d, captured by
+  pnpm evidence:capture on commit 1c735c2 with a clean working tree (linux/arm64, Node v24.22.2,
+  pnpm 12.18.0), 18:31:49.775Z to 18:32:06.410Z:
+    install-frozen          pnpm install --frozen-lockfile   exit 0     65 ms
+    typecheck               pnpm typecheck                   exit 0   3,446 ms
+    lint                    pnpm lint                        exit 0   1,858 ms
+    test                    pnpm test                        exit 0   3,615 ms
+    build                   pnpm build                       exit 0   1,892 ms
+    test-boundaries         pnpm test:boundaries             exit 0   1,081 ms
+    test-fixtures           pnpm test:fixtures               exit 0   1,078 ms
+    test-contract-UDG-001   pnpm test:contract -- --task …   exit 0   3,596 ms
   Same eight commands from the same commit, executed by the workflow on a GitHub-hosted
-  ubuntu-24.04 linux-x64 runner (bundle UDG-001-2026-11-08T12-22-46-897Z-13089be8, published as
-  artifact udg-001-evidence of run 42479920170): all exit 0, total 22,407 ms
-  (install 79, typecheck 5,299, lint 2,344, test 4,028, build 3,488, boundaries 1,453,
-  fixtures 1,551, contract 4,165 ms).
-  Tests: 43 passed, 0 failed, 0 errors, 0 skipped, 0 quarantined, no duplicate case names in 1 file,
-  on both machines. Boundary check on the real tree: 14 files, 0 violations. Fixture manifests: 7
-  valid. pnpm evidence:verify: PASS with 0 issues on the local bundle and on the downloaded CI
-  bundle. pnpm contracts:checksums: in sync. pnpm dependencies:verify: in sync locally and on CI.
+  ubuntu-24.04 linux-x64 runner (bundle UDG-001-2026-11-08T18-32-23-165Z-1c735c2d, published as
+  artifact udg-001-evidence of run 42510445695): all exit 0, total 27,257 ms
+  (install 92, typecheck 6,347, lint 2,888, test 4,983, build 4,028, boundaries 1,757,
+  fixtures 1,764, contract 5,398 ms).
+  The submission run on 13089be (local UDG-001-2026-11-08T12-37-46-915Z-13089be8 and CI bundle
+  UDG-001-2026-11-08T12-22-46-897Z-13089be8 of run 42479920170) is retained unchanged as the record of
+  what the reviewer reviewed; all sixteen of its commands also exited 0.
+  Tests: 49 passed, 0 failed, 0 errors, 0 skipped, 0 quarantined, no duplicate case names in 1 file,
+  on both machines (43 at the 13089be submission run, also on both). Boundary check on the real tree:
+  14 files, 0 violations. Fixture manifests: 7 valid. pnpm evidence:verify: PASS with 0 issues on the
+  local bundle and on the downloaded CI bundle. pnpm contracts:checksums: in sync.
+  pnpm dependencies:verify: in sync locally and on CI.
   Refusals exercised, each with its exit code asserted: pnpm test:contract for the other ten task
   ids exits 2; pnpm test:e2e, test:spike, test:unit, assets:build and assets:verify exit 1 with the
   owning task named; an unknown task id and an unknown guarded command exit 2 with usage.
@@ -187,9 +242,20 @@ Positive, negative, lifecycle and race coverage:
   addition are both refused.
   Evidence: bundles are built with the production writer and then mutated - a changed file, a
   removed artefact, zero discovered tests, a skipped test, a duplicated case name from a rerun, a
-  PASS report whose command exited non-zero, an injected GitHub token and a private home path, a
-  bundle with no measured values, a report referencing a path outside the bundle, and a bundle whose
-  own capture recorded sanitisation failures. Each must produce its specific EVIDENCE-* code.
+  PASS report whose command exited non-zero, a bundle that is internally consistent but records
+  status FAIL, an injected GitHub token and a private home path, a bundle with no measured values, a
+  report referencing a path outside the bundle, and a bundle whose own capture recorded sanitisation
+  failures. Each must produce its specific EVIDENCE-* code, and the FAIL-status bundle must also stop
+  evidence:summary from writing any file at all.
+  CI workflow policy: the suite parses .github/workflows/ci.yml itself (a strict structural reader
+  that refuses to assert vacuously on a restructured file), demands that no step declares
+  continue-on-error, demands if: !cancelled() on the capture, assertion, verification and publication
+  steps, demands if-no-files-found: error and the pointer-plus-run-directory upload paths, maps a
+  non-zero exit from each of those steps to a failed job conclusion, and then executes the assertion
+  script with bash against four real situations: an artifacts/ directory with no pointer, a pointer
+  whose bundle lacks junit.xml and has only empty logs, a complete bundle, and a directory where
+  capture could not even start (the real evidence CLI is run for UDG-999 there and leaves no pointer,
+  after which the assertion fails and the real verify CLI reports EVIDENCE-RUN-MISSING).
   Race coverage: none. There is no concurrency, timer, timestep, input ordering or reconnection code
   in this task; ordering and race proofs belong to UDG-005 and the spike tasks.
 
@@ -213,13 +279,19 @@ Acceptance thresholds and measured results:
                                                                      and its contract path
   Modified lockfile rejected by a frozen install                     PASS for a version mutation and
                                                                      for an added dependency
-  CI reproduces the local result                                     PASS. Run 42479920170 on
-                                                                     commit 13089be, GitHub-hosted
-                                                                     ubuntu-24.04 linux-x64, 17/17
+  CI reproduces the local result                                     PASS. Run 42510445695 on
+                                                                     commit 1c735c2, GitHub-hosted
+                                                                     ubuntu-24.04 linux-x64, 19/19
                                                                      steps success, all eight
-                                                                     commands exit 0, 43 tests, and
+                                                                     commands exit 0, 49 tests, and
                                                                      its published evidence bundle
-                                                                     verifies with 0 issues.
+                                                                     verifies with 0 issues. The
+                                                                     run also proves the evidence
+                                                                     policy in the negative: probe
+                                                                     run 42509775271 turned each of
+                                                                     capture failure, verification
+                                                                     failure and absent artefacts
+                                                                     into a failed job.
   README startup prerequisites complete                              PASS: OS prerequisites, exact
                                                                      install/check/run/stop commands,
                                                                      ports 2567/5173, loopback
@@ -244,22 +316,39 @@ Raw evidence directory and integrity result:
   SHA-256 of all 21 artefacts plus the CI run url, per owner clarification C-03; raw bundles are
   not committed).
   Raw bundles, owner-reachable durable storage under /workspace/udg-evidence:
-    UDG-001-2026-11-08T12-37-46-915Z-13089be8            local linux/arm64 authoritative run
+    UDG-001-2026-11-08T18-31-49-723Z-1c735c2d                   local linux/arm64 authoritative run
+      report.json sha256 e07293e74db3a43edcd19c2bc48a47d075a707a9e2e29b3cf1308d08e7e7e2c8
+    ci-run-42510445695/UDG-001-2026-11-08T18-32-23-165Z-1c735c2d  CI bundle, downloaded from the
+      artifact udg-001-evidence of the green run, plus the CI-written sanitised summary
+      report.json sha256 5c435eebdba91b46c0da691bc344979faa781af0eb6b17c214c6aca3444b8c4f
+      full runner log sha256 473220e1dcde18210ba34e0d3ecc9238fd081803e1eee63e037102201c7c3589
+    UDG-001-2026-11-08T12-37-46-915Z-13089be8                   local run of the reviewed submission
       report.json sha256 d3d5b098b579bdd6a6545d2ccfcc5c055b0785cd225945bb0bbfef39a461f142
-    ci-run-42479920170/UDG-001-2026-11-08T12-22-46-897Z-13089be8   CI bundle, downloaded from
-      artifact udg-001-evidence of the green run
+    ci-run-42508948276/                                          bundle, CI summary and runner log of
+      the first green run of the corrected workflow on 50c6cee
+    ci-run-42479920170/UDG-001-2026-11-08T12-22-46-897Z-13089be8   submission CI bundle, downloaded
+      from artifact udg-001-evidence of that green run
       report.json sha256 cae97b8fdc932a6e5cb960b54eb745e2ee8e5db64e479ece0a3e0b581594e1e2
       full runner log sha256 be7ea60367d24d12ca9455312e9f2921b89a15e523059f3c40d646873504684a
     ci-run-42479473061/                                   bundle and runner log of the green run
       that validated the dependency-register fix on commit 9472fa5
       full runner log sha256 f5d1d90651d53989166c160ef89a7a81ce77a0bed764eecc709f6ccbe15e0603
-    inventory.json                                        sha256 and size of every retained file
+    probe-run-42509775271/                                 the negative-probe publication: the bundle
+      that the pre-fix verifier wrongly accepted (status FAIL, 7 failing tests), the run pointer the
+      probe uploaded, the raw runner log (sha256
+      073c5424a8b0f401e1a084c023519fecdceb00b8a569329bcb211e7ab04783a4) and a README explaining that
+      this directory is a deliberate counterexample, not a passing run
+    inventory.json                                        sha256
+      75c8131b9436f274c6721486f0d6b6f88fd4184c275ac0de1e91ae1e90333e05, 186 files, every retained
+      byte covered by name, size and hash
   Contents per bundle: report.json, environment.json, commands.json, junit.xml,
   boundary-report.json, build.log, logs/*.log, checksums.sha256 and a .keep marker.
   Integrity: pnpm evidence:verify -- --run <bundle> => PASS with 0 issues for the local bundle and
   for the downloaded CI bundle. The two bundles agree on commit, test counts and every config hash,
-  which is the cross-machine reproduction the contract asks for. Hashes in report.json and
-  checksums.sha256 are cross-checked against the bytes on disk by the verifier.
+  which is the cross-machine reproduction the contract asks for. The same command run over the
+  retained probe bundle returns FAIL with exactly EVIDENCE-GATE-NOT-PASS, which is the counterexample
+  the correction needs. Hashes in report.json and checksums.sha256 are cross-checked against the
+  bytes on disk by the verifier.
   Sanitisation: working directory recorded as REPO_ROOT, host as a per-run runner alias, home as
   <HOME>, temp as <TMP>, pnpm store as PNPM_STORE, bundle directory as BUNDLE_ROOT. Capture
   self-checks every artefact it writes and refuses PASS on a leftover machine path; the verifier
@@ -270,11 +359,13 @@ Raw evidence directory and integrity result:
   The owner must mirror /workspace/udg-evidence to whichever store they designate as durable; that
   path is this checkout's shared evidence directory, not a Git-tracked copy.
   Hash drift to expect when re-verifying: report.json configHashes.taskContract is
-  8d14ed5eda08b7b151069576dae18decaeb0403e0d4c20b902f2f298ccb15d80, the bytes of
-  docs/contracts/UDG-001.md at run time; the record commit edits only that file's CI and evidence
-  bullets, giving 8f2842f4edb4f4c959c525b63fd6b218919052919272dda97309de9a4ade6635. tsconfig.base,
-  boundary rule table and fixture configuration, .env.example, .npmrc and the CI workflow hashes
-  all still match the committed bytes exactly, as does the lockfile hash.
+  8f2842f4edb4f4c959c525b63fd6b218919052919272dda97309de9a4ade6635, the bytes of
+  docs/contracts/UDG-001.md at run time; the record commit edits only that file's evidence and CI
+  bullets, giving 7b181f958fa54cfeceaaaa838e3743ea485266e5e075c51f8ee3f605e97efbb8. Everything else
+  the bundles pin still matches the committed bytes exactly, including the corrected CI workflow
+  (55c38813e8e2659325c4fb02d24fdedd2ca26deb498c4ed2a498d9db1c3d99bc), tsconfig.base, the boundary rule
+  table, the fixture configuration, .env.example, .npmrc and the lockfile - unlike the submission run,
+  whose workflow hash had already moved because the workflow was fixed after capture.
 
 ADRs accepted, rejected or still proposed:
   None proposed, none accepted, none rejected. No genuine contract conflict was found inside the
@@ -283,12 +374,15 @@ ADRs accepted, rejected or still proposed:
   already governs it. P02 to P10 remain Pending and were not treated as approved anywhere.
 
 Limitations and remaining downstream work:
-  1. CI reproduction is now executed and green, so the only open acceptance condition is the
-     reviewer decision. Two defects were found only by running on GitHub-hosted runners and both
-     are fixed with a covering test: the shallow checkout could not see the prerequisite commit
-     (0faf872), and the dependency register was not host-independent (9472fa5). Neither defect
-     could have been found from this container, which has no container runtime and no act; that
-     dependency on a real runner is now recorded rather than assumed away.
+  1. CI reproduction is executed and green, so the only open acceptance condition is the reviewer
+     decision. Four defects were found only by running on GitHub-hosted runners and each is fixed
+     with a covering test: the shallow checkout could not see the prerequisite commit (0faf872), the
+     dependency register was not host-independent (9472fa5), evidence capture and verification could
+     fail without failing the run and a missing artefact was only a warning (50c6cee), and
+     verification accepted a bundle whose own record said the gate failed (1c735c2). The last two
+     were demonstrated on a runner by a purpose-built failing workflow rather than inferred, because
+     nothing in this container can execute a GitHub Actions job. That dependency on a real runner is
+     now recorded rather than assumed away.
   2. Local execution happened on Linux aarch64 and CI execution on GitHub-hosted Linux x64.
      README states Linux/macOS support, but macOS has never been exercised, and no client or browser
      path exists yet to exercise either. The CI-to-local agreement therefore proves linux arm64 and
@@ -313,14 +407,18 @@ Limitations and remaining downstream work:
 
 Implementer recommendation: In Review or Blocked
   In Review. Every acceptance condition in UDG-001.md now has measured evidence, including CI
-  reproduction on GitHub-hosted runners; what remains is the reviewer's acceptance decision, which
-  clarification C-05 reserves to the owner and which the implementer must not record. Not Blocked:
-  no contract conflict or failing check remains, and no requirement was relaxed to obtain that state.
-  Recommended reviewer actions: read the declared additions A1 to A4 and deviations D1 to D3, read
-  the CI verification section above, run
+  reproduction on GitHub-hosted runners and a runner-executed demonstration that the evidence checks
+  cannot fail silently; what remains is the reviewer's acceptance decision, which clarification C-05
+  reserves to the owner and which the implementer must not record. Not Blocked: no contract conflict
+  or failing check remains, and no requirement was relaxed to obtain that state.
+  Recommended reviewer actions: read the declared additions A1 to A4, deviations D1 to D3 and the
+  scoped-correction section above, then run
   pnpm install --frozen-lockfile && pnpm test && pnpm test:contract -- --task UDG-001, re-run
-  pnpm evidence:verify against the retained local and CI bundles, and check the Actions run url in
-  docs/contracts/assignments/UDG-001-evidence.json before recording acceptance.
+  pnpm evidence:verify against the retained local and CI bundles (and against
+  probe-run-42509775271/UDG-001-2026-11-08T18-23-42-322Z-24cc93bd, which must come back
+  EVIDENCE-GATE-NOT-PASS), open the Actions run url recorded in
+  docs/contracts/assignments/UDG-001-evidence.json together with probe run 42509775271, and only then
+  record the acceptance decision.
 
 Reviewer decision and date:
   Pending. Reviewer: project owner, GitHub account TomBResearch.
