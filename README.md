@@ -2,10 +2,12 @@
 
 Browser-based prehistoric RPG planning repository.
 
-**Current state:** UDG-001 (workspace and CI foundation) is implemented and **In Review**. Game
-movement, networking, physics and rendering behaviour still do not exist, and validation Gates A,
-B and C have not run. The planning contracts and their adoption status remain the authority for
-what may be built next.
+**Current state:** UDG-001 (workspace and CI foundation) is **Verified** — accepted by the project
+owner on 2026-11-08 (implementation `1c735c2`, reviewed submission `0e586b6`). Nothing else is
+implemented: game movement, networking, physics and rendering behaviour do not exist, validation
+Gates A, B and C have not run, refinements P02 to P10 remain pending and no later task is assigned.
+The planning contracts and their [adoption status](docs/contracts/adoption.md) remain the authority
+for what may be built next.
 
 ## Start here
 
@@ -108,18 +110,28 @@ publishes its logs and machine-readable results. A missing artefact is an error
 conclusion, and executes the assertion script against empty, incomplete and complete bundles.
 
 That policy was also demonstrated on the runner itself, in probe run [42509775271](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42509775271)
-(three jobs on the now-deleted branch `udg-001-ci-negative-probe`, `main` untouched): a capture that
-could not start, a verification of a corrupted bundle and a publication with no artefacts each ended
-in a failed job, and the job whose evidence still existed uploaded it anyway. The probe also exposed
-a real hole — verification had accepted a bundle that recorded a failing run — which is why a
-non-PASS bundle is now refused outright.
+(three jobs on the now-deleted branch `udg-001-ci-negative-probe`, `main` untouched). A capture that
+could not start failed its job at the capture, assertion, verification and upload steps alike, and a
+publication with no artefacts failed on `if-no-files-found: error`. The third job was meant to corrupt
+a captured bundle but never got the chance — its capture step had already failed, so the corruption
+step was skipped — and that is how the real hole surfaced: capture had written a complete bundle that
+honestly recorded a failing run, the new assertion step passed it because every artefact was present,
+and the verifier then in use printed `PASS evidence verify … (0 issue(s))` for it. A bundle whose own
+record is not PASS is therefore refused outright now (`EVIDENCE-GATE-NOT-PASS`). That runner
+observation is separate from the proof of the fix: the contract suite builds a hash-consistent bundle
+with status `FAIL` and asserts the single refusal code plus a non-zero exit and that no summary file
+is written, and re-running the corrected verifier over the retained probe bundle reproduces the same
+refusal on the original bytes.
 
-Per owner clarification C-05 the workflow has to run green on the pushed commit before UDG-001 can
-be Verified. It has: run [42510445695](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42510445695)
-on commit `1c735c2` completed with 19 of 19 steps success on `ubuntu-24.04`, and its published
-evidence bundle verifies with zero issues. The task stays **In Review** until the reviewer records
-acceptance; the local reproduction of the identical command sequence and the CI bundle are both
-retained and verified.
+Per owner clarification C-05 the workflow had to run green on the pushed commit before UDG-001 could
+be Verified. It did: run [42510445695](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42510445695)
+on the accepted implementation `1c735c2` and run
+[42511785889](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42511785889) on the
+reviewed submission `0e586b6` each completed with 19 of 19 steps success on `ubuntu-24.04`, and the
+published evidence bundles verify with zero issues. The project owner recorded acceptance on
+2026-11-08, so UDG-001 is **Verified**. Gates A, B and C remain Not Run and P02 to P10 remain
+pending, so no later task is assigned; the local reproduction of the identical command sequence and
+the CI bundles are retained and verified.
 
 ## Evidence
 

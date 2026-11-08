@@ -2,7 +2,7 @@
 
 Status: **Partially adopted — P01 approved 2026-11-08; P02 to P10 pending**
 
-Implementation assignment: **UDG-001 only** (authorised 2026-11-08 by the integration owner)
+Implementation assignment: **UDG-001 only** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)). No later task is assigned.
 
 Integration owner: **Project owner, GitHub account `TomBResearch`** — recorded 2026-11-08 at the owner's instruction as both integration owner and project reviewer. Replace with the owner's preferred display name on request; the identity, not the decision, is what may be restated.
 
@@ -37,6 +37,38 @@ The owner approved P01 with the following binding clarifications. They are part 
 | C-04 | UDG-001 must implement and test evidence verification against its own bundle. Suites owned by later, unstarted tasks may remain unavailable and must fail clearly when invoked. | `repository.md` §3.2 "dispatcher that fails clearly for unavailable suites"; §19.1 evidence schema ownership |
 | C-05 | CI option 1: the workflow is authored in this task and the identical script sequence is proven locally. CI reproduction is not waived. UDG-001 stays In Review until the real GitHub Actions checks on the pushed commit pass and the owner accepts the work. | UDG-001 "CI reproduces the local result"; `definition-of-done.md` In Review rule |
 | C-06 | Review groups R2 to R6 (P02, P06 / P03, P04 / P05, P07 / P08, P09 / P10) remain pending. Each blocks only its own dependants: UDG-002 and everything downstream of it, then the Gate A, B and C spikes, stay Not Started until the relevant group is approved. | `scope.md` §1.3 approval deadlines; adoption-per-task rule |
+
+## UDG-001 acceptance recorded 2026-11-08
+
+The project owner (`TomBResearch`), acting as reviewer and integration owner, accepted the UDG-001
+implementation and its two scoped corrections on 2026-11-08. The task state is **Verified**.
+
+```text
+Accepted implementation   1c735c2d845e399cc8b3cc33adac4ba7a6081387
+Reviewed submission       0e586b619796597266f7ec4942d24231dfb5ce62
+Passing submission CI     https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42511785889
+Acceptance covers         the implementation, the scoped CI-evidence correction (50c6cee), the
+                          non-PASS-bundle correction (1c735c2), declared additions A1 to A4 and
+                          deviations D1 to D3 of the completion record
+Clarification C-05        satisfied: the workflow ran green on the pushed commit and the owner
+                          accepted the work. The ruling itself is unchanged and applies to any
+                          later task that authors CI
+Not adopted or passed     P02 to P10 remain Pending; Gates A, B and C remain Not Run; no spike gate
+                          decision exists
+Contract edition          UDG-CONTRACTS-M0-001 v1.0, repository edition 1 - unchanged by acceptance.
+                          The reviewed digest
+                          1b33cc20128ab75c59591448496164e30039018691e2a7d85ab21d7372926257 continues
+                          to identify the edition the owner reviewed; docs/contracts/checksums.json
+                          was regenerated for this acceptance edition (56 entries, verified in sync
+                          against file bytes) and identifies the edition in which the acceptance was
+                          written down, as the closing rule of this record requires
+Next assignment           none. UDG-002 and every later task stay Not Started until the owner
+                          records the relevant refinement decision and assigns the task
+```
+
+The decision fields of [assignments/UDG-001-completion.md](assignments/UDG-001-completion.md) carry
+the same record, and the state history at the foot of
+[assignments/UDG-001.md](assignments/UDG-001.md) shows the transition.
 
 ## Reviewed edition and pins for the P01 approval
 

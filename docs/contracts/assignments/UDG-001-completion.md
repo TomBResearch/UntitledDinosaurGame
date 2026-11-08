@@ -2,7 +2,9 @@
 
 Appendix B2 record for the authorised UDG-001 implementation. Like the assignment record this file
 sits outside the edition-controlled [checksum manifest](../checksums.json) and pins its own commits.
-Reviewer and gate decisions are left pending on purpose; they are the owner's to record.
+The reviewer and gate decision fields at the foot of this record belong to the owner; they were
+filled in on 2026-11-08 when the owner accepted the work, and they are transcribed from the owner's
+instruction rather than judged by the implementer.
 
 ```text
 Task ID and final implementation SHA:
@@ -23,9 +25,9 @@ Task ID and final implementation SHA:
   The commit that contains this record adds only planning documents (this file, the updated
   assignment record, the UDG-001 metadata evidence and CI lines, the regenerated evidence summary,
   the README evidence-policy text and the refreshed checksum manifest). No source file changes after
-  1c735c2. Earlier revisions of this record were themselves published and green - cbab29dceea8816fdd
-  8174177767c5a31ee0430e, Actions run 42511404907, 19/19 steps - and the commit carrying these words
-  adds only these record lines.
+  1c735c2, which is the accepted implementation. Earlier revisions of this record were themselves
+  published and green - cbab29dceea8816fdd8174177767c5a31ee0430e, Actions run 42511404907, 19/19
+  steps - and the commit carrying these words adds only record lines.
 
 CI verification (published, executed on GitHub-hosted runners):
   Pushed to github.com/TomBResearch/UntitledDinosaurGame branch main as a fast-forward from the
@@ -82,18 +84,33 @@ Scoped reviewer correction (evidence checks must be able to fail the run):
       branch. PROBE 1 started no capture: the step failed, the assertion reported "evidence capture
       wrote no run pointer", verification reported EVIDENCE-REPORT-MISSING and the upload errored -
       job failure. PROBE 3 published nothing: "No files were found with the provided path:
-      artifacts/latest-UDG-001.txt" - job failure. PROBE 2 corrupted a captured bundle: job failure
-      while the diagnostic upload still succeeded.
+      artifacts/latest-UDG-001.txt" - job failure. PROBE 2 was intended to corrupt a captured
+      bundle and in fact never got the chance; what it exposed instead is set out in the next two
+      paragraphs. Its job still failed, and its diagnostic upload still succeeded.
       https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42509775271
-  The probe exposed a second, real hole, fixed in 1c735c2. In PROBE 2 the capture step failed because
-  one of its own commands failed, the bundle honestly recorded status FAIL with 7 failing tests, and
-  the verification step still printed "PASS evidence verify
-  artifacts/UDG-001-2026-11-08T18-23-42-322Z-24cc93bd (0 issue(s))". Verification audited integrity -
-  hashes, artefacts, counts, sanitisation - but never the recorded gate outcome, so a self-consistent
-  record of a failing run was accepted as verified evidence. verify now refuses any status other than
-  PASS with EVIDENCE-GATE-NOT-PASS, and evidence:summary refuses to write a completion claim for such
-  a bundle at all. Re-running the verifier over that retained probe bundle reproduces the change
-  directly: it now returns exactly one issue, EVIDENCE-GATE-NOT-PASS.
+  What PROBE 2 actually did, read from its runner log and the bundle it published. The step "Corrupt
+  the captured bundle (simulate missing junit results)" was **skipped**, because the capture step
+  before it had already failed and the probe job had no continue-on-error. Capture failed for a
+  reason of the probe's own making: replacing .github/workflows/ci.yml with the probe file broke
+  seven tests in the suite that reads that file (step count, the published artefact name, the script
+  list and the prerequisite-commit lookup that needs fetch-depth: 0), so the captured pnpm test and
+  pnpm test:contract both exited 1. Capture still wrote a complete bundle that honestly recorded
+  status FAIL with 48 tests and 7 failures, and returned non-zero - and that exit code was the only
+  thing that made the job red. The new assertion step passed, because every artefact really was
+  present, and the verifier then in use passed the same bundle:
+  "PASS evidence verify artifacts/UDG-001-2026-11-08T18-23-42-322Z-24cc93bd (0 issue(s))". A bundle
+  recording a failing gate therefore cleared both evidence checks and was published as evidence.
+  Verification audited integrity - hashes, artefacts, counts, sanitisation - but never the recorded
+  gate outcome.
+  That is a runner observation about the pre-fix verifier, recorded as an observation: it belongs to
+  commit 50c6cee plus the probe branch and cannot be reproduced on main, because main no longer
+  contains the verifier that produced it. The fix it motivated is 1c735c2, and the fix is proved
+  separately, in two ways. The regression test in tests/contracts/UDG-001.test.ts builds a bundle
+  with the production writer whose every hash matches but whose status is FAIL, and asserts exactly
+  one issue code EVIDENCE-GATE-NOT-PASS, a non-zero verify exit and that evidence:summary writes no
+  file at all. Independently, re-running the corrected verifier over the retained probe bundle now
+  returns exactly that single issue on the original bytes, which is a check the reviewer can repeat:
+  pnpm evidence:verify -- --run <durable>/probe-run-42509775271/UDG-001-2026-11-08T18-23-42-322Z-24cc93bd
     Run 42510445695  commit 1c735c2  conclusion success  19/19 steps, no failed step, artifact
       udg-001-evidence; the published bundle UDG-001-2026-11-08T18-32-23-165Z-1c735c2d verifies with
       0 issues after download.
@@ -292,12 +309,18 @@ Acceptance thresholds and measured results:
                                                                      commands exit 0, 49 tests, and
                                                                      its published evidence bundle
                                                                      verifies with 0 issues. The
-                                                                     run also proves the evidence
-                                                                     policy in the negative: probe
-                                                                     run 42509775271 turned each of
-                                                                     capture failure, verification
-                                                                     failure and absent artefacts
-                                                                     into a failed job.
+                                                                     evidence policy was also
+                                                                     exercised in the negative by
+                                                                     probe run 42509775271: a capture
+                                                                     failure and an absent artefact
+                                                                     each failed a job on their own,
+                                                                     while the third job showed that
+                                                                     neither the assertion nor the
+                                                                     then-current verifier would
+                                                                     catch a bundle recording a
+                                                                     failing gate - the gap closed
+                                                                     by 1c735c2. See the
+                                                                     scoped-correction section.
   README startup prerequisites complete                              PASS: OS prerequisites, exact
                                                                      install/check/run/stop commands,
                                                                      ports 2567/5173, loopback
@@ -320,7 +343,11 @@ Acceptance thresholds and measured results:
 Raw evidence directory and integrity result:
   Committed pointer: docs/contracts/assignments/UDG-001-evidence.json (sanitised summary with the
   SHA-256 of all 21 artefacts plus the CI run url, per owner clarification C-03; raw bundles are
-  not committed).
+  not committed). Its ci.note field is generator text written when the bundle was captured, i.e.
+  before acceptance, so it states the C-05 rule as it stood then ("stays In Review until the
+  reviewer accepts"). It is not a current status claim: the status, verification, implementationSha,
+  testCounts and ci.url fields are the facts, and the acceptance itself is recorded in this file, in
+  the assignment record's state history and in docs/contracts/adoption.md.
   Raw bundles, owner-reachable durable storage under /workspace/udg-evidence:
     UDG-001-2026-11-08T18-31-49-723Z-1c735c2d                   local linux/arm64 authoritative run
       report.json sha256 e07293e74db3a43edcd19c2bc48a47d075a707a9e2e29b3cf1308d08e7e7e2c8
@@ -385,15 +412,15 @@ ADRs accepted, rejected or still proposed:
   already governs it. P02 to P10 remain Pending and were not treated as approved anywhere.
 
 Limitations and remaining downstream work:
-  1. CI reproduction is executed and green, so the only open acceptance condition is the reviewer
-     decision. Four defects were found only by running on GitHub-hosted runners and each is fixed
-     with a covering test: the shallow checkout could not see the prerequisite commit (0faf872), the
-     dependency register was not host-independent (9472fa5), evidence capture and verification could
-     fail without failing the run and a missing artefact was only a warning (50c6cee), and
-     verification accepted a bundle whose own record said the gate failed (1c735c2). The last two
-     were demonstrated on a runner by a purpose-built failing workflow rather than inferred, because
-     nothing in this container can execute a GitHub Actions job. That dependency on a real runner is
-     now recorded rather than assumed away.
+  1. CI reproduction is executed and green, and the reviewer has recorded acceptance (2026-11-08),
+     so UDG-001 has no open acceptance condition. Four defects were found only by running on
+     GitHub-hosted runners and each is fixed with a covering test: the shallow checkout could not see
+     the prerequisite commit (0faf872), the dependency register was not host-independent (9472fa5),
+     evidence capture and verification could fail without failing the run and a missing artefact was
+     only a warning (50c6cee), and verification accepted a bundle whose own record said the gate
+     failed (1c735c2). The last two were demonstrated on a runner by a purpose-built failing workflow
+     rather than inferred, because nothing in this container can execute a GitHub Actions job. That
+     dependency on a real runner is now recorded rather than assumed away.
   2. Local execution happened on Linux aarch64 and CI execution on GitHub-hosted Linux x64.
      README states Linux/macOS support, but macOS has never been exercised, and no client or browser
      path exists yet to exercise either. The CI-to-local agreement therefore proves linux arm64 and
@@ -417,24 +444,37 @@ Limitations and remaining downstream work:
      Not Started.
 
 Implementer recommendation: In Review or Blocked
-  In Review. Every acceptance condition in UDG-001.md now has measured evidence, including CI
-  reproduction on GitHub-hosted runners and a runner-executed demonstration that the evidence checks
-  cannot fail silently; what remains is the reviewer's acceptance decision, which clarification C-05
-  reserves to the owner and which the implementer must not record. Not Blocked: no contract conflict
-  or failing check remains, and no requirement was relaxed to obtain that state.
-  Recommended reviewer actions: read the declared additions A1 to A4, deviations D1 to D3 and the
+  In Review at submission. Every acceptance condition in UDG-001.md has measured evidence, including
+  CI reproduction on GitHub-hosted runners and a runner-executed demonstration that the evidence
+  checks cannot fail silently. Superseded on 2026-11-08: the reviewer accepted the work and the task
+  is Verified - see the decision fields below. Not Blocked: no contract conflict or failing check
+  remains, and no requirement was relaxed to obtain that state.
+  Recommended reviewer actions, kept as the reproduction path for the record and repeated by the
+  owner before acceptance: read the declared additions A1 to A4, deviations D1 to D3 and the
   scoped-correction section above, then run
   pnpm install --frozen-lockfile && pnpm test && pnpm test:contract -- --task UDG-001, re-run
   pnpm evidence:verify against the retained local and CI bundles (and against
   probe-run-42509775271/UDG-001-2026-11-08T18-23-42-322Z-24cc93bd, which must come back
-  EVIDENCE-GATE-NOT-PASS), open the Actions run url recorded in
-  docs/contracts/assignments/UDG-001-evidence.json together with probe run 42509775271, and only then
-  record the acceptance decision.
+  EVIDENCE-GATE-NOT-PASS), and open the Actions run url recorded in
+  docs/contracts/assignments/UDG-001-evidence.json together with probe run 42509775271.
 
 Reviewer decision and date:
-  Pending. Reviewer: project owner, GitHub account TomBResearch.
+  **Accepted, 2026-11-08**, by the project owner, GitHub account TomBResearch, recorded here on the
+  owner's instruction.
+    Accepted implementation 1c735c2d845e399cc8b3cc33adac4ba7a6081387
+    Reviewed submission    0e586b619796597266f7ec4942d24231dfb5ce62
+    Passing submission CI  https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42511785889
+  The acceptance covers the implementation and both scoped corrections, the declared additions A1 to
+  A4 and the deviations D1 to D3. Task state In Review -> Verified, recorded in
+  docs/contracts/UDG-001.md, docs/contracts/adoption.md and the assignment record's state history.
+  This decision is written down only because the owner gave it; an agent submission is never accepted
+  on its own authority.
 
 Integration owner gate decision and date:
-  Pending. Foundation evidence is this task's own bundle; Gates A, B and C are Not Run and no spike
-  gate is affected. Integration owner: project owner, GitHub account TomBResearch.
+  Recorded 2026-11-08 by the same owner instruction. UDG-001 is accepted as above, and its foundation
+  evidence is its own bundle, which verifies with zero issues on both the local linux/arm64 run and
+  the GitHub-hosted linux-x64 run. **No gate pass is claimed here**: Gates A, B and C remain Not Run,
+  no spike gate depends on UDG-001, and refinements P02 to P10 remain Pending. Assigning the next
+  task needs a separate owner decision on the relevant proposal group plus an explicit assignment.
+  Integration owner: project owner, GitHub account TomBResearch.
 ```
