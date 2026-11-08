@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "taskId": "UDG-001",
-  "runId": "UDG-001-2026-11-08T11-36-22-801Z-50205c0b",
-  "generatedAt": "2026-11-08T11:36:36.605Z",
-  "generatorCommand": "pnpm evidence:summary -- --run <bundle> --out <file> (bundle UDG-001-2026-11-08T11-36-22-801Z-50205c0b)",
+  "runId": "UDG-001-2026-11-08T12-37-46-915Z-13089be8",
+  "generatedAt": "2026-11-08T12:38:41.409Z",
+  "generatorCommand": "pnpm evidence:summary -- --run <bundle> --out <file> (bundle UDG-001-2026-11-08T12-37-46-915Z-13089be8)",
   "durableStorage": {
-    "location": "/workspace/udg-evidence/UDG-001-2026-11-08T11-36-22-801Z-50205c0b",
+    "location": "/workspace/udg-evidence/UDG-001-2026-11-08T12-37-46-915Z-13089be8",
     "note": "Raw bundle retained outside Git per clarification C-03. The hashes below identify the retained bytes; a mismatch means the stored bundle is not the run this summary describes."
   },
   "verification": {
@@ -14,7 +14,7 @@
     "issueCount": 0
   },
   "status": "PASS",
-  "implementationSha": "50205c0b8c9a0c8731d5c390029c2d1f8adac6e2",
+  "implementationSha": "13089be842b12d2906f2eeb1a355ad71478d9d84",
   "branch": "main",
   "workingTreeDirty": false,
   "prerequisiteShas": [
@@ -24,13 +24,13 @@
   "baselineSpecHash": "b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf",
   "dependencyLockHash": "d2cccebdb42f5686c8d7b172a0810d07b95cc73685690459c0ea225291e202c8",
   "configHashes": {
-    "taskContract": "d0fd0e24220c80f06cb9e3fc99cfaffb06e233680abf774162e5e0daefc0c171",
+    "taskContract": "8d14ed5eda08b7b151069576dae18decaeb0403e0d4c20b902f2f298ccb15d80",
     "tsconfigBase": "da4b844063b8abb6f48677c87c8996accf9e77cf1f7e5792827cd811edcb394d",
     "boundaryRuleTable": "8b423148e09f4edc83f475d418f5c3ee81e7f9a0493c8d63ce89a35b07de84bd",
     "boundaryFixtures": "141ad56e3f81c2321515769ba93353dd2e3982c1749e8a3dbc6d44170bbf71af",
     "envExample": "e86500e8724b74788191b57467a75945cc88b8d75d42b055f1f86be4c9d5e6c4",
     "npmrc": "267d57bf2a964bda8f0b89d32edebf8bff186348ac5def3a574a1d6cbb42e9b6",
-    "ciWorkflow": "910e6d1cb024bb125cc796c35290da28d86d45a7f7da4896eec610ff2140ff2d"
+    "ciWorkflow": "3fea42f2f675b6fc9d5524c9e26d88b4f6a26d46d573cc67627f6a385eaba6cc"
   },
   "fixtureHashes": {
     "UDG-001-boundaries-allowed": "39b12c378d80fb90dd1469c865eeece5ba6dded84320be1a793daf69fd29bbd5:141ad56e3f81c232",
@@ -42,7 +42,7 @@
     "UDG-001-strict-type-errors": "bd4d0988ddb11b9239904ef5f6bb381d9bccff8167a111c83b012fb44738ffb8:da4b844063b8abb6"
   },
   "testCounts": {
-    "tests": 42,
+    "tests": 43,
     "failures": 0,
     "errors": 0,
     "skipped": 0
@@ -50,7 +50,7 @@
   "suites": [
     {
       "name": "vitest",
-      "tests": 42,
+      "tests": 43,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
@@ -62,42 +62,42 @@
     {
       "label": "install-frozen",
       "exitCode": 0,
-      "durationMs": 53
+      "durationMs": 45
     },
     {
       "label": "typecheck",
       "exitCode": 0,
-      "durationMs": 2687
+      "durationMs": 2388
     },
     {
       "label": "lint",
       "exitCode": 0,
-      "durationMs": 1417
+      "durationMs": 1261
     },
     {
       "label": "test",
       "exitCode": 0,
-      "durationMs": 2332
+      "durationMs": 2281
     },
     {
       "label": "build",
       "exitCode": 0,
-      "durationMs": 1518
+      "durationMs": 1357
     },
     {
       "label": "test-boundaries",
       "exitCode": 0,
-      "durationMs": 824
+      "durationMs": 733
     },
     {
       "label": "test-fixtures",
       "exitCode": 0,
-      "durationMs": 845
+      "durationMs": 729
     },
     {
       "label": "test-contract-UDG-001",
       "exitCode": 0,
-      "durationMs": 2353
+      "durationMs": 2369
     }
   ],
   "measured": {
@@ -129,7 +129,8 @@
     "dependencyRegister": {
       "current": true,
       "pendingLibraryGroups": 7,
-      "ciActionsPinned": 3
+      "ciActionsPinned": 3,
+      "hostIndependent": true
     },
     "boundaryFixtures": {
       "total": 6,
@@ -191,6 +192,7 @@
       "rejectsSelfReportedSanitisationFailure": true,
       "machinePathAliasing": true,
       "junitParser": true,
+      "ciClaim": "pending-owner-run",
       "summaryCommitted": true,
       "summaryArtefacts": 21
     },
@@ -207,44 +209,45 @@
       "failingCommands": [],
       "sanitisationFailures": [],
       "pnpmStoreRecorded": true,
-      "totalDurationMs": 12029,
+      "totalDurationMs": 11163,
       "keepGoing": false
     }
   },
   "ci": {
-    "status": "pending-owner-run",
-    "note": "Clarification C-05: UDG-001 stays In Review until .github/workflows/ci.yml runs green on the pushed commit. The local run is recorded here; CI reproduction is not claimed."
+    "status": "success (GitHub-hosted ubuntu-24.04, linux-x64)",
+    "url": "https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42479920170",
+    "note": "Workflow ci on the pushed commit, identified by the url field. UDG-001 still stays In Review until the reviewer accepts the work (clarification C-05)."
   },
   "artifacts": [
     {
       "path": "boundary-report.json",
-      "sha256": "7f29d6bcc43eecdbce07312c5f18dd3b16dca9b7e0a8021a27657cb19dc75412",
+      "sha256": "5fb084165f1bb911cb0b2d384b09b97d9a8e295f090e13280d7d13574cc46004",
       "bytes": 253
     },
     {
       "path": "build.log",
-      "sha256": "ac0d2926294f09809b444819bdac13d38a35c24c58bbd4a04a79ada068540480",
+      "sha256": "7fcac15ea1d4cfa998d7f530cec6025b4deb9d0967e5a90106b1e7f734607ce1",
       "bytes": 774
     },
     {
       "path": "checksums.sha256",
-      "sha256": "001f5527f0190c8794f7df7545a0a8152ce41020661e01efcf6d87b5bbad84c8",
+      "sha256": "00af6698ba71ed56e8abc9fab68efb4814da0ff9fb4150011d4c59d434a08750",
       "bytes": 1802
     },
     {
       "path": "commands.json",
-      "sha256": "645f457a8a76cd625faed4601464716059eb408aaacd4c029ab316a17cfe7a2f",
+      "sha256": "61635b184688a6c756492d0fe60dc1ea4b92b5dc0e7d26bb0dfaa2764b21fe18",
       "bytes": 3759
     },
     {
       "path": "environment.json",
-      "sha256": "1934a276422b24cb9484fb4eee1447fe7cd07cecffac0b7362b7c32118a4e0b5",
+      "sha256": "ed7c3f074ef9922120346fb0e196f794fcddca255bf5861f63f0cedeaeab5dbb",
       "bytes": 656
     },
     {
       "path": "junit.xml",
-      "sha256": "86b389d37678ffd0360748018e3be54ef7aeb6bdd32a218821c4939da285cc3a",
-      "bytes": 9195
+      "sha256": "c3f2a4d2a7fc4cb7803d1d758eedcbe0629128160c0ba80ccab7ffa1fbc83afa",
+      "bytes": 9407
     },
     {
       "path": "logs/install-frozen.stderr.log",
@@ -253,8 +256,8 @@
     },
     {
       "path": "logs/install-frozen.stdout.log",
-      "sha256": "2f52c63c7cc25ca610b9cebc5e8867fc08d17c1f6ac9d5301f147488a03c2318",
-      "bytes": 383
+      "sha256": "940c101b01aba17fb4cfd13bd00c0572b756aa2e040f7d6cf4b9c19eb15745ae",
+      "bytes": 382
     },
     {
       "path": "logs/lint.stderr.log",
@@ -283,8 +286,8 @@
     },
     {
       "path": "logs/test-contract-UDG-001.stdout.log",
-      "sha256": "08078c3d5c2cc58b66aec31a12d986c177d624f980129b39f3ca91ee143b9fa4",
-      "bytes": 271
+      "sha256": "2c12af7e1284a4bd77adfbf423cf0783a2f1642a697f2e05b504009f30d58620",
+      "bytes": 352
     },
     {
       "path": "logs/test-fixtures.stderr.log",
@@ -303,8 +306,8 @@
     },
     {
       "path": "logs/test.stdout.log",
-      "sha256": "12c0c0f294fe0282edaa053683ba770e165ed90d048a606f74a101d04d19353d",
-      "bytes": 355
+      "sha256": "b0b66f800bf646a009eefdddc8a5f4eb6eee77d124288462756b6f51a29245f8",
+      "bytes": 246
     },
     {
       "path": "logs/typecheck.stderr.log",
@@ -313,13 +316,13 @@
     },
     {
       "path": "logs/typecheck.stdout.log",
-      "sha256": "2fb331fd03af113193407169ae5cc6accd0d055f6840861e65d543b6a259bbb2",
+      "sha256": "dc5f317f1e3ff9aed131637de319f329356bd14f5384820380b9bc9c9a691d27",
       "bytes": 712
     },
     {
       "path": "report.json",
-      "sha256": "9fb9ba9df66d8ccd865a805cc508d76b2eed4ba0af02d4ae5bcc90c9ffddb48d",
-      "bytes": 11821
+      "sha256": "d3d5b098b579bdd6a6545d2ccfcc5c055b0785cd225945bb0bbfef39a461f142",
+      "bytes": 11890
     }
   ]
 }

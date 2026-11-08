@@ -101,9 +101,11 @@ zero discovered tests.
 corepack-pinned pnpm `12.18.0`, a frozen installation, and third-party actions pinned to commit
 shas. It uploads the evidence directory so logs and machine-readable results survive a failure.
 
-Per owner clarification C-05, UDG-001 stays **In Review** until this workflow has actually run green
-on the pushed commit; the local reproduction of the identical command sequence is recorded in the
-completion report, and CI reproduction is not treated as passed before that run exists.
+Per owner clarification C-05 the workflow has to run green on the pushed commit before UDG-001 can
+be Verified. It has: run [42479920170](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42479920170)
+on commit `13089be` completed with 17 of 17 steps success on `ubuntu-24.04`. The task stays
+**In Review** until the reviewer records acceptance; the local reproduction of the identical command
+sequence and the CI bundle are both retained and verified.
 
 ## Evidence
 
