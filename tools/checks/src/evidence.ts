@@ -11,6 +11,10 @@
  *   evidence.js checksums [--write]
  *   evidence.js summary   --run <bundle> [--out <file>] [--storage <location>] [--ci-status <s>] [--ci-url <u>]
  *
+ * verify and summary are gates, not neutral audits: a bundle whose own record says FAIL, BLOCKED or
+ * INVALID is refused (EVIDENCE-GATE-NOT-PASS) even when every stored hash matches, because a
+ * self-consistent record of a failing run proves nothing about completion.
+ *
  * Sanitisation rules (19.1): no bearer or reconnect tokens, cookies, credentials or private
  * machine paths. The environment record therefore contains no variable dump, the working
  * directory is the alias REPO_ROOT, and the host name is replaced by a per-run alias.
@@ -638,6 +642,7 @@ export type VerifyCode =
   | 'EVIDENCE-REPORT-UNPARSEABLE'
   | 'EVIDENCE-SCHEMA-FIELD'
   | 'EVIDENCE-STATUS-INVALID'
+  | 'EVIDENCE-GATE-NOT-PASS'
   | 'EVIDENCE-FILE-MISSING'
   | 'EVIDENCE-FILE-EMPTY'
   | 'EVIDENCE-FILE-HASH'
@@ -722,6 +727,17 @@ export const verify = (root: string, runRelative: string): VerifyResult => {
   }
   if (!['PASS', 'FAIL', 'BLOCKED', 'INVALID'].includes(report.status)) {
     issues.push({ code: 'EVIDENCE-STATUS-INVALID', detail: `status "${report.status}" is not PASS, FAIL, BLOCKED or INVALID` });
+  } else if (report.status !== 'PASS') {
+    // `verify` is the gate command that CI and the reviewer run, not a neutral audit. A bundle can
+    // be perfectly self-consistent and still record a failing run - probe run 42509775271 showed a
+    // capture step failing while its own verification step stayed green - so a non-PASS status must
+    // refuse here as well, otherwise a red gate could be reported as verified evidence.
+    issues.push({
+      code: 'EVIDENCE-GATE-NOT-PASS',
+      detail:
+        `status "${report.status}" is not PASS: the bundle is internally consistent but records a failing gate, `
+        + 'so verification cannot report success',
+    });
   }
   if (!HEX64.test(report.contractHash)) issues.push({ code: 'EVIDENCE-SCHEMA-FIELD', detail: 'contractHash is not 64 hex characters' });
   if (!HEX64.test(report.baselineSpecHash)) issues.push({ code: 'EVIDENCE-SCHEMA-FIELD', detail: 'baselineSpecHash is not 64 hex characters' });
@@ -1432,6 +1448,17 @@ const summaryMain = (flags: CliArgs['flags']): number => {
   });
   const text = `${JSON.stringify(summary, null, 2)}\n`;
 
+  // A summary is a completion claim, so a bundle that does not verify is never written out at all:
+  // the refusal is the output, and the exit code is non-zero whatever else happens.
+  if (!summary.verification.ok) {
+    process.stderr.write(
+      `refused to produce a summary for ${run}: verification reported ${String(issueCount)} issue(s), `
+        + `status ${summary.status}\n` // e.g. EVIDENCE-GATE-NOT-PASS for a bundle that records a failing run
+        + 'A summary is only written for a bundle that verifies as PASS.\n',
+    );
+    return 1;
+  }
+
   if (out !== undefined) {
     const absoluteOut = resolve(root, out);
     writeFileSyncEnsuring(absoluteOut, text);
@@ -1445,14 +1472,14 @@ const summaryMain = (flags: CliArgs['flags']): number => {
       return 1;
     }
     process.stdout.write(
-      `wrote ${out}: ${String(summary.artifacts.length)} artefact(s), verification ${summary.verification.ok ? 'PASS' : 'FAIL'} `
-        + `(${String(issueCount)} issue(s)), status ${summary.status}\n`,
+      `wrote ${out}: ${String(summary.artifacts.length)} artefact(s), verification PASS `
+        + `(0 issue(s)), status ${summary.status}\n`,
     );
-    return summary.verification.ok ? 0 : 1;
+    return 0;
   }
 
   process.stdout.write(text);
-  return summary.verification.ok ? 0 : 1;
+  return 0;
 };
 
 const main = (): number => {

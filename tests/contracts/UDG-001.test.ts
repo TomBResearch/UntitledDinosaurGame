@@ -831,6 +831,32 @@ describe('evidence capture schema and verification', () => {
     }
   });
 
+  it('refuses a self-consistent bundle that records a failing gate (runner probe regression)', () => {
+    const scratch = tempDir('evidence-not-pass');
+    try {
+      const { dir } = buildBundle(scratch, { status: 'FAIL' });
+      const codes = codesOf(verify(ROOT, dir).issues);
+      // Nothing is corrupt and every hash matches; the run simply did not pass, and that alone has
+      // to refuse verification. Probe run 42509775271 caught the opposite behaviour on a runner.
+      expect(codes).toEqual(['EVIDENCE-GATE-NOT-PASS']);
+
+      const cli = run(['node', join(DIST, 'evidence.js'), 'verify', '--run', dir], ROOT);
+      expect(cli.status).toBe(1);
+      expect(`${cli.stdout}${cli.stderr}`).toContain('EVIDENCE-GATE-NOT-PASS');
+
+      // A completion summary is never written for such a bundle, to disk or to stdout.
+      const outPath = join(scratch, 'summary.json');
+      const summary = run(['node', join(DIST, 'evidence.js'), 'summary', '--run', dir, '--out', outPath], ROOT);
+      expect(summary.status).toBe(1);
+      expect(existsSync(outPath), 'a failing bundle must not produce a committed summary').toBe(false);
+      expect(`${summary.stdout}${summary.stderr}`).toContain('only written for a bundle that verifies as PASS');
+      expect(run(['node', join(DIST, 'evidence.js'), 'summary', '--run', dir], ROOT).status).toBe(1);
+      record('evidence.refusesNonPassGate', true);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
   it('rejects unsanitised credential material and private paths', () => {
     const scratch = tempDir('evidence-secret');
     try {

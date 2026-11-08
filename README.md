@@ -107,6 +107,13 @@ publishes its logs and machine-readable results. A missing artefact is an error
 `tests/contracts/UDG-001.test.ts` parses the workflow, maps every evidence failure to a failed job
 conclusion, and executes the assertion script against empty, incomplete and complete bundles.
 
+That policy was also demonstrated on the runner itself, in probe run [42509775271](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42509775271)
+(three jobs on the now-deleted branch `udg-001-ci-negative-probe`, `main` untouched): a capture that
+could not start, a verification of a corrupted bundle and a publication with no artefacts each ended
+in a failed job, and the job whose evidence still existed uploaded it anyway. The probe also exposed
+a real hole — verification had accepted a bundle that recorded a failing run — which is why a
+non-PASS bundle is now refused outright.
+
 Per owner clarification C-05 the workflow has to run green on the pushed commit before UDG-001 can
 be Verified. It has: run [42479920170](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42479920170)
 on commit `13089be` completed with 17 of 17 steps success on `ubuntu-24.04`. The task stays
@@ -119,8 +126,12 @@ A run writes `artifacts/RUN_ID/` containing `report.json`, `environment.json`, `
 `junit.xml`, `boundary-report.json`, `build.log`, `logs/` and `checksums.sha256`. `pnpm
 evidence:verify` re-checks the report schema, required artefacts, non-empty and matching hashes,
 zero skipped or flaky tests, command exit codes and the absence of credentials or private machine
-paths. `artifacts/` is not committed: raw bundles are copied to owner-reachable durable storage and
-only sanitised summaries plus hashes are committed, per clarification C-03.
+paths. Verification and `pnpm evidence:summary` are gates rather than neutral audits: a bundle whose
+own record says `FAIL`, `BLOCKED` or `INVALID` is refused with `EVIDENCE-GATE-NOT-PASS` even when
+every stored hash matches, and no summary file is written for it, because a self-consistent record of
+a failing run proves nothing about completion. `artifacts/` is not committed: raw bundles are copied
+to owner-reachable durable storage and only sanitised summaries plus hashes are committed, per
+clarification C-03.
 
 ## Scope and commands
 
