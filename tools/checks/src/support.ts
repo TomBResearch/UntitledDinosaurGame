@@ -491,24 +491,43 @@ export const git = (root: string, args: readonly string[]): string =>
  * Replace machine-specific paths with stable aliases before anything is written into an evidence
  * bundle (docs/validation/evidence-requirements.md 19.1 forbids private machine paths).
  */
-export const sanitiseMachineText = (text: string, extraRoots: readonly string[] = []): string => {
+export const sanitiseMachineText = (text: string, extraRoots: readonly (readonly [string, string])[] = []): string => {
   const home = homedir();
   const tmp = tmpdir();
   const repo = process.cwd();
-  const pairs: readonly (readonly [string, string])[] = [
+  const base: readonly (readonly [string, string])[] = [
     [repo, 'REPO_ROOT'],
     [home, '<HOME>'],
     [tmp, '<TMP>'],
-    ...extraRoots.map((root): readonly [string, string] => [root, 'REPO_ROOT']),
   ];
+  const pairs: readonly (readonly [string, string])[] = [...base, ...extraRoots].filter(([path]) => path.length > 2);
+  // Longest path first so a nested root is replaced before its parent prefix.
+  const ordered = [...pairs].sort((a, b) => b[0].length - a[0].length);
   let out = text;
-  for (const [path, alias] of pairs) {
-    if (path.length > 2) out = out.split(path).join(alias);
-  }
+  for (const [path, alias] of ordered) out = out.split(path).join(alias);
   out = out.replaceAll(/\\/g, '/');
   out = out.replace(/\/home\/[A-Za-z0-9._-]+/g, '<HOME>');
   out = out.replace(/\/Users\/[A-Za-z0-9._-]+/g, '<HOME>');
   out = out.replace(/[A-Za-z]:\/Users\/[A-Za-z0-9._-]+/g, '<HOME>');
   return out;
+};
+
+/**
+ * Filesystem roots that must never appear literally in an evidence bundle (owner clarification
+ * C-03 forbids sensitive machine details). Each root gets a stable alias so two runs on different
+ * machines still produce comparable logs.
+ */
+export const machineRoots = (
+  repoRoot: string,
+  bundleDir: string,
+  storePath: string | undefined,
+): readonly (readonly [string, string])[] => {
+  const parent = repoRoot.includes('/') ? repoRoot.slice(0, repoRoot.lastIndexOf('/')) : '';
+  return [
+    [bundleDir, 'BUNDLE_ROOT'],
+    [repoRoot, 'REPO_ROOT'],
+    ...(storePath === undefined || storePath === '' ? [] : ([[storePath, 'PNPM_STORE']] as const)),
+    ...(parent.length > 2 ? ([[parent, 'CHECKOUT_PARENT']] as const) : []),
+  ];
 };
 

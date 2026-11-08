@@ -16,7 +16,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { cpus, release, arch, platform, machine, totalmem } from 'node:os';
+import { cpus, release, arch, platform, machine, totalmem, homedir, tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
 import {
@@ -27,6 +27,7 @@ import {
   readOptional,
   requireFlag,
   runCommand,
+  machineRoots,
   sha256Bytes,
   sha256Canonical,
   sha256File,
@@ -357,6 +358,17 @@ const fixtureHashes = (root: string): Record<string, string> => {
 const measurementsPath = (root: string, taskId: string): string =>
   join(root, 'artifacts', '.local', 'measurements', `${taskId}.json`);
 
+/** The pnpm content-addressable store path, used to keep absolute store paths out of logs. */
+const pnpmStorePath = (root: string): string | undefined => {
+  try {
+    const result = runCommand(['pnpm', 'store', 'path'], { cwd: root });
+    const path = result.stdout.trim();
+    return result.exitCode === 0 && path.length > 2 ? path : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const readMeasurements = (root: string, taskId: string): Record<string, unknown> => {
   const raw = readOptional(measurementsPath(root, taskId));
   if (raw === undefined) return {};
@@ -372,6 +384,7 @@ export interface CaptureResult {
   readonly runDir: RepoPath;
   readonly status: EvidenceStatus;
   readonly failingCommands: readonly string[];
+  readonly sanitisationFailures: readonly string[];
 }
 
 export const capture = (root: string, taskId: string, outDir: string, keepGoing: boolean): CaptureResult => {
@@ -385,6 +398,18 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
   const runId = `${taskId}-${timestamp()}-${shortSha(head)}`;
   const absoluteRunDir = join(resolve(root, outDir), runId);
   const runAlias = sha256Bytes(`${runId}-${machine()}`).slice(0, 8);
+  const storePath = pnpmStorePath(root);
+  const roots = machineRoots(root, absoluteRunDir, storePath);
+  // Every artefact is sanitised; a leftover root is a capture failure, not a warning.
+  const sanitisationFailures: string[] = [];
+  const clean = (label: string, text: string): string => {
+    const sanitised = sanitiseMachineText(text, roots);
+    const leaked = [absoluteRunDir, root, homedir(), tmpdir(), ...(storePath === undefined ? [] : [storePath])].filter(
+      (path) => path.length > 2 && sanitised.includes(path),
+    );
+    if (leaked.length > 0) sanitisationFailures.push(`${label} (${String(leaked.length)} machine path(s))`);
+    return sanitised;
+  };
 
   writeFileSyncEnsuring(join(absoluteRunDir, 'logs', '.keep'), '');
 
@@ -397,7 +422,7 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
     for (const [key, value] of Object.entries(step.env ?? {})) {
       env[key] = value
         .replace('BUNDLE/', `${absoluteRunDir}/`)
-        .replace('MEAS/', join(root, 'artifacts', '.local', 'measurements'));
+        .replace('MEAS/', `${join(root, 'artifacts', '.local', 'measurements')}/`);
     }
     const start = new Date().toISOString();
     const result: RunResult = runCommand(step.argv, {
@@ -410,12 +435,12 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
     let stdoutPath: RepoPath | null = null;
     let stderrPath: RepoPath | null = null;
     if (step.buildLog === true) {
-      writeFileSyncEnsuring(join(absoluteRunDir, 'build.log'), sanitiseMachineText(`${result.stdout}${result.stderr}`));
+      writeFileSyncEnsuring(join(absoluteRunDir, 'build.log'), clean('build.log', `${result.stdout}${result.stderr}`));
     } else {
       stdoutPath = `logs/${step.label}.stdout.log`;
       stderrPath = `logs/${step.label}.stderr.log`;
-      writeFileSyncEnsuring(join(absoluteRunDir, stdoutPath), sanitiseMachineText(result.stdout));
-      writeFileSyncEnsuring(join(absoluteRunDir, stderrPath), sanitiseMachineText(result.stderr));
+      writeFileSyncEnsuring(join(absoluteRunDir, stdoutPath), clean(stdoutPath, result.stdout));
+      writeFileSyncEnsuring(join(absoluteRunDir, stderrPath), clean(stderrPath, result.stderr));
     }
     records.push({
       label: step.label,
@@ -441,7 +466,7 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
   // Reporters can print absolute paths; sanitise before hashing so the bundle stays portable.
   const junitAbsolute = join(absoluteRunDir, 'junit.xml');
   if (existsSync(junitAbsolute)) {
-    writeFileSyncEnsuring(junitAbsolute, sanitiseMachineText(readFileSync(junitAbsolute, 'utf8')));
+    writeFileSyncEnsuring(junitAbsolute, clean('junit.xml', readFileSync(junitAbsolute, 'utf8')));
   }
 
   writeJson(join(absoluteRunDir, 'environment.json'), environmentRecord(root, runAlias));
@@ -468,7 +493,13 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
     },
   ];
 
-  const status: EvidenceStatus = failing.length === 0 && counts.tests > 0 && counts.failures === 0 ? 'PASS' : 'FAIL';
+  const status: EvidenceStatus =
+    failing.length === 0 &&
+    sanitisationFailures.length === 0 &&
+    counts.tests > 0 &&
+    counts.failures === 0
+      ? 'PASS'
+      : 'FAIL';
   writeBundleArtifacts(root, plan, absoluteRunDir, runId, {
     runStart,
     runEnd,
@@ -480,6 +511,8 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
       capture: {
         commandsRun: records.length,
         failingCommands: failing,
+        sanitisationFailures: sanitisationFailures,
+        pnpmStoreRecorded: storePath !== undefined,
         totalDurationMs: records.reduce((total, record) => total + record.durationMs, 0),
         keepGoing,
       },
@@ -489,7 +522,7 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
   // Pointer so CI can verify the bundle without parsing the run id out of stdout.
   writeFileSyncEnsuring(join(resolve(root, outDir), `latest-${taskId}.txt`), `${toRepoPath(root, absoluteRunDir)}\n`);
 
-  return { runDir: toRepoPath(root, absoluteRunDir), status, failingCommands: failing };
+  return { runDir: toRepoPath(root, absoluteRunDir), status, failingCommands: failing, sanitisationFailures };
 };
 
 /**
@@ -545,6 +578,7 @@ const writeReport = (root: string, plan: CapturePlan, absoluteRunDir: string, ru
     prerequisiteShas: prerequisiteShas(root),
     dependencyLockHash: hashOf(root, 'pnpm-lock.yaml'),
     configHashes: {
+      taskContract: hashOf(root, `docs/contracts/${plan.taskId}.md`),
       tsconfigBase: baseTsconfigHash(root),
       boundaryRuleTable: ruleTableHash(),
       boundaryFixtures: boundaryConfigHash(root),
@@ -711,7 +745,10 @@ export const verify = (root: string, runRelative: string): VerifyResult => {
       continue;
     }
     const size = statSync(absolute).size;
-    if (size === 0) issues.push({ code: 'EVIDENCE-FILE-EMPTY', detail: ref.path });
+    // An empty stderr stream is the expected result of a successful command, and the logs
+    // directory keeps a .keep marker so an all-empty bundle still has a traceable directory.
+    const legitimatelyEmpty = /^logs\/[^/]+\.stderr\.log$/.test(ref.path) || basename(ref.path) === '.keep';
+    if (size === 0 && !legitimatelyEmpty) issues.push({ code: 'EVIDENCE-FILE-EMPTY', detail: ref.path });
     if (size !== ref.bytes) {
       issues.push({ code: 'EVIDENCE-FILE-HASH', detail: `${ref.path}: recorded ${String(ref.bytes)} bytes, found ${String(size)}` });
     }
@@ -848,6 +885,18 @@ export const verify = (root: string, runRelative: string): VerifyResult => {
     issues.push({ code: 'EVIDENCE-SECRET', detail: `${hit.file}:${String(hit.line)} matches ${hit.pattern}` });
   }
 
+  // A run that recorded its own sanitisation failures cannot claim PASS.
+  const captureRecord: unknown = report.measured['capture'];
+  if (typeof captureRecord === 'object' && captureRecord !== null) {
+    const recorded = (captureRecord as { readonly sanitisationFailures?: unknown }).sanitisationFailures;
+    if (Array.isArray(recorded) && recorded.length > 0 && report.status === 'PASS') {
+      issues.push({
+        code: 'EVIDENCE-SECRET',
+        detail: `capture recorded ${String(recorded.length)} artefact(s) with unaliased machine paths`,
+      });
+    }
+  }
+
   return { ok: issues.length === 0, issues };
 };
 
@@ -862,6 +911,9 @@ const captureMain = (flags: CliArgs['flags']): number => {
   process.stdout.write(`${result.status} ${result.runDir}\n`);
   if (result.failingCommands.length > 0) {
     process.stderr.write(`failing commands: ${result.failingCommands.join(', ')}\n`);
+  }
+  if (result.sanitisationFailures.length > 0) {
+    process.stderr.write(`unsanitised artefacts: ${result.sanitisationFailures.join(', ')}\n`);
   }
   process.stdout.write(
     `verify with: pnpm evidence:verify -- --run ${result.runDir}\n` +

@@ -23,9 +23,11 @@ import {
   checkWorkspace,
   decideContractRun,
   guardUnavailable,
+  machineRoots,
   parseJunit,
   planContractRun,
   ruleTableHash,
+  sanitiseMachineText,
   verify,
   writeBundleArtifacts,
   CONTRACT_TASK_IDS,
@@ -816,6 +818,35 @@ describe('evidence capture schema and verification', () => {
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
+  });
+
+  it('rejects a bundle whose own capture reported unsanitised artefacts', () => {
+    const scratch = tempDir('evidence-sanitise-selfreport');
+    try {
+      const { dir } = buildBundle(scratch, {
+        status: 'PASS',
+        measurements: { capture: { commandsRun: 8, failingCommands: [], sanitisationFailures: ['logs/test.stdout.log (1 machine path(s))'] } },
+      });
+      expect(codesOf(verify(ROOT, dir).issues)).toContain('EVIDENCE-SECRET');
+      record('evidence.rejectsSelfReportedSanitisationFailure', true);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it('aliases every machine path before it can enter a bundle (clarification C-03)', () => {
+    const roots = machineRoots('/checkout/repo', '/evidence/store/RUN-1', '/cache/pnpm-store/v11');
+    const raw =
+      'wrote /evidence/store/RUN-1/junit.xml from /checkout/repo/tools/checks with store /cache/pnpm-store/v11 ' +
+      'and a developer file /home/example/notes.txt';
+    const out = sanitiseMachineText(raw, roots);
+    for (const [path] of roots) expect(out, path).not.toContain(path);
+    expect(out).not.toContain('/home/example');
+    expect(out).toContain('BUNDLE_ROOT/junit.xml');
+    expect(out).toContain('REPO_ROOT/tools/checks');
+    expect(out).toContain('PNPM_STORE');
+    expect(out).toContain('<HOME>');
+    record('evidence.machinePathAliasing', true);
   });
 
   it('parses junit counts and flags duplicate case names', () => {
