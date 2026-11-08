@@ -478,3 +478,20 @@ Integration owner gate decision and date:
   task needs a separate owner decision on the relevant proposal group plus an explicit assignment.
   Integration owner: project owner, GitHub account TomBResearch.
 ```
+
+Retention wording correction (addendum, recorded 2026-11-08 after acceptance):
+```
+  Two phrases in this record overstated what the evidence store provides. "Owner-reachable durable
+  storage under /workspace/udg-evidence" and "to be mirrored to the owner's durable store" describe
+  reachability, not redundancy. /workspace/udg-evidence sits on the same host and storage as this
+  checkout, so it is a working copy: it protects against GitHub artefact expiry (30 days from
+  2026-11-08, i.e. 2026-12-08) and against losing the artifacts directory, and nothing more. Host
+  loss, filesystem corruption or an accidental recursive delete would remove every retained bundle at
+  once; Git holds the documents and hashes, so tampering after such a loss would be detectable, but
+  the retained bytes could not be re-verified at all.
+  Corrected statement: the accepted implementation, the reviewed submission and the acceptance commit
+  each have captured, verified bundles mirrored out of Git into one host-side location, and no
+  independent copy exists yet. Backup designation remains an open owner decision, recorded as D4 in
+  docs/contracts/assignments/UDG-002-readiness-proposal.md, which also carries the corrected retention
+  analysis in its section 6. This addendum changes no evidence, no hash and no decision above; it
+  corrects a characterisation and leaves the residual risk recorded as open rather than closed.
