@@ -12,7 +12,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, cpSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
@@ -897,6 +897,70 @@ describe('planning records stay consistent with the implementation', () => {
     record('planning.prerequisiteCommit', prerequisite ?? 'missing');
   });
 
+  it('commits a sanitised evidence summary whose integrity fields are complete (C-03)', () => {
+    const path = 'docs/contracts/assignments/UDG-001-evidence.json';
+    expect(existsSync(join(ROOT, path)), path).toBe(true);
+    const summary = json<{
+      schemaVersion: number;
+      taskId: string;
+      runId: string;
+      durableStorage: { location: string; note: string };
+      verification: { command: string; ok: boolean; issueCount: number };
+      status: string;
+      implementationSha: string;
+      workingTreeDirty: boolean;
+      prerequisiteShas: string[];
+      contractHash: string;
+      baselineSpecHash: string;
+      dependencyLockHash: string;
+      configHashes: Record<string, string>;
+      testCounts: { tests: number; failures: number; errors: number; skipped: number };
+      commands: { label: string; exitCode: number; durationMs: number }[];
+      ci: { status: string; note: string };
+      artifacts: { path: string; sha256: string; bytes: number }[];
+    }>(path);
+
+    const hex64 = /^[0-9a-f]{64}$/;
+    expect(summary.taskId).toBe('UDG-001');
+    expect(summary.runId).toMatch(/^UDG-001-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}/);
+    expect(summary.implementationSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(summary.prerequisiteShas[0]).toBe('555735b6b3b2b72ec23fb99f2db26cbe3cef67a2');
+    expect(summary.contractHash).toMatch(hex64);
+    expect(summary.baselineSpecHash).toBe('b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf');
+    expect(summary.dependencyLockHash).toMatch(hex64);
+    for (const [name, hash] of Object.entries(summary.configHashes)) expect(hash, name).toMatch(hex64);
+
+    // The summary must describe a real, verified, non-empty run, and must not claim CI success.
+    expect(summary.testCounts.tests).toBeGreaterThan(0);
+    expect(summary.testCounts.skipped).toBe(0);
+    expect(summary.commands.length).toBe(8);
+    expect(summary.commands.every((command) => command.exitCode === 0)).toBe(true);
+    expect(summary.verification.ok).toBe(true);
+    expect(summary.verification.issueCount).toBe(0);
+    expect(summary.ci.status).toBe('pending-owner-run');
+    expect(summary.artifacts.length).toBeGreaterThan(0);
+    for (const artifact of summary.artifacts) {
+      expect(artifact.sha256, artifact.path).toMatch(hex64);
+      // A successful command writes nothing to stderr, so that stream may legitimately be empty.
+      const mayBeNull = /^logs\/[^/]+\.stderr\.log$/.test(artifact.path);
+      expect(artifact.bytes, artifact.path).toBeGreaterThanOrEqual(mayBeNull ? 0 : 1);
+      expect(artifact.path).not.toContain('..');
+    }
+    for (const required of ['report.json', 'junit.xml', 'environment.json', 'commands.json', 'checksums.sha256']) {
+      expect(summary.artifacts.some((artifact) => artifact.path === required), required).toBe(true);
+    }
+    expect(summary.workingTreeDirty).toBe(false);
+
+    // The committed summary itself must carry no credential or private path.
+    const raw = readFileSync(join(ROOT, path), 'utf8');
+    expect(raw).not.toMatch(/\/(?:home|Users)\/[A-Za-z0-9._-]+\//);
+    expect(raw).not.toMatch(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}\b/);
+    expect(raw).not.toMatch(/"(?:password|secret|clientSecret|token)"\s*:\s*"[^"]{4,}"/i);
+    expect(raw).not.toContain(homedir());
+    record('evidence.summaryCommitted', true);
+    record('evidence.summaryArtefacts', summary.artifacts.length);
+  });
+
   it('ships an ADR template and an environment example with no secrets', () => {
     expect(existsSync(join(ROOT, 'docs/adr/0000-template.md'))).toBe(true);
     const example = readFileSync(join(ROOT, '.env.example'), 'utf8');
@@ -924,6 +988,7 @@ describe('planning records stay consistent with the implementation', () => {
       'pnpm assets:build',
       'pnpm assets:verify',
       'pnpm evidence:verify',
+      'pnpm evidence:summary',
       'pnpm contracts:checksums',
     ]) {
       expect(readme, command).toContain(command);

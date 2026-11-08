@@ -9,15 +9,16 @@
  *   evidence.js verify    --run artifacts/RUN_ID [--report <file>]
  *   evidence.js dependencies [--out docs/integration/dependencies.json] [--verify]
  *   evidence.js checksums [--write]
+ *   evidence.js summary   --run <bundle> [--out <file>] [--storage <location>]
  *
  * Sanitisation rules (19.1): no bearer or reconnect tokens, cookies, credentials or private
  * machine paths. The environment record therefore contains no variable dump, the working
  * directory is the alias REPO_ROOT, and the host name is replaced by a per-run alias.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, rmSync } from 'node:fs';
 import { cpus, release, arch, platform, machine, totalmem, homedir, tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 import {
   CONTRACT_TASK_IDS,
@@ -143,7 +144,7 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       'toolchain.pnpmCli': '=== "12.18.0" (owner clarification C-01)',
       'pins.exactVersionSpecsOnly': '=== true (no range or tag specifier in any workspace manifest)',
       'workspaces.populated': '=== 8 workspaces, each typechecked and built by the root commands',
-      'boundaryFixtures.total': '=== every fixture under tests/fixtures/boundaries, all matching its declared expectation',
+      'boundaryFixtures.total': '=== 6 dependency-boundary fixtures, each matching its declared expectation (the 7th directory under tests/fixtures/boundaries is the strict-compile fixture, asserted separately)',
       'boundaryFixtures.negative': '>= 5 reject fixtures, each matched by its expected rule ids',
       'realTree.boundaryViolations': '=== 0 on the repository tree',
       'fixtureManifests.allValid': '=== true (manifest schema, pinned file hashes and configuration hash)',
@@ -1293,12 +1294,145 @@ export const updateContractChecksums = (root: string, write: boolean): ChecksumR
   return { path, tracked: Object.keys(next.files).length, drifted, written: write && drifted.length > 0 };
 };
 
+/**
+ * Committed evidence summary (owner clarification C-03).
+ *
+ * The raw bundle lives in owner-reachable durable storage; the repository keeps a sanitised,
+ * machine-readable summary with the integrity hashes so a reviewer can confirm that the retained
+ * bundle is the one this task produced. Secrets and private paths abort the write.
+ */
+export interface EvidenceSummary {
+  readonly schemaVersion: number;
+  readonly taskId: string;
+  readonly runId: string;
+  readonly generatedAt: string;
+  readonly generatorCommand: string;
+  readonly durableStorage: { readonly location: string; readonly note: string };
+  readonly verification: { readonly command: string; readonly ok: boolean; readonly issueCount: number };
+  readonly status: EvidenceStatus;
+  readonly implementationSha: string;
+  readonly branch: string;
+  readonly workingTreeDirty: boolean;
+  readonly prerequisiteShas: readonly string[];
+  readonly contractHash: string;
+  readonly baselineSpecHash: string;
+  readonly dependencyLockHash: string;
+  readonly configHashes: Readonly<Record<string, string>>;
+  readonly fixtureHashes: Readonly<Record<string, string>>;
+  readonly testCounts: { readonly tests: number; readonly failures: number; readonly errors: number; readonly skipped: number };
+  readonly suites: readonly SuiteRecord[];
+  readonly commands: readonly { readonly label: string; readonly exitCode: number; readonly durationMs: number }[];
+  readonly measured: Readonly<Record<string, unknown>>;
+  readonly ci: { readonly status: string; readonly note: string };
+  readonly artifacts: readonly { readonly path: RepoPath; readonly sha256: string; readonly bytes: number }[];
+}
+
+export const buildEvidenceSummary = (
+  root: string,
+  absoluteRunDir: string,
+  durableLocation: string,
+): { readonly summary: EvidenceSummary; readonly issueCount: number } => {
+  const report = JSON.parse(readFileSync(join(absoluteRunDir, 'report.json'), 'utf8')) as EvidenceReport;
+  const commands = JSON.parse(readFileSync(join(absoluteRunDir, 'commands.json'), 'utf8')) as {
+    readonly commands: readonly { readonly label: string; readonly exitCode: number; readonly durationMs: number }[];
+  };
+  const verification = verify(root, absoluteRunDir);
+  const runId = basename(absoluteRunDir);
+
+  const artifacts = listFiles(absoluteRunDir)
+    .filter((relative) => basename(relative) !== '.keep')
+    .map((relative) => ({
+      path: relative,
+      sha256: sha256File(join(absoluteRunDir, relative)),
+      bytes: statSync(join(absoluteRunDir, relative)).size,
+    }));
+
+  return {
+    issueCount: verification.issues.length,
+    summary: {
+      schemaVersion: EVIDENCE_SCHEMA_VERSION,
+      taskId: report.taskId,
+      runId: report.runId,
+      generatedAt: new Date().toISOString(),
+      generatorCommand: `pnpm evidence:summary -- --run <bundle> --out <file> (bundle ${runId})`,
+      durableStorage: {
+        location: durableLocation,
+        note:
+          'Raw bundle retained outside Git per clarification C-03. The hashes below identify the retained bytes; ' +
+          'a mismatch means the stored bundle is not the run this summary describes.',
+      },
+      verification: {
+        command: `pnpm evidence:verify -- --run <bundle>`,
+        ok: verification.ok,
+        issueCount: verification.issues.length,
+      },
+      status: report.status,
+      implementationSha: report.implementationSha,
+      branch: report.branch,
+      workingTreeDirty: report.workingTreeDirty,
+      prerequisiteShas: report.prerequisiteShas,
+      contractHash: report.contractHash,
+      baselineSpecHash: report.baselineSpecHash,
+      dependencyLockHash: report.dependencyLockHash,
+      configHashes: report.configHashes,
+      fixtureHashes: report.fixtureHashes,
+      testCounts: report.testCounts,
+      suites: report.suites,
+      commands: commands.commands.map((record) => ({
+        label: record.label,
+        exitCode: record.exitCode,
+        durationMs: record.durationMs,
+      })),
+      measured: report.measured,
+      ci: {
+        status: 'pending-owner-run',
+        note:
+          'Clarification C-05: UDG-001 stays In Review until .github/workflows/ci.yml runs green on the pushed ' +
+          'commit. The local run is recorded here; CI reproduction is not claimed.',
+      },
+      artifacts,
+    },
+  };
+};
+
+const summaryMain = (flags: CliArgs['flags']): number => {
+  const root = process.cwd();
+  const run = requireFlag(flags, 'run', 'usage: evidence.js summary --run <bundle> [--out <file>] [--storage <location>]');
+  const out = flagString(flags, 'out');
+  const absoluteRunDir = resolve(root, run);
+  const { summary, issueCount } = buildEvidenceSummary(root, absoluteRunDir, flagString(flags, 'storage') ?? absoluteRunDir);
+  const text = `${JSON.stringify(summary, null, 2)}\n`;
+
+  if (out !== undefined) {
+    const absoluteOut = resolve(root, out);
+    writeFileSyncEnsuring(absoluteOut, text);
+    const hits = scanForSecrets(dirname(absoluteOut), [basename(absoluteOut) as RepoPath]);
+    if (hits.length > 0) {
+      rmSync(absoluteOut, { force: true });
+      process.stderr.write(
+        `refused to write ${out}: ${hits.map((hit) => `${hit.pattern} at line ${String(hit.line)}`).join(', ')}\n` +
+          'A summary containing credentials or private paths is never committed.\n',
+      );
+      return 1;
+    }
+    process.stdout.write(
+      `wrote ${out}: ${String(summary.artifacts.length)} artefact(s), verification ${summary.verification.ok ? 'PASS' : 'FAIL'} `
+        + `(${String(issueCount)} issue(s)), status ${summary.status}\n`,
+    );
+    return summary.verification.ok ? 0 : 1;
+  }
+
+  process.stdout.write(text);
+  return summary.verification.ok ? 0 : 1;
+};
+
 const main = (): number => {
   const { positionals, flags } = parseArgs(process.argv.slice(2));
   const mode = positionals[0];
   if (mode === 'capture') return captureMain(flags);
   if (mode === 'verify') return verifyMain(flags);
   if (mode === 'dependencies') return dependenciesMain(flags);
+  if (mode === 'summary') return summaryMain(flags);
   if (mode === 'checksums') {
     const write = flags['write'] === true;
     const result = updateContractChecksums(process.cwd(), write);
@@ -1314,6 +1448,7 @@ const main = (): number => {
       '  evidence.js capture   --task <TASK_ID> [--out artifacts] [--keep-going]\n' +
       '  evidence.js verify    --run artifacts/RUN_ID [--report <file>]\n' +
       '  evidence.js dependencies [--out docs/integration/dependencies.json] [--verify]\n' +
+      '  evidence.js summary   --run <bundle> [--out <file>] [--storage <location>]\n' +
       '  evidence.js checksums [--write]\n',
   );
   return 2;

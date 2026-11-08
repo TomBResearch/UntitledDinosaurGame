@@ -61,6 +61,7 @@ pnpm contracts:checksums          # report contract documents whose bytes moved 
 pnpm contracts:checksums -- --write # rewrite docs/contracts/checksums.json after such a change
 pnpm evidence:capture -- --task UDG-001 --out artifacts
 pnpm evidence:verify -- --run artifacts/RUN_ID
+pnpm evidence:summary -- --run artifacts/RUN_ID --out docs/contracts/assignments/UDG-001-evidence.json
 ```
 
 `pnpm clean` removes workspace build output. There is nothing to run or stop yet: no server or
@@ -87,7 +88,7 @@ zero discovered tests.
 | --- | --- | --- |
 | `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build` | Implemented and passing | UDG-001 |
 | `pnpm test:boundaries`, `pnpm test:fixtures`, `pnpm test:contract -- --task UDG-001` | Implemented and passing | UDG-001 |
-| `pnpm dependencies:record`, `pnpm dependencies:verify`, `pnpm contracts:checksums`, `pnpm evidence:capture`, `pnpm evidence:verify` | Implemented | UDG-001 |
+| `pnpm dependencies:record`, `pnpm dependencies:verify`, `pnpm contracts:checksums`, `pnpm evidence:capture`, `pnpm evidence:verify`, `pnpm evidence:summary` | Implemented | UDG-001 |
 | `pnpm test:contract -- --task UDG-002 … UDG-SPIKE-003` | Exits `2`: that task's suite does not exist yet | each task creates its own suite |
 | `pnpm test:unit` | Exits `1`: no unit suite exists yet | UDG-002 first, then every task that adds logic |
 | `pnpm test:e2e -- --suite camera` | Exits `1`: no browser suite exists | UDG-004 camera, UDG-SPIKE-001 netcode, UDG-006 physics, UDG-008 input, UDG-SPIKE-003 hybrid |

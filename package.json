@@ -31,6 +31,7 @@
     "dependencies:verify": "pnpm --filter @udg/checks build && node tools/checks/dist/evidence.js dependencies --verify",
     "evidence:capture": "pnpm --filter @udg/checks build && node tools/checks/dist/evidence.js capture",
     "evidence:verify": "pnpm --filter @udg/checks build && node tools/checks/dist/evidence.js verify",
+    "evidence:summary": "pnpm --filter @udg/checks build && node tools/checks/dist/evidence.js summary",
     "contracts:checksums": "pnpm --filter @udg/checks build && node tools/checks/dist/evidence.js checksums"
   },
   "devDependencies": {

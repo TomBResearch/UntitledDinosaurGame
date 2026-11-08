@@ -1,0 +1,323 @@
+{
+  "schemaVersion": 1,
+  "taskId": "UDG-001",
+  "runId": "UDG-001-2026-11-08T11-31-12-682Z-c5acde09",
+  "generatedAt": "2026-11-08T11:35:22.722Z",
+  "generatorCommand": "pnpm evidence:summary -- --run <bundle> --out <file> (bundle UDG-001-2026-11-08T11-31-12-682Z-c5acde09)",
+  "durableStorage": {
+    "location": "/workspace/udg-evidence/UDG-001-2026-11-08T11-31-12-682Z-c5acde09",
+    "note": "Raw bundle retained outside Git per clarification C-03. The hashes below identify the retained bytes; a mismatch means the stored bundle is not the run this summary describes."
+  },
+  "verification": {
+    "command": "pnpm evidence:verify -- --run <bundle>",
+    "ok": true,
+    "issueCount": 0
+  },
+  "status": "PASS",
+  "implementationSha": "c5acde09e96c009aaaad88ff556b9a52b087eace",
+  "branch": "main",
+  "workingTreeDirty": false,
+  "prerequisiteShas": [
+    "555735b6b3b2b72ec23fb99f2db26cbe3cef67a2"
+  ],
+  "contractHash": "255e7b2cb8fd64c41e2e5beb2a56b03bb62b08e0ca11089299d81a2e540a5943",
+  "baselineSpecHash": "b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf",
+  "dependencyLockHash": "d2cccebdb42f5686c8d7b172a0810d07b95cc73685690459c0ea225291e202c8",
+  "configHashes": {
+    "taskContract": "d0fd0e24220c80f06cb9e3fc99cfaffb06e233680abf774162e5e0daefc0c171",
+    "tsconfigBase": "da4b844063b8abb6f48677c87c8996accf9e77cf1f7e5792827cd811edcb394d",
+    "boundaryRuleTable": "8b423148e09f4edc83f475d418f5c3ee81e7f9a0493c8d63ce89a35b07de84bd",
+    "boundaryFixtures": "141ad56e3f81c2321515769ba93353dd2e3982c1749e8a3dbc6d44170bbf71af",
+    "envExample": "e86500e8724b74788191b57467a75945cc88b8d75d42b055f1f86be4c9d5e6c4",
+    "npmrc": "267d57bf2a964bda8f0b89d32edebf8bff186348ac5def3a574a1d6cbb42e9b6",
+    "ciWorkflow": "910e6d1cb024bb125cc796c35290da28d86d45a7f7da4896eec610ff2140ff2d"
+  },
+  "fixtureHashes": {
+    "UDG-001-boundaries-allowed": "39b12c378d80fb90dd1469c865eeece5ba6dded84320be1a793daf69fd29bbd5:141ad56e3f81c232",
+    "UDG-001-boundaries-cycle": "7f0899f91faddabb09b645cce96232bad3464d72da1407e05d88dfc296d4eeb3:141ad56e3f81c232",
+    "UDG-001-boundaries-forbidden-browser-global": "d6a85e6c61fb985396a813fdfb5131b505d263c56a4797d84a74a2fd4bd63890:141ad56e3f81c232",
+    "UDG-001-boundaries-forbidden-client-server": "7b01ba5a082c41a20fa5dcdccb0f63cbf3c588f799ba7302dd5598dc7ca81dfd:141ad56e3f81c232",
+    "UDG-001-boundaries-forbidden-engine": "6821872a44e9feacf7a91006967b0684fbed9972b1bd6c43a0914e07d329e05f:141ad56e3f81c232",
+    "UDG-001-boundaries-forbidden-undeclared-and-config": "24bc4edf1e48bf4ca20ae0fad8485b4be4b785da930abd73a64e3df3d677a54d:141ad56e3f81c232",
+    "UDG-001-strict-type-errors": "bd4d0988ddb11b9239904ef5f6bb381d9bccff8167a111c83b012fb44738ffb8:da4b844063b8abb6"
+  },
+  "testCounts": {
+    "tests": 41,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "suites": [
+    {
+      "name": "vitest",
+      "tests": 41,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "quarantined": 0,
+      "duplicateCaseNames": []
+    }
+  ],
+  "commands": [
+    {
+      "label": "install-frozen",
+      "exitCode": 0,
+      "durationMs": 55
+    },
+    {
+      "label": "typecheck",
+      "exitCode": 0,
+      "durationMs": 2677
+    },
+    {
+      "label": "lint",
+      "exitCode": 0,
+      "durationMs": 1475
+    },
+    {
+      "label": "test",
+      "exitCode": 0,
+      "durationMs": 2328
+    },
+    {
+      "label": "build",
+      "exitCode": 0,
+      "durationMs": 1493
+    },
+    {
+      "label": "test-boundaries",
+      "exitCode": 0,
+      "durationMs": 840
+    },
+    {
+      "label": "test-fixtures",
+      "exitCode": 0,
+      "durationMs": 832
+    },
+    {
+      "label": "test-contract-UDG-001",
+      "exitCode": 0,
+      "durationMs": 2323
+    }
+  ],
+  "measured": {
+    "taskId": "UDG-001",
+    "toolchain": {
+      "node": "v24.22.2",
+      "packageManagerField": "pnpm@12.18.0",
+      "pnpmCli": "12.18.0",
+      "typescript": "Version 5.9.3"
+    },
+    "pins": {
+      "exactVersionSpecsOnly": true
+    },
+    "compiler": {
+      "strictFlagsPresent": true,
+      "domWorkspaces": [
+        "@udg/client"
+      ],
+      "ambientTypePolicy": true
+    },
+    "workspaces": {
+      "populated": 8,
+      "eachHasTypecheckAndBuild": true,
+      "emptySkeletons": true
+    },
+    "checks": {
+      "independentOfGameWorkspaces": true
+    },
+    "dependencyRegister": {
+      "current": true,
+      "pendingLibraryGroups": 7,
+      "ciActionsPinned": 3
+    },
+    "boundaryFixtures": {
+      "total": 6,
+      "negative": 5,
+      "allMatched": true,
+      "ruleTableHash": "8b423148e09f4edc83f475d418f5c3ee81e7f9a0493c8d63ce89a35b07de84bd",
+      "configHash": "141ad56e3f81c2321515769ba93353dd2e3982c1749e8a3dbc6d44170bbf71af"
+    },
+    "boundaryChecker": {
+      "liveDetection": true,
+      "staleExpectationFails": true
+    },
+    "realTree": {
+      "boundaryViolations": 0
+    },
+    "fixtureManifests": {
+      "total": 7,
+      "allValid": true,
+      "tamperDetected": true
+    },
+    "strictFixture": {
+      "rejected": true,
+      "diagnosticCodes": [
+        "TS2304",
+        "TS2366",
+        "TS2375",
+        "TS2532",
+        "TS7006"
+      ]
+    },
+    "dispatch": {
+      "refusedTasks": 10,
+      "unknownTaskRejected": true,
+      "guardedCommands": 5
+    },
+    "missingSuite": {
+      "refused": true,
+      "exitCode": 2
+    },
+    "frozenLockfile": {
+      "cleanInstall": true,
+      "rejected": true,
+      "manifestMutationRejected": true
+    },
+    "secondInstall": {
+      "trackedFilesUnchanged": true,
+      "workingTreeWasClean": true
+    },
+    "evidence": {
+      "acceptsWellFormedBundle": true,
+      "rejectsMutatedFile": true,
+      "rejectsMissingArtefact": true,
+      "rejectsZeroTests": true,
+      "rejectsSkipsAndReruns": true,
+      "rejectsInconsistentStatus": true,
+      "rejectsSecretsAndPaths": true,
+      "requiresMeasurements": true,
+      "rejectsPathEscape": true,
+      "rejectsSelfReportedSanitisationFailure": true,
+      "machinePathAliasing": true,
+      "junitParser": true
+    },
+    "planning": {
+      "checksumsMatch": true,
+      "checksummedFiles": 56,
+      "prerequisiteCommit": "555735b6b3b2b72ec23fb99f2db26cbe3cef67a2",
+      "envExampleLoopbackOnly": true,
+      "readmeCommands": true,
+      "ciMirrorsLocalCommands": true
+    },
+    "capture": {
+      "commandsRun": 8,
+      "failingCommands": [],
+      "sanitisationFailures": [],
+      "pnpmStoreRecorded": true,
+      "totalDurationMs": 12023,
+      "keepGoing": false
+    }
+  },
+  "ci": {
+    "status": "pending-owner-run",
+    "note": "Clarification C-05: UDG-001 stays In Review until .github/workflows/ci.yml runs green on the pushed commit. The local run is recorded here; CI reproduction is not claimed."
+  },
+  "artifacts": [
+    {
+      "path": "boundary-report.json",
+      "sha256": "a03048511c96f3e274b8312c3152d76c9b4560eab40eedf7321e9a669bf21d32",
+      "bytes": 253
+    },
+    {
+      "path": "build.log",
+      "sha256": "86d8c46dd9d88e4ca50637b5bb8e7eaac4a0c28c05bbda732f071aee64df617f",
+      "bytes": 774
+    },
+    {
+      "path": "checksums.sha256",
+      "sha256": "ec19a0fa031e202356583139910953e49ab0f37720599d28fc09056cf5cc10a3",
+      "bytes": 1802
+    },
+    {
+      "path": "commands.json",
+      "sha256": "159b1b10bd8ffa3e44a243214b34a1c41b1132067fb9e54d594e9f90d8966b4d",
+      "bytes": 3759
+    },
+    {
+      "path": "environment.json",
+      "sha256": "da34e2634f02de0a6c96194e555259ac1980b09202ffc8a3568271b6d075be65",
+      "bytes": 656
+    },
+    {
+      "path": "junit.xml",
+      "sha256": "fac19d37b7930b807e097069379748c58c3906a787cdc654be771686883ef133",
+      "bytes": 8947
+    },
+    {
+      "path": "logs/install-frozen.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "logs/install-frozen.stdout.log",
+      "sha256": "a203d4a838216678ba9fbd409a700ea43a4e8e671146b88bf52f250a02b19ea6",
+      "bytes": 383
+    },
+    {
+      "path": "logs/lint.stderr.log",
+      "sha256": "7384ead2e35d3b5a79702445da48618c8e66d2b367f8e019271963d0393aba78",
+      "bytes": 178
+    },
+    {
+      "path": "logs/lint.stdout.log",
+      "sha256": "b78f5e8c6f076af54148ec8de38499af6ab90a37061eb8f414745f55eba1550e",
+      "bytes": 69
+    },
+    {
+      "path": "logs/test-boundaries.stderr.log",
+      "sha256": "75a8861803dbc1265be8fbdbf580083f36ff3ad100983667661514a6b740685d",
+      "bytes": 134
+    },
+    {
+      "path": "logs/test-boundaries.stdout.log",
+      "sha256": "2268d56b66216b45d3322bafc657190bb0f14ae74492f44890be9dd26f4124f7",
+      "bytes": 1199
+    },
+    {
+      "path": "logs/test-contract-UDG-001.stderr.log",
+      "sha256": "9bee5598c1da4253853153105994b2d741d121d5b7c49ebf5299c9cd53935d05",
+      "bytes": 117
+    },
+    {
+      "path": "logs/test-contract-UDG-001.stdout.log",
+      "sha256": "e7f7eac276a08b37abf390f5a4dda52210c1c7c9cc2bf5b1df9631150c12abc9",
+      "bytes": 271
+    },
+    {
+      "path": "logs/test-fixtures.stderr.log",
+      "sha256": "5da9dea7980aba3dade1961c094fd49b3acd15c78048ede9fb6de6cf007ca706",
+      "bytes": 117
+    },
+    {
+      "path": "logs/test-fixtures.stdout.log",
+      "sha256": "792a539af0bc6fcd09ad289909808b6ae5f46e816a51bb195c3784d6a332c1a5",
+      "bytes": 798
+    },
+    {
+      "path": "logs/test.stderr.log",
+      "sha256": "f3b12ea81af703cddcee2791b5439c18926dbadae22a7941f811815e160034b7",
+      "bytes": 71
+    },
+    {
+      "path": "logs/test.stdout.log",
+      "sha256": "22113147f0fb8aecec67b95c8db5d013b14588b331d6d236af2967b00a63803f",
+      "bytes": 260
+    },
+    {
+      "path": "logs/typecheck.stderr.log",
+      "sha256": "1f4ecf71ff5bdac7e73bfbb956fdf4f344cc846b0968145645ea3aab22edc343",
+      "bytes": 137
+    },
+    {
+      "path": "logs/typecheck.stdout.log",
+      "sha256": "7da428fbb9e3194afd70d4bb2ca94dc50971071b1e89c6afc287ee2be6665c4b",
+      "bytes": 712
+    },
+    {
+      "path": "report.json",
+      "sha256": "7ecf76fbfcb5c83190094c17e3b7363d8fb3dae4793fc9568900db4eb5d86dea",
+      "bytes": 11670
+    }
+  ]
+}
