@@ -1,7 +1,9 @@
 {
   "algorithm": "sha256",
   "excluded": [
-    "docs/contracts/checksums.json"
+    "docs/contracts/checksums.json",
+    "docs/contracts/assignments/",
+    "docs/integration/dependencies.json"
   ],
   "files": {
     "AGENTS.md": "09f283643fbc9db3d9192d7ae227207452eac756b3503dfa04d4bd875580fec3",
@@ -13,7 +15,7 @@
     "docs/adr/0000-template.md": "4cddc0471025479043882c3efb792c548e35812f59bef9d38d7b756f48284abd",
     "docs/adr/README.md": "5339e9f5911de2356e1ace7af17cdb5a28f55e9be35fdb8925925a2006c3edae",
     "docs/contracts/README.md": "255e7b2cb8fd64c41e2e5beb2a56b03bb62b08e0ca11089299d81a2e540a5943",
-    "docs/contracts/UDG-001.md": "d83309af3bc28aa77085ec1c2ae07c5413a4617ab96ab975c211860a48df6f4f",
+    "docs/contracts/UDG-001.md": "d0fd0e24220c80f06cb9e3fc99cfaffb06e233680abf774162e5e0daefc0c171",
     "docs/contracts/UDG-002.md": "0760f8d09579ecfaa92c48ebbc6aa1dc0773743a55b0e0b534298845ef9a52ec",
     "docs/contracts/UDG-003.md": "096f3ff0755569230b884cf4138be035845e28d44ad7332dc6bbd0c9e0cafaf5",
     "docs/contracts/UDG-004.md": "c6abc27b3268a2c3118dbd61cc24af111bcf911b088653057f8d7273736e1889",
@@ -24,7 +26,7 @@
     "docs/contracts/UDG-SPIKE-001.md": "fe1a67de94ca3cba55ddec920c6ff91f4a3c8e749f50debb01d0e67c5072c1fe",
     "docs/contracts/UDG-SPIKE-002.md": "7172cd91e7f93730e4755322bedeaf35403e4485d03732391463b3150a466de9",
     "docs/contracts/UDG-SPIKE-003.md": "df65add7bbd2c1d4d1953f17ea0644a60430cea5d69e051a63a04ebc4f6caf99",
-    "docs/contracts/adoption.md": "fef7e7b3f7d986809f0068cf2f728a42ba957abb703577496b5fe6da31a9136e",
+    "docs/contracts/adoption.md": "ea66c7ddb21f634298a7ac6332b6655ec01d13b9772fab006fe53a43a370fb43",
     "docs/contracts/definition-of-done.md": "3721f7ad7ae1c8865d13e2d6c9340f74d99e1bede563b4801a233d3b84449606",
     "docs/contracts/ownership.md": "0927c6d2617781abebb082fc1d027409d5afc3220bdaaedb823620bcffaca0ea",
     "docs/contracts/provenance.json": "311acdb3a45c10d11497c06f70cba171a8e99d3e089a5389f552a4cdd3343f6b",
