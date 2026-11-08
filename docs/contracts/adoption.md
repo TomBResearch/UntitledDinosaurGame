@@ -1,12 +1,12 @@
 # Contracts adoption record
 
-Status: **Partially adopted — P01 approved 2026-11-08; P02 to P10 pending**
+Status: **Partially adopted — P01, P02 and P06 approved 2026-11-08; P03 to P05 and P07 to P10 pending**
 
-Implementation assignment: **UDG-001 only** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)). No later task is assigned.
+Implementation assignment: **UDG-001** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)) and **UDG-002** (authorised 2026-11-08, see [P02 and P06 adoption](#p02-and-p06-adoption-recorded-2026-11-08)). No task beyond UDG-002 is assigned.
 
 Integration owner: **Project owner, GitHub account `TomBResearch`** — recorded 2026-11-08 at the owner's instruction as both integration owner and project reviewer. Replace with the owner's preferred display name on request; the identity, not the decision, is what may be restated.
 
-The user authorised creating and publishing this repository planning structure. That is not a signature accepting each proposed technical refinement or permission to begin the game implementation. Preserve this distinction when assigning tasks. The 2026-11-08 instruction below is a separate, explicit signature for P01 and for UDG-001 only; it does not adopt P02 to P10 or assign any other task.
+The user authorised creating and publishing this repository planning structure. That is not a signature accepting each proposed technical refinement or permission to begin the game implementation. Preserve this distinction when assigning tasks. The 2026-11-08 instruction below is a separate, explicit signature for P01 and for UDG-001 only; it does not adopt P02 to P10 or assign any other task. A second 2026-11-08 instruction adopted P02 and P06 and assigned UDG-002; it adopts nothing else.
 
 Before a task becomes Ready, the owner records the relevant refinement decision, date, reviewed repository commit, contract checksum manifest and any ADR. Adoption may occur per task; unresolved later proposals do not require reopening settled earlier work. An explicit later user/owner approval can be recorded without requesting the same approval again.
 
@@ -15,11 +15,11 @@ The proposal definitions and deadlines have one owner: [scope and authority](sco
 | Proposal | Decision | Owner/date | ADR or approval reference |
 | --- | --- | --- | --- |
 | P01 | **Approved** | Project owner (`TomBResearch`) / 2026-11-08 | Owner instruction recorded as clarifications C-01 to C-06 below. No ADR: the rulings change no baseline clause, protocol, timestep or collision owner. |
-| P02 | Pending | Unassigned | None |
+| P02 | **Approved** | Project owner (`TomBResearch`) / 2026-11-08 | Decision D1 of the [UDG-002 readiness proposal](assignments/UDG-002-readiness-proposal.md) revision 2, section 1. No ADR: the ruling elaborates baseline §4 to §5 and moves no protocol shape, timestep or collision owner. |
 | P03 | Pending | Unassigned | None |
 | P04 | Pending | Unassigned | None |
 | P05 | Pending | Unassigned | None |
-| P06 | Pending | Unassigned | None |
+| P06 | **Approved (deferred-freeze form)** | Project owner (`TomBResearch`) / 2026-11-08 | Decision D2 of the same proposal, section 2, recorded as [ADR 0001 Replica precision policy](../adr/0001-replica-precision-policy.md) (Accepted). Concrete encoding widths and SDK integration remain subject to Gate A validation. |
 | P07 | Pending | Unassigned | None |
 | P08 | Pending | Unassigned | None |
 | P09 | Pending | Unassigned | None |
@@ -37,6 +37,50 @@ The owner approved P01 with the following binding clarifications. They are part 
 | C-04 | UDG-001 must implement and test evidence verification against its own bundle. Suites owned by later, unstarted tasks may remain unavailable and must fail clearly when invoked. | `repository.md` §3.2 "dispatcher that fails clearly for unavailable suites"; §19.1 evidence schema ownership |
 | C-05 | CI option 1: the workflow is authored in this task and the identical script sequence is proven locally. CI reproduction is not waived. UDG-001 stays In Review until the real GitHub Actions checks on the pushed commit pass and the owner accepts the work. | UDG-001 "CI reproduces the local result"; `definition-of-done.md` In Review rule |
 | C-06 | Review groups R2 to R6 (P02, P06 / P03, P04 / P05, P07 / P08, P09 / P10) remain pending. Each blocks only its own dependants: UDG-002 and everything downstream of it, then the Gate A, B and C spikes, stay Not Started until the relevant group is approved. | `scope.md` §1.3 approval deadlines; adoption-per-task rule |
+
+## P02 and P06 adoption recorded 2026-11-08
+
+The owner approved the consolidated UDG-002 readiness proposal **revision 2**, reviewed at commit
+`222a787fb61597fa60a6a465044893a9985dca8c`, and authorised UDG-002 with the clarifications below. This
+instruction supersedes the "Next assignment: none" line of the UDG-001 acceptance section beneath it, which
+recorded the state at the moment that acceptance was written down.
+
+```text
+Reviewed proposal            docs/contracts/assignments/UDG-002-readiness-proposal.md, revision 2,
+                             reviewed at 222a787fb61597fa60a6a465044893a9985dca8c
+Contract edition             UDG-CONTRACTS-M0-001 v1.0, repository edition 1 (unchanged)
+Manifest at review           docs/contracts/checksums.json, 56 entries
+                             file SHA-256   6ad6bdbb5540c38d6d142cc1e4f4bb78c76b36755803bb778c146a3c114474db
+                             content digest 9b9177c0b57d3b3ee298794761f30fe77b52aa8a71eeef72401e8b86a665ac79
+                             (procedure D-1 of the readiness proposal, section 5). This adoption commit
+                             regenerates the manifest, so the manifest of the adoption edition is identified
+                             by this commit rather than by a self-referential digest written into it.
+Baseline                     UDG-SPEC-M0-002 v0.2, SHA-256
+                             b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf
+Approval channel             Owner instruction, 2026-11-08, recording decisions D1 to D5
+```
+
+| Decision | Owner ruling | Effect |
+| --- | --- | --- |
+| D1 | **P02 approved**, including the route-pair rule and the normalisation ordering, with no ADR | [interfaces/protocol.md](../interfaces/protocol.md) §4.2 to §4.4 is adopted as written, plus the pair rule (`routeRevision === 0` requires `nextWaypointIndex === 0`; a positive revision with index zero is an active route at its first waypoint) and normalisation of yaw and signed zero at validation time, before any exact-copy mapping assertion |
+| D2 | **P06 approved in the deferred-freeze form**; record [ADR 0001](../adr/0001-replica-precision-policy.md); encoding widths and SDK integration stay subject to Gate A | Canonical domain is float64 end to end and the replica mapping must be lossless; schema encoding widths are provisional until Gate A per baseline §7.2 |
+| D3 | **UDG-002 authorised**, including its narrowly scoped tooling extensions and the UDG-001 test amendments | Assignment record: [assignments/UDG-002.md](assignments/UDG-002.md). Grants authorise UDG-002 work only and do not widen functional scope |
+| D4 | **Backup destinations remain undesignated.** The independent-backup risk stays open; no archive repository is created, no storage is provisioned and the risk is not claimed resolved | Recorded as an open residual risk in the UDG-002 assignment and completion records |
+| D5 | **Explicit validated region bounds with no production defaults**; synthetic fixture bounds remain permitted and clearly labelled | `validateRegionBounds` receives bounds as an argument; absence is a configuration error. Real bounds arrive through UDG-007's `region.json` loaded by UDG-003, as those contracts already state |
+
+Implementation clarifications recorded with the approval, binding on UDG-002:
+
+| ID | Owner clarification |
+| --- | --- |
+| U2-1 | Historical UDG-001 evidence remains verifiable under its recorded format. New task or schema metadata requirements must not retroactively invalidate accepted bundles or rewrite their bytes, and backward compatibility must be tested. |
+| U2-2 | Dependency-record idempotence compares substantive fields using the documented provenance exclusions. A fresh timestamp or recording-commit metadata must never fail a legitimate check. |
+| U2-3 | The supporting paths required by the approved plan are included: `tests/unit/**`, `tests/fixtures/catalog.json`, the new boundary fixtures, `README.md`, the ADR, adoption and task metadata, and the UDG-002 assignment, completion and evidence records. These grants permit only UDG-002 work. |
+| U2-4 | Neither UDG-002 nor the subsequent UDG-003 foundation may require an asset first produced by UDG-007. Region bounds stay explicitly supplied; later asset integration replaces that source through separately authorised work. |
+| U2-5 | Historical checksum manifests are preserved in Git history. Current manifest entries are regenerated when authorised covered files change; historical preservation does not freeze the current manifest. |
+| U2-6 | UDG-002 defines and tests protocol types, validation and mapping. It must not implement the authoritative admission, ordering or movement behaviour owned by later tasks. |
+
+Still pending after this instruction: P03, P04, P05, P07, P08, P09 and P10. Gates A, B and C remain Not Run.
+UDG-003 and every later task remain unassigned and Not Started.
 
 ## UDG-001 acceptance recorded 2026-11-08
 
