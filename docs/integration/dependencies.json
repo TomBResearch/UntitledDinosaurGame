@@ -1,0 +1,288 @@
+{
+  "schemaVersion": 1,
+  "generated": {
+    "at": "2026-11-08T11:04:31.053Z",
+    "taskId": "UDG-001",
+    "command": "pnpm dependencies:record",
+    "commit": "680773c0e2228769085c06cd62bf5236d63feb45"
+  },
+  "runtime": {
+    "node": {
+      "version": "v24.22.2",
+      "pinnedIn": [
+        ".node-version",
+        "package.json engines",
+        ".github/workflows/ci.yml"
+      ]
+    },
+    "pnpm": {
+      "packageManagerField": "pnpm@12.18.0",
+      "cliVersion": "12.18.0"
+    },
+    "host": {
+      "platform": "linux",
+      "arch": "arm64"
+    }
+  },
+  "lockfile": {
+    "path": "pnpm-lock.yaml",
+    "sha256": "d2cccebdb42f5686c8d7b172a0810d07b95cc73685690459c0ea225291e202c8"
+  },
+  "workspaces": [
+    {
+      "name": "@udg/workspace (root)",
+      "dir": ".",
+      "dependencies": {
+        "@eslint/js": "10.0.1",
+        "@udg/checks": "workspace:*",
+        "@playwright/test": "1.65.0",
+        "@types/node": "24.19.2",
+        "eslint": "10.14.0",
+        "typescript": "5.9.3",
+        "typescript-eslint": "8.72.1",
+        "vitest": "5.1.0"
+      }
+    },
+    {
+      "name": "@udg/protocol",
+      "dir": "packages/protocol",
+      "dependencies": {
+        "typescript": "5.9.3"
+      }
+    },
+    {
+      "name": "@udg/config",
+      "dir": "packages/config",
+      "dependencies": {
+        "typescript": "5.9.3"
+      }
+    },
+    {
+      "name": "@udg/simulation",
+      "dir": "packages/simulation",
+      "dependencies": {
+        "typescript": "5.9.3"
+      }
+    },
+    {
+      "name": "@udg/physics",
+      "dir": "packages/physics",
+      "dependencies": {
+        "typescript": "5.9.3"
+      }
+    },
+    {
+      "name": "@udg/navigation",
+      "dir": "packages/navigation",
+      "dependencies": {
+        "typescript": "5.9.3"
+      }
+    },
+    {
+      "name": "@udg/server",
+      "dir": "apps/server",
+      "dependencies": {
+        "typescript": "5.9.3",
+        "@types/node": "24.19.2"
+      }
+    },
+    {
+      "name": "@udg/client",
+      "dir": "apps/client",
+      "dependencies": {
+        "typescript": "5.9.3"
+      }
+    },
+    {
+      "name": "@udg/checks",
+      "dir": "tools/checks",
+      "dependencies": {
+        "@types/node": "24.19.2",
+        "typescript": "5.9.3"
+      }
+    }
+  ],
+  "packages": [
+    {
+      "name": "@eslint/js",
+      "declared": "10.0.1",
+      "installedVersion": "10.0.1",
+      "licence": "MIT",
+      "licenceSource": "node_modules/@eslint/js/package.json",
+      "importedBy": [
+        "."
+      ]
+    },
+    {
+      "name": "@playwright/test",
+      "declared": "1.65.0",
+      "installedVersion": "1.65.0",
+      "licence": "Apache-2.0",
+      "licenceSource": "node_modules/@playwright/test/package.json",
+      "importedBy": [
+        "."
+      ]
+    },
+    {
+      "name": "@types/node",
+      "declared": "24.19.2",
+      "installedVersion": "24.19.2",
+      "licence": "MIT",
+      "licenceSource": "node_modules/@types/node/package.json",
+      "importedBy": [
+        ".",
+        "apps/server",
+        "tools/checks"
+      ]
+    },
+    {
+      "name": "@udg/checks",
+      "declared": "workspace:*",
+      "installedVersion": "0.0.0",
+      "licence": "UNLICENSED",
+      "licenceSource": "node_modules/@udg/checks/package.json",
+      "importedBy": [
+        "."
+      ]
+    },
+    {
+      "name": "eslint",
+      "declared": "10.14.0",
+      "installedVersion": "10.14.0",
+      "licence": "MIT",
+      "licenceSource": "node_modules/eslint/package.json",
+      "importedBy": [
+        "."
+      ]
+    },
+    {
+      "name": "typescript",
+      "declared": "5.9.3",
+      "installedVersion": "5.9.3",
+      "licence": "Apache-2.0",
+      "licenceSource": "node_modules/typescript/package.json",
+      "importedBy": [
+        ".",
+        "apps/client",
+        "apps/server",
+        "packages/config",
+        "packages/navigation",
+        "packages/physics",
+        "packages/protocol",
+        "packages/simulation",
+        "tools/checks"
+      ]
+    },
+    {
+      "name": "typescript-eslint",
+      "declared": "8.72.1",
+      "installedVersion": "8.72.1",
+      "licence": "MIT",
+      "licenceSource": "node_modules/typescript-eslint/package.json",
+      "importedBy": [
+        "."
+      ]
+    },
+    {
+      "name": "vitest",
+      "declared": "5.1.0",
+      "installedVersion": "5.1.0",
+      "licence": "MIT",
+      "licenceSource": "node_modules/vitest/package.json",
+      "importedBy": [
+        "."
+      ]
+    }
+  ],
+  "pendingGameLibraries": [
+    {
+      "name": "@colyseus/schema",
+      "status": "not-selected",
+      "ownerTask": "UDG-002",
+      "reason": "Owner clarification C-02: UDG-002 selects and tests the schema dependency against real encode/decode fixtures."
+    },
+    {
+      "name": "@colyseus/core",
+      "status": "not-selected",
+      "ownerTask": "UDG-003",
+      "reason": "Owner clarification C-02: server and fixed-step input integration belongs to UDG-003 and UDG-SPIKE-001."
+    },
+    {
+      "name": "@colyseus/sdk",
+      "status": "not-selected",
+      "ownerTask": "UDG-SPIKE-001",
+      "reason": "Owner clarification C-02: the client SDK and prediction adapter are proven by the Gate A probes."
+    },
+    {
+      "name": "@colyseus/testing",
+      "status": "not-selected",
+      "ownerTask": "UDG-003",
+      "reason": "Optional per docs/integration/colyseus.md; chosen only if the UDG-003 probes need it."
+    },
+    {
+      "name": "@dimforge/rapier3d-compat (or equivalent Rapier package)",
+      "status": "not-selected",
+      "ownerTask": "UDG-006",
+      "reason": "Rapier version and WASM identity are frozen at Gate B with binary hashes."
+    },
+    {
+      "name": "recast-navigation-js package family",
+      "status": "not-selected",
+      "ownerTask": "UDG-007",
+      "reason": "Recast version and WASM hashes are recorded with the asset pipeline and Gate C evidence."
+    },
+    {
+      "name": "@babylonjs/* and react",
+      "status": "not-selected",
+      "ownerTask": "UDG-004",
+      "reason": "Client rendering and UI dependencies are chosen by the browser client task."
+    }
+  ],
+  "toolchainNotes": [
+    "Node 24.22.2 and pnpm 12.18.0 are pinned by owner clarification C-01 and enforced by package.json engines plus .npmrc engine-strict.",
+    "TypeScript is pinned to 5.9.3. TypeScript 7.x exists on the registry but the installed typescript-eslint release declares peer typescript \">=4.8.4 <6.1.0\", so the newer compiler line is deferred until the lint toolchain supports it. Changing the compiler line is a dependency-pin decision, not a routine edit.",
+    "Game libraries are listed under pendingGameLibraries and are deliberately absent from the lockfile until their owning task can prove them (clarification C-02).",
+    "onlyBuiltDependencies in pnpm-workspace.yaml is the allowlist for dependency build scripts; an unlisted build script fails the install.",
+    "Every actions/* reference in .github/workflows/ci.yml is pinned to an immutable commit sha (actions/checkout, actions/setup-node, actions/upload-artifact)."
+  ],
+  "ciActions": [
+    {
+      "repo": "actions/checkout",
+      "ref": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "pinnedCommit": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "pinnedByCommitSha": true
+    },
+    {
+      "repo": "actions/setup-node",
+      "ref": "949feb2413d6458794dcd2491c4babbbce0c15c1",
+      "pinnedCommit": "949feb2413d6458794dcd2491c4babbbce0c15c1",
+      "pinnedByCommitSha": true
+    },
+    {
+      "repo": "actions/upload-artifact",
+      "ref": "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      "pinnedCommit": "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      "pinnedByCommitSha": true
+    }
+  ],
+  "thirdPartyReferences": [
+    {
+      "subject": "Node.js LTS index",
+      "source": "https://nodejs.org/dist/index.json",
+      "inspectedOn": "2026-11-08"
+    },
+    {
+      "subject": "npm registry (package metadata)",
+      "source": "https://registry.npmjs.org/",
+      "inspectedOn": "2026-11-08"
+    },
+    {
+      "subject": "GitHub git refs API (action commit pins)",
+      "source": "https://api.github.com/repos/{owner}/{repo}/git/ref/tags/{tag}",
+      "inspectedOn": "2026-11-08"
+    }
+  ],
+  "sanitisation": {
+    "note": "No registry auth tokens, machine paths outside the repository alias, user names or environment dumps are recorded here."
+  }
+}
