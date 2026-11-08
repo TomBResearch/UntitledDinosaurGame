@@ -917,6 +917,236 @@ describe('evidence capture schema and verification', () => {
   });
 });
 
+describe('CI workflow failure policy', () => {
+  interface WorkflowStep {
+    readonly name: string;
+    readonly if?: string;
+    readonly continueOnError?: boolean;
+    readonly uses?: string;
+    readonly run?: string;
+    readonly with: Readonly<Record<string, string>>;
+  }
+
+  /** Drops a trailing `# ref` comment, which is how the workflow records the tag of a pinned sha. */
+  const stripComment = (value: string): string => value.replace(/\s+#\s.*$/u, '').trim();
+
+  /**
+   * Structural reader for the step list this repository owns. It is deliberately strict: an
+   * unrecognisable workflow yields a failed test rather than a silently empty step list, so the
+   * policy assertions below cannot pass vacuously if the file is restructured.
+   */
+  const parseWorkflowSteps = (text: string): WorkflowStep[] => {
+    const steps: { name: string; if?: string; continueOnError?: boolean; uses?: string; run?: string; with: Record<string, string> }[] = [];
+    let current: (typeof steps)[number] | undefined;
+    let blockKey: string | undefined;
+    let blockIndent = 0;
+    let block: string[] = [];
+
+    const indentation = (line: string): number => line.length - line.trimStart().length;
+
+    const closeBlock = (): void => {
+      if (current !== undefined && blockKey !== undefined) {
+        const value = block.join('\n').trim();
+        if (blockKey === 'run') current.run = value;
+        else current.with[blockKey] = value;
+      }
+      blockKey = undefined;
+      blockIndent = 0;
+      block = [];
+    };
+
+    for (const line of text.split('\n')) {
+      const step = /^ {6}- name:\s*(.+?)\s*$/u.exec(line);
+      if (step?.[1] !== undefined) {
+        closeBlock();
+        current = { name: step[1], with: {} };
+        steps.push(current);
+        continue;
+      }
+      if (current === undefined) continue;
+
+      // A block scalar body wins over key detection, otherwise a line such as `run_dir="..."` at
+      // the block indent could be mistaken for a mapping key. Only lines indented deeper than the
+      // block's own key belong to it, exactly as YAML requires.
+      if (blockKey !== undefined && (line.trim() === '' || indentation(line) > blockIndent)) {
+        block.push(line.trim());
+        continue;
+      }
+
+      const top = /^ {8}([A-Za-z][\w-]*):\s*(.*)$/u.exec(line);
+      if (top !== null) {
+        closeBlock();
+        const key = top[1] as string;
+        const value = (top[2] ?? '').trim();
+        if (key === 'with') continue;
+        if (value === '|' || value === '|-') {
+          blockKey = key;
+          blockIndent = 8;
+          continue;
+        }
+        if (key === 'if') current.if = stripComment(value);
+        else if (key === 'continue-on-error') current.continueOnError = stripComment(value) === 'true';
+        else if (key === 'uses') current.uses = stripComment(value);
+        else if (key === 'run' && value.length > 0) current.run = value;
+        continue;
+      }
+
+      const withEntry = /^ {10}([A-Za-z][\w-]*):\s*(.*)$/u.exec(line);
+      if (withEntry !== null) {
+        closeBlock();
+        const key = withEntry[1] as string;
+        const value = (withEntry[2] ?? '').trim();
+        if (value === '|' || value === '|-') {
+          blockKey = key;
+          blockIndent = 10;
+          continue;
+        }
+        current.with[key] = stripComment(value);
+      }
+    }
+    closeBlock();
+    if (steps.length < 10) throw new Error(`workflow parse produced only ${String(steps.length)} steps; refusing to assert vacuously`);
+    return steps;
+  };
+
+  const workflow = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
+  const steps = parseWorkflowSteps(workflow);
+  const stepNamed = (name: string): WorkflowStep | undefined => steps.find((step) => step.name === name);
+  const jobConclusion = (failures: Readonly<Record<string, number>>): 'success' | 'failure' => {
+    for (const step of steps) {
+      const exitCode = failures[step.name] ?? 0;
+      if (exitCode !== 0 && step.continueOnError !== true) return 'failure';
+    }
+    return 'success';
+  };
+
+  const EVIDENCE_STEPS = [
+    'Capture the foundation evidence bundle',
+    'Assert the required evidence artefacts exist',
+    'Verify the captured evidence bundle',
+    'Publish logs and machine-readable results',
+  ] as const;
+
+  it('parses the real workflow step list', () => {
+    expect(steps.length).toBeGreaterThan(12);
+    expect(stepNamed('Install from the frozen lockfile')?.run).toBe('pnpm install --frozen-lockfile');
+    // A block scalar must survive as a script body, not disappear into a mapping key.
+    expect(stepNamed('Enable the pinned pnpm 12.18.0 through corepack')?.run).toContain('corepack prepare pnpm@12.18.0 --activate');
+    expect(steps.filter((step) => step.name.startsWith('Post '))).toEqual([]);
+    record('ci.steps', steps.length);
+  });
+
+  it('allows no step to fail without failing the run', () => {
+    const softFailures = steps.filter((step) => step.continueOnError === true).map((step) => step.name);
+    expect(softFailures, 'continue-on-error would let a required check fail silently').toEqual([]);
+    // No step may declare the key at all, even though the file explains why it must not.
+    expect(workflow).not.toMatch(/^\s*continue-on-error:/mu);
+
+    for (const name of EVIDENCE_STEPS) {
+      const step = stepNamed(name);
+      expect(step, `${name} must exist`).toBeDefined();
+      // !cancelled() keeps these steps running after an earlier failure so a red run still carries
+      // diagnostics, while the absence of continue-on-error keeps them able to fail the job.
+      expect(step?.if, name).toContain('!cancelled()');
+      expect(step?.continueOnError ?? false, name).toBe(false);
+    }
+    record('ci.softFailSteps', softFailures.length);
+  });
+
+  it('treats a missing evidence artefact as an error while still publishing after failure', () => {
+    const upload = stepNamed('Publish logs and machine-readable results');
+    expect(upload?.uses).toMatch(/^actions\/upload-artifact@[0-9a-f]{40}$/);
+    expect(upload?.with['if-no-files-found']).toBe('error');
+    expect(upload?.with['name']).toBe('udg-001-evidence');
+    expect(upload?.with['retention-days']).toBe('30');
+    // The block scalar must not swallow the sibling keys that follow it.
+    expect((upload?.with['path'] ?? '').split('\n')).toEqual(['artifacts/latest-UDG-001.txt', 'artifacts/UDG-001-*']);
+    const paths = upload?.with['path'] ?? '';
+    expect(paths).toContain('artifacts/latest-UDG-001.txt');
+    expect(paths).toContain('artifacts/UDG-001-*');
+    expect(workflow).not.toMatch(/if-no-files-found:\s*(?:warn|ignore)/);
+
+    const capture = stepNamed('Capture the foundation evidence bundle');
+    expect(capture?.run).toContain('pnpm evidence:capture');
+    expect(capture?.run).toContain('--keep-going'); // full diagnostics on a failing run
+
+    const verify = stepNamed('Verify the captured evidence bundle');
+    expect(verify?.run).toContain('set -euo pipefail');
+    expect(verify?.run).toContain('pnpm evidence:verify');
+    expect(verify?.run).toContain('pnpm evidence:summary');
+    record('ci.artifactMissingPolicy', upload?.with['if-no-files-found'] ?? 'missing');
+  });
+
+  it('maps every evidence failure to a failed job conclusion', () => {
+    expect(jobConclusion({})).toBe('success');
+    expect(jobConclusion({ 'Capture the foundation evidence bundle': 1 })).toBe('failure');
+    expect(jobConclusion({ 'Assert the required evidence artefacts exist': 1 })).toBe('failure');
+    expect(jobConclusion({ 'Verify the captured evidence bundle': 1 })).toBe('failure');
+    expect(jobConclusion({ 'Publish logs and machine-readable results': 1 })).toBe('failure');
+    expect(jobConclusion({ 'Verify the committed dependency register': 1 })).toBe('failure');
+    // A later evidence step still runs after an earlier failure, so its own failure is reported too.
+    expect(jobConclusion({ 'Capture the foundation evidence bundle': 1, 'Verify the captured evidence bundle': 1 })).toBe('failure');
+    record('ci.failureMapping', 'failure');
+  });
+
+  it('executes the workflow artefact assertion against empty, incomplete and complete evidence', () => {
+    const script = stepNamed('Assert the required evidence artefacts exist')?.run ?? '';
+    expect(script).toContain('set -euo pipefail');
+    const scratch = tempDir('ci-assert');
+    const runAssertion = (cwd: string) => spawnSync('bash', ['-c', script], { cwd, encoding: 'utf8' });
+
+    const write = (path: string, content: string): void => {
+      const absolute = join(scratch, path);
+      mkdirSync(join(absolute, '..'), { recursive: true });
+      writeFileSync(absolute, content);
+    };
+
+    try {
+      // 1. Capture never produced a pointer.
+      mkdirSync(join(scratch, 'empty/artifacts'), { recursive: true });
+      const empty = runAssertion(join(scratch, 'empty'));
+      expect(empty.status).not.toBe(0);
+      expect(`${empty.stdout}${empty.stderr}`).toContain('no run pointer');
+
+      // 2. A pointer exists but the bundle is incomplete and its logs are empty.
+      write('partial/artifacts/latest-UDG-001.txt', 'artifacts/RUN-PARTIAL\n');
+      for (const file of ['report.json', 'environment.json', 'commands.json', 'boundary-report.json', 'build.log', 'checksums.sha256']) {
+        write(`partial/artifacts/RUN-PARTIAL/${file}`, '{}\n');
+      }
+      mkdirSync(join(scratch, 'partial/artifacts/RUN-PARTIAL/logs'), { recursive: true });
+      write('partial/artifacts/RUN-PARTIAL/logs/empty.log', '');
+      const partial = runAssertion(join(scratch, 'partial'));
+      expect(partial.status).not.toBe(0);
+      expect(`${partial.stdout}${partial.stderr}`).toContain('required evidence artefact missing or empty: junit.xml');
+      expect(`${partial.stdout}${partial.stderr}`).toContain('no non-empty command log');
+
+      // 3. A complete bundle passes.
+      write('whole/artifacts/latest-UDG-001.txt', 'artifacts/RUN-WHOLE\n');
+      for (const file of ['report.json', 'environment.json', 'commands.json', 'junit.xml', 'boundary-report.json', 'build.log', 'checksums.sha256']) {
+        write(`whole/artifacts/RUN-WHOLE/${file}`, '{}\n');
+      }
+      write('whole/artifacts/RUN-WHOLE/logs/test.stdout.log', 'output\n');
+      const whole = runAssertion(join(scratch, 'whole'));
+      expect(whole.status, `${whole.stdout}${whole.stderr}`).toBe(0);
+      expect(whole.stdout).toContain('all required evidence artefacts present');
+
+      // 4. A capture that cannot start leaves nothing for the assertion or the uploader to find.
+      const orphan = join(scratch, 'orphan');
+      mkdirSync(join(orphan, 'artifacts'), { recursive: true });
+      const badCapture = run(['node', join(DIST, 'evidence.js'), 'capture', '--task', 'UDG-999', '--out', 'artifacts'], orphan);
+      expect(badCapture.status).not.toBe(0);
+      expect(existsSync(join(orphan, 'artifacts', 'latest-UDG-001.txt'))).toBe(false);
+      const badVerify = run(['node', join(DIST, 'evidence.js'), 'verify', '--run', 'artifacts/RUN-MISSING'], orphan);
+      expect(badVerify.status).toBe(1);
+      expect(`${badVerify.stdout}${badVerify.stderr}`).toContain('EVIDENCE-RUN-MISSING');
+      expect(runAssertion(orphan).status).not.toBe(0);
+      record('ci.assertionExecuted', true);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('planning records stay consistent with the implementation', () => {
   it('keeps the contract checksum manifest matching tracked planning files', () => {
     const manifest = json<{ algorithm: string; excluded: string[]; files: Record<string, string> }>('docs/contracts/checksums.json');
@@ -1066,7 +1296,7 @@ describe('planning records stay consistent with the implementation', () => {
 
   it('authorship: the CI workflow runs the same scripts and pins third-party actions', () => {
     const workflow = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
-    for (const command of ['pnpm install --frozen-lockfile', 'pnpm typecheck', 'pnpm lint', 'pnpm test', 'pnpm build', 'pnpm test:boundaries', 'pnpm test:fixtures', 'pnpm test:contract', 'pnpm contracts:checksums', 'pnpm dependencies:verify']) {
+    for (const command of ['pnpm install --frozen-lockfile', 'pnpm typecheck', 'pnpm lint', 'pnpm test', 'pnpm build', 'pnpm test:boundaries', 'pnpm test:fixtures', 'pnpm test:contract', 'pnpm contracts:checksums', 'pnpm dependencies:verify', 'pnpm evidence:capture', 'pnpm evidence:verify', 'pnpm evidence:summary']) {
       expect(workflow, command).toContain(command);
     }
     expect(workflow).toContain('24.22.2');

@@ -99,7 +99,13 @@ zero discovered tests.
 
 `.github/workflows/ci.yml` runs the same sequence above on `ubuntu-24.04` with Node `24.22.2`, the
 corepack-pinned pnpm `12.18.0`, a frozen installation, and third-party actions pinned to commit
-shas. It uploads the evidence directory so logs and machine-readable results survive a failure.
+shas. Evidence capture, the artefact assertion, evidence verification and artefact publication are
+required checks: no step in the job sets `continue-on-error`, so a failure in any of them fails the
+run, while `if: !cancelled()` keeps them executing after an earlier failure so a red run still
+publishes its logs and machine-readable results. A missing artefact is an error
+(`if-no-files-found: error`), never a warning — a green run always carries the evidence it claims.
+`tests/contracts/UDG-001.test.ts` parses the workflow, maps every evidence failure to a failed job
+conclusion, and executes the assertion script against empty, incomplete and complete bundles.
 
 Per owner clarification C-05 the workflow has to run green on the pushed commit before UDG-001 can
 be Verified. It has: run [42479920170](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42479920170)
