@@ -23,7 +23,9 @@ Task ID and final implementation SHA:
   The commit that contains this record adds only planning documents (this file, the updated
   assignment record, the UDG-001 metadata evidence and CI lines, the regenerated evidence summary,
   the README evidence-policy text and the refreshed checksum manifest). No source file changes after
-  1c735c2.
+  1c735c2. Earlier revisions of this record were themselves published and green - cbab29dceea8816fdd
+  8174177767c5a31ee0430e, Actions run 42511404907, 19/19 steps - and the commit carrying these words
+  adds only these record lines.
 
 CI verification (published, executed on GitHub-hosted runners):
   Pushed to github.com/TomBResearch/UntitledDinosaurGame branch main as a fast-forward from the
@@ -96,6 +98,10 @@ Scoped reviewer correction (evidence checks must be able to fail the run):
       udg-001-evidence; the published bundle UDG-001-2026-11-08T18-32-23-165Z-1c735c2d verifies with
       0 issues after download.
       https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42510445695
+    Run 42511404907  commit cbab29d, the record commit carrying this file  conclusion success
+      19/19 steps, no failed step; bundle UDG-001-2026-11-08T18-44-15-487Z-cbab29dc downloaded and
+      verified with 0 issues, so the published head of main is itself a green run.
+      https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42511404907
 
 Contract revision and prerequisite SHAs:
   UDG-CONTRACTS-M0-001 v1.0, repository edition 1.
@@ -338,9 +344,14 @@ Raw evidence directory and integrity result:
       probe uploaded, the raw runner log (sha256
       073c5424a8b0f401e1a084c023519fecdceb00b8a569329bcb211e7ab04783a4) and a README explaining that
       this directory is a deliberate counterexample, not a passing run
+    ci-run-42511404907/                                  bundle, CI summary and runner log of the
+      green run on revision cbab29d of these record files
+      report.json sha256 2cfddf38a23ab9324555a41ef4cc10a1249cd8b98262804b6caf372a8231c4c7
+      full runner log sha256 1c4da07bc704399fb643901b53160e7d043eee9aac5a61f55e9541d07e6040f5
     inventory.json                                        sha256
-      75c8131b9436f274c6721486f0d6b6f88fd4184c275ac0de1e91ae1e90333e05, 186 files, every retained
-      byte covered by name, size and hash
+      aa0293d2fa613271d7f7e067b690747322f0af32dede325d825d7a7da205edc6, 210 files, every retained
+      byte covered by name, size and hash; the inventory note states that it covers the retained set
+      through run 42511404907, so artifacts of later docs-only runs are appended by the owner
   Contents per bundle: report.json, environment.json, commands.json, junit.xml,
   boundary-report.json, build.log, logs/*.log, checksums.sha256 and a .keep marker.
   Integrity: pnpm evidence:verify -- --run <bundle> => PASS with 0 issues for the local bundle and
