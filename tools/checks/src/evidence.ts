@@ -979,6 +979,7 @@ export interface DependencyRegister {
   readonly toolchainNotes: readonly string[];
   readonly ciActions: readonly GithubActionEntry[];
   readonly thirdPartyReferences: readonly { readonly subject: string; readonly source: string; readonly inspectedOn: string }[];
+  readonly verification: Readonly<{ excludes: readonly string[]; note: string }>;
   readonly sanitisation: Readonly<{ note: string }>;
 }
 
@@ -1174,16 +1175,37 @@ export const buildDependencyRegister = (root: string, command: string): Dependen
       { subject: 'npm registry (package metadata)', source: 'https://registry.npmjs.org/', inspectedOn: '2026-11-08' },
       { subject: 'GitHub git refs API (action commit pins)', source: 'https://api.github.com/repos/{owner}/{repo}/git/ref/tags/{tag}', inspectedOn: '2026-11-08' },
     ],
+    verification: {
+      excludes: VERIFICATION_EXCLUDES,
+      note:
+        'pnpm dependencies:verify compares the repository-controlled fields only: engine pins, lockfile hash, ' +
+        'workspace dependency tables, direct package versions and licences, deferred library groups and CI action pins. ' +
+        'The recording host and the generation timestamp describe one machine, so a Linux arm64 laptop and a ' +
+        'GitHub-hosted Linux x64 runner must both verify the same register.',
+    },
     sanitisation: {
       note: 'No registry auth tokens, machine paths outside the repository alias, user names or environment dumps are recorded here.',
     },
   };
 };
 
+/**
+ * Fields that describe the machine that ran pnpm dependencies:record rather than the repository.
+ * They are kept for provenance and excluded from the staleness comparison; excluding everything
+ * else is what makes the register meaningful on a different host architecture.
+ */
+const VERIFICATION_EXCLUDES: readonly string[] = ['generated.at', 'generated.commit', 'runtime.host.platform', 'runtime.host.arch'];
+
+const HOST_PLACEHOLDER = 'not-verified-host-provenance';
+
 const withoutVolatile = (register: DependencyRegister): unknown =>
   sha256Canonical({
     ...register,
     generated: { taskId: register.generated.taskId, command: register.generated.command },
+    runtime: {
+      ...register.runtime,
+      host: { platform: HOST_PLACEHOLDER, arch: HOST_PLACEHOLDER },
+    },
   });
 
 const dependenciesMain = (flags: CliArgs['flags']): number => {
@@ -1192,7 +1214,7 @@ const dependenciesMain = (flags: CliArgs['flags']): number => {
   const register = buildDependencyRegister(root, 'pnpm dependencies:record');
 
   if (flags['verify'] === true) {
-    const existingRaw = readOptional(join(root, outPath));
+    const existingRaw = readOptional(resolve(root, outPath));
     if (existingRaw === undefined) {
       process.stderr.write(`${outPath} is missing. Run pnpm dependencies:record.\n`);
       return 1;
@@ -1204,7 +1226,7 @@ const dependenciesMain = (flags: CliArgs['flags']): number => {
       process.stderr.write(`${outPath} is not valid JSON: ${String(error)}\n`);
       return 1;
     }
-    if (sha256Canonical({ ...existing, generated: { taskId: existing.generated.taskId, command: existing.generated.command } }) !== withoutVolatile(register)) {
+    if (withoutVolatile(existing) !== withoutVolatile(register)) {
       process.stderr.write(
         `${outPath} is stale: the installed dependency graph, engine pins or CI actions differ from the recorded register.\nRun pnpm dependencies:record and commit the result.\n`,
       );
@@ -1214,7 +1236,7 @@ const dependenciesMain = (flags: CliArgs['flags']): number => {
     return 0;
   }
 
-  writeJson(join(root, outPath), register);
+  writeJson(resolve(root, outPath), register);
   process.stdout.write(
     `wrote ${outPath}: ${String(register.packages.length)} declared package(s), ${String(register.pendingGameLibraries.length)} deferred library group(s)\n`,
   );

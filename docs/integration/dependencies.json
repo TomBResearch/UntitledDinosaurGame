@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "generated": {
-    "at": "2026-11-08T11:04:31.053Z",
+    "at": "2026-11-08T12:16:03.606Z",
     "taskId": "UDG-001",
     "command": "pnpm dependencies:record",
-    "commit": "680773c0e2228769085c06cd62bf5236d63feb45"
+    "commit": "0faf872cbd0197bd7cfec51c351690a994ed89ab"
   },
   "runtime": {
     "node": {
@@ -282,6 +282,15 @@
       "inspectedOn": "2026-11-08"
     }
   ],
+  "verification": {
+    "excludes": [
+      "generated.at",
+      "generated.commit",
+      "runtime.host.platform",
+      "runtime.host.arch"
+    ],
+    "note": "pnpm dependencies:verify compares the repository-controlled fields only: engine pins, lockfile hash, workspace dependency tables, direct package versions and licences, deferred library groups and CI action pins. The recording host and the generation timestamp describe one machine, so a Linux arm64 laptop and a GitHub-hosted Linux x64 runner must both verify the same register."
+  },
   "sanitisation": {
     "note": "No registry auth tokens, machine paths outside the repository alias, user names or environment dumps are recorded here."
   }

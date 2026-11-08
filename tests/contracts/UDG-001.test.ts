@@ -271,6 +271,65 @@ describe('workspace shape', () => {
     record('dependencyRegister.pendingLibraryGroups', register.pendingGameLibraries.length);
     record('dependencyRegister.ciActionsPinned', register.ciActions.length);
   });
+
+  it('verifies the register on a foreign host while still refusing real drift (CI regression)', () => {
+    // GitHub-hosted runners are linux/x64; a developer checkout may be linux/arm64 or macOS. The
+    // register describes the repository, so only the recording host may differ between them.
+    const scratch = tempDir('register');
+    try {
+      const register = json<DependencyRegister>('docs/integration/dependencies.json');
+      expect(register.verification.excludes).toContain('runtime.host.arch');
+      expect(register.verification.excludes).toContain('generated.at');
+
+      const writeCopy = (name: string, value: unknown): string => {
+        const path = join(scratch, name);
+        writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+        return path;
+      };
+      const verifyRegister = (path: string) =>
+        run(['node', join(DIST, 'evidence.js'), 'dependencies', '--verify', '--out', path], ROOT);
+
+      const foreignHost = {
+        ...register,
+        runtime: { ...register.runtime, host: { platform: 'linux', arch: 'x64' } },
+        generated: { ...register.generated, at: '2020-01-01T00:00:00.000Z', commit: '0'.repeat(40) },
+      };
+      const foreign = verifyRegister(writeCopy('foreign-host.json', foreignHost));
+      expect(foreign.status, `${foreign.stdout}${foreign.stderr}`).toBe(0);
+
+      const versionDrift = {
+        ...register,
+        packages: register.packages.map((entry) =>
+          entry.name === 'typescript' ? { ...entry, installedVersion: '5.0.0' } : entry,
+        ),
+      };
+      const drifted = verifyRegister(writeCopy('version-drift.json', versionDrift));
+      expect(drifted.status).not.toBe(0);
+      expect(`${drifted.stdout}${drifted.stderr}`).toContain('is stale');
+
+      const actionDrift = {
+        ...register,
+        ciActions: register.ciActions.map((entry, index) =>
+          index === 0 ? { ...entry, pinnedCommit: 'f'.repeat(40) } : entry,
+        ),
+      };
+      expect(verifyRegister(writeCopy('action-drift.json', actionDrift)).status).not.toBe(0);
+
+      const missing = verifyRegister(join(scratch, 'does-not-exist.json'));
+      expect(missing.status).toBe(1);
+      expect(`${missing.stdout}${missing.stderr}`).toContain('is missing');
+
+      // A mutated pin must still be reported, so the exclusion cannot mask an engine change.
+      const engineDrift = {
+        ...register,
+        runtime: { ...register.runtime, pnpm: { ...register.runtime.pnpm, cliVersion: '9.0.0' } },
+      };
+      expect(verifyRegister(writeCopy('engine-drift.json', engineDrift)).status).not.toBe(0);
+      record('dependencyRegister.hostIndependent', true);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('dependency boundary checker', () => {
