@@ -4,7 +4,7 @@ Prepared 2026-11-08 for integration-owner review, after UDG-001 was accepted and
 **Revision 2** responds to the owner's five review points on revision 1 (`101623e`): the UDG-001 suite
 amendment schedule (§3.5), the completed evidence/dispatcher tooling grant (§4B), breaking the region-asset
 dependency (§1.6), the route-pair and normalisation-order rules (§1.3, §3.4), and the corrected retention
-claim (§6).
+claim (§6). Owner decisions are now five (D1–D5).
 
 **What this document is.** A single consolidated proposal covering the decisions, assignment shape, tooling
 changes and record-keeping needed before UDG-002 can be made Ready. It is non-normative: it records no
@@ -151,7 +151,7 @@ Recommended design — dependency-free and fail-closed:
 - Validators receive bounds **as an explicit, already-validated argument** —
   `validateMoveTo(frame, context: { bounds: RegionBounds; … })` — so nothing in `packages/protocol` or
   `packages/config` reads an asset, a file or a global default. **Recommended: UDG-002 ships no default extents
-  at all** (owner decision D6); absence of bounds is a configuration error, never a permissive pass.
+  at all** (owner decision D5); absence of bounds is a configuration error, never a permissive pass.
 - **Fixtures use synthetic bounds, explicitly labelled.** Every protocol fixture carries
   `"boundsProvenance": "test-only-synthetic"` plus the extents it used — for example `x, z ∈ [-100, 100]`,
   `y ∈ [-10, 50]` with a spawn at `(0, 0.9, 0)`; that `0.9` is v0.2's capsule-centre rest height
@@ -291,9 +291,9 @@ behaviour.
    both fields.
 5. Mapping completeness: the table-driven test fails on an unmapped schema field or an unmapped table row;
    exact-copy equality is asserted **after** yaw and signed-zero normalisation; `verticalVelocity` round-trips.
-6. Region bounds: validators take explicit validated bounds; **no default extents exist in the repository**;
-   every protocol fixture declares `boundsProvenance: "test-only-synthetic"` and the tooling or suite fails if a
-   fixture omits it; a `min ≥ max` bounds set is refused by `validateRegionBounds`.
+6. Region bounds: validators take explicit validated bounds; **no default extents exist in the repository**
+   (under D5 as recommended); every protocol fixture declares `boundsProvenance: "test-only-synthetic"` and the
+   tooling or suite fails if a fixture omits it; a `min ≥ max` bounds set is refused by `validateRegionBounds`.
 7. Config: `configHash` changes on a single parameter change and is stable across repeated runs; a validated
    result is readonly and a source-fixture mutation cannot alter it; missing, non-finite or inconsistent config
    fails startup validation.
@@ -462,17 +462,18 @@ not mirrored; if the owner wants them, D4 plus one mirror covers them under the 
 | --- | --- | --- |
 | D1 | Adopt **P02** as section 1 drafts — including the statement that it elaborates v0.2 §4–§5 rather than changing it, the route-pair and normalisation-order rules, and the P03 gap-of-64 acknowledgement | Approve; no ADR |
 | D2 | Adopt **P06** in the deferred-freeze form of section 2 (float64 canonical + lossless mapping now; encoding widths frozen at Gate A per v0.2 §7.2) | Approve **with** ADR `0001-replica-precision-policy.md` |
-| D3 | Approve the grant list in 3.3 — including §3.5's UDG-001 suite amendments and the §4A/§4B tooling — inside the UDG-002 assignment rather than as separate micro-tasks | Approve; each grant carries its own limit, and the suite amendments replace snapshot assertions with invariants plus a permanent live refusal demonstration |
+| D3 | Assign UDG-002 on the reconciled shape in 3.1–3.4: the grant list in 3.3 (tooling grants included, each with its own limit), §3.5's UDG-001 amendment schedule, the acceptance commands and criteria, and the prerequisite commit set to the adoption commit with this proposal as its reference document | Approve as one assignment rather than micro-tasks. The suite amendments replace snapshot assertions with invariants plus a permanent live refusal demonstration, and no grant widens functional scope |
 | D4 | Designate the **backup** locations in section 6, closing the residual risk that every retained bundle exists on one host | Adopt `/var/backups/udg-evidence/udg-001/` plus a private off-host archive of bundles and inventory only. **Until then the risk stays open and should be recorded as open in any assignment** |
-| D5 | Set the UDG-002 prerequisite commit to the adoption commit (full SHA recorded at assignment), with this proposal as its reference document | Approve |
-| D6 | Region bounds: should UDG-002 ship **no** default extents (bounds must be supplied; absence is a configuration error), or ship labelled development bounds so a room can start without assets? | Recommend **no default** (fail closed); UDG-003 supplies UDG-007's validated `region.json` bounds at startup |
+| D5 | Region bounds: should UDG-002 ship **no** default extents (bounds must be supplied; absence is a configuration error), or ship labelled development bounds so a room can start without assets? | Recommend **no default** (fail closed); UDG-003 supplies UDG-007's validated `region.json` bounds at startup |
 
-Resolved here without needing a decision, for the record: the fixture-layout strategy (extend the checker and fail
+Resolved here without needing a decision, for the record: the UDG-002 prerequisite commit being the adoption
+commit (it only exists after D1/D2, so it is mechanical); the fixture-layout strategy (extend the checker and fail
 closed, TC-1…TC-9); the evidence/dispatcher changes EC-1…EC-9 including task-specific prerequisite SHAs and
 artefact verification; the UDG-001 amendment schedule and its disposable live-refusal fixture; the route-pair rule
 and normalisation ordering; the dependency-free region-bounds design, with real bounds owned by UDG-007 and
 UDG-003 as their contracts already state; digest procedure D-1 with legacy provenance preserved; inventory
-v1 → v2; and the corrected retention statement.
+v1 → v2; and the corrected retention statement. Nothing else in this document asks the owner to choose between
+open-ended options.
 
 **Still not authorised by this document:** P02–P10 remain Pending until the owner records adoption; UDG-002
 remains Not Started and unassigned; no protocol, schema, config or tooling file may be created; Gates A, B and C
