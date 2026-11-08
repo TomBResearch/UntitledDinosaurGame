@@ -15,10 +15,11 @@ sits under `docs/contracts/assignments/`, which the checksum manifest excludes b
 **What this document is not.** It is not a questionnaire. Routine preparation choices are resolved with a
 recommendation and a reason. Genuine owner decisions are collected in section 7 and nowhere else.
 
-Repository state at revision 2: `main` = `101623eaeaf9972fd62d96d7ff92703bdd63195d` (the revision-1 proposal
-commit, CI [42518964644](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42518964644)
-success), clean tree. P01 Approved. **P02 to P10 Pending. UDG-002 Not Started and unassigned.** Gates A, B and
-C Not Run.
+Repository state: revision 1 was published at `101623eaeaf9972fd62d96d7ff92703bdd63195d` (CI
+[42518964644](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42518964644) success, clean
+tree). This revision is carried by the later commits on this file (`git log --oneline` on this path is the
+authoritative provenance, since a document cannot name its own commit). P01 Approved. **P02 to P10 Pending.
+UDG-002 Not Started and unassigned.** Gates A, B and C Not Run.
 
 ---
 
