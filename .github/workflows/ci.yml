@@ -1,0 +1,98 @@
+# Foundation CI for the Untitled Dinosaur Game monorepo (UDG-001).
+#
+# It runs exactly the local command sequence on a clean checkout with a frozen installation and
+# publishes machine-readable results even when a step fails. Third-party actions are pinned to
+# immutable commit shas; the ref comment records the tag those shas came from, verified through the
+# GitHub git-refs API on 2026-11-08 and recorded in docs/integration/dependencies.json.
+#
+# Owner clarification C-05: this workflow is the CI half of the UDG-001 acceptance evidence. Until
+# it has actually run on a pushed commit, UDG-001 stays In Review and the CI reproduction criterion
+# is reported as pending, not as passed.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  foundation:
+    name: foundation checks (Node 24.22.2, pnpm 12.18.0)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 24.22.2
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.2
+
+      - name: Enable the pinned pnpm 12.18.0 through corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@12.18.0 --activate
+          corepack pnpm --version
+          pnpm --version
+
+      - name: Install from the frozen lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck every populated workspace
+        run: pnpm typecheck
+
+      - name: Lint sources and dependency boundaries
+        run: pnpm lint
+
+      - name: Run the unit and Node integration suites
+        run: pnpm test
+
+      - name: Build shared libraries, tools and apps
+        run: pnpm build
+
+      - name: Run positive and negative dependency fixtures
+        run: pnpm test:boundaries
+
+      - name: Validate fixture manifests and pinned hashes
+        run: pnpm test:fixtures
+
+      - name: Run the UDG-001 task suite
+        run: pnpm test:contract -- --task UDG-001
+
+      - name: Verify the contract checksum manifest is in sync
+        run: pnpm contracts:checksums
+
+      - name: Verify the committed dependency register
+        run: pnpm dependencies:verify
+
+      - name: Capture the foundation evidence bundle
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: pnpm evidence:capture -- --task UDG-001 --out artifacts --keep-going
+
+      - name: Verify the captured evidence bundle
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: pnpm evidence:verify -- --run "$(cat artifacts/latest-UDG-001.txt)"
+
+      - name: Publish logs and machine-readable results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: udg-001-evidence
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 30
