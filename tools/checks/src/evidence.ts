@@ -9,7 +9,7 @@
  *   evidence.js verify    --run artifacts/RUN_ID [--report <file>]
  *   evidence.js dependencies [--out docs/integration/dependencies.json] [--verify]
  *   evidence.js checksums [--write]
- *   evidence.js summary   --run <bundle> [--out <file>] [--storage <location>]
+ *   evidence.js summary   --run <bundle> [--out <file>] [--storage <location>] [--ci-status <s>] [--ci-url <u>]
  *
  * Sanitisation rules (19.1): no bearer or reconnect tokens, cookies, credentials or private
  * machine paths. The environment record therefore contains no variable dump, the working
@@ -1345,7 +1345,7 @@ export interface EvidenceSummary {
   readonly suites: readonly SuiteRecord[];
   readonly commands: readonly { readonly label: string; readonly exitCode: number; readonly durationMs: number }[];
   readonly measured: Readonly<Record<string, unknown>>;
-  readonly ci: { readonly status: string; readonly note: string };
+  readonly ci: { readonly status: string; readonly note: string; readonly url?: string };
   readonly artifacts: readonly { readonly path: RepoPath; readonly sha256: string; readonly bytes: number }[];
 }
 
@@ -1353,6 +1353,7 @@ export const buildEvidenceSummary = (
   root: string,
   absoluteRunDir: string,
   durableLocation: string,
+  ci: { readonly status: string; readonly url?: string } = { status: 'pending-owner-run' },
 ): { readonly summary: EvidenceSummary; readonly issueCount: number } => {
   const report = JSON.parse(readFileSync(join(absoluteRunDir, 'report.json'), 'utf8')) as EvidenceReport;
   const commands = JSON.parse(readFileSync(join(absoluteRunDir, 'commands.json'), 'utf8')) as {
@@ -1407,10 +1408,12 @@ export const buildEvidenceSummary = (
       })),
       measured: report.measured,
       ci: {
-        status: 'pending-owner-run',
+        status: ci.status,
+        ...(ci.url === undefined ? {} : { url: ci.url }),
         note:
-          'Clarification C-05: UDG-001 stays In Review until .github/workflows/ci.yml runs green on the pushed ' +
-          'commit. The local run is recorded here; CI reproduction is not claimed.',
+          ci.url === undefined
+            ? 'Clarification C-05: UDG-001 stays In Review until .github/workflows/ci.yml runs green on the pushed commit; CI reproduction is not claimed by this summary.'
+            : 'Workflow ci on the pushed commit, identified by the url field. UDG-001 still stays In Review until the reviewer accepts the work (clarification C-05).',
       },
       artifacts,
     },
@@ -1419,10 +1422,14 @@ export const buildEvidenceSummary = (
 
 const summaryMain = (flags: CliArgs['flags']): number => {
   const root = process.cwd();
-  const run = requireFlag(flags, 'run', 'usage: evidence.js summary --run <bundle> [--out <file>] [--storage <location>]');
+  const run = requireFlag(flags, 'run', 'usage: evidence.js summary --run <bundle> [--out <file>] [--storage <location>] [--ci-status <s>] [--ci-url <u>]');
   const out = flagString(flags, 'out');
   const absoluteRunDir = resolve(root, run);
-  const { summary, issueCount } = buildEvidenceSummary(root, absoluteRunDir, flagString(flags, 'storage') ?? absoluteRunDir);
+  const ciUrl = flagString(flags, 'ci-url');
+  const { summary, issueCount } = buildEvidenceSummary(root, absoluteRunDir, flagString(flags, 'storage') ?? absoluteRunDir, {
+    status: flagString(flags, 'ci-status') ?? 'pending-owner-run',
+    ...(ciUrl === undefined ? {} : { url: ciUrl }),
+  });
   const text = `${JSON.stringify(summary, null, 2)}\n`;
 
   if (out !== undefined) {
@@ -1470,7 +1477,7 @@ const main = (): number => {
       '  evidence.js capture   --task <TASK_ID> [--out artifacts] [--keep-going]\n' +
       '  evidence.js verify    --run artifacts/RUN_ID [--report <file>]\n' +
       '  evidence.js dependencies [--out docs/integration/dependencies.json] [--verify]\n' +
-      '  evidence.js summary   --run <bundle> [--out <file>] [--storage <location>]\n' +
+      '  evidence.js summary   --run <bundle> [--out <file>] [--storage <location>] [--ci-status <s>] [--ci-url <u>]\n' +
       '  evidence.js checksums [--write]\n',
   );
   return 2;

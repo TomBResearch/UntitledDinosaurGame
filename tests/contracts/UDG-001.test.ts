@@ -975,7 +975,7 @@ describe('planning records stay consistent with the implementation', () => {
       configHashes: Record<string, string>;
       testCounts: { tests: number; failures: number; errors: number; skipped: number };
       commands: { label: string; exitCode: number; durationMs: number }[];
-      ci: { status: string; note: string };
+      ci: { status: string; note: string; url?: string };
       artifacts: { path: string; sha256: string; bytes: number }[];
     }>(path);
 
@@ -996,7 +996,12 @@ describe('planning records stay consistent with the implementation', () => {
     expect(summary.commands.every((command) => command.exitCode === 0)).toBe(true);
     expect(summary.verification.ok).toBe(true);
     expect(summary.verification.issueCount).toBe(0);
-    expect(summary.ci.status).toBe('pending-owner-run');
+    // CI is either explicitly pending or an evidenced GitHub Actions success; a vague claim fails.
+    const ciGreen = /^success\b/.test(summary.ci.status);
+    expect(ciGreen || summary.ci.status === 'pending-owner-run').toBe(true);
+    if (ciGreen) expect(summary.ci.url).toMatch(/^https:\/\/github\.com\/[^/]+\/[^/]+\/actions\/runs\/\d+$/);
+    else expect(summary.ci.url).toBeUndefined();
+    record('evidence.ciClaim', ciGreen ? `success (${summary.ci.url ?? 'missing url'})` : 'pending-owner-run');
     expect(summary.artifacts.length).toBeGreaterThan(0);
     for (const artifact of summary.artifacts) {
       expect(artifact.sha256, artifact.path).toMatch(hex64);
