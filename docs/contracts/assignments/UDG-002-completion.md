@@ -195,11 +195,14 @@ Raw evidence directory and integrity result:
                   bundle, which is the cross-machine reproduction that matters
   Foundation      UDG-001-2026-11-09T11-46-42-432Z-a2a2318e (local) and
                   UDG-001-2026-11-09T11-48-52-798Z-a2a2318e (CI) both PASS at this head
-  Retention       /workspace/udg-evidence, inventory v3 (418 files, sha256
-                  ef5feeb647b2850435f77f0d67eed03fdf3fbb32665d7e465f13abccbebe3964) superseding v2
-                  (d4aa0bc1c24f4ef07d5056adb1ff8c33722483d333a8a3116ed1e5a617fd4240). Runner logs are
-                  retained gzipped in this store only: they contain runner filesystem paths, so they
-                  are never committed. Only the sanitised summary
+  Retention       /workspace/udg-evidence, versioned inventory. v3 (418 files, sha256 ef5feeb647b2850435f77f0d67eed03fdf3fbb32665d7e465f13abccbebe3964)
+                  supersedes v2 (d4aa0bc1c24f4ef07d5056adb1ff8c33722483d333a8a3116ed1e5a617fd4240);
+                  v4 (476 files, sha256 e6b1345a8b5b3ae2acad6455301a1482db6e0b9e57c683941317a0d9645fad6c) adds the submission-record run 42613223227, whose
+                  bundles also verify PASS. Each append writes the next version with its predecessor's
+                  hash embedded, so this record cites the chain rather than a terminal inventory
+                  digest — the version that documents this record's own CI run can only be written
+                  after it. Runner logs are retained gzipped in the store only: they contain runner
+                  filesystem paths, so they are never committed. Only the sanitised summary
                   docs/contracts/assignments/UDG-002-evidence.json and its hashes enter Git (C-03).
   OPEN residual   The store is one copy on one host. It guards against Actions artefact expiry (30
                   days from the run date) and against losing the artifacts directory, not against
