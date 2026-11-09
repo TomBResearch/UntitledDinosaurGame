@@ -19,6 +19,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -1086,6 +1087,41 @@ describe('regression and scope', () => {
 
     expect(CONTRACT_TASK_IDS).toContain('UDG-002');
     record('regression.UDG001', 'green');
+  });
+
+  it('separates the contracts-index digest from the task-contract digest in every record', () => {
+    /**
+     * Review correction: this submission's completion record quoted the contracts-index digest under a
+     * "task contract" label. The producer hashes two different files into two different fields, so the
+     * labels are now asserted instead of trusted.
+     */
+    const digest = (relativePath: string): string =>
+      createHash('sha256').update(readFileSync(join(ROOT, relativePath))).digest('hex');
+    const indexDigest = digest('docs/contracts/README.md');
+    const taskDigest = digest(`docs/contracts/${TASK}.md`);
+    expect(indexDigest).not.toBe(taskDigest);
+
+    // The producer's field semantics, as the committed summary carries them.
+    const summary = json<{ contractHash: string; configHashes: Record<string, string> }>(
+      `docs/contracts/assignments/${TASK}-evidence.json`,
+    );
+    expect(summary.contractHash, 'contractHash is the contracts index').toBe(indexDigest);
+    expect(summary.configHashes['taskContract']).toMatch(/^[0-9a-f]{64}$/);
+    expect(summary.configHashes['taskContract'], 'taskContract is never the index digest').not.toBe(indexDigest);
+
+    // The prose record, field by field: the digest quoted beside the index label is the index digest,
+    // and no digest quoted beside a task-contract label is the index digest.
+    const completion = readFileSync(join(ROOT, `docs/contracts/assignments/${TASK}-completion.md`), 'utf8');
+    const digestsUnder = (marker: string): string[] => {
+      const lines = completion.split('\n');
+      const start = lines.findIndex((line) => line.includes(marker));
+      expect(start, marker).toBeGreaterThanOrEqual(0);
+      return [...lines.slice(start, start + 5).join(' ').matchAll(/\b[0-9a-f]{64}\b/g)].map((match) => match[0] as string);
+    };
+    expect(digestsUnder('Contracts index')).toContain(indexDigest);
+    const taskLine = digestsUnder('configHashes.taskContract');
+    expect(taskLine.length).toBeGreaterThan(0);
+    expect(taskLine).not.toContain(indexDigest);
   });
 
   it('builds the libraries before anything asserts against their output', () => {
