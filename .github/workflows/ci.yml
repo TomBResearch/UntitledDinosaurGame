@@ -83,6 +83,15 @@ jobs:
       - name: Run the UDG-002 task suite
         run: pnpm test:contract -- --task UDG-002
 
+      # UDG-003 Phase 0 measures the pinned third-party stack, and the suite builds what it asserts:
+      # this step emits the probe project, runs each probe in its own process and checks the recorded
+      # results, so the api map in docs/integration/colyseus-0.18-api-map.md is backed by this commit
+      # rather than quoted. The results directory is uploaded with the evidence below.
+      - name: Run the UDG-003 Phase 0 probe suite
+        env:
+          UDG_PROBE_OUT: artifacts/probes
+        run: pnpm test:contract -- --task UDG-003
+
       - name: Verify the contract checksum manifest is in sync
         run: pnpm contracts:checksums
 
@@ -224,5 +233,6 @@ jobs:
             artifacts/latest-*.txt
             artifacts/UDG-*-*
             artifacts/*-ci-summary.json
+            artifacts/probes
           if-no-files-found: error
           retention-days: 30

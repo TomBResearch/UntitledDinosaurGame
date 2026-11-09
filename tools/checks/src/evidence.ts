@@ -1255,19 +1255,35 @@ const DEFERRED_GAME_LIBRARIES: readonly DeferredGroup[] = [
   {
     name: '@colyseus/core',
     ownerTask: 'UDG-003',
-    reason: 'Owner clarification C-02: server and fixed-step input integration belongs to UDG-003 and UDG-SPIKE-001.',
+    reason:
+      'Owner clarification C-02 assigns server and fixed-step input integration to UDG-003 and UDG-SPIKE-001; '
+      + 'owner decision D-2 installs the pin only as a provisional candidate whose compatibility must be '
+      + 'established by the Phase 0 probes, recorded in docs/integration/colyseus-0.18-api-map.md.',
     members: ['@colyseus/core'],
   },
   {
     name: '@colyseus/sdk',
-    ownerTask: 'UDG-SPIKE-001',
-    reason: 'Owner clarification C-02: the client SDK and prediction adapter are proven by the Gate A probes.',
+    ownerTask: 'UDG-003',
+    reason:
+      'Owner decision D-3 permits the SDK as a transport smoke and probe client under UDG-003, with this '
+      + 'register entry as its ownership record; prediction validation remains UDG-SPIKE-001, so selecting '
+      + 'it here says nothing about client reconciliation being approved.',
     members: ['@colyseus/sdk'],
+  },
+  {
+    name: '@colyseus/ws-transport',
+    ownerTask: 'UDG-003',
+    reason:
+      'The only M0 transport, installed as a provisional candidate under owner decision D-2. It declares '
+      + 'express as a required peer, so an application that imports express itself must declare it.',
+    members: ['@colyseus/ws-transport'],
   },
   {
     name: '@colyseus/testing',
     ownerTask: 'UDG-003',
-    reason: 'Optional per docs/integration/colyseus.md; chosen only if the UDG-003 probes need it.',
+    reason:
+      'Optional per docs/integration/colyseus.md; owner decision D-3 leaves it unselected, and the Phase 0 '
+      + 'probes drive a real SDK client instead of a testing harness.',
     members: ['@colyseus/testing'],
   },
   {

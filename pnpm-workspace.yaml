@@ -10,9 +10,20 @@ packages:
 # Exact pinning is a repository rule (repository.md 3.1). Never widen these to ranges.
 savePrefix: ""
 
-# Dependency lifecycle scripts are blocked by default in pnpm 10+. The allowlist is empty because
-# no dependency in the current graph needs a build script; verified behaviour is that an unlisted
-# script aborts the install with ERR_PNPM_IGNORED_BUILDS rather than running silently. Adding an
-# entry here is a reviewed supply-chain change, and docs/integration/dependencies.json records the
-# licence and source of everything that is installed.
-onlyBuiltDependencies: []
+# Dependency lifecycle scripts are denied by default, and the denial must be recorded as a decision.
+# Phase 0 finding: `onlyBuiltDependencies`, `neverBuiltDependencies` and `ignoredBuiltDependencies`
+# were replaced by `allowBuilds` in pnpm 11 and are **silently ignored** by pnpm 12 (see the pinned
+# pnpm 12.18.0 changelog entry for `pnpm approve-builds`). The empty `onlyBuiltDependencies: []` list
+# this file carried therefore proved nothing: installs were protected by pnpm's default-deny policy,
+# which aborts with ERR_PNPM_IGNORED_BUILDS, not by the list. An explicit `false` is a decided denial,
+# so the install succeeds while still running nothing.
+#
+# msgpackr-extract is pulled transitively by the Colyseus pin set approved under owner decision D-2 and
+# would compile a native addon. It stays denied: msgpackr falls back to its pure-JavaScript decoder, so
+# no dependency build script runs in this repository. Letting the native build run is a supply-chain
+# decision the owner has not made (addition A-11 of
+# docs/contracts/assignments/UDG-003-phase-0.md). If a later Gate A measurement shows the codec is the
+# bottleneck, allowing it becomes a recorded decision with its own evidence. Anything new that wants a
+# build script must be named here explicitly, never waved through.
+allowBuilds:
+  msgpackr-extract: false

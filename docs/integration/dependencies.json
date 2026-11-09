@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "generated": {
-    "at": "2026-11-09T10:58:25.803Z",
+    "at": "2026-11-09T18:25:25.113Z",
     "taskId": "UDG-001",
     "command": "pnpm dependencies:record",
-    "commit": "45051f6391dc9862dd92e514dddb6d51ea50c746"
+    "commit": "1e9bd1b4099ab7f2777c82f9fe703d0a0b4b8366"
   },
   "runtime": {
     "node": {
@@ -26,7 +26,7 @@
   },
   "lockfile": {
     "path": "pnpm-lock.yaml",
-    "sha256": "899e6f4d18930cb23fc32438dfe5d7b11d4d16741ebf2cf03f54a5c8585517e5"
+    "sha256": "bbfe68e33a072ecbd1974fe32f54e1a238d0f697737320ba554eceae8dd0777d"
   },
   "workspaces": [
     {
@@ -84,8 +84,14 @@
       "name": "@udg/server",
       "dir": "apps/server",
       "dependencies": {
-        "typescript": "5.9.3",
-        "@types/node": "24.19.2"
+        "@colyseus/core": "0.18.27",
+        "@colyseus/sdk": "0.18.9",
+        "@colyseus/ws-transport": "0.18.4",
+        "@udg/protocol": "workspace:*",
+        "@types/debug": "4.1.12",
+        "@types/express": "5.0.4",
+        "@types/node": "24.19.2",
+        "typescript": "5.9.3"
       }
     },
     {
@@ -106,6 +112,16 @@
   ],
   "packages": [
     {
+      "name": "@colyseus/core",
+      "declared": "0.18.27",
+      "installedVersion": "0.18.27",
+      "licence": "MIT",
+      "licenceSource": "node_modules/@colyseus/core/package.json",
+      "importedBy": [
+        "apps/server"
+      ]
+    },
+    {
       "name": "@colyseus/schema",
       "declared": "5.0.45",
       "installedVersion": "5.0.45",
@@ -113,6 +129,26 @@
       "licenceSource": "node_modules/@colyseus/schema/package.json",
       "importedBy": [
         "packages/protocol"
+      ]
+    },
+    {
+      "name": "@colyseus/sdk",
+      "declared": "0.18.9",
+      "installedVersion": "0.18.9",
+      "licence": "MIT",
+      "licenceSource": "node_modules/@colyseus/sdk/package.json",
+      "importedBy": [
+        "apps/server"
+      ]
+    },
+    {
+      "name": "@colyseus/ws-transport",
+      "declared": "0.18.4",
+      "installedVersion": "0.18.4",
+      "licence": "MIT",
+      "licenceSource": "node_modules/@colyseus/ws-transport/package.json",
+      "importedBy": [
+        "apps/server"
       ]
     },
     {
@@ -133,6 +169,26 @@
       "licenceSource": "node_modules/@playwright/test/package.json",
       "importedBy": [
         "."
+      ]
+    },
+    {
+      "name": "@types/debug",
+      "declared": "4.1.12",
+      "installedVersion": "4.1.12",
+      "licence": "MIT",
+      "licenceSource": "node_modules/@types/debug/package.json",
+      "importedBy": [
+        "apps/server"
+      ]
+    },
+    {
+      "name": "@types/express",
+      "declared": "5.0.4",
+      "installedVersion": "5.0.4",
+      "licence": "MIT",
+      "licenceSource": "node_modules/@types/express/package.json",
+      "importedBy": [
+        "apps/server"
       ]
     },
     {
@@ -164,6 +220,7 @@
       "licence": "UNLICENSED",
       "licenceSource": "node_modules/@udg/protocol/package.json",
       "importedBy": [
+        "apps/server",
         "packages/config"
       ]
     },
@@ -232,23 +289,48 @@
     },
     {
       "name": "@colyseus/core",
-      "status": "not-selected",
+      "status": "selected",
       "ownerTask": "UDG-003",
-      "reason": "Owner clarification C-02: server and fixed-step input integration belongs to UDG-003 and UDG-SPIKE-001.",
-      "selectedPackages": []
+      "reason": "Owner clarification C-02 assigns server and fixed-step input integration to UDG-003 and UDG-SPIKE-001; owner decision D-2 installs the pin only as a provisional candidate whose compatibility must be established by the Phase 0 probes, recorded in docs/integration/colyseus-0.18-api-map.md. Selected by UDG-003: @colyseus/core@0.18.27.",
+      "selectedPackages": [
+        {
+          "name": "@colyseus/core",
+          "version": "0.18.27",
+          "licence": "MIT"
+        }
+      ]
     },
     {
       "name": "@colyseus/sdk",
-      "status": "not-selected",
-      "ownerTask": "UDG-SPIKE-001",
-      "reason": "Owner clarification C-02: the client SDK and prediction adapter are proven by the Gate A probes.",
-      "selectedPackages": []
+      "status": "selected",
+      "ownerTask": "UDG-003",
+      "reason": "Owner decision D-3 permits the SDK as a transport smoke and probe client under UDG-003, with this register entry as its ownership record; prediction validation remains UDG-SPIKE-001, so selecting it here says nothing about client reconciliation being approved. Selected by UDG-003: @colyseus/sdk@0.18.9.",
+      "selectedPackages": [
+        {
+          "name": "@colyseus/sdk",
+          "version": "0.18.9",
+          "licence": "MIT"
+        }
+      ]
+    },
+    {
+      "name": "@colyseus/ws-transport",
+      "status": "selected",
+      "ownerTask": "UDG-003",
+      "reason": "The only M0 transport, installed as a provisional candidate under owner decision D-2. It declares express as a required peer, so an application that imports express itself must declare it. Selected by UDG-003: @colyseus/ws-transport@0.18.4.",
+      "selectedPackages": [
+        {
+          "name": "@colyseus/ws-transport",
+          "version": "0.18.4",
+          "licence": "MIT"
+        }
+      ]
     },
     {
       "name": "@colyseus/testing",
       "status": "not-selected",
       "ownerTask": "UDG-003",
-      "reason": "Optional per docs/integration/colyseus.md; chosen only if the UDG-003 probes need it.",
+      "reason": "Optional per docs/integration/colyseus.md; owner decision D-3 leaves it unselected, and the Phase 0 probes drive a real SDK client instead of a testing harness.",
       "selectedPackages": []
     },
     {
