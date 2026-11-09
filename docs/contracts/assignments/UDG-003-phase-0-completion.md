@@ -143,6 +143,22 @@ addon is a separate owner decision (amendment A-11 of the assignment) and would 
 | `pnpm dependencies:verify` | `docs/integration/dependencies.json matches the installed dependency graph` |
 | `pnpm --filter @udg/server typecheck:probes` | **exit 2** — the PH0-B1 inventory; reported, not suppressed |
 
+## 5b. CI runs on `main`
+
+| Run | Head | Result | What it proves |
+| --- | --- | --- | --- |
+| [42676201677](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42676201677) | `b32bf114` | **fail** — `drift detected: docs/contracts/checksums.json (59 file(s), 1 change(s))` | the checksum gate caught a real omission: the new api map had no manifest entry. Bundle `UDG-001-2026-11-09T18-42-24-484Z-b32bf114` verifies as internally consistent with `EVIDENCE-GATE-NOT-PASS`, which is the required behaviour for a failing gate |
+| [42677043247](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42677043247) | `e52a97c1` | **fail** — probe step only | `UDG_PROBE_OUT=artifacts/probes` is relative while each probe runs with `apps/server` as its working directory, so the suite looked in one directory and the probes wrote another. `pnpm test` in the same run passed, which is how the difference was isolated. UDG-001 and UDG-002 bundles from this run verify PASS |
+| [42678254682](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42678254682) | `673e2dd3` | **success**, 23 steps, 0 failed | the submitted state. The probe step reproduced the local numbers exactly: `PR-0` 39 checks, `PR-1` 43, `PR-2` 7, `PR-3` 10, `PR-8` 7, `PR-12` 6, all exit 0, and the probe-project typecheck exit 2 with the same 27 diagnostics pinned as PH0-B1 |
+
+Evidence retained in the host store `/workspace/udg-evidence` as `ci-run-42676201677`,
+`ci-run-42677043247` and `ci-run-42678254682`, each with its bundles, `probes/` result directory and
+runner log. Both bundles of the successful run verify with zero issues. No release, tag or new storage
+location was created for Phase 0, and **D4 remains open**.
+
+This section is a documentation-only follow-up to `673e2dd3`; it changes this file and the checksum
+manifest entry for it, and reports the runs above rather than a new one.
+
 ## 6. Deviations and amendments actually applied
 
 Every one of these stays inside the paths the assignment allowed; none widens functional scope, and
