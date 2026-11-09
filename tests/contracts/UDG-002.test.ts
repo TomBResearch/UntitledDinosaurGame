@@ -1115,15 +1115,18 @@ describe('regression and scope', () => {
   // Five names, two producers: this suite writes four, the fixture suite writes the rejection set.
 
   it('writes the evidence artefacts the contract names when capture asks for them', () => {
-    // Outside capture there is no evidence directory, so asserting their contents would assert nothing;
-    // the capture plans declare them as required artefacts and verification refuses a placeholder.
-    const skip = EVIDENCE_DIR === undefined;
-    if (skip) {
+    // The directory this task owns, which is no directory at all when capture is running for someone
+    // else. `pnpm test` inside a UDG-001 capture sets an evidence destination for that bundle, and
+    // asserting that UDG-002's artefacts sit in it would be a false failure — while asserting nothing
+    // about a destination this task does write to would be a false pass. The capture plan declares
+    // these files as required artefacts, and verification refuses a placeholder.
+    const directory = evidenceDirectory();
+    if (directory === undefined) {
       expect(true).toBe(true);
       return;
     }
     for (const name of artefactNames) {
-      const path = join(evidenceDirectory() as string, name);
+      const path = join(directory, name);
       expect(existsSync(path), name).toBe(true);
       const body = JSON.parse(readFileSync(path, 'utf8')) as { schemaVersion: number; taskId: string };
       expect(body.taskId, name).toBe(TASK);
