@@ -132,7 +132,6 @@ const checkKinematic = (issues: MappingIssue[], kinematic: KinematicState | unde
  * `../version.ts` is unchanged.
  */
 const ROUTE_MIN_REVISION = ROUTE_ABSENT_REVISION + 1;
-
 /**
  * Validate the canonical state that a player replica would be produced from.
  *
@@ -166,12 +165,15 @@ export const checkPlayerState = (state: PlayerSimulationState | undefined): read
   } else if (!isRecord(route)) {
     collect(issues, 'route', 'must be null or a RouteProgress object');
   } else {
-    checkUint(issues, 'routeRevision', route.revision, UINT32_MAX, ROUTE_MIN_REVISION);
+    // Width first, from `0` rather than from `ROUTE_MIN_REVISION`: revision `0` is representable on the
+    // wire, so it gets the one semantic issue below instead of a width complaint as well. Everything the
+    // width cannot carry — negative, fractional, oversized, non-finite — is reported here.
+    checkUint(issues, 'routeRevision', route.revision, UINT32_MAX, ROUTE_ABSENT_REVISION);
     checkUint(issues, 'nextWaypointIndex', route.nextWaypointIndex, UINT32_MAX, ROUTE_ABSENT_INDEX);
     if (route.revision === ROUTE_ABSENT_REVISION) {
-      // Reported under both names when both are wrong: `routeRevision` carries the canonical-absence
-      // reason, `nextWaypointIndex` carries the pair rule the wire table states.
-      collect(issues, 'routeRevision', 'a non-null route must carry a positive revision; canonical absence is null');
+      // Each half of the pair is reported under its own name and once each: `routeRevision` carries the
+      // canonical-absence reason, `nextWaypointIndex` the pair rule the wire table states.
+      collect(issues, 'routeRevision', `a non-null route must carry a revision of at least ${String(ROUTE_MIN_REVISION)}; canonical absence is null`);
       if (typeof route.nextWaypointIndex === 'number' && route.nextWaypointIndex !== ROUTE_ABSENT_INDEX) {
         collect(issues, 'nextWaypointIndex', 'revision 0 means no route and requires index 0');
       }

@@ -229,9 +229,9 @@ describe('projection', () => {
     const reported = checkPlayerState(mismatched);
     expect(reported.length).toBeGreaterThan(0);
     const reportedFields = reported.map((issue) => issue.field);
-    // `nextWaypointIndex` carries the pair rule; `routeRevision` carries the canonical-absence reason.
-    expect(reportedFields).toContain('nextWaypointIndex');
-    expect(reportedFields).toContain('routeRevision');
+    // `nextWaypointIndex` carries the pair rule; `routeRevision` carries the canonical-absence reason,
+    // and each of them says so exactly once.
+    expect(reportedFields).toEqual(['routeRevision', 'nextWaypointIndex']);
   });
 
   it('refuses a canonical route at the wire sentinel instead of silently making it null', () => {
@@ -239,7 +239,9 @@ describe('projection', () => {
     // back as `route: null`, so the caller would get a different canonical value than the one it passed.
     // Canonical absence is `null`; a `RouteProgress` is a route, and a route has a positive revision.
     const zeroPair = withRoute({ revision: 0, nextWaypointIndex: 0 });
-    expect(checkPlayerState(zeroPair).map((issue) => issue.field)).toContain('routeRevision');
+    // One issue per field, named: a report that says the same thing twice is noise a caller learns to
+    // ignore, and a caller that ignores this one would ship the state anyway.
+    expect(checkPlayerState(zeroPair).map((issue) => issue.field)).toEqual(['routeRevision']);
     expect(toReplica(zeroPair).ok).toBe(false);
     // `null` is the canonical spelling of absence and stays acceptable.
     expect(checkPlayerState(withRoute(null))).toEqual([]);
