@@ -17,7 +17,6 @@ export {
   toReplica,
   type MappingIssue,
   type MappingResult,
-  type PlayerMappingOptions,
 } from './to-replica.js';
 export {
   fromRegionReplica,

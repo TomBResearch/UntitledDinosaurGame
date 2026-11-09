@@ -12,6 +12,7 @@ import type { PlayerSimulationState, RegionReplicaState } from '../domain/state.
 import type { MovementMode } from '../domain/primitives.js';
 import type { Validation } from '../domain/wire.js';
 import {
+  GENERATION_MAX,
   HASH_PATTERN,
   MAX_IDENTIFIER_LENGTH,
   MAX_VERSION_LENGTH,
@@ -83,7 +84,9 @@ export const readReplicaIssues = (replica: PlayerSchema | undefined): readonly R
   requireUint(issues, 'movementMode', replica.movementMode, 255);
   requireUint(issues, 'routeRevision', replica.routeRevision, UINT32_MAX);
   requireUint(issues, 'nextWaypointIndex', replica.nextWaypointIndex, UINT32_MAX);
-  requireUint(issues, 'intentGeneration', replica.intentGeneration, UINT32_MAX);
+  // `GENERATION_MAX`, the same bound the outbound validators and `toReplica` apply. A replica carrying
+  // `UINT32_MAX` is a wire-integrity failure, not a generation this receiver may adopt.
+  requireUint(issues, 'intentGeneration', replica.intentGeneration, GENERATION_MAX);
   requireUint(issues, 'sessionEpoch', replica.sessionEpoch, UINT32_MAX, 1);
   requireUint(issues, 'lastAuthorityTick', replica.lastAuthorityTick, UINT32_MAX);
   return issues;
@@ -113,6 +116,8 @@ export const readPlayerReplica = (
         ? null
         : { revision: replica.routeRevision, nextWaypointIndex: replica.nextWaypointIndex };
 
+    // The reconstruction is a value `toReplica` would project identically: `0 / 0` is the only wire
+    // encoding of absence, and any surviving route carries a positive revision.
     return {
       issues,
       value: {

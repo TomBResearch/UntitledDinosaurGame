@@ -15,6 +15,7 @@
 import type { EntityId, MovementMode } from '../domain/primitives.js';
 import type { KinematicState, PlayerSimulationState, RegionReplicaState } from '../domain/state.js';
 import {
+  GENERATION_MAX,
   HASH_PATTERN,
   MAX_IDENTIFIER_LENGTH,
   MAX_VERSION_LENGTH,
@@ -121,20 +122,25 @@ const checkKinematic = (issues: MappingIssue[], kinematic: KinematicState | unde
   checkFiniteNormalised(issues, 'verticalVelocity', kinematic.verticalVelocity);
 };
 
-export interface PlayerMappingOptions {
-  /**
-   * Enforce the adopted route pair rule: revision `0` means no route and requires index `0`, while a
-   * positive revision with index `0` is a valid active route at its first waypoint. Default `true`.
-   */
-  readonly enforceRoutePairRule?: boolean;
-}
+/**
+ * The lowest revision a **canonical** route may carry.
+ *
+ * `0` is reserved for absence, and absence is spelled `null` in the domain, so a `RouteProgress` whose
+ * revision is `0` has no meaning that `null` does not already carry. It is refused rather than
+ * projected, because the projection would send the `0 / 0` sentinel and the round trip would come back
+ * as `null`: not the value that went in. Kept package-private; the public numeric vocabulary in
+ * `../version.ts` is unchanged.
+ */
+const ROUTE_MIN_REVISION = ROUTE_ABSENT_REVISION + 1;
 
-/** Validate the canonical state that a player replica would be produced from. */
-export const checkPlayerState = (
-  state: PlayerSimulationState | undefined,
-  options: PlayerMappingOptions = {},
-): readonly MappingIssue[] => {
-  const enforceRoutePairRule = options.enforceRoutePairRule ?? true;
+/**
+ * Validate the canonical state that a player replica would be produced from.
+ *
+ * The route pair rule (owner decision D1) is **not optional**: there is no caller-visible way to turn
+ * it off, because a projection that skipped it would produce a replica that decodes to a different
+ * canonical state than the one it was built from.
+ */
+export const checkPlayerState = (state: PlayerSimulationState | undefined): readonly MappingIssue[] => {
   const issues: MappingIssue[] = [];
   if (!isRecord(state)) {
     collect(issues, 'state', 'must be a PlayerSimulationState object');
@@ -160,19 +166,21 @@ export const checkPlayerState = (
   } else if (!isRecord(route)) {
     collect(issues, 'route', 'must be null or a RouteProgress object');
   } else {
-    checkUint(issues, 'routeRevision', route.revision, UINT32_MAX, ROUTE_ABSENT_REVISION);
+    checkUint(issues, 'routeRevision', route.revision, UINT32_MAX, ROUTE_MIN_REVISION);
     checkUint(issues, 'nextWaypointIndex', route.nextWaypointIndex, UINT32_MAX, ROUTE_ABSENT_INDEX);
-    if (
-      enforceRoutePairRule &&
-      route.revision === ROUTE_ABSENT_REVISION &&
-      typeof route.nextWaypointIndex === 'number' &&
-      route.nextWaypointIndex !== ROUTE_ABSENT_INDEX
-    ) {
-      collect(issues, 'nextWaypointIndex', 'revision 0 means no route and requires index 0');
+    if (route.revision === ROUTE_ABSENT_REVISION) {
+      // Reported under both names when both are wrong: `routeRevision` carries the canonical-absence
+      // reason, `nextWaypointIndex` carries the pair rule the wire table states.
+      collect(issues, 'routeRevision', 'a non-null route must carry a positive revision; canonical absence is null');
+      if (typeof route.nextWaypointIndex === 'number' && route.nextWaypointIndex !== ROUTE_ABSENT_INDEX) {
+        collect(issues, 'nextWaypointIndex', 'revision 0 means no route and requires index 0');
+      }
     }
   }
 
-  checkUint(issues, 'intentGeneration', state.locomotion.intentGeneration, UINT32_MAX);
+  // `GENERATION_MAX`, not `UINT32_MAX`: the same bound the outbound validators apply, so a state that
+  // validated cannot be projected onto a generation the receiver will refuse.
+  checkUint(issues, 'intentGeneration', state.locomotion.intentGeneration, GENERATION_MAX);
   checkUint(issues, 'lastAuthorityTick', state.locomotion.lastAuthorityTick, UINT32_MAX);
   return issues;
 };
@@ -184,11 +192,8 @@ export const checkPlayerState = (
  * stamps full-sync generations per context, so pushing the same instance through two encoders drops
  * field values. That probe result is recorded with a reproduction in docs/contracts/protocol-v1.md.
  */
-export const toReplica = (
-  state: PlayerSimulationState,
-  options: PlayerMappingOptions = {},
-): MappingResult<PlayerSchema> => {
-  const issues = checkPlayerState(state, options);
+export const toReplica = (state: PlayerSimulationState): MappingResult<PlayerSchema> => {
+  const issues = checkPlayerState(state);
   if (issues.length > 0) return { ok: false, issues };
 
   const replica = new PlayerSchema();
