@@ -54,17 +54,20 @@ requires: whoever imports a package must declare it.
 
 ## 2. Probe index
 
-Phase 0 ran six probes. Each is a module under `apps/server/probes/`, executed as its own process by
-`tests/probes/colyseus-server.probe.ts`, and reported by `pnpm test:contract -- --task UDG-003`.
+Phase 0 ran six assigned probes. Each is a module under `apps/server/probes/`, executed as its own process by
+`tests/probes/colyseus-server.probe.ts`, and reported by `pnpm test:contract -- --task UDG-003`. `PR-13` is not an
+assigned Phase 0 probe: it is the overflow/acknowledgement remedy investigation the owner authorised on 2026-11-09,
+run against the same pins and reported in the same artefact ([§9](#9-pr-13-overflow-postures-can-a-supported-mechanism-prevent-unrepresented-retirement)).
 
 | Probe | Module | Question | Outcome |
 | --- | --- | --- | --- |
 | `PR-0` | `apps/server/probes/pr0-compile.probe.ts` | does the pinned stack compile under the repository policy | **BLOCKED, 43 checks, `ok: false`, `verdict: "blocked"`** — the strict typecheck it reports on exits 2 with 27 third-party diagnostics (PH0-B1); its typed-reference and escape-hatch halves pass |
-| `PR-1` | `apps/server/probes/pr1-graph.probe.ts` | what actually resolved, and is there one schema runtime | passes, 36 checks |
+| `PR-1` | `apps/server/probes/pr1-graph.probe.ts` | what actually resolved, and is there one schema runtime | passes, 43 checks |
 | `PR-2` | `apps/server/probes/pr2-fixed-step.probe.ts` | is there a public fixed-step facility at the advertised dt | passes, 7 checks |
 | `PR-3` | `apps/server/probes/pr3-input-schema.probe.ts` | is the adopted input schema the room's declaration, with five fields intact | passes, 10 checks |
 | `PR-8` | `apps/server/probes/pr8-ack.probe.ts` | which frames does one acknowledgement retire | passes, 15 checks; traces frames by identity through receipt, buffering, overflow, consumption, refusal and acknowledgement ([§4](#4-pr-8-which-frames-does-one-acknowledgement-retire-d-7-evidence)) |
 | `PR-12` | `apps/server/probes/pr12-epoch.probe.ts` | what lifecycle primitives exist for a UDG-owned session epoch | passes, 6 checks; records the primitives, the renewal procedure still required and what stays unproved ([§6](#6-reclassified-ph0-b2-the-session-epoch-is-udg-owned)) |
+| `PR-13` | `apps/server/probes/pr13-overflow-policy.probe.ts` | can a public, supported mechanism keep the buffer from retiring a frame the room never represented | passes, 20 checks; nine postures measured, one prevents the violation ([§9](#9-pr-13-overflow-postures-can-a-supported-mechanism-prevent-unrepresented-retirement)) |
 
 Each probe result carries `verdict`: `pass`, `fail`, or `blocked` — `blocked` meaning the probe could not
 be attempted as stated because a precondition of it is unmet. `pass` for a behaviour probe is not a
@@ -269,6 +272,15 @@ between a pinned declaration and UDG's code, which is the failure mode Phase 0 e
 **R4 — rejected: `skipLibCheck: true`.** Turns the compiler off for third-party surfaces; makes the
 inventory vanish by destroying the instrument.
 
+> **Measurement note (2026-11-09, owner Route 1).** After this recommendation was written the owner authorised
+> measuring `skipLibCheck` as a *candidate* confined to the Colyseus-facing projects, so it is no longer
+> unexamined. The two paragraphs above stand as written on the evidence then available, and **R4 remains the
+> repository posture**: nothing is adopted, PR-0 stays BLOCKED under the committed policy, and the recommendation
+> in the proposal is still R0. What changed is only that the candidate now has measurements — what it hides,
+> what it demonstrably keeps checking, which projects would need it, and its residual risk — recorded in
+> [§10](#10-compiler-policy-candidate-skiplibcheck-confined-to-the-network-facing-projects) and in
+> [ADR-P-0002 Part A](../adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md).
+
 **R5 — rejected: a package patch or vendored `.d.ts`.** Editing a pinned dependency's declarations
 means UDG maintains a fork of the type surface, and the dependency register would describe a package
 that no longer matches its pinned tarball.
@@ -335,6 +347,68 @@ Phase 0 assignment), and would need its own evidence.
 - No gate. Gate A stays **Not Run**, encoding widths stay provisional under ADR 0001, and the pins in
   [§1](#1-installed-set) stay candidates until the owner resolves PH0-B1. The stack is
   `not-established`, and no probe result in this file should be quoted as a compatibility endorsement.
+
+## 9. PR-13 overflow postures: can a supported mechanism prevent unrepresented retirement?
+
+[§4](#4-pr-8-which-frames-does-one-acknowledgement-retire-d-7-evidence) proved the acknowledgement retires an
+evicted frame as though it had been simulated. PR-13 asks the preventive question, with the same pins and public
+API only. Two identity sets decide every scenario:
+
+- **`ackedUnrepresented`** — sent frames whose seq the client's `lastProcessed` retires although their values never
+  entered a solver step. Non-empty **is** the prohibition being violated.
+- **`unackedUnrepresented`** — frames that vanished without acknowledgement: the residue a reconnection must
+  resolve truthfully.
+
+| posture | peak backlog (bound 4) | `ackedUnrepresented` | disconnect | conclusion |
+| --- | --- | --- | --- | --- |
+| none (5 ms sender) | 4 | 8 of 14 acked | — | the failure, reproduced; the bound held |
+| `InputAccessor.clear()` at a threshold | 4 | 14 (`consumedCount` 10 → 14) | — | moves the same watermark: **not a remedy** |
+| `Client.leave(4008)` at a threshold | 4 | 3 | yes (4008) | watermark froze at 3 of 8 sent; the 20 Hz tick acted **too late** for a 5 ms sender |
+| `Room.maxMessagesPerSecond = 40` vs ~200/s | 4 | 29 | yes (4002) | cuts the offender off; a ceiling above the consume rate still permits growth |
+| `defineInput(…, { seqField: 'generation' })` | 4 | 9 | — | the ack is still a send-order watermark |
+| `Room.send(client, 'udg-backlog', …)` + obeying sender | **2** | **0** | none | **prevention**, 0 frames sent inside the signal window at loopback |
+| `drain()` then step the newest | 3 | 13 (3 drained without a step) | — | **rejected**: the ack jump the declarations warn about, measured |
+| `take(1)` per 20 Hz step vs 40/s sender | 4 | 8 | none | an under-sized budget makes eviction unavoidable |
+| `take(3)` per 20 Hz step vs the same sender | **2** | **0** | none | **prevention**: all 24 sent frames entered a step |
+| `defineInput(…, { sanitize })` | 4 | 9 | none | the only admission-time hook: `(input) => void` rewrites, cannot refuse |
+
+**There is no rejection lever.** `sanitize` is the sole admission hook and returns `void`, so a room cannot refuse
+an over-quota frame; no `InputAccessor` or `InputHandle` member withholds or retracts an acknowledgement (§4).
+Prevention comes from matching consumption to the admitted rate, which is what the declarations themselves
+recommend for a shared world: `take` a bounded few and sub-step, "the ack then === inputs actually simulated;
+`drain()`-then-apply-latest would silently jump the ack past inputs the server never simulated" — N7 measures that
+warning instead of quoting it.
+
+**Measured sizing rule** (from the two `take` points plus the threshold and rate scenarios; not a rate sweep):
+`n ≥ ceil(admittedArrivalRate / stepRate)`; `bufferMaxSize ≥ n` plus jitter and signal round-trip headroom;
+`maxMessagesPerSecond ≤ n × stepRate` so an offender is cut off rather than accommodated. Buffering stayed at or
+below the declared bound in every scenario: the problem was never growth, it is what becomes of what the bound
+drops.
+
+**SDK proof versus UDG-SPIKE-001 proof.** PR-13 proves server-side accounting only. It does not observe client
+reconciliation, and a room's own record of what it stepped is not evidence that a client stops predicting from a
+retired frame: convergence after a cut-off, behaviour under loss and reconnect, and the non-zero signal round trip
+of a real network stay with UDG-SPIKE-001. D-7 is unchanged: the remedy measured here is a posture in which the
+acknowledgement is never asked to distinguish applied from refused from drained, not a better acknowledgement.
+
+The recommendation built on this table, and the four-item architectural decision it implies, are in
+[ADR proposal ADR-P-0002](../adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md) Part B.
+
+## 10. Compiler-policy candidate: `skipLibCheck` confined to the network-facing projects
+
+The measured evaluation of the owner's Route 1 — what the exception hides, what it keeps checking, which projects
+would need it, and the residual risk — is in
+[ADR-P-0002](../adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md) Part A. Nothing is adopted;
+[§5](#5-blocker-ph0-b1-third-party-declarations-do-not-typecheck) and §5.4 remain the blocker record, and PR-0 stays
+**BLOCKED** under the committed policy. The two facts worth carrying here:
+
+- the exception demonstrably keeps checking first-party code and application calls (20 first-party diagnostics
+  identical with and without it, 13 of 15 invalid public-API calls still error, `window`/`document`/`HTMLElement`
+  still unavailable) and hides only the inside of declaration files;
+- it is not narrow. Measured per minimal import: `@udg/protocol` and `@udg/protocol/schema` need nothing (0
+  diagnostics); `apps/server` needs it for 23–26 diagnostics depending on entry; `apps/client` needs it for 3 of
+  its own once it imports `@colyseus/sdk`, because 22 of the 23 `HeadersInit` diagnostics are an artefact of the
+  server's Node `lib` and vanish under the client's existing DOM `lib`.
 
 [docs]: https://docs.colyseus.io/ 'Colyseus documentation (versionless URL; the pinned package is the authority)'
 [pinned]: https://www.npmjs.com/package/@colyseus/core/v/0.18.27 'pinned package page'

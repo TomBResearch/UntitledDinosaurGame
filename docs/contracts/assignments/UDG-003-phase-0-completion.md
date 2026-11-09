@@ -430,3 +430,145 @@ storage, which the owner has not authorised.
 3. **Whether Phase 1 may proceed on the current provisional pins** once PH0-B1 has a decided posture, or
    only after an upstream fix. There is no newer version to move to (§9.4).
 4. **D4** — independent evidence backup destination, still undesignated.
+
+---
+
+## 10. Revision 3 — the two authorised remedy investigations
+
+The owner acknowledged the revision 2 corrections, left **Phase 1 unassigned** and **D-7 undecided**, and
+authorised two narrowly scoped investigations plus one decision document
+([adoption I-1…I-3](adoption.md)). Revision 3 is those investigations. It changes no pin, no compiler setting and
+no protocol rule, and it opens no upstream issue.
+
+### 10.1 What was authorised, and what was not
+
+Authorised: scratch compiler experiments, and minimal Phase 0 overflow probes against the current pins. Not
+authorised: dependency changes, compiler-policy adoption, authority implementation, Phase 1 work. Preserved: all
+historical evidence. Drafted for review only, not published: the two upstream reports. Untouched: releases, tags,
+archives, storage; **D4 remains undesignated**.
+
+### 10.2 Route 2 — PR-13: can a supported mechanism prevent unrepresented retirement?
+
+`apps/server/probes/pr13-overflow-policy.probe.ts` (20 checks) and `OverflowRoom` in
+`apps/server/probes/rooms.ts` measure nine postures against the pinned `core@0.18.27` / `sdk@0.18.9`, all with
+public declarations only. Two identity sets decide every scenario: `ackedUnrepresented` (the client's
+`lastProcessed` retires a frame whose values never entered a solver step — non-empty **is** the violation) and
+`unackedUnrepresented` (frames that vanished without acknowledgement — the residue a reconnection must resolve).
+The sets are computed from the send table rather than from what a tick happened to observe in `peek()`, so a frame
+dropped before any tick saw it still counts.
+
+| posture | peak backlog (bound 4) | `ackedUnrepresented` | disconnect | conclusion |
+| --- | --- | --- | --- | --- |
+| none, 5 ms sender | 4 | 8 of 14 acked | — | the finding reproduced; the bound held |
+| `InputAccessor.clear()` at a threshold | 4 | 14 (`consumedCount` 10 → 14) | — | moves the same watermark: not a remedy |
+| `Client.leave(4008)` at a threshold | 4 | 3 | yes (4008) | watermark froze at 3 of 8 sent; the 20 Hz tick acted too late for a 5 ms sender |
+| `Room.maxMessagesPerSecond = 40` vs ~200/s | 4 | 29 | yes (4002) | cuts the offender off; a ceiling above the consume rate still permits growth |
+| `defineInput(…, { seqField: 'generation' })` | 4 | 9 | — | the ack is still a send-order watermark |
+| `Room.send(client, 'udg-backlog', …)` + obeying sender | **2** | **0** | none | prevention, 0 frames sent inside the signal window at loopback |
+| `drain()` then step the newest | 3 | 13 (3 drained without a step) | — | rejected: the ack jump the declarations warn about, measured |
+| `take(1)` per 20 Hz step vs 40/s | 4 | 8 | none | an under-sized budget makes eviction unavoidable |
+| `take(3)` per 20 Hz step vs 40/s | **2** | **0** | none | prevention: all 24 sent frames entered a step |
+| `defineInput(…, { sanitize })` | 4 | 9 | none | the only admission hook, `(input) => void`: rewrites, cannot refuse |
+
+Findings, stated plainly:
+
+1. **There is no rejection lever.** `sanitize` is the sole admission-time hook and returns `void`; no
+   `InputAccessor` or `InputHandle` member withholds, retracts or qualifies an acknowledgement (§9.2). A room
+   therefore cannot refuse an over-quota frame before it is buffered.
+2. **A per-tick threshold is enforcement, not prevention.** Between two 20 Hz steps a 5 ms sender overran the whole
+   buffer, so frames were acknowledged without a step before the tick could disconnect anyone (N3), and the same
+   happens before a rate cut lands (N4). What those postures do achieve is real: the watermark stops lying once the
+   seat ends, and the residue is explicitly unacknowledged rather than silently represented.
+3. **Prevention is consumption matched to the admitted rate.** `take(n)` with `n ≥ ceil(admittedRate / stepRate)`
+   retired nothing and simulated every sent frame (N8 budget 3, minimum 2), and a `Room.send()` backlog signal with
+   an obeying sender did the same without a disconnect (N6). The pinned declarations recommend exactly this for a
+   shared world and warn that `drain()`-then-apply-latest "would silently jump the ack past inputs the server never
+   simulated"; N7 measures that warning instead of quoting it.
+4. **Bounded buffering is proved**: the declared bound was never exceeded in any posture. The problem was never
+   growth; it is what becomes of what the bound drops.
+5. **Smallest required architectural decision** (no library change, no unbounded queue, no private state, no
+   fabricated ack, no custom transport): an admitted input rate per session with a derived `take(n)` budget;
+   `bufferMaxSize` derived from that budget plus jitter headroom so an overflowing buffer means an offender; one
+   deterministic offender consequence (rate ceiling plus reserved close code, or a mandatory throttle signal — the
+   owner's choice); and one explicit client state that resynchronises from authoritative state instead of replaying
+   unacknowledged frames.
+
+**SDK proof versus UDG-SPIKE-001 proof.** PR-13 observes server-side accounting only. It does not observe client
+reconciliation, and the room's own step log is not evidence that a client stops predicting from a retired frame.
+Convergence after a cut-off, behaviour under loss and reconnect, and the non-zero signal round trip of a real
+network stay with UDG-SPIKE-001. **D-7 is unchanged and still open** (§9.2 remains its evidence).
+
+### 10.3 Route 1 — the `skipLibCheck` candidate, measured and not applied
+
+Scratch configurations and 19 negative fixtures were created under `apps/server/.adr-scratch`, measured, and
+deleted; no repository tsconfig changed, and PR-0 still reports **BLOCKED** with 27 third-party diagnostics and 0
+first-party ones.
+
+| measurement | committed policy | with the candidate exception |
+| --- | --- | --- |
+| probe project — third-party declaration diagnostics | 27 | 0 |
+| probe project — first-party diagnostics | 0 | 0 |
+| probe project + 19 negative fixtures | 47 (27 + 20) | 20 — **the identical 20 first-party diagnostics** |
+| `window.innerWidth`, `document.body`, `HTMLElement` | 3 errors | 3 errors |
+| invalid calls to the public APIs UDG uses | 13 of 15 error | the same 13 error |
+| type fidelity over 752 first-party call expressions | baseline | identical resolved signatures; 0 expressions acquiring a type from the six defective declaration files; identical `any`-expression count (48, all pre-existing) |
+| `@udg/protocol`, `@udg/protocol/schema`, no-Colyseus entries | 0 diagnostics | 0 — no exception needed |
+
+Two negative cases escape under **both** policies (`client.create(999)`, `server.listen('not-a-port')`), which is
+looseness in the pinned upstream types rather than an effect of the flag. Measured per minimal import: `apps/server`
+needs the exception (23–26 diagnostics by entry), `apps/client` needs it for 3 of its own once it imports
+`@colyseus/sdk` (22 of the 23 `HeadersInit` diagnostics are an artefact of the server's Node `lib` and vanish under
+the client's existing DOM `lib`), and `packages/*`, `tools/*` and the root test project need nothing. Residual risk
+was measured rather than asserted: with the exception, an unresolvable **exported** type in a dependency reports
+nothing and its call sites stop being checked, and an error inside a declaration file the repository itself emits
+is silenced too.
+
+Recommendation is unchanged from §9.4: **R0/A0 — keep PH0-B1 blocked and escalate upstream.** The exception works as
+measured, but it clears a compiler gate for a stack whose behavioural blockers are still open, and it would require
+restating PR-0's claim. Recorded in api map §10 (with a supersession note on the §5.4 R4 rejection, whose text
+stands as written) and in the decision document below.
+
+### 10.4 The decision document
+
+[docs/adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md](../adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md),
+status **Proposed** (ADR-P-0002): Part A compiler options A0–A6 with the measurements and the exact project list;
+Part B the posture options, the measured sizing rule and the four-item decision; impact; the decisions requested in
+order; appendix A the reproducible scratch measurements; appendix B two upstream report drafts **for review only —
+not published, no issue opened**. It is a proposal: only the owner can accept it, and acceptance would still not be
+a gate pass.
+
+### 10.5 Commands re-run for this revision (local)
+
+| command | result |
+| --- | --- |
+| `pnpm --filter @udg/server build:probes` | 0 — emits the probe project (`--noCheck`, diagnostic emission only) |
+| `node apps/server/probes/dist/probes/pr13-overflow-policy.probe.js --out …` | 0 — 20 checks, all passing, twice in a row |
+| `pnpm --filter @udg/server typecheck:probes` | **non-zero** — 27 third-party diagnostics, 0 first-party (PH0-B1 unchanged) |
+| `pnpm typecheck` | 0 |
+| `pnpm lint` | 0 — `boundary check OK: 49 file(s), 0 violations, rule table 818c63d5b12f` |
+| `pnpm test` | 0 — **`Tests 372 passed (372)`**; UDG-001 49, UDG-002 31, **UDG-003 56**, unit 216, fixture-layout 20 |
+| `pnpm contracts:checksums -- --write` | manifest regenerated; tracked planning documents in sync (the new ADR proposal enters the manifest when it becomes tracked) |
+| scratch compiler measurements | appendix A of the decision document; scratch tree deleted afterwards, `git status` clean of scratch files |
+
+### 10.6 What this revision did not do
+
+- No pin added, removed or changed; `pnpm-lock.yaml` untouched.
+- No compiler flag, tsconfig, ambient shim or dependency patch applied to the repository; the scratch configs were
+  deleted and `git status` carries no scratch path.
+- No Phase 1 code, no authority implementation, no room behaviour beyond the probe-only `OverflowRoom`.
+- No upstream issue opened and no report published.
+- No acceptance, gate pass or spike gate recorded. UDG-003 stays **In Progress — Phase 0 revision 3 submitted for
+  review**; UDG-001 and UDG-002 remain **Verified**; Gates A/B/C remain **Not Run**.
+- No release, tag, archive or storage created, replaced or deleted; **D4** still undesignated.
+
+### 10.7 Decisions the owner still owes
+
+1. **Part A** — accept A0 (recommended: stay blocked, escalate upstream) or accept A4 with the recorded mitigations
+   and a restated PR-0.
+2. **Part B** — accept the admitted-rate + `take(n)` budget + derived `bufferMaxSize` posture, and choose the
+   offender consequence (rate ceiling plus close code, or a mandatory throttle signal).
+3. **Phase 1 authorisation** on that basis, still carrying `not-established` and the declaration-error inventory, or
+   a decision to wait for upstream (no newer pins exist).
+4. **D-7** — unchanged and open; PR-13 supplies a posture in which the acknowledgement is never asked to make the
+   distinction, which is not the same as making the acknowledgement truthful.
+5. **D4** — independent evidence backup destination, still undesignated.
