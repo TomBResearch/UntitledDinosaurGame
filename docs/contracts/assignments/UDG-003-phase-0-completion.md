@@ -356,10 +356,22 @@ with an epoch change). The suite asserts the probe no longer says "BLOCKED".
 
 ### 9.7 CI for this revision
 
-To be recorded by the follow-up commit once the run on `main` completes, with the same convention as §5b:
-run id, head, result and what it proves. Retention stays as before — host store plus the per-run
-`udg-evidence` workflow artefact, **no new release, tag or storage location**, and **D4 remains
-undesignated**.
+| Run | Head | Result | What it proves |
+| --- | --- | --- | --- |
+| [42690547977](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42690547977) | `af29668a` | **success**, 23 steps, 0 failed | GitHub reproduces the corrected posture, not just the local one: `PR-0` reports `verdict: "blocked"` with 43 checks and process exit 1, the probe-project typecheck exits 2 with the **same pinned 27-diagnostic PH0-B1 inventory and 0 repository diagnostics**, and `PR-1`/`PR-2`/`PR-3`/`PR-8`/`PR-12` pass 43/7/10/15/6 checks. `compatibility-verdict.json` in the artefact reads `stackCompatibility: "not-established"`, `pr0: "blocked"`, `diagnostics: { total: 27, inRepositoryCode: 0, inThirdPartyDeclarations: 27 }`. The index labels the two compiler purposes explicitly: `emit.purpose = "diagnostic emission only (--noCheck)"` and `typecheck.purpose = "the accepted compiler gate"`. `PR-8` CI evidence reproduces the identity trace: dropped generations `1,2,3,4` retired under watermark `4` |
+
+A green workflow is **not** a compatibility claim: the run is green because the suite now asserts that
+PR-0 is blocked and the stack is `not-established`. Both evidence bundles from this run
+(`UDG-001-2026-11-09T20-13-02-455Z-af29668a`, `UDG-002-2026-11-09T20-13-55-141Z-af29668a`) verify with
+**zero issues**.
+
+Retention is unchanged in kind: the host store `/workspace/udg-evidence/ci-run-42690547977` holds both
+bundles, the `probes/` result directory and the runner log, alongside the per-run `udg-evidence` workflow
+artefact. The durable inventory chain extends to **v16** — 1 488 files, tip
+`98db2f6d915940ab41ea31e6e1740a911402c1fa0620bbd6523d3f450d79194d`, superseding v15
+`72b1f873425529c630a2e8f88d13530d3e2fd95237f8ef84a303da2add985d5f`; the chain v9 → v16 verifies. Records
+cite the chain, never a tip asserted from a record. **No release, tag, archive or storage location was
+created, replaced or deleted**, and **D4 remains undesignated**.
 
 ### 9.8 What this revision did not do
 
