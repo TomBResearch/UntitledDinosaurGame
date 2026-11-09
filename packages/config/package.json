@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "UDG @udg/config workspace. readonly movement, network, limit and region configuration plus canonical hashes. Implemented by UDG-002; intentionally empty in the UDG-001 foundation.",
+  "description": "UDG @udg/config workspace. readonly movement, network, limit and region configuration plus canonical hashes. Implemented by UDG-002: validated values and hashes only, with no production region bounds default.",
   "license": "UNLICENSED",
   "engines": {
     "node": "24.22.2",
@@ -26,5 +26,8 @@
   },
   "devDependencies": {
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@udg/protocol": "workspace:*"
   }
 }

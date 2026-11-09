@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "generated": {
-    "at": "2026-11-08T12:16:03.606Z",
+    "at": "2026-11-09T10:58:25.803Z",
     "taskId": "UDG-001",
     "command": "pnpm dependencies:record",
-    "commit": "0faf872cbd0197bd7cfec51c351690a994ed89ab"
+    "commit": "45051f6391dc9862dd92e514dddb6d51ea50c746"
   },
   "runtime": {
     "node": {
@@ -26,7 +26,7 @@
   },
   "lockfile": {
     "path": "pnpm-lock.yaml",
-    "sha256": "d2cccebdb42f5686c8d7b172a0810d07b95cc73685690459c0ea225291e202c8"
+    "sha256": "899e6f4d18930cb23fc32438dfe5d7b11d4d16741ebf2cf03f54a5c8585517e5"
   },
   "workspaces": [
     {
@@ -47,6 +47,7 @@
       "name": "@udg/protocol",
       "dir": "packages/protocol",
       "dependencies": {
+        "@colyseus/schema": "5.0.45",
         "typescript": "5.9.3"
       }
     },
@@ -54,6 +55,7 @@
       "name": "@udg/config",
       "dir": "packages/config",
       "dependencies": {
+        "@udg/protocol": "workspace:*",
         "typescript": "5.9.3"
       }
     },
@@ -104,6 +106,16 @@
   ],
   "packages": [
     {
+      "name": "@colyseus/schema",
+      "declared": "5.0.45",
+      "installedVersion": "5.0.45",
+      "licence": "MIT",
+      "licenceSource": "node_modules/@colyseus/schema/package.json",
+      "importedBy": [
+        "packages/protocol"
+      ]
+    },
+    {
       "name": "@eslint/js",
       "declared": "10.0.1",
       "installedVersion": "10.0.1",
@@ -143,6 +155,16 @@
       "licenceSource": "node_modules/@udg/checks/package.json",
       "importedBy": [
         "."
+      ]
+    },
+    {
+      "name": "@udg/protocol",
+      "declared": "workspace:*",
+      "installedVersion": "0.0.0",
+      "licence": "UNLICENSED",
+      "licenceSource": "node_modules/@udg/protocol/package.json",
+      "importedBy": [
+        "packages/config"
       ]
     },
     {
@@ -197,51 +219,64 @@
   "pendingGameLibraries": [
     {
       "name": "@colyseus/schema",
-      "status": "not-selected",
+      "status": "selected",
       "ownerTask": "UDG-002",
-      "reason": "Owner clarification C-02: UDG-002 selects and tests the schema dependency against real encode/decode fixtures."
+      "reason": "Owner clarification C-02: UDG-002 selects and tests the schema dependency against real encode/decode fixtures. Selected by UDG-002: @colyseus/schema@5.0.45.",
+      "selectedPackages": [
+        {
+          "name": "@colyseus/schema",
+          "version": "5.0.45",
+          "licence": "MIT"
+        }
+      ]
     },
     {
       "name": "@colyseus/core",
       "status": "not-selected",
       "ownerTask": "UDG-003",
-      "reason": "Owner clarification C-02: server and fixed-step input integration belongs to UDG-003 and UDG-SPIKE-001."
+      "reason": "Owner clarification C-02: server and fixed-step input integration belongs to UDG-003 and UDG-SPIKE-001.",
+      "selectedPackages": []
     },
     {
       "name": "@colyseus/sdk",
       "status": "not-selected",
       "ownerTask": "UDG-SPIKE-001",
-      "reason": "Owner clarification C-02: the client SDK and prediction adapter are proven by the Gate A probes."
+      "reason": "Owner clarification C-02: the client SDK and prediction adapter are proven by the Gate A probes.",
+      "selectedPackages": []
     },
     {
       "name": "@colyseus/testing",
       "status": "not-selected",
       "ownerTask": "UDG-003",
-      "reason": "Optional per docs/integration/colyseus.md; chosen only if the UDG-003 probes need it."
+      "reason": "Optional per docs/integration/colyseus.md; chosen only if the UDG-003 probes need it.",
+      "selectedPackages": []
     },
     {
       "name": "@dimforge/rapier3d-compat (or equivalent Rapier package)",
       "status": "not-selected",
       "ownerTask": "UDG-006",
-      "reason": "Rapier version and WASM identity are frozen at Gate B with binary hashes."
+      "reason": "Rapier version and WASM identity are frozen at Gate B with binary hashes.",
+      "selectedPackages": []
     },
     {
       "name": "recast-navigation-js package family",
       "status": "not-selected",
       "ownerTask": "UDG-007",
-      "reason": "Recast version and WASM hashes are recorded with the asset pipeline and Gate C evidence."
+      "reason": "Recast version and WASM hashes are recorded with the asset pipeline and Gate C evidence.",
+      "selectedPackages": []
     },
     {
       "name": "@babylonjs/* and react",
       "status": "not-selected",
       "ownerTask": "UDG-004",
-      "reason": "Client rendering and UI dependencies are chosen by the browser client task."
+      "reason": "Client rendering and UI dependencies are chosen by the browser client task.",
+      "selectedPackages": []
     }
   ],
   "toolchainNotes": [
     "Node 24.22.2 and pnpm 12.18.0 are pinned by owner clarification C-01 and enforced by package.json engines plus .npmrc engine-strict.",
     "TypeScript is pinned to 5.9.3. TypeScript 7.x exists on the registry but the installed typescript-eslint release declares peer typescript \">=4.8.4 <6.1.0\", so the newer compiler line is deferred until the lint toolchain supports it. Changing the compiler line is a dependency-pin decision, not a routine edit.",
-    "Game libraries are listed under pendingGameLibraries and are deliberately absent from the lockfile until their owning task can prove them (clarification C-02).",
+    "Deferred game libraries carry a derived status: selected only when the owning task has actually declared the package, absent otherwise (clarification C-02).",
     "onlyBuiltDependencies in pnpm-workspace.yaml is the allowlist for dependency build scripts; an unlisted build script fails the install.",
     "Every actions/* reference in .github/workflows/ci.yml is pinned to an immutable commit sha (actions/checkout, actions/setup-node, actions/upload-artifact)."
   ],
