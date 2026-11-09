@@ -547,8 +547,34 @@ a gate pass.
 | `pnpm typecheck` | 0 |
 | `pnpm lint` | 0 — `boundary check OK: 49 file(s), 0 violations, rule table 818c63d5b12f` |
 | `pnpm test` | 0 — **`Tests 372 passed (372)`**; UDG-001 49, UDG-002 31, **UDG-003 56**, unit 216, fixture-layout 20 |
-| `pnpm contracts:checksums -- --write` | manifest regenerated; tracked planning documents in sync (the new ADR proposal enters the manifest when it becomes tracked) |
+| `pnpm contracts:checksums -- --write` | 60 entries, one addition (`docs/adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md`, which `docs/**` makes edition-controlled) and no other change; CI's "Verify the contract checksum manifest is in sync" step passes on the head |
 | scratch compiler measurements | appendix A of the decision document; scratch tree deleted afterwards, `git status` clean of scratch files |
+
+### 10.5b CI on `main`, and the evidence retained
+
+| run | head | result | what the artefact says |
+| --- | --- | --- | --- |
+| `42719371983` | `21079545` | **success**, 23 steps + post steps, 0 failed | probe index reads `PR-0=blocked(43)`, `PR-1/2/3/8/12=pass`, **`PR-13=pass(20 checks, 0 failed)`**; `compatibility-verdict.json` keeps `stackCompatibility: "not-established"`, `pr0: "blocked"`, `strictTypecheckExitCode: 2`, `diagnostics: { total: 27, inRepositoryCode: 0, inThirdPartyDeclarations: 27 }` |
+
+CI-measured PR-13 values, which the recommendation quotes (they differ from the local run only in generation
+counts, never in direction): N1 9 of 14 acknowledged frames never entered a step, peak backlog 4 of 4; N2
+`clear()` still retiring frames; N3 `Client.leave(4008)` freezing the watermark at 5 of 10 sent with 5 frames
+unacknowledged and unrepresented, yet still 5 acknowledged without a step and the backlog touching the bound; N4
+rate ceiling 40/s disconnecting with code 4002 after 30 acknowledgements without a step; N5 `seqField` no help; N6
+signal posture peak 2 of 4, nothing acknowledged without a step, 0 frames inside the signal window; N7 `drain()`
+retiring 6 frames without a step and 12 acknowledgements without a step; N8 budget 1 → 9 acknowledged without a
+step, budget 3 → none, peak 2 of 4, minimum budget 2; N9 `sanitize` running 14 times, 5 frames stepped after
+rewriting, 9 acknowledgements without a step.
+
+Retained in the durable host store as `ci-run-42719371983`: both evidence bundles (each `PASS evidence verify …
+(0 issue(s))`), the `probes/` artefact including `PR-13.probe-result.json`, and `runner/runner-log.txt.gz`. This
+revision appends one entry to the `UDG-003-PHASE-0-2026-11-09` record in the store's inventory chain (inventory
+version 20, 1 762 files, superseding version 19); the chain v9 → v20 was re-verified with matching `supersedes`
+digests and no duplicate `ciRuns`, and `inventory.json` mirrors version 20. Records cite the chain entry, never a
+tip hash asserted from a record.
+
+**No release, tag, archive or storage location was created, replaced or deleted for this revision, and D4 remains
+undesignated.**
 
 ### 10.6 What this revision did not do
 
