@@ -219,6 +219,28 @@ The decision fields of [assignments/UDG-002-completion.md](assignments/UDG-002-c
 same record, and the state history at the foot of
 [assignments/UDG-002.md](assignments/UDG-002.md) shows the transition.
 
+## UDG-003 Phase 0 review instruction recorded 2026-11-09
+
+The owner reviewed the Phase 0 submission (head `83d33321`, CI run `42679471471`) and instructed the
+corrections below. This is the owner's instruction, recorded by the implementer; the remedy options in
+[assignments/UDG-003-phase-0-completion.md](assignments/UDG-003-phase-0-completion.md) §9.4 and api map §5.4
+remain **recommendations** and nothing there is adopted. Decisions D-1…D-7 recorded above are unchanged.
+
+| id | Owner instruction | Effect recorded |
+| --- | --- | --- |
+| D-8 | The Phase 0 candidate stack is **not** accepted as compatible and Phase 1 is **not** authorised | `stackCompatibility: "not-established"` in `artifacts/probes/compatibility-verdict.json`; Phases 1–3 stay unassigned; no pin promoted from provisional candidate |
+| D-9 | Compiler status must be unambiguous and reported separately: strict typechecking is the gate, `--noCheck` is diagnostic emission and never the accepted build path | PR-0 reports `verdict: "blocked"`, `ok: false`, with `blockedReason`; api map §0 states the three questions apart; `--noCheck` removed from the `@udg/server` `build` script; the suite asserts all of it |
+| D-10 | PR-8 must trace distinct frame identities through receipt, buffering, overflow, consumption, refusal, drop and acknowledgement; determine whether the acknowledgement is a count or a sequence watermark and which frames it retire; assert the observed relationship; preserve the earlier evidence while correcting the conclusion; keep D-7 undecided | The first submission's S4 conclusion ("dropped frames are never acknowledged") is **wrong** and is now recorded as superseded: overflow eviction counts as consumed, so dropped frames **are** retired by the watermark `lastProcessed` while never being represented in state. The acknowledgement is a sequence watermark equal to the server `consumedCount`, retiring a prefix with no per-frame disposition; applied, refused and dropped are indistinguishable to the client. An application journal is server-side evidence and does not prove client reconciliation. **D-7 remains open** |
+| D-11 | Remove `client as never` from the reconnection probe, use the publicly declared client type, and make sure that bypass cannot be reported as clean | `apps/server/probes/rooms.ts` types `onJoin`/`onLeave`/`onDrop` with `Client` from `@colyseus/core` and passes it to `allowReconnection` uncast; PR-0's escape-hatch scan bans `as never` and `as unknown` and now scans code only (comments and literals stripped), so prose can neither create nor conceal an offender |
+| D-12 | Prepare a concrete PH0-B1 remedy recommendation; separate configuration/type-environment issues from upstream declaration defects; investigate compatible exact versions first; a compiler-policy change must be narrowly scoped, explained precisely and demonstrated not to add DOM globals or hide errors; **do not adopt new pins, flags, shims or package patches without approval** | Recorded in api map §5.1–5.4 and completion §9.4: class A (23 × `HeadersInit`, DOM-lib assumption), class B (2 × `TS1192`, libraries default-import `node:http`), class C (2 × `TS2344`, a defect inside `@colyseus/sdk`'s own published types). All four pinned packages are already the latest published versions and every published candidate carries the same defects; TypeScript 5.8/6/7 does not clear them and TS 6/7 cannot read `esModuleInterop: false`. Measured variants: DOM lib 27→4 (adds DOM globals — demonstrated), `allowSyntheticDefaultImports` 27→25, ambient `HeadersInit` shim 27→4, both 27→2, `skipLibCheck` 27→0. **Recommendation R0: keep PH0-B1 open and change nothing.** Nothing adopted |
+| D-13 | Reclassify the epoch finding accurately: UDG `sessionEpoch` is application-owned and distinct from SDK input bookkeeping, and the absence of a UDG epoch API in Colyseus is not a library defect | **PH0-B2 reclassified** from blocker to design obligation (it does not gate Phase 1). PR-12 records the supported lifecycle primitives measured, the renewal procedure UDG still has to build (specified, not implemented; Phase 2 `DevelopmentSessions`), and what remains unproved. No reset call invented |
+| — | No retention provisioning is authorised | No release, tag, archive or storage location created, replaced or deleted. **D4 stays open**: the independent backup destination remains undesignated |
+
+State after this instruction: **UDG-001 Verified**, **UDG-002 Verified**, **UDG-003 In Progress — Phase 0
+revision 2 resubmitted for review**; Phases 1–3 unassigned; Gate A, B and C **Not Run**; P04, P05, P07–P10
+Pending; encoding widths provisional under ADR 0001; **D-7 open**; **D4 open**. Nothing in this entry is an
+acceptance, a gate pass or an adoption of a remedy.
+
 ## Reviewed edition and pins for the P01 approval
 
 ```text
