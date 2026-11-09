@@ -40,7 +40,9 @@ const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '../..');
 const EVIDENCE_DIR = process.env['UDG_EVIDENCE_OUT'];
 const EVIDENCE_TASK = process.env['UDG_EVIDENCE_TASK'];
 const OWNS_EVIDENCE_RUN = EVIDENCE_DIR !== undefined && EVIDENCE_TASK === TASK;
-const PROBE_OUT = process.env['UDG_PROBE_OUT'] ?? join(ROOT, 'artifacts', 'probes');
+// Relative is what a workflow step naturally writes (UDG_PROBE_OUT=artifacts/probes), and the probes
+// run with a different working directory than the suite, so the value is anchored here once.
+const PROBE_OUT = resolve(ROOT, process.env['UDG_PROBE_OUT'] ?? join('artifacts', 'probes'));
 
 /**
  * Blocker PH0-B1, recorded exactly as produced on 2026-11-09 at commit 1e9bd1b with the pins in

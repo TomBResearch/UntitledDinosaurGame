@@ -214,6 +214,9 @@ export function runProbe(root: string, outDir: string, id: ProbeId): ProbeRecord
 
 /** Emit, typecheck and run every assigned probe. Nothing here judges the outcome. */
 export function runColyseusProbes(root: string, outDir: string): ProbeRun {
+  // Each probe runs with apps/server as its working directory, so a relative output directory would
+  // mean two different places depending on who asked. Anchor it once, here.
+  outDir = resolve(root, outDir);
   const emit = emitProbes(root);
   const typecheck = typecheckProbes(root);
   const diagnostics = parseDiagnostics(`${typecheck.stdout}\n${typecheck.stderr}`, serverDirectory(root), root);
