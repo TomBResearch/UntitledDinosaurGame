@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "taskId": "UDG-002",
-  "runId": "UDG-002-2026-11-09T12-57-05-477Z-9b04ee28",
-  "generatedAt": "2026-11-09T13:04:21.813Z",
-  "generatorCommand": "pnpm evidence:summary -- --run <bundle> --out <file> (bundle UDG-002-2026-11-09T12-57-05-477Z-9b04ee28)",
+  "runId": "UDG-002-2026-11-09T13-32-06-371Z-372be938",
+  "generatedAt": "2026-11-09T13:34:44.910Z",
+  "generatorCommand": "pnpm evidence:summary -- --run <bundle> --out <file> (bundle UDG-002-2026-11-09T13-32-06-371Z-372be938)",
   "durableStorage": {
-    "location": "/workspace/udg-evidence/UDG-002-2026-11-09T12-57-05-477Z-9b04ee28",
+    "location": "/workspace/udg-evidence/ci-run-42625893542/UDG-002-2026-11-09T13-32-06-371Z-372be938",
     "note": "Raw bundle retained outside Git per clarification C-03. The hashes below identify the retained bytes; a mismatch means the stored bundle is not the run this summary describes."
   },
   "verification": {
@@ -14,7 +14,7 @@
     "issueCount": 0
   },
   "status": "PASS",
-  "implementationSha": "9b04ee2802dac72588163828beaaafeae39ff08f",
+  "implementationSha": "372be938f0dd825ff89fac56da7dc29d0789098f",
   "branch": "main",
   "workingTreeDirty": false,
   "prerequisiteShas": [
@@ -24,7 +24,7 @@
   "baselineSpecHash": "b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf",
   "dependencyLockHash": "899e6f4d18930cb23fc32438dfe5d7b11d4d16741ebf2cf03f54a5c8585517e5",
   "configHashes": {
-    "taskContract": "25e44ba5190e85af351491fd6f24a8964ab37ebd1be6f4210497746145d2fc78",
+    "taskContract": "87ac552f0793e1fec36ff37f41892eadb2129b9dd83200cca75d300c49c7ed5a",
     "tsconfigBase": "da4b844063b8abb6f48677c87c8996accf9e77cf1f7e5792827cd811edcb394d",
     "boundaryRuleTable": "818c63d5b12f984b17172688be6fd82ed103d9e18473e0978e307225e8194b82",
     "boundaryFixtures": "076b6a6f6f6ae75fdb3a3ba607df73f456b1ea0ec39cd465942e41730c79ba0d",
@@ -64,52 +64,52 @@
     {
       "label": "install-frozen",
       "exitCode": 0,
-      "durationMs": 46
+      "durationMs": 111
     },
     {
       "label": "typecheck",
       "exitCode": 0,
-      "durationMs": 3445
+      "durationMs": 12518
     },
     {
       "label": "lint",
       "exitCode": 0,
-      "durationMs": 1630
+      "durationMs": 4667
     },
     {
       "label": "test",
       "exitCode": 0,
-      "durationMs": 10450
+      "durationMs": 27451
     },
     {
       "label": "build",
       "exitCode": 0,
-      "durationMs": 1437
+      "durationMs": 5800
     },
     {
       "label": "test-unit",
       "exitCode": 0,
-      "durationMs": 1244
+      "durationMs": 4049
     },
     {
       "label": "test-boundaries",
       "exitCode": 0,
-      "durationMs": 745
+      "durationMs": 2366
     },
     {
       "label": "test-fixtures",
       "exitCode": 0,
-      "durationMs": 790
+      "durationMs": 2434
     },
     {
       "label": "test-contract-UDG-002",
       "exitCode": 0,
-      "durationMs": 5835
+      "durationMs": 16214
     },
     {
       "label": "test-contract-UDG-001",
       "exitCode": 0,
-      "durationMs": 2600
+      "durationMs": 6827
     }
   ],
   "measured": {
@@ -200,35 +200,35 @@
       "failingCommands": [],
       "sanitisationFailures": [],
       "pnpmStoreRecorded": true,
-      "totalDurationMs": 28222,
+      "totalDurationMs": 82437,
       "keepGoing": true
     }
   },
   "ci": {
     "status": "success (GitHub-hosted ubuntu-24.04, linux-x64)",
-    "url": "https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42621422569",
+    "url": "https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42625893542",
     "note": "Workflow ci on the pushed commit, identified by the url field. UDG-002 still stays In Review until the reviewer accepts the work (clarification C-05)."
   },
   "artifacts": [
     {
       "path": "boundary-report.json",
-      "sha256": "f76c0034053e9e2a3fae83b7595a67d71757a872fe4444675e5ebbea200c495a",
+      "sha256": "a045bdaf44a90a263603e236e9ae6b5109a8bf40e9fd4af2911cbf60149c7d7b",
       "bytes": 253
     },
     {
       "path": "build.log",
-      "sha256": "af74af8187a10faf5f1240c24ffda99287d23c646003494a7c5c97bf11ecdc54",
+      "sha256": "ec7299788941d8e389c2d846018c74c4464fc65715ece14174830e4ec18ef3f0",
       "bytes": 774
     },
     {
       "path": "checksums.sha256",
-      "sha256": "7c55a94db2e977de38771bd484beea839e8f63373de969b6e07d6ca31f3989ec",
+      "sha256": "4d9acf6ca5cbc58ce81e86fea04511e87a5fab36f939e0cbf64432b215df8f42",
       "bytes": 2732
     },
     {
       "path": "commands.json",
-      "sha256": "d88339fa6ce0ff0f057343451ab0696bc947b0c265aab40e52cef7b7c457d398",
-      "bytes": 5315
+      "sha256": "986254ec67d00df95d89686b0cab6b9eeda958f3b52cf25851345fbd2e92f9b4",
+      "bytes": 5320
     },
     {
       "path": "config-hashes.json",
@@ -237,13 +237,13 @@
     },
     {
       "path": "environment.json",
-      "sha256": "60b5c86dc6dbd14af273ddd2bfbdd801efca974d09328f85cfc75c0519e39f71",
-      "bytes": 656
+      "sha256": "718b756e4ef82b9036328b5f84df9bc81de818e6ff5568dc736a4870acdbfdd5",
+      "bytes": 678
     },
     {
       "path": "junit.xml",
-      "sha256": "eb4aa21af2e4b8f3cb4aeca9e6aad061deaa943b62d54882a640df555314d48c",
-      "bytes": 63133
+      "sha256": "5b4b13bdb6217efc2ecb9627a03d895deba33e2b67cbbc833e9747464cd3e349",
+      "bytes": 63211
     },
     {
       "path": "live-rejection-probes.json",
@@ -257,8 +257,8 @@
     },
     {
       "path": "logs/install-frozen.stdout.log",
-      "sha256": "eb29734fed1aa6fc17b9104fc20424799c644f88577e2db11623d14e7e2f042c",
-      "bytes": 383
+      "sha256": "61c1fc84802f2d0da29827e915ae0cff83040679397a451fbc4b63837c62e63e",
+      "bytes": 176
     },
     {
       "path": "logs/lint.stderr.log",
@@ -287,8 +287,8 @@
     },
     {
       "path": "logs/test-contract-UDG-001.stdout.log",
-      "sha256": "4373f6fcd8cc67add3c05ac98cc2d1ae35c6e7490dfda291fb3849f312d442e4",
-      "bytes": 257
+      "sha256": "a3604c58ac3521fec58efcb6cac1b62fd8494a5f9995ac70b15ba8f051034524",
+      "bytes": 840
     },
     {
       "path": "logs/test-contract-UDG-002.stderr.log",
@@ -297,8 +297,8 @@
     },
     {
       "path": "logs/test-contract-UDG-002.stdout.log",
-      "sha256": "8982ce1dec27aee90551c3b5114eea404ad9bdf1b1b01393c66be9aa1024cd68",
-      "bytes": 469
+      "sha256": "66865d1691ce671366beeb91b83dc7c6ed51f14a3cec13a85b2fd1ad2021f2b5",
+      "bytes": 795
     },
     {
       "path": "logs/test-fixtures.stderr.log",
@@ -317,8 +317,8 @@
     },
     {
       "path": "logs/test-unit.stdout.log",
-      "sha256": "61819f03110e8252dc67f766c4fdde48262f3655c4e9589245a222adab071906",
-      "bytes": 846
+      "sha256": "0b9da40d58a40fa7cab92d7b182b99d30dd5429168819089032c5745279a4fef",
+      "bytes": 1544
     },
     {
       "path": "logs/test.stderr.log",
@@ -327,8 +327,8 @@
     },
     {
       "path": "logs/test.stdout.log",
-      "sha256": "4f99ad62e0df09aa47cbfd75284aca3b47009b7cf60267b167559efa60eb7384",
-      "bytes": 1365
+      "sha256": "b96c55133f49ca03d4fad5ae320199eab043354099f5a66d9185e908cef890ba",
+      "bytes": 2693
     },
     {
       "path": "logs/typecheck.stderr.log",
@@ -337,7 +337,7 @@
     },
     {
       "path": "logs/typecheck.stdout.log",
-      "sha256": "ca2892ccbf159eb249109e02c3938045d24faa639f50f39977d1cc33add0b8af",
+      "sha256": "9df4222bf3b31790b7625afe2907e70791822e04251ab4371670c7a4d3a8e4e4",
       "bytes": 1094
     },
     {
@@ -357,8 +357,8 @@
     },
     {
       "path": "report.json",
-      "sha256": "a16826ba3d1131ba7a2007dd2830d34dad8ed13675ff67003f09ca5d7149f03b",
-      "bytes": 13027
+      "sha256": "9574991c7ec3b674dadcba6edff99ebe4f0485d80b29f8f1b4608a855c3f1295",
+      "bytes": 13028
     },
     {
       "path": "roundtrip-results.json",

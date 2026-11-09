@@ -7,9 +7,11 @@ reviewer acceptance, or gate passes").
 ```text
 Task ID and final implementation SHA:
   UDG-002 Protocol and validation.
-  Final implementation  9b04ee2802dac72588163828beaaafeae39ff08f (pushed to main) — the head the
-                        bundles below ran at and the head CI run 42621422569 is green on. It is the
-                        review correction of the first submission, not a replacement of it.
+  Final implementation  372be938f0dd825ff89fac56da7dc29d0789098f (pushed to main) — the head the
+                        committed evidence summary describes and the head CI run 42625893542 is green
+                        on. It is the review correction of the first submission, not a replacement: the
+                        correction body is 9b04ee2802dac72588163828beaaafeae39ff08f, and 372be938 is the
+                        follow-up that made the route refusal report each field once.
   First submission      a2a2318e31d38b731fed543e0eb49dce5474de55 — the head the review examined.
                         Its bundles, its CI run 42611762215 and its red counterexample runs are all
                         retained; a correction round adds commits, it never edits an old run.
@@ -17,8 +19,10 @@ Task ID and final implementation SHA:
                         e6be6aa9 docs(readme) · 830a326a test(UDG-002) · 2321bb4e fix(gate)
                         a2a2318e fix(test)
   Correction set        bf4984b8 fix(protocol) · 41159dfd test(UDG-002) · c82020b9 docs(checks)
-                        69f114b3 docs(udg) — the four review corrections, described under "Review
-                        corrections applied in this revision"
+                        69f114b3 docs(udg) · 9b04ee28 docs(UDG-002) — the four review corrections,
+                        described under "Review corrections applied in this revision"
+                        372be938 fix(protocol) — a canonical route on the sentinel reports routeRevision
+                        once, not twice; nothing became more permissive
   Record set            the commits after the correction set: the assignment, this completion record
                         and the regenerated committed evidence summary. The first edition of this
                         text is b527d33217ef4c88def30075515bcac3695845f5, whose own CI run
@@ -162,10 +166,12 @@ Commands with exit codes and test counts:
     pnpm test:contract -- --task UDG-002   0   31 tests
     pnpm contracts:checksums        0   in sync, 58 entries
     pnpm dependencies:verify        0   register matches the installed graph; re-recording is idempotent
-  CI, GitHub-hosted ubuntu-24.04 linux-x64: run 42621422569 on 9b04ee28, conclusion success, 23 steps,
-  zero failed steps, zero `::error::` lines in the published log, artefact udg-evidence carrying both
-  task bundles and both summaries. The first submission's green run 42611762215 on a2a2318e is
-  retained alongside it, as are the record-commit runs 42613223227 and 42614129225.
+  CI, GitHub-hosted ubuntu-24.04 linux-x64, at the submitted head: run 42625893542 on
+  372be938, conclusion success, 23 steps, zero failed steps, zero `::error::` lines in the published
+  log, artefact udg-evidence carrying both task bundles and both summaries. The correction body
+  9b04ee28 is green on run 42621422569, the record commits b527d33 and fe660c7 on runs 42623876835
+  and 42624700501, and the first submission's green run 42611762215 on a2a2318e is retained alongside
+  them, as are the record-commit runs 42613223227 and 42614129225.
   Two earlier runs on the first submission were red and are reported rather than buried:
     42609613962 (830a326a) failed `pnpm typecheck` with TS2307 for every built-module import. The
       suites assert against packages/*/dist and a developer machine always has one; a fresh checkout
@@ -246,7 +252,15 @@ Acceptance thresholds and measured results:
   entry points, and the UDG-001 suite green as a child run.
 
 Raw evidence directory and integrity result:
-  This submission, captured at 9b04ee28 with a clean working tree:
+  Submitted head 372be93, CI bundles from run 42625893542, both verified on the runner and again after
+  download with zero issues, both with a clean working tree:
+  CI bundle       UDG-002-2026-11-09T13-32-06-371Z-372be938 — PASS, 316 tests, report.json sha256
+                  9574991c7ec3b674dadcba6edff99ebe4f0485d80b29f8f1b4608a855c3f1295 — this is the bundle
+                  the committed summary docs/contracts/assignments/UDG-002-evidence.json describes
+  CI foundation   UDG-001-2026-11-09T13-31-01-945Z-372be938 — PASS, 316 tests, report.json sha256
+                  2c1bb260860cbe3df83fb5687888e5adea201e8e1e5d569dbb642e6985dea56a
+  Correction body 9b04ee28, captured locally with a clean working tree and on CI, all four verified
+  with zero issues:
   Local bundle    artifacts/UDG-002-2026-11-09T12-57-05-477Z-9b04ee28 — PASS, 29 files hashed in
                   report.json, report.json sha256
                   a16826ba3d1131ba7a2007dd2830d34dad8ed13675ff67003f09ca5d7149f03b,
@@ -276,11 +290,13 @@ Raw evidence directory and integrity result:
                   v2 d4aa0bc1c24f4ef07d5056adb1ff8c33722483d333a8a3116ed1e5a617fd4240,
                   v3, 418 files, ef5feeb647b2850435f77f0d67eed03fdf3fbb32665d7e465f13abccbebe3964,
                   v4, 476 files, e6b1345a8b5b3ae2acad6455301a1482db6e0b9e57c683941317a0d9645fad6c,
-                  v5, 534 files, 0880bcf559440b28a2bfd232cf559a0dc67d77b1527f39dd8fa46d3b7ccd4b06 and
+                  v5, 534 files, 0880bcf559440b28a2bfd232cf559a0dc67d77b1527f39dd8fa46d3b7ccd4b06,
                   v6, 647 files, db27af39bc2d59efdf8350c034adebbc1bda150f1ae87c349066169883c20e80,
-                  which adds the four bundles above and Actions run 42621422569. The inventory written
-                  after this record commit will carry that commit's own run: a commit cannot cite the
-                  CI run it triggers. Runner logs are retained gzipped in the store only — they contain
+                  which added the four bundles at 9b04ee28 and Actions run 42621422569, and
+                  v7, 763 files, dafdd957da4818bb5bb77780dce499632ab39bc609038874f61a7ba5de42ef1d,
+                  which added runs 42623876835 and 42624700501. The inventory written after this record
+                  commit will add run 42625893542 on the submitted head and that commit's own run: a
+                  commit cannot cite the CI run it triggers. Runner logs are retained gzipped in the store only — they contain
                   runner filesystem paths, so they are never committed. Only the sanitised summary
                   docs/contracts/assignments/UDG-002-evidence.json and its hashes enter Git (C-03).
   OPEN residual   The store is one copy on one host. It guards against Actions artefact expiry (30
@@ -299,7 +315,9 @@ Review corrections applied in this revision (2026-11-09, submitted at 9b04ee28):
     round-tripping into `null`. The wire rule is unchanged — `0 / 0` still decodes to `null` and a
     positive revision with index `0` is still an active route at its first waypoint — and every
     accepted canonical route and wire pair is now round-tripped in both directions and re-projected
-    onto the same pair.
+    onto the same pair. The follow-up commit 372be938 makes the refusal report each field exactly once:
+    `{ 0, 0 }` is one `routeRevision` issue, `{ 0, > 0 }` is one on each field, and the width cases
+    (negative, fractional, oversized, non-finite) stay width failures, so nothing was loosened.
   3 The public bypass is removed. PlayerMappingOptions and its enforceRoutePairRule flag exist in
     neither the source nor the built declaration; checkPlayerState and toReplica take one parameter;
     no caller in packages/, tools/ or tests/ ever passed the option, so nothing else needed changing.
@@ -316,14 +334,16 @@ Review corrections applied in this revision (2026-11-09, submitted at 9b04ee28):
     record quoting the index digest beside a task-file label. Old evidence is disclosed, not rewritten:
     every retained bundle still verifies with zero issues, and the two first-submission claims corrected
     in the section above are the other inaccuracies found while doing this.
-  Hash drift to expect when re-verifying: report.json configHashes.taskContract is
-  25e44ba5190e85af351491fd6f24a8964ab37ebd1be6f4210497746145d2fc78, the bytes of
-  docs/contracts/UDG-002.md at 9b04ee28. The commit carrying this sentence adds the corrected
-  submission line to that same file, giving
-  87ac552f0793e1fec36ff37f41892eadb2129b9dd83200cca75d300c49c7ed5a, and the checksum manifest is
-  regenerated for it. Everything else the bundles pin still matches the committed bytes exactly: the
-  contracts index, the lockfile, the CI workflow, tsconfig.base, the boundary rule table and fixtures,
-  .env.example and .npmrc.
+  Hash drift to expect when re-verifying: the committed summary pins
+  configHashes.taskContract = 87ac552f0793e1fec36ff37f41892eadb2129b9dd83200cca75d300c49c7ed5a, the
+  bytes of docs/contracts/UDG-002.md at the submitted head 372be938, and
+  contractHash = 255e7b2cb8fd64c41e2e5beb2a56b03bb62b08e0ca11089299d81a2e540a5943, the contracts index.
+  The commit carrying this sentence adds the follow-up head to that same task file, giving
+  7c7549cb43060c695fc47e9b0f4e45e6d0f736609dd8fbdfa0fb52d239544632, and regenerates the checksum
+  manifest for it; no bundle can pin the bytes of the commit that records it, which is why each
+  bundle's own report stays the authority. Everything else the bundles pin matches the committed bytes
+  exactly: the index, the lockfile, the CI workflow, tsconfig.base, the boundary rule table and
+  fixtures, .env.example and .npmrc.
 
 ADRs accepted, rejected or still proposed:
   Accepted   docs/adr/0001-replica-precision-policy.md — float64 canonical end to end, lossless
