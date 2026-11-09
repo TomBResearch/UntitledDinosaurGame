@@ -7,7 +7,7 @@
   ],
   "files": {
     "AGENTS.md": "09f283643fbc9db3d9192d7ae227207452eac756b3503dfa04d4bd875580fec3",
-    "README.md": "81084584edcbdba595618d71234052e4b4aeda3d8e3a036257ae33dceea5b7f5",
+    "README.md": "338a2dfec243446e20b8a8872e9ed5b83c30fc170d26ed28713c6c2629a16b33",
     "apps/client/AGENTS.md": "572516ef3ef5ca07b9477129bd5fab5fd12c5ca1b9d3578652a0a1a28849f7dd",
     "apps/server/AGENTS.md": "5867f7487b1124d63be75b3e8c969fc97541d1df8753763511d39b31f3daf3fe",
     "assets/AGENTS.md": "15c1871247241eaef1a36a3be4daddbc3a44711e9317ccf2d62c2c874d675d3e",
@@ -30,6 +30,7 @@
     "docs/contracts/adoption.md": "0cee915d2a03bdc274e107877bf7169132491fe8ef7fb92d9ce1b4eb0e56b022",
     "docs/contracts/definition-of-done.md": "3721f7ad7ae1c8865d13e2d6c9340f74d99e1bede563b4801a233d3b84449606",
     "docs/contracts/ownership.md": "0927c6d2617781abebb082fc1d027409d5afc3220bdaaedb823620bcffaca0ea",
+    "docs/contracts/protocol-v1.md": "8c569600c2a417a8218d1c93a27ef14ab11bed78c372dfcd87937a2160ca0283",
     "docs/contracts/provenance.json": "311acdb3a45c10d11497c06f70cba171a8e99d3e089a5389f552a4cdd3343f6b",
     "docs/contracts/repository.md": "bae8e330a7716b82dbd3c14656de61fc29fb7c8abf10f8fe2b56cc64f312ccaa",
     "docs/contracts/scope.md": "572b6ca2f3271fb87e8f4c8c620c768226008d5cee04889418804931b99652c5",

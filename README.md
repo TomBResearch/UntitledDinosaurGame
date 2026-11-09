@@ -3,16 +3,19 @@
 Browser-based prehistoric RPG planning repository.
 
 **Current state:** UDG-001 (workspace and CI foundation) is **Verified** — accepted by the project
-owner on 2026-11-08 (implementation `1c735c2`, reviewed submission `0e586b6`). Nothing else is
-implemented: game movement, networking, physics and rendering behaviour do not exist, validation
-Gates A, B and C have not run, refinements P02 to P10 remain pending and no later task is assigned.
-The planning contracts and their [adoption status](docs/contracts/adoption.md) remain the authority
-for what may be built next.
+owner on 2026-11-08 (implementation `1c735c2`, reviewed submission `0e586b6`). UDG-002 (protocol and
+configuration types, validation and replica mapping) is **In Review**: `@udg/protocol` and
+`@udg/config` contain the wire contract, validation and mapping described in
+[docs/contracts/protocol-v1.md](docs/contracts/protocol-v1.md), and they contain nothing else. Game
+movement, networking, physics and rendering behaviour still do not exist, validation Gates A, B and C
+have not run, refinements P03 to P05 and P07 to P10 remain pending, and no task beyond UDG-002 is
+assigned. The planning contracts and their
+[adoption status](docs/contracts/adoption.md) remain the authority for what may be built next.
 
 ## Start here
 
 - **For an agent:** read [AGENTS.md](AGENTS.md), then the specific [task contract](docs/contracts/README.md) you are assigned. Each task links only to the shared rules it needs.
-- **For the project owner:** review [adoption status](docs/contracts/adoption.md). P01 is approved with clarifications C-01 to C-06; P02 to P10 remain pending, so UDG-002 and everything downstream of it stay Not Started.
+- **For the project owner:** review [adoption status](docs/contracts/adoption.md). P01, P02 and P06 are approved (P02 with clarifications U2-1 to U2-6 and ADR 0001); P03 to P05 and P07 to P10 remain pending, so UDG-003 and everything downstream of it stay Not Started.
 - **For the current project plan:** read the [plan and version guide](docs/specifications/README.md). The [M0 Technical Specification v0.2](docs/specifications/UDG-SPEC-M0-002.md) is the current architecture baseline; the v1.0 agent contracts elaborate it into work packages.
 
 ## Repository map
@@ -25,8 +28,11 @@ for what may be built next.
 | [docs/validation/](docs/validation/README.md) | Fixtures, thresholds, workloads and evidence requirements |
 | [docs/adr/](docs/adr/README.md) | Architecture-conflict escalation and decision template |
 | [docs/specifications/](docs/specifications/README.md) | Current plan, document version guide and preserved architecture baseline |
+| [docs/contracts/protocol-v1.md](docs/contracts/protocol-v1.md) | The built M0 protocol: entry points, wire messages, rejection codes, replica fields, normalisation order and the provisional items |
 | [tools/checks/](tools/checks/AGENTS.md) | `@udg/checks`: boundary, fixture, evidence and task-dispatch checkers created by UDG-001 |
-| apps/, packages/, assets/, tests/ | Scoped `AGENTS.md` instructions plus empty workspace skeletons created by UDG-001 |
+| [packages/protocol/](packages/protocol/src) | `@udg/protocol`: canonical domain types, wire validation, replica schema declarations and mapping (UDG-002) |
+| [packages/config/](packages/config/src) | `@udg/config`: configuration validation, protocol limits, region bounds and the canonical hash (UDG-002) |
+| apps/, packages/simulation, packages/physics, packages/navigation, assets/ | Scoped `AGENTS.md` instructions plus the empty workspace skeletons created by UDG-001; each is filled by its owning task |
 
 ## Development prerequisites
 
@@ -56,14 +62,18 @@ pnpm test                         # all populated unit and Node integration suit
 pnpm build                        # clean, then build shared libraries, tools and both apps
 pnpm test:boundaries              # positive and deliberately invalid dependency fixtures
 pnpm test:fixtures                # fixture manifest schema, pinned file and configuration hashes
+pnpm test:unit                      # unit suites for the packages that have logic (UDG-002 onward)
 pnpm test:contract -- --task UDG-001
+pnpm test:contract -- --task UDG-002
 pnpm dependencies:record          # rewrite docs/integration/dependencies.json from the install
 pnpm dependencies:verify          # fail when that register no longer describes the install
 pnpm contracts:checksums          # report contract documents whose bytes moved since the manifest
 pnpm contracts:checksums -- --write # rewrite docs/contracts/checksums.json after such a change
 pnpm evidence:capture -- --task UDG-001 --out artifacts
+pnpm evidence:capture -- --task UDG-002 --out artifacts
 pnpm evidence:verify -- --run artifacts/RUN_ID
-pnpm evidence:summary -- --run artifacts/RUN_ID --out docs/contracts/assignments/UDG-001-evidence.json
+pnpm evidence:summary -- --run artifacts/RUN_ID --out docs/contracts/assignments/UDG-002-evidence.json
+node tools/checks/dist/evidence.js plans   # the task IDs that have a capture plan
 ```
 
 `pnpm clean` removes workspace build output. There is nothing to run or stop yet: no server or
@@ -90,9 +100,9 @@ zero discovered tests.
 | --- | --- | --- |
 | `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build` | Implemented and passing | UDG-001 |
 | `pnpm test:boundaries`, `pnpm test:fixtures`, `pnpm test:contract -- --task UDG-001` | Implemented and passing | UDG-001 |
-| `pnpm dependencies:record`, `pnpm dependencies:verify`, `pnpm contracts:checksums`, `pnpm evidence:capture`, `pnpm evidence:verify`, `pnpm evidence:summary` | Implemented | UDG-001 |
-| `pnpm test:contract -- --task UDG-002 … UDG-SPIKE-003` | Exits `2`: that task's suite does not exist yet | each task creates its own suite |
-| `pnpm test:unit` | Exits `1`: no unit suite exists yet | UDG-002 first, then every task that adds logic |
+| `pnpm test:unit`, `pnpm test:contract -- --task UDG-002` | Implemented and passing: protocol and configuration validation, mapping, schema round trips and the executable protocol fixtures | UDG-002 |
+| `pnpm dependencies:record`, `pnpm dependencies:verify`, `pnpm contracts:checksums`, `pnpm evidence:capture`, `pnpm evidence:verify`, `pnpm evidence:summary` | Implemented; a capture plan exists for each of UDG-001 and UDG-002 | UDG-001, extended by UDG-002 |
+| `pnpm test:contract -- --task UDG-003 … UDG-SPIKE-003` | Exits `2`: that task's suite does not exist yet | each task creates its own suite |
 | `pnpm test:e2e -- --suite camera` | Exits `1`: no browser suite exists | UDG-004 camera, UDG-SPIKE-001 netcode, UDG-006 physics, UDG-008 input, UDG-SPIKE-003 hybrid |
 | `pnpm test:spike -- --id UDG-SPIKE-001 …` | Exits `1`: no spike harness exists | UDG-SPIKE-001, UDG-SPIKE-002, UDG-SPIKE-003 |
 | `pnpm assets:build`, `pnpm assets:verify` | Exits `1`: no asset pipeline exists | UDG-007 |
@@ -136,10 +146,14 @@ the CI bundles are retained and verified.
 ## Evidence
 
 A run writes `artifacts/RUN_ID/` containing `report.json`, `environment.json`, `commands.json`,
-`junit.xml`, `boundary-report.json`, `build.log`, `logs/` and `checksums.sha256`. `pnpm
-evidence:verify` re-checks the report schema, required artefacts, non-empty and matching hashes,
-zero skipped or flaky tests, command exit codes and the absence of credentials or private machine
-paths. Verification and `pnpm evidence:summary` are gates rather than neutral audits: a bundle whose
+`junit.xml`, `boundary-report.json`, `build.log`, `logs/` and `checksums.sha256`, plus the artefacts
+its task declares — for UDG-002 the protocol field map, the round-trip results, the observed
+rejection codes and the live refusal probes. Each task's bundle is described by a capture plan
+(`node tools/checks/dist/evidence.js plans` lists them), and CI captures, asserts and verifies every
+plan it finds, so adding a task cannot silently drop evidence. `pnpm evidence:verify` re-checks the
+report schema, required artefacts, non-empty and matching hashes, zero skipped or flaky tests,
+command exit codes, the task's own prerequisite commits, that task-declared JSON artefacts parse and
+carry that task's identity, and the absence of credentials or private machine paths. Verification and `pnpm evidence:summary` are gates rather than neutral audits: a bundle whose
 own record says `FAIL`, `BLOCKED` or `INVALID` is refused with `EVIDENCE-GATE-NOT-PASS` even when
 every stored hash matches, and no summary file is written for it, because a self-consistent record of
 a failing run proves nothing about completion. `artifacts/` is not committed: raw bundles are copied
@@ -149,9 +163,13 @@ clarification C-03.
 ## Scope and commands
 
 The assignable planning scope stops at UDG-SPIKE-003. UDG-009 through UDG-012 remain future work.
-No game source, protocol schema, generated asset or engine dependency exists yet; the game-library
-entries in [docs/integration/dependencies.json](docs/integration/dependencies.json) are recorded as
-`not-selected` with the task that must choose them. The [repository contract](docs/contracts/repository.md)
+`@udg/protocol` and `@udg/config` now hold the UDG-002 deliverables; no server room, locomotion,
+physics, navigation, rendering or generated asset exists yet, and the protocol package deliberately
+imports no schema runtime outside `@udg/protocol/schema`. Of the game libraries, only
+`@colyseus/schema@5.0.45` is selected (by UDG-002); the remaining entries in
+[docs/integration/dependencies.json](docs/integration/dependencies.json) are recorded `not-selected`
+with the task that must choose them, and that status is derived from the install rather than asserted
+by hand. The [repository contract](docs/contracts/repository.md)
 specifies what assigned tasks must create and how those commands must behave.
 
 The original README specification is preserved byte-for-byte at its specification path; this page is
