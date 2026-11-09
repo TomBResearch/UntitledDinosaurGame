@@ -18,8 +18,19 @@ Task ID and final implementation SHA:
 
 Contract revision and prerequisite SHAs:
   Contract edition      UDG-CONTRACTS-M0-001 v1.0, repository edition 1
-  Task contract         docs/contracts/UDG-002.md, contract hash
+  Contracts index       docs/contracts/README.md, the file report.json `contractHash` hashes:
                         255e7b2cb8fd64c41e2e5beb2a56b03bb62b08e0ca11089299d81a2e540a5943
+                        Unchanged since the reviewed edition: the same digest at a2a2318e and today.
+  Task contract         docs/contracts/UDG-002.md, the file report.json `configHashes.taskContract`
+                        hashes at the revision a run read. Both reviewed bundles and the committed
+                        summary pin
+                        d78ec67820faa4179a0141f4beb48a96dc20e33766bc724d629ffda8280d7c4b,
+                        which is that file from the adoption commit 74ffdaab through implementation
+                        a2a2318e. The later record commits move the file, so a later bundle pins the
+                        value its own report names; no retained bundle is edited to match a record.
+                        The correction bundles below pin the task-file revision they ran against, and
+                        `pnpm test:contract -- --task UDG-002` asserts that these two fields stay
+                        distinct rather than trusting this sentence.
   Baseline              docs/specifications/UDG-SPEC-M0-002.md v0.2,
                         b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf
   Prerequisite (UDG-001 Verified, recorded in docs/contracts/assignments/UDG-002.md)
