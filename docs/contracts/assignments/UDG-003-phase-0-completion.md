@@ -375,12 +375,37 @@ success — recorded here because a docs-only push still produces bundles, and i
 The durable inventory is a chain, and this record deliberately does not present itself as the tip of it:
 each version hashes the previous file, so the current tip is whatever `inventory.json` says when the store
 is read, and it is verified by walking `supersedes` rather than by trusting a record. Entries added while
-preparing this revision: **v16** (1 488 files, superseding v15
-`72b1f873425529c630a2e8f88d13530d3e2fd95237f8ef84a303da2add985d5f`) added the revision-2 run and the
-correction record; **v17** (1 556 files, superseding v16
-`98db2f6d915940ab41ea31e6e1740a911402c1fa0620bbd6523d3f450d79194d`) added the follow-up run. The chain
-v9 → v17 verified when this was written, and each of these records cites the chain, never a tip asserted
-from a record.
+preparing this revision:
+
+| Version | Files | Supersedes | Added |
+| --- | --- | --- | --- |
+| v16 | 1 488 | v15 `72b1f873425529c630a2e8f88d13530d3e2fd95237f8ef84a303da2add985d5f` | the revision-2 head, the correction record, and the reclassified PH0-B2 posture |
+| v17 | 1 624 | v16 `98db2f6d915940ab41ea31e6e1740a911402c1fa0620bbd6523d3f450d79194d` | the documentation-only follow-up run `42691770887` |
+| v18 | 1 625 | v17 `84e82f19646ea5a7ed8a7e35828786abbb176098863ab6fe3d024d3726580a37` | the cancelled run `42692674417` and the final revision-2 head run `42692879425` |
+
+Two things about that chain are recorded rather than smoothed over.
+
+**A run with no evidence.** Run `42692674417` (head `538cb70`) was **cancelled** when the next push
+landed, and GitHub produced no `udg-evidence` artefact for it — `gh run download` answers `no valid
+artifacts found to download`. Its directory in the store contains a `NOTICE.txt` saying exactly that, so
+the absence is explicit instead of implied.
+
+**A generator mistake, self-reported.** v17 and v18 were minted twice. The first mint used an
+append-style generator that re-inserted run entries the previous version already carried, so
+`ciRuns` contained duplicates (`42679471471`, `42690547977`, `42691770887` each appeared twice). Nothing
+cited those versions and no recorded digest outside the store depended on them, so both were rebuilt from
+v16 — the last version whose `ciRuns` were sound — with de-duplication, and the chain re-verified
+(v9 → v18, no duplicate run ids). The tip hashes of v17 and v18 therefore differ from the ones first
+announced in chat (`3cefc552…` and `66484abe…`, both superseded by this rebuild); earlier versions v9 →
+v16 were never rewritten, and no historical bundle byte or recorded digest changed at any point.
+
+The substantive head of this revision is `396672b2` (the commit recording this section is
+documentation-only), whose run
+[42692879425](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42692879425) is
+**success** with 0 failed steps and reproduces the same posture as `42690547977`: `PR-0` blocked (43
+checks), `PR-1`/`PR-2`/`PR-3`/`PR-8`/`PR-12` passing 43/7/10/15/6 checks, the probe-project typecheck
+exiting 2 with the pinned 27-diagnostic PH0-B1 inventory and zero repository diagnostics, and
+`stackCompatibility: "not-established"`.
 
 **No release, tag, archive or storage location was created, replaced or deleted for this revision**, and
 **D4 — the independent backup destination — remains undesignated**; nothing in this revision provisions
