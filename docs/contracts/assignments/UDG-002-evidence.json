@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "taskId": "UDG-002",
-  "runId": "UDG-002-2026-11-09T11-46-13-890Z-a2a2318e",
-  "generatedAt": "2026-11-09T11:54:38.640Z",
-  "generatorCommand": "pnpm evidence:summary -- --run <bundle> --out <file> (bundle UDG-002-2026-11-09T11-46-13-890Z-a2a2318e)",
+  "runId": "UDG-002-2026-11-09T12-57-05-477Z-9b04ee28",
+  "generatedAt": "2026-11-09T13:04:21.813Z",
+  "generatorCommand": "pnpm evidence:summary -- --run <bundle> --out <file> (bundle UDG-002-2026-11-09T12-57-05-477Z-9b04ee28)",
   "durableStorage": {
-    "location": "/workspace/udg-evidence/UDG-002-2026-11-09T11-46-13-890Z-a2a2318e",
+    "location": "/workspace/udg-evidence/UDG-002-2026-11-09T12-57-05-477Z-9b04ee28",
     "note": "Raw bundle retained outside Git per clarification C-03. The hashes below identify the retained bytes; a mismatch means the stored bundle is not the run this summary describes."
   },
   "verification": {
@@ -14,9 +14,9 @@
     "issueCount": 0
   },
   "status": "PASS",
-  "implementationSha": "a2a2318e31d38b731fed543e0eb49dce5474de55",
+  "implementationSha": "9b04ee2802dac72588163828beaaafeae39ff08f",
   "branch": "main",
-  "workingTreeDirty": true,
+  "workingTreeDirty": false,
   "prerequisiteShas": [
     "74ffdaaba1bc3617999c99e73c7f197ebd01a570"
   ],
@@ -24,7 +24,7 @@
   "baselineSpecHash": "b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf",
   "dependencyLockHash": "899e6f4d18930cb23fc32438dfe5d7b11d4d16741ebf2cf03f54a5c8585517e5",
   "configHashes": {
-    "taskContract": "d78ec67820faa4179a0141f4beb48a96dc20e33766bc724d629ffda8280d7c4b",
+    "taskContract": "25e44ba5190e85af351491fd6f24a8964ab37ebd1be6f4210497746145d2fc78",
     "tsconfigBase": "da4b844063b8abb6f48677c87c8996accf9e77cf1f7e5792827cd811edcb394d",
     "boundaryRuleTable": "818c63d5b12f984b17172688be6fd82ed103d9e18473e0978e307225e8194b82",
     "boundaryFixtures": "076b6a6f6f6ae75fdb3a3ba607df73f456b1ea0ec39cd465942e41730c79ba0d",
@@ -44,7 +44,7 @@
     "UDG-001-strict-type-errors": "bd4d0988ddb11b9239904ef5f6bb381d9bccff8167a111c83b012fb44738ffb8:da4b844063b8abb6"
   },
   "testCounts": {
-    "tests": 302,
+    "tests": 316,
     "failures": 0,
     "errors": 0,
     "skipped": 0
@@ -52,7 +52,7 @@
   "suites": [
     {
       "name": "vitest",
-      "tests": 302,
+      "tests": 316,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
@@ -64,52 +64,52 @@
     {
       "label": "install-frozen",
       "exitCode": 0,
-      "durationMs": 47
+      "durationMs": 46
     },
     {
       "label": "typecheck",
       "exitCode": 0,
-      "durationMs": 3439
+      "durationMs": 3445
     },
     {
       "label": "lint",
       "exitCode": 0,
-      "durationMs": 1543
+      "durationMs": 1630
     },
     {
       "label": "test",
       "exitCode": 0,
-      "durationMs": 10077
+      "durationMs": 10450
     },
     {
       "label": "build",
       "exitCode": 0,
-      "durationMs": 1418
+      "durationMs": 1437
     },
     {
       "label": "test-unit",
       "exitCode": 0,
-      "durationMs": 1236
+      "durationMs": 1244
     },
     {
       "label": "test-boundaries",
       "exitCode": 0,
-      "durationMs": 763
+      "durationMs": 745
     },
     {
       "label": "test-fixtures",
       "exitCode": 0,
-      "durationMs": 774
+      "durationMs": 790
     },
     {
       "label": "test-contract-UDG-002",
       "exitCode": 0,
-      "durationMs": 5755
+      "durationMs": 5835
     },
     {
       "label": "test-contract-UDG-001",
       "exitCode": 0,
-      "durationMs": 2636
+      "durationMs": 2600
     }
   ],
   "measured": {
@@ -149,7 +149,7 @@
       "requiredIds": true,
       "cases": 66,
       "binaryNegative": 3,
-      "executed": 203
+      "executed": 216
     },
     "validation": {
       "readonlyResults": true,
@@ -200,34 +200,34 @@
       "failingCommands": [],
       "sanitisationFailures": [],
       "pnpmStoreRecorded": true,
-      "totalDurationMs": 27688,
+      "totalDurationMs": 28222,
       "keepGoing": true
     }
   },
   "ci": {
     "status": "success (GitHub-hosted ubuntu-24.04, linux-x64)",
-    "url": "https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42611762215",
+    "url": "https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42621422569",
     "note": "Workflow ci on the pushed commit, identified by the url field. UDG-002 still stays In Review until the reviewer accepts the work (clarification C-05)."
   },
   "artifacts": [
     {
       "path": "boundary-report.json",
-      "sha256": "ac752e724ab17494fb61e91f1057ce82ef141988feb99b923957403e4c852789",
+      "sha256": "f76c0034053e9e2a3fae83b7595a67d71757a872fe4444675e5ebbea200c495a",
       "bytes": 253
     },
     {
       "path": "build.log",
-      "sha256": "bede60e9eb440d2c4dc64be641c1579d1accb016012b0471d4cdefd9ddc6a35a",
+      "sha256": "af74af8187a10faf5f1240c24ffda99287d23c646003494a7c5c97bf11ecdc54",
       "bytes": 774
     },
     {
       "path": "checksums.sha256",
-      "sha256": "a838eb5aeb67f412b9f35ea3cc2f238eeac8315141c58bd40c5d4d7be7a9b958",
+      "sha256": "7c55a94db2e977de38771bd484beea839e8f63373de969b6e07d6ca31f3989ec",
       "bytes": 2732
     },
     {
       "path": "commands.json",
-      "sha256": "83973632d40a91d81c65a0daf0d096e8507a056cb8961bcea660cf4ff48c4e51",
+      "sha256": "d88339fa6ce0ff0f057343451ab0696bc947b0c265aab40e52cef7b7c457d398",
       "bytes": 5315
     },
     {
@@ -237,13 +237,13 @@
     },
     {
       "path": "environment.json",
-      "sha256": "8e7e065b9337d6b0a173e337f85bec3f7826838f2536b8e974e0f25c7468da61",
-      "bytes": 655
+      "sha256": "60b5c86dc6dbd14af273ddd2bfbdd801efca974d09328f85cfc75c0519e39f71",
+      "bytes": 656
     },
     {
       "path": "junit.xml",
-      "sha256": "2dc6796e3434fd301606efc14ab5704a3e217cd51e7080ef295a106a39fedc12",
-      "bytes": 59976
+      "sha256": "eb4aa21af2e4b8f3cb4aeca9e6aad061deaa943b62d54882a640df555314d48c",
+      "bytes": 63133
     },
     {
       "path": "live-rejection-probes.json",
@@ -257,7 +257,7 @@
     },
     {
       "path": "logs/install-frozen.stdout.log",
-      "sha256": "534f3ec2a7bbae97ba85dd6c0d91aa835f00d66a44fef86701b71e611866a668",
+      "sha256": "eb29734fed1aa6fc17b9104fc20424799c644f88577e2db11623d14e7e2f042c",
       "bytes": 383
     },
     {
@@ -287,7 +287,7 @@
     },
     {
       "path": "logs/test-contract-UDG-001.stdout.log",
-      "sha256": "19868c8580da54b2ad346a934df88f70db06635da788a1a7bfe993ab7ab08655",
+      "sha256": "4373f6fcd8cc67add3c05ac98cc2d1ae35c6e7490dfda291fb3849f312d442e4",
       "bytes": 257
     },
     {
@@ -297,7 +297,7 @@
     },
     {
       "path": "logs/test-contract-UDG-002.stdout.log",
-      "sha256": "b20c43124ae3462d4b845428161296057dfc965d531e2b5f85e910499e7fc282",
+      "sha256": "8982ce1dec27aee90551c3b5114eea404ad9bdf1b1b01393c66be9aa1024cd68",
       "bytes": 469
     },
     {
@@ -317,8 +317,8 @@
     },
     {
       "path": "logs/test-unit.stdout.log",
-      "sha256": "1467a8642d31a720c04f55b21f3ba1be2102286da7722e5bd95df399b6d9901b",
-      "bytes": 845
+      "sha256": "61819f03110e8252dc67f766c4fdde48262f3655c4e9589245a222adab071906",
+      "bytes": 846
     },
     {
       "path": "logs/test.stderr.log",
@@ -327,8 +327,8 @@
     },
     {
       "path": "logs/test.stdout.log",
-      "sha256": "1cc936b5912aa9c5d1220c23b013c5460d1d3b4ace2f8ad3f955e99dd2b7a271",
-      "bytes": 1364
+      "sha256": "4f99ad62e0df09aa47cbfd75284aca3b47009b7cf60267b167559efa60eb7384",
+      "bytes": 1365
     },
     {
       "path": "logs/typecheck.stderr.log",
@@ -337,12 +337,12 @@
     },
     {
       "path": "logs/typecheck.stdout.log",
-      "sha256": "35453c122dbbad97073c1ce01461be7de92dfab2456d506bb65112550d595e90",
+      "sha256": "ca2892ccbf159eb249109e02c3938045d24faa639f50f39977d1cc33add0b8af",
       "bytes": 1094
     },
     {
       "path": "measurements/UDG-002.json",
-      "sha256": "6788373e594af7c6c8ef78ae06811829ae5a1e36b26d279694fa0cb49d93088d",
+      "sha256": "cbb2eec6af2f0295993adbd1bb4e023d3f85226eddbf62c26901fe5eb2fe9e6c",
       "bytes": 1458
     },
     {
@@ -357,8 +357,8 @@
     },
     {
       "path": "report.json",
-      "sha256": "b23b63d673b187772f5af053a9c183d966d251b02f77c73c5418f748c79b8460",
-      "bytes": 13026
+      "sha256": "a16826ba3d1131ba7a2007dd2830d34dad8ed13675ff67003f09ca5d7149f03b",
+      "bytes": 13027
     },
     {
       "path": "roundtrip-results.json",

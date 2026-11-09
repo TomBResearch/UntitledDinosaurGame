@@ -7,10 +7,21 @@ reviewer acceptance, or gate passes").
 ```text
 Task ID and final implementation SHA:
   UDG-002 Protocol and validation.
-  Final implementation  a2a2318e31d38b731fed543e0eb49dce5474de55 (pushed to main)
+  Final implementation  9b04ee2802dac72588163828beaaafeae39ff08f (pushed to main) — the head the
+                        bundles below ran at and the head CI run 42621422569 is green on. It is the
+                        review correction of the first submission, not a replacement of it.
+  First submission      a2a2318e31d38b731fed543e0eb49dce5474de55 — the head the review examined.
+                        Its bundles, its CI run 42611762215 and its red counterexample runs are all
+                        retained; a correction round adds commits, it never edits an old run.
   Submission set        8aebbd15 feat(protocol) · 1284b423 feat(config) · cf35a133 chore(checks)
                         e6be6aa9 docs(readme) · 830a326a test(UDG-002) · 2321bb4e fix(gate)
                         a2a2318e fix(test)
+  Correction set        bf4984bc fix(protocol) · 41159df3 test(UDG-002) · c82020bc docs(checks)
+                        69f114b6 docs(udg) — the four review corrections, described under "Review
+                        corrections applied in this revision"
+  Record set            this commit: the assignment, this completion record and the regenerated
+                        committed evidence summary. A commit cannot quote its own SHA or its own CI
+                        run, so both are named by the durable inventory appended after it, as before.
   The gate commands below were run at this head, which is what CI verifies. Per-commit CI is not
   configured, and the intermediate commits of one submission set are not individually green by
   construction: the UDG-002 suites, the amended UDG-001 assertions and the tooling that supports them
@@ -59,6 +70,16 @@ Files added or changed and scope deviations:
     tests/contracts/UDG-001.test.ts (amendments S-1 to S-5 only); README.md;
     docs/contracts/{UDG-002.md,checksums.json}; docs/contracts/assignments/UDG-002*.
   Scope deviations, declared rather than smoothed over:
+  0. Correction round only, the files the four review findings touched:
+     packages/protocol/src/mapping/{to-replica,from-replica,index}.ts (the generation bound, the
+     canonical route rule, the removed option), tests/unit/udg-002/mapping.test.ts and
+     tests/contracts/UDG-002.test.ts (the regressions), docs/contracts/protocol-v1.md (both route
+     tables and the intentGeneration row), README.md (the stale CI paragraph),
+     packages/protocol/AGENTS.md and packages/config/AGENTS.md (the stale status sentence, authorised
+     by the owner's correction instruction; every operative rule kept), docs/contracts/UDG-002.md
+     (implementer/reviewer attribution), tools/checks/src/evidence.ts (a comment naming the two
+     digests — no behaviour and no schema change), docs/contracts/checksums.json (regenerated, never
+     hand-edited) and the three UDG-002 assignment records. No other file moved.
   1. tools/checks/**, .github/workflows/ci.yml, the root package.json, pnpm-lock.yaml,
      docs/integration/dependencies.json and tests/checks/** are UDG-001-owned surfaces. They were
      changed under the controlled-path grants in the assignment record, each for its stated purpose:
@@ -90,6 +111,11 @@ Public interface/schema/config changes:
                        pure TypeScript so a browser client reproduces the same digest.
   Explicitly unchanged docs/interfaces/**, docs/specifications/**, docs/validation/** and every other
                        task contract. No later task's behaviour was implemented.
+  Correction round     @udg/protocol/mapping no longer exports the type PlayerMappingOptions, and
+                       checkPlayerState and toReplica take one parameter instead of two. No runtime
+                       export was added or removed — the measured export count stays 167 across the
+                       documented entry points, because what disappeared was a type — and no entry
+                       point, wire field, rejection code or configuration value changed.
 
 Actual package and WASM versions/hashes:
   @colyseus/schema     5.0.45, licence MIT, declared as the exact specifier "5.0.45" in
@@ -112,26 +138,30 @@ Actual package and WASM versions/hashes:
                        boundary rule table 818c63d5b12f984b17172688be6fd82ed103d9e18473e0978e307225e8194b82
 
 Commands with exit codes and test counts:
-  Run from a tree with every dist directory deleted, in the CI order, and again with FORCE_COLOR=3 to
-  match the runner's coloured output. Every command exits 0.
+  Run at 9b04ee28 from a tree with every dist directory deleted, in the CI order. Every command exits
+  0. The first submission recorded 302 root tests, 203 unit tests and 30 UDG-002 contract tests; the
+  correction round added tests, so the numbers below are larger, and both sets are true of the head
+  they name.
     pnpm install --frozen-lockfile  0
     pnpm typecheck                  0
     pnpm lint                       0   (eslint clean; boundary check OK, 40 files, 0 violations)
-    pnpm test                       0   8 files, 302 tests, 0 failures, 0 skipped
+    pnpm test                       0   8 files, 316 tests, 0 failures, 0 skipped
     pnpm build                      0
-    pnpm test:unit                  0   203 tests (validation 47, config 40, mapping 31,
+    pnpm test:unit                  0   216 tests (validation 47, config 40, mapping 44,
                                             schema round trip 13, fixtures 72)
     pnpm test:boundaries            0   positive and negative fixtures, including the new
                                         domain-no-schema pair
     pnpm test:fixtures              0   24 fixtures discovered: boundary manifests plus the standalone
                                         protocol fixtures, all digest-pinned
     pnpm test:contract -- --task UDG-001   0   49 tests
-    pnpm test:contract -- --task UDG-002   0   30 tests
+    pnpm test:contract -- --task UDG-002   0   31 tests
     pnpm contracts:checksums        0   in sync, 58 entries
     pnpm dependencies:verify        0   register matches the installed graph; re-recording is idempotent
-  CI, GitHub-hosted ubuntu-24.04 linux-x64: run 42611762215 on a2a2318e, conclusion success, 23 steps,
-  zero failed steps, artefact udg-evidence carrying both task bundles and both summaries.
-  Two earlier runs on this submission were red and are reported rather than buried:
+  CI, GitHub-hosted ubuntu-24.04 linux-x64: run 42621422569 on 9b04ee28, conclusion success, 23 steps,
+  zero failed steps, zero `::error::` lines in the published log, artefact udg-evidence carrying both
+  task bundles and both summaries. The first submission's green run 42611762215 on a2a2318e is
+  retained alongside it, as are the record-commit runs 42613223227 and 42614129225.
+  Two earlier runs on the first submission were red and are reported rather than buried:
     42609613962 (830a326a) failed `pnpm typecheck` with TS2307 for every built-module import. The
       suites assert against packages/*/dist and a developer machine always has one; a fresh checkout
       does not. Fixed by the named build:libraries step running before typecheck, test and test:unit,
@@ -150,6 +180,11 @@ Positive, negative, lifecycle and race coverage:
              corners; the diagonal normalisation; yaw wrap to [-π, π); the route pair rule in both
              directions; region-level round trip; player map read through its own reader; a map key
              that disagrees with its embedded entityId is reported rather than silently re-keyed.
+             Correction round adds: every valid canonical route — `null` and each positive revision
+             with index `0` and index `>0`, up to `4294967295` — compared after a full encode/decode
+             cycle; every valid wire pair decoded, reconstructed and re-projected onto the same pair;
+             `4294967294` projected, encoded, decoded and read back as exactly itself in both
+             directions, and cross-checked against the value validateDirectFrame accepts.
   Negative   46 rejecting cases, each asserting the specific documented rejection code it must return
              and receiving it: 46 of 46 matched. Unknown and missing keys, out-of-range axes,
              non-finite scalars, oversized identifiers, out-of-width and fractional integers, epoch
@@ -159,6 +194,15 @@ Positive, negative, lifecycle and race coverage:
              the codec. Nothing throws where it should refuse, and no result escapes the closed
              rejection vocabulary. Four live refusal probes are re-run in the contract suite so the
              recorded codes are not a fixture's self-report.
+             Correction round adds, each one refusing rather than coercing: `4294967295`, one above
+             GENERATION_MAX, `4294967296`, `42.5`, `-1`, NaN, ±Infinity on `intentGeneration` — refused
+             by checkPlayerState and toReplica on the way out and by readReplicaIssues,
+             readPlayerReplica and fromReplica on the way in; the canonical route
+             `{ revision: 0, nextWaypointIndex: 0 }`, which used to round-trip silently into `null`;
+             `{ revision: 0, index > 0 }`, a fractional, negative and oversized revision, and a
+             negative or fractional waypoint index, through every mapping entry point including the
+             region player map; and the deleted `{ enforceRoutePairRule: false }` call shape, which
+             now refuses the state it used to approve.
   Lifecycle  Schema round trips per declared kind (player, direct input, region) with float64 vectors
              0.1 + 0.2, -π, 5e-324, ±Number.MAX_VALUE carried exactly; -0 documented as the codec's
              one exception and refused by mapping before it can be sent; deep-frozen accepted values,
@@ -184,7 +228,7 @@ Acceptance thresholds and measured results:
     schema.roundTrips                  3 (player, direct input, region)   ≥ 1 each
     schema.losslessFloat64             true                        exact for every vector tried
     protocol.requiredIds               true                        P01-P12, P13-P20, P21-P34 present
-    protocol.executed                  203 unit assertions run     > 0, none skipped
+    protocol.executed                  216 unit assertions run     > 0, none skipped
     protocol.binaryNegative            3                           ≥ 1 binary rejecting case
     validation.noNonFiniteEscape       true                        no non-finite value survives
     config.hashStable                  true                        same input, same digest; four
@@ -197,28 +241,84 @@ Acceptance thresholds and measured results:
   entry points, and the UDG-001 suite green as a child run.
 
 Raw evidence directory and integrity result:
-  Local bundle    artifacts/UDG-002-2026-11-09T11-46-13-890Z-a2a2318e — PASS, 31 hashed files,
-                  report.json sha256 b23b63d673b187772f5af053a9c183d966d251b02f77c73c5418f748c79b8460,
-                  302 tests, 0 failures, 0 errors, 0 skipped, clean working tree
-  CI bundle       UDG-002-2026-11-09T11-49-54-974Z-a2a2318e — PASS, report.json sha256
-                  ca1c6f44e3ce6f34fec9c4be5c0b9a6e64985db6966bada698239abb660072d9; verified on the
-                  runner and again after download, with configuration hashes identical to the local
-                  bundle, which is the cross-machine reproduction that matters
-  Foundation      UDG-001-2026-11-09T11-46-42-432Z-a2a2318e (local) and
-                  UDG-001-2026-11-09T11-48-52-798Z-a2a2318e (CI) both PASS at this head
-  Retention       /workspace/udg-evidence, versioned inventory. v3 (418 files, sha256 ef5feeb647b2850435f77f0d67eed03fdf3fbb32665d7e465f13abccbebe3964)
-                  supersedes v2 (d4aa0bc1c24f4ef07d5056adb1ff8c33722483d333a8a3116ed1e5a617fd4240);
-                  v4 (476 files, sha256 e6b1345a8b5b3ae2acad6455301a1482db6e0b9e57c683941317a0d9645fad6c) adds the submission-record run 42613223227, whose
-                  bundles also verify PASS. Each append writes the next version with its predecessor's
-                  hash embedded, so this record cites the chain rather than a terminal inventory
-                  digest — the version that documents this record's own CI run can only be written
-                  after it. Runner logs are retained gzipped in the store only: they contain runner
-                  filesystem paths, so they are never committed. Only the sanitised summary
+  This submission, captured at 9b04ee28 with a clean working tree:
+  Local bundle    artifacts/UDG-002-2026-11-09T12-57-05-477Z-9b04ee28 — PASS, 29 files hashed in
+                  report.json, report.json sha256
+                  a16826ba3d1131ba7a2007dd2830d34dad8ed13675ff67003f09ca5d7149f03b,
+                  316 tests, 0 failures, 0 errors, 0 skipped, workingTreeDirty false
+  CI bundle       UDG-002-2026-11-09T13-00-10-342Z-9b04ee28 from run 42621422569 — PASS, report.json
+                  sha256 7a6a0414239cbbc5d2bcb54865ba8b5269e8504070e7681091207119bf9cb123; verified on
+                  the runner and again after download, with configuration hashes identical to the local
+                  bundle — task contract 25e44ba5, index 255e7b2c, lockfile 899e6f4d, CI workflow
+                  0187b58e, boundary rule table 818c63d5 — which is the cross-machine reproduction that
+                  matters
+  Foundation      UDG-001-2026-11-09T12-57-38-359Z-9b04ee28 (local, report.json sha256
+                  d53caba6b7b6e9694debd4cef27a39c16d383602840c0563bb2a1dd8f8a2d488) and
+                  UDG-001-2026-11-09T12-59-33-146Z-9b04ee28 (CI, report.json sha256
+                  9feaaf2b0420bb8c4cbe1c260a6de9911f8cab607e71786deb769f5950fa1c98), both PASS at this
+                  head with 316 tests: the accepted UDG-001 gate still passes on the corrected code
+  First submission, retained and re-verified with zero issues after the correction landed:
+                  UDG-002-2026-11-09T11-46-13-890Z-a2a2318e (local, report.json sha256 b23b63d6…),
+                  UDG-002-2026-11-09T11-49-54-974Z-a2a2318e (CI run 42611762215, ca1c6f44…) and the
+                  matching UDG-001 pair. Two claims the earlier edition of this record made about
+                  those local bundles were wrong and are corrected here rather than kept quiet: that
+                  run's report.json says workingTreeDirty true, because the record files were being
+                  written around the capture — the CI bundle at the same commit is the clean-tree one —
+                  and "31 hashed files" counted the two files a report deliberately excludes
+                  (report.json and checksums.sha256), where the report hashes 29.
+  Retention       /workspace/udg-evidence, versioned inventory. Every append embeds its predecessor's
+                  digest, so this record cites the chain rather than a terminal inventory digest:
+                  v2 d4aa0bc1c24f4ef07d5056adb1ff8c33722483d333a8a3116ed1e5a617fd4240,
+                  v3, 418 files, ef5feeb647b2850435f77f0d67eed03fdf3fbb32665d7e465f13abccbebe3964,
+                  v4, 476 files, e6b1345a8b5b3ae2acad6455301a1482db6e0b9e57c683941317a0d9645fad6c,
+                  v5, 534 files, 0880bcf559440b28a2bfd232cf559a0dc67d77b1527f39dd8fa46d3b7ccd4b06 and
+                  v6, 647 files, db27af39bc2d59efdf8350c034adebbc1bda150f1ae87c349066169883c20e80,
+                  which adds the four bundles above and Actions run 42621422569. The inventory written
+                  after this record commit will carry that commit's own run: a commit cannot cite the
+                  CI run it triggers. Runner logs are retained gzipped in the store only — they contain
+                  runner filesystem paths, so they are never committed. Only the sanitised summary
                   docs/contracts/assignments/UDG-002-evidence.json and its hashes enter Git (C-03).
   OPEN residual   The store is one copy on one host. It guards against Actions artefact expiry (30
                   days from the run date) and against losing the artifacts directory, not against
                   host loss. Independent backup designation is owner decision D4 and remains
                   unprovisioned and unclaimed.
+
+Review corrections applied in this revision (2026-11-09, submitted at 9b04ee28):
+  1 GENERATION_MAX in both directions. toReplica and readReplicaIssues bounded `intentGeneration` by
+    UINT32_MAX while every validator used GENERATION_MAX, so 4294967295 could cross a boundary no
+    validator would accept. Both now use GENERATION_MAX. The boundary tests prove 4294967294 projects,
+    encodes, decodes and reconstructs as itself, and that 4294967295, 4294967296, 42.5, -1, NaN,
+    +Infinity and -Infinity each fail outbound and inbound.
+  2 Canonical route round trips. Canonical absence is `null`; a non-null RouteProgress must carry a
+    positive revision, so `{ revision: 0, nextWaypointIndex: 0 }` is refused instead of silently
+    round-tripping into `null`. The wire rule is unchanged — `0 / 0` still decodes to `null` and a
+    positive revision with index `0` is still an active route at its first waypoint — and every
+    accepted canonical route and wire pair is now round-tripped in both directions and re-projected
+    onto the same pair.
+  3 The public bypass is removed. PlayerMappingOptions and its enforceRoutePairRule flag exist in
+    neither the source nor the built declaration; checkPlayerState and toReplica take one parameter;
+    no caller in packages/, tools/ or tests/ ever passed the option, so nothing else needed changing.
+    The test that used to approve the bypass now proves refusal at checkPlayerState, toReplica,
+    readReplicaIssues, readPlayerReplica, fromReplica and readPlayerMap, that both entry points have
+    arity 1, and that the deleted call shape is inert. docs/contracts/protocol-v1.md 6.2 now documents
+    the canonical and wire tables separately and says neither has an option.
+  4 Record accuracy. This record quoted the contracts-index digest under a "task contract" label. The
+    producer was never wrong: report.contractHash hashes docs/contracts/README.md (255e7b2c…) and
+    report.configHashes.taskContract hashes docs/contracts/UDG-002.md (d78ec678… for the reviewed
+    bundles). So the producer schema is unchanged — a new or renamed field would have invalidated the
+    retained evidence for no gain — and what changed is the labelling in both records, a comment on the
+    EvidenceReport interface naming both fields, and a new UDG-002 contract assertion that refuses a
+    record quoting the index digest beside a task-file label. Old evidence is disclosed, not rewritten:
+    every retained bundle still verifies with zero issues, and the two first-submission claims corrected
+    in the section above are the other inaccuracies found while doing this.
+  Hash drift to expect when re-verifying: report.json configHashes.taskContract is
+  25e44ba5190e85af351491fd6f24a8964ab37ebd1be6f4210497746145d2fc78, the bytes of
+  docs/contracts/UDG-002.md at 9b04ee28. The commit carrying this sentence adds the corrected
+  submission line to that same file, giving
+  87ac552f0793e1fec36ff37f41892eadb2129b9dd83200cca75d300c49c7ed5a, and the checksum manifest is
+  regenerated for it. Everything else the bundles pin still matches the committed bytes exactly: the
+  contracts index, the lockfile, the CI workflow, tsconfig.base, the boundary rule table and fixtures,
+  .env.example and .npmrc.
 
 ADRs accepted, rejected or still proposed:
   Accepted   docs/adr/0001-replica-precision-policy.md — float64 canonical end to end, lossless
@@ -227,7 +327,10 @@ ADRs accepted, rejected or still proposed:
   Proposed   none outstanding from this task.
   Not raised No architecture, protocol, timestep, collision-ownership or acceptance-threshold change
              required escalation: the two CI failures above were implementation and tooling defects
-             inside the authorised scope, fixed inside it, not contract conflicts.
+             inside the authorised scope, fixed inside it, not contract conflicts. The correction round
+             raised none either: it tightened the implementation to the contract that was already
+             adopted (D1's route pair rule and the GENERATION_MAX the protocol table already declares),
+             so no contract text, wire field or threshold moved.
 
 Limitations and remaining downstream work:
   - Encoding widths, and any SDK bookkeeping field, are provisional under ADR 0001 until Gate A.
@@ -244,6 +347,14 @@ Limitations and remaining downstream work:
     PROVISIONAL_P07_FIELDS are named as provisional in the hash inputs rather than adopted.
   - Gates A, B and C remain Not Run. Gate A is validated by UDG-SPIKE-001 after UDG-003 and UDG-004;
     Gate B by UDG-SPIKE-002; Gate C by UDG-SPIKE-003.
+  - Left stale on purpose, because it was not in the correction authorisation: tests/AGENTS.md and
+    tools/checks/AGENTS.md still call their directories "planning instructions only", which the code
+    those tasks shipped contradicts just as the protocol and configuration pages did. The owner's
+    correction instruction named the protocol and configuration pages, so only those two were changed;
+    the other two need the same one-sentence fix under whichever task owns them.
+  - The correction round changed no contract text, no wire field, no rejection code, no configuration
+    value and no threshold, and implemented nothing outside its four findings: no Room, no admission
+    or ordering, no movement, physics, navigation, input or asset behaviour, and no other task.
 
 Implementer recommendation: In Review
 Reviewer decision and date:
