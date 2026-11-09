@@ -110,6 +110,21 @@ const record = (path: string, value: unknown): void => {
 
 const json = <T>(relativePath: string): T => JSON.parse(readFileSync(join(ROOT, relativePath), 'utf8')) as T;
 
+/**
+ * Remove SGR escape sequences from a child's output.
+ *
+ * GitHub Actions sets FORCE_COLOR, so a nested vitest writes a coloured summary — the counts are
+ * wrapped in their own colour codes, which splits the very text a summary parser looks for. The first
+ * UDG-002 run on a hosted runner read "0 tests executed" out of a run that had just passed 203. Plain
+ * text is what a parser must parse, so colour is removed before any count is read.
+ */
+// The escape is constructed rather than written into a regex literal: the repository's lint config
+// bans control characters in patterns (no-control-regex), which is a reasonable rule for a codebase
+// that should not be matching terminal noise anywhere else.
+const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+
+const stripAnsi = (text: string): string => text.replace(ANSI_PATTERN, '');
+
 const run = (command: readonly string[], cwd: string = ROOT, timeoutMs = 900_000, env: NodeJS.ProcessEnv = childEnv()) => {
   const [file, ...args] = command;
   if (file === undefined) throw new Error('empty command');
@@ -694,10 +709,16 @@ describe('protocol fixtures', () => {
     // is forwarded deliberately — it is the producer of rejection-results.json — while every other
     // evidence variable stays stripped.
     const unit = run(['pnpm', 'exec', 'vitest', 'run', 'tests/unit/udg-002', '--reporter=dot'], ROOT, 900_000, childEnv(EVIDENCE_DIR === undefined ? {} : { UDG_EVIDENCE_OUT: EVIDENCE_DIR, UDG_EVIDENCE_TASK: TASK }));
-    const output = `${unit.stdout}${unit.stderr}`;
+    const output = stripAnsi(`${unit.stdout}${unit.stderr}`);
     expect(unit.status, output).toBe(0);
-    expect(output).not.toMatch(/skipped\s+[1-9]/);
-    const executed = Number(/Tests\s+(\d+) passed/.exec(output)?.[1] ?? '0');
+    // Read the counts the runner reports rather than the absence of a phrase. `not.toMatch(/skipped\s+
+    // [1-9]/)` could never match vitest's own "1 skipped" word order, so it proved nothing: a skipped
+    // case set would have looked green. An absent count means zero here, which is the reported case.
+    const count = (pattern: RegExp): number => Number(pattern.exec(output)?.[1] ?? '0');
+    expect(count(/(\d+) failed/), output).toBe(0);
+    expect(count(/(\d+) skipped/), output).toBe(0);
+    expect(count(/(\d+) error/), output).toBe(0);
+    const executed = count(/Tests\s+(\d+) passed/);
     expect(executed).toBeGreaterThan(150);
     record('protocol.executed', executed);
   });
