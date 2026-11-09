@@ -2,7 +2,7 @@
 
 Status: **Partially adopted — P01, P02 and P06 approved 2026-11-08; P03 to P05 and P07 to P10 pending**
 
-Implementation assignment: **UDG-001** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)) and **UDG-002** (authorised 2026-11-08, see [P02 and P06 adoption](#p02-and-p06-adoption-recorded-2026-11-08)). No task beyond UDG-002 is assigned.
+Implementation assignment: **UDG-001** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)) and **UDG-002** (authorised 2026-11-08, see [P02 and P06 adoption](#p02-and-p06-adoption-recorded-2026-11-08); **accepted and Verified 2026-11-09**, see [UDG-002 acceptance](#udg-002-acceptance-recorded-2026-11-09)). No task beyond UDG-002 is assigned.
 
 Integration owner: **Project owner, GitHub account `TomBResearch`** — recorded 2026-11-08 at the owner's instruction as both integration owner and project reviewer. Replace with the owner's preferred display name on request; the identity, not the decision, is what may be restated.
 
@@ -113,6 +113,53 @@ Next assignment           none. UDG-002 and every later task stay Not Started un
 The decision fields of [assignments/UDG-001-completion.md](assignments/UDG-001-completion.md) carry
 the same record, and the state history at the foot of
 [assignments/UDG-001.md](assignments/UDG-001.md) shows the transition.
+
+## UDG-002 acceptance recorded 2026-11-09
+
+The project owner (`TomBResearch`), acting as reviewer and integration owner, accepted the UDG-002
+implementation on 2026-11-09. The first submission was reviewed, drew four corrections, and the
+corrected head was accepted. The task state is **Verified**.
+
+```text
+Accepted implementation   372be938f0dd825ff89fac56da7dc29d0789098f
+Reviewed submission       a967c5f97ede7126837addcd192eb599648b9546
+Passing submission CI     https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42627324928
+                          (success, 23 of 23 steps on the reviewed submission)
+Review history            first submission a2a2318e31d38b731fed543e0eb49dce5474de55, reviewed by the
+                          owner; four corrections implemented at
+                          9b04ee2802dac72588163828beaaafeae39ff08f — GENERATION_MAX in both mapping
+                          directions, canonical route round trips in both directions, removal of the
+                          enforceRoutePairRule public bypass, and record/digest attribution — plus the
+                          follow-up at 372be938f0dd825ff89fac56da7dc29d0789098f which reports each malformed route field once instead of
+                          twice. Nothing became more permissive at any step
+Acceptance covers         the implementation, the four review corrections, the follow-up route-report
+                          tightening, the documentation corrections the review authorised, and the
+                          declared additions and deviations recorded in
+                          assignments/UDG-002-completion.md
+Clarification C-05        satisfied: the workflow ran green on the pushed reviewed submission and the
+                          owner accepted the work
+Evidence preserved        every bundle from the first submission, the correction rounds and this
+                          acceptance review is retained and still verifies; no bundle byte or recorded
+                          digest was rewritten. The task-file digest moves again with this acceptance
+                          entry, which is the disclosure already stated in the completion record: no
+                          bundle can pin the bytes of a commit written after it, so each bundle's own
+                          report remains the authority for the edition it recorded
+Not adopted or passed     Gates A, B and C remain Not Run and no spike gate decision exists; schema
+                          encoding widths and any SDK integration remain provisional under ADR 0001
+                          until Gate A; P03, P04, P05, P07, P08, P09 and P10 remain Pending; owner
+                          decision D4 leaves the independent-backup destination undesignated and that
+                          risk open — no storage was provisioned and no archive repository created
+Contract edition          UDG-CONTRACTS-M0-001 v1.0, repository edition 1 — unchanged by acceptance.
+                          docs/contracts/checksums.json is regenerated for the acceptance edition by
+                          `pnpm contracts:checksums -- --write`; the acceptance commit identifies that
+                          edition, because a manifest cannot pin its own bytes
+Next assignment           none. UDG-003 and every later task stay Not Started until the owner records
+                          the relevant refinement decision and assigns the task
+```
+
+The decision fields of [assignments/UDG-002-completion.md](assignments/UDG-002-completion.md) carry the
+same record, and the state history at the foot of
+[assignments/UDG-002.md](assignments/UDG-002.md) shows the transition.
 
 ## Reviewed edition and pins for the P01 approval
 

@@ -1,6 +1,6 @@
 # Test fixtures and suites instructions
 
-Read [root instructions](../AGENTS.md) and the currently assigned task first. This directory currently contains planning instructions only; implementation starts only when separately assigned.
+Read [root instructions](../AGENTS.md) and the currently assigned task first. This directory contains implemented suites, not planning instructions: [UDG-001](../docs/contracts/UDG-001.md) created `tests/contracts/`, `tests/fixtures/boundaries/` and the checkers' fixtures, and [UDG-002](../docs/contracts/UDG-002.md) added `tests/unit/`, `tests/checks/` and the standalone protocol fixtures under `tests/fixtures/protocol/` with `tests/fixtures/catalog.json`. `tests/e2e/` and `tests/spikes/` do not exist and are created only by their owning tasks. Having suites here assigns no further work: each additional suite needs its own task and assignment.
 
 ## Applicable task contracts
 

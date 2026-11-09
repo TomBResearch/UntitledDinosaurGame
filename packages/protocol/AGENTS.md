@@ -1,6 +1,6 @@
 # Protocol instructions
 
-Read [root instructions](../../AGENTS.md) and the currently assigned task first. This directory contains implemented code, not planning instructions: `@udg/protocol` was written by [UDG-002](../../docs/contracts/UDG-002.md) and is In Review. Writing it assigned no further work here — admission and ordering, movement, physics, navigation and room behaviour still need their own task and assignment.
+Read [root instructions](../../AGENTS.md) and the currently assigned task first. This directory contains implemented code, not planning instructions: `@udg/protocol` was written by [UDG-002](../../docs/contracts/UDG-002.md), which the owner accepted on 2026-11-09 (Verified). Writing it assigned no further work here — admission and ordering, movement, physics, navigation and room behaviour still need their own task and assignment.
 
 ## Applicable task contracts
 

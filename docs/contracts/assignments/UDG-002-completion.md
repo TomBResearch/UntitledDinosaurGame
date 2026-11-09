@@ -1,8 +1,11 @@
 # UDG-002 completion record
 
-Appendix B2 submission record. Reviewer and integration-owner decision fields are left pending: the
-implementer does not record them (root [AGENTS.md](../../AGENTS.md), "do not self-sign adoption,
-reviewer acceptance, or gate passes").
+Appendix B2 submission record. The implementer recorded no acceptance of its own work (root
+[AGENTS.md](../../AGENTS.md), "do not self-sign adoption, reviewer acceptance, or gate passes"): the
+field stayed "Pending" until the owner decided. The owner accepted UDG-002 on 2026-11-09 and that
+decision is recorded in "Reviewer decision and date" below, with the matching entry in
+[adoption](../adoption.md#udg-002-acceptance-recorded-2026-11-09). The gate field remains blank
+because UDG-002 validates no gate.
 
 ```text
 Task ID and final implementation SHA:
@@ -383,7 +386,16 @@ Limitations and remaining downstream work:
 
 Implementer recommendation: In Review
 Reviewer decision and date:
-  Pending. The owner reviewer has not accepted this submission; nothing here records acceptance.
+  **Accepted 2026-11-09** by the project owner (`TomBResearch`), acting as reviewer and integration
+  owner. The decision is the owner's, recorded here on the owner's instruction; the implementer
+  recorded no acceptance before it was given, and the earlier revision of this field read "Pending".
+    Accepted implementation  372be938f0dd825ff89fac56da7dc29d0789098f
+    Reviewed submission      a967c5f97ede7126837addcd192eb599648b9546
+    Passing submission CI    https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42627324928 (success, 23 of 23 steps on the reviewed submission)
+  Acceptance covers the implementation, the four review corrections of 2026-11-09, the follow-up that
+  reports each malformed route field once, and the documentation corrections the review authorised.
+  The first submission, its bundles and its red counterexample runs remain retained and verifiable:
+  the correction round added commits and disclosed corrections, and rewrote no evidence.
 Integration owner gate decision and date:
   Not applicable to UDG-002 and deliberately left blank. This task validates no gate: Gates A, B and C
   remain Not Run, and their validation belongs to the spike tasks named above.

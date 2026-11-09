@@ -1,10 +1,11 @@
 # Repository checks instructions
 
-Read [root instructions](../../AGENTS.md) and the currently assigned task first. This directory currently contains planning instructions only; implementation starts only when separately assigned.
+Read [root instructions](../../AGENTS.md) and the currently assigned task first. This directory contains implemented code, not planning instructions: `@udg/checks` was written by [UDG-001](../../docs/contracts/UDG-001.md) and extended by [UDG-002](../../docs/contracts/UDG-002.md) under the controlled-path grant in that task's assignment record, which authorised the fixture layout, the per-task capture plan and the report-derived artefact rule and nothing else. Extending this package further needs its own task and assignment; no suite, asset pipeline or load-test harness is implied by its existence here.
 
 ## Applicable task contracts
 
-- [UDG-001](../../docs/contracts/UDG-001.md)
+- [UDG-001](../../docs/contracts/UDG-001.md) — created this package
+- [UDG-002](../../docs/contracts/UDG-002.md) — extended it under an assignment-scoped grant
 
 ## Shared contracts
 

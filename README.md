@@ -4,12 +4,15 @@ Browser-based prehistoric RPG planning repository.
 
 **Current state:** UDG-001 (workspace and CI foundation) is **Verified** — accepted by the project
 owner on 2026-11-08 (implementation `1c735c2`, reviewed submission `0e586b6`). UDG-002 (protocol and
-configuration types, validation and replica mapping) is **In Review**: `@udg/protocol` and
-`@udg/config` contain the wire contract, validation and mapping described in
-[docs/contracts/protocol-v1.md](docs/contracts/protocol-v1.md), and they contain nothing else. Game
-movement, networking, physics and rendering behaviour still do not exist, validation Gates A, B and C
-have not run, refinements P03 to P05 and P07 to P10 remain pending, and no task beyond UDG-002 is
-assigned. The planning contracts and their
+configuration types, validation and replica mapping) is **Verified** — accepted by the project owner
+on 2026-11-09 (implementation `372be93`, reviewed submission `a967c5f`) after one review round that
+produced four corrections and a follow-up. `@udg/protocol` and `@udg/config` contain the wire
+contract, validation and mapping described in
+[docs/contracts/protocol-v1.md](docs/contracts/protocol-v1.md), and they contain nothing else; the
+replica encoding widths stay provisional under
+[ADR 0001](docs/adr/0001-replica-precision-policy.md) until Gate A. Game movement, networking,
+physics and rendering behaviour still do not exist, validation Gates A, B and C have not run,
+refinements P03 to P05 and P07 to P10 remain pending, and no task beyond UDG-002 is assigned. The planning contracts and their
 [adoption status](docs/contracts/adoption.md) remain the authority for what may be built next.
 
 ## Start here
@@ -142,11 +145,13 @@ on the accepted implementation `1c735c2` and run
 reviewed submission `0e586b6` each completed with 19 of 19 steps success on `ubuntu-24.04`, and the
 published evidence bundles verify with zero issues. The project owner recorded acceptance on
 2026-11-08, so UDG-001 is **Verified**. UDG-002 was authorised by the same owner decision set that
-adopted P02 and P06 on 2026-11-08, is **In Review** with the owner as reviewer, and its own CI history
-— including two red runs and the green submission run — is recorded in
+adopted P02 and P06 on 2026-11-08 and reviewed by the owner on 2026-11-09: the first
+submission drew four corrections, and the corrected head was accepted with
+[run 42627324928](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42627324928) green on the reviewed submission. Its own CI history — two red runs,
+a green first submission and a green accepted submission — is recorded in
 [the UDG-002 completion record](docs/contracts/assignments/UDG-002-completion.md). P03 to P05 and P07
 to P10 remain pending and Gates A, B and C remain Not Run, so no task beyond UDG-002 is assigned; the
-local reproduction of the identical command sequence and the CI bundles are retained and verified.
+local reproduction of the identical command sequence and every CI bundle are retained and verified.
 
 ## Evidence
 
