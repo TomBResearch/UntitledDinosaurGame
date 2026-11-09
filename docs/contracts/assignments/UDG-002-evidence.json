@@ -1,0 +1,369 @@
+{
+  "schemaVersion": 1,
+  "taskId": "UDG-002",
+  "runId": "UDG-002-2026-11-09T11-46-13-890Z-a2a2318e",
+  "generatedAt": "2026-11-09T11:54:38.640Z",
+  "generatorCommand": "pnpm evidence:summary -- --run <bundle> --out <file> (bundle UDG-002-2026-11-09T11-46-13-890Z-a2a2318e)",
+  "durableStorage": {
+    "location": "/workspace/udg-evidence/UDG-002-2026-11-09T11-46-13-890Z-a2a2318e",
+    "note": "Raw bundle retained outside Git per clarification C-03. The hashes below identify the retained bytes; a mismatch means the stored bundle is not the run this summary describes."
+  },
+  "verification": {
+    "command": "pnpm evidence:verify -- --run <bundle>",
+    "ok": true,
+    "issueCount": 0
+  },
+  "status": "PASS",
+  "implementationSha": "a2a2318e31d38b731fed543e0eb49dce5474de55",
+  "branch": "main",
+  "workingTreeDirty": true,
+  "prerequisiteShas": [
+    "74ffdaaba1bc3617999c99e73c7f197ebd01a570"
+  ],
+  "contractHash": "255e7b2cb8fd64c41e2e5beb2a56b03bb62b08e0ca11089299d81a2e540a5943",
+  "baselineSpecHash": "b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf",
+  "dependencyLockHash": "899e6f4d18930cb23fc32438dfe5d7b11d4d16741ebf2cf03f54a5c8585517e5",
+  "configHashes": {
+    "taskContract": "d78ec67820faa4179a0141f4beb48a96dc20e33766bc724d629ffda8280d7c4b",
+    "tsconfigBase": "da4b844063b8abb6f48677c87c8996accf9e77cf1f7e5792827cd811edcb394d",
+    "boundaryRuleTable": "818c63d5b12f984b17172688be6fd82ed103d9e18473e0978e307225e8194b82",
+    "boundaryFixtures": "076b6a6f6f6ae75fdb3a3ba607df73f456b1ea0ec39cd465942e41730c79ba0d",
+    "envExample": "e86500e8724b74788191b57467a75945cc88b8d75d42b055f1f86be4c9d5e6c4",
+    "npmrc": "267d57bf2a964bda8f0b89d32edebf8bff186348ac5def3a574a1d6cbb42e9b6",
+    "ciWorkflow": "0187b58e03bac3112e33ec3b142ba8ba8cc00425fd0f7d550a12b2ad6219a730"
+  },
+  "fixtureHashes": {
+    "UDG-001-boundaries-allowed": "3be555a8ba0386e9832555a798e047c1a0aaeb3d369e1bb5527a42fb62e589e3:076b6a6f6f6ae75f",
+    "UDG-001-boundaries-cycle": "026c428e7c1cba8ac50e042fec3e2935a047ffbb646cf9519b4da3a36d0dadd1:076b6a6f6f6ae75f",
+    "UDG-002-boundaries-domain-no-schema": "1e95e025ddf9ed71132a2015d12a95e4382908e6a4e9401ca6af7179ec686aef:076b6a6f6f6ae75f",
+    "UDG-002-boundaries-domain-no-schema-allowed": "13ff1920f2c02dc42f56a170391fbfbfada9e0564714d5576908a3e72aaa64a3:076b6a6f6f6ae75f",
+    "UDG-001-boundaries-forbidden-browser-global": "0a49c844acfa0c90e785db0ebb211c14042ad1e6cfc9c59d9edfe52f1cd4f739:076b6a6f6f6ae75f",
+    "UDG-001-boundaries-forbidden-client-server": "ec04732dcbd1bf70942acc815a2588619e8d671cafe059937bd39b0a7b767351:076b6a6f6f6ae75f",
+    "UDG-001-boundaries-forbidden-engine": "005d372788660b06e131957a289c39048cf1dd5d412b9912ac65e8aec0bcc49d:076b6a6f6f6ae75f",
+    "UDG-001-boundaries-forbidden-undeclared-and-config": "a74825b40f292991c9c88c96d0b4d21bdabd1124e54632a73d87b7cd8a570a4a:076b6a6f6f6ae75f",
+    "UDG-001-strict-type-errors": "bd4d0988ddb11b9239904ef5f6bb381d9bccff8167a111c83b012fb44738ffb8:da4b844063b8abb6"
+  },
+  "testCounts": {
+    "tests": 302,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "suites": [
+    {
+      "name": "vitest",
+      "tests": 302,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "quarantined": 0,
+      "duplicateCaseNames": []
+    }
+  ],
+  "commands": [
+    {
+      "label": "install-frozen",
+      "exitCode": 0,
+      "durationMs": 47
+    },
+    {
+      "label": "typecheck",
+      "exitCode": 0,
+      "durationMs": 3439
+    },
+    {
+      "label": "lint",
+      "exitCode": 0,
+      "durationMs": 1543
+    },
+    {
+      "label": "test",
+      "exitCode": 0,
+      "durationMs": 10077
+    },
+    {
+      "label": "build",
+      "exitCode": 0,
+      "durationMs": 1418
+    },
+    {
+      "label": "test-unit",
+      "exitCode": 0,
+      "durationMs": 1236
+    },
+    {
+      "label": "test-boundaries",
+      "exitCode": 0,
+      "durationMs": 763
+    },
+    {
+      "label": "test-fixtures",
+      "exitCode": 0,
+      "durationMs": 774
+    },
+    {
+      "label": "test-contract-UDG-002",
+      "exitCode": 0,
+      "durationMs": 5755
+    },
+    {
+      "label": "test-contract-UDG-001",
+      "exitCode": 0,
+      "durationMs": 2636
+    }
+  ],
+  "measured": {
+    "taskId": "UDG-002",
+    "schemaVersion": 1,
+    "files": {
+      "owned": 28
+    },
+    "docs": {
+      "protocolV1": {
+        "sections": true
+      }
+    },
+    "entry": {
+      "map": {
+        "matchesManifests": true
+      },
+      "importedThroughPackageName": true,
+      "exportCount": 167,
+      "domainImportsNoSchemaRuntime": true
+    },
+    "boundaries": {
+      "domainImportsSchema": 0
+    },
+    "field": {
+      "map": {
+        "rows": 17,
+        "bidirectional": 17
+      }
+    },
+    "roundtrip": {
+      "cases": 4,
+      "regionExact": true,
+      "playerMapEntries": 2
+    },
+    "protocol": {
+      "requiredIds": true,
+      "cases": 66,
+      "binaryNegative": 3,
+      "executed": 203
+    },
+    "validation": {
+      "readonlyResults": true,
+      "codesObserved": [
+        "EPOCH_MISMATCH",
+        "INVALID_GENERATION",
+        "INVALID_PAYLOAD"
+      ],
+      "noNonFiniteEscape": true
+    },
+    "config": {
+      "hashSensitive": 4,
+      "unitsConsistent": true,
+      "regionDefaults": 0,
+      "hashStable": true
+    },
+    "toolchain": {
+      "node": "v24.22.2",
+      "pnpmCli": "12.18.0"
+    },
+    "schema": {
+      "pin": "@colyseus/schema@5.0.45",
+      "roundTrips": 3,
+      "roundTripKinds": [
+        "PlayerSchema",
+        "DirectInputSchema",
+        "RegionSchema"
+      ],
+      "losslessFloat64": true
+    },
+    "regression": {
+      "UDG001": "green"
+    },
+    "gate": {
+      "buildsBeforeAsserting": true
+    },
+    "unit": {
+      "suites": 5
+    },
+    "scope": {
+      "noLaterTaskBehaviour": true
+    },
+    "evidence": {
+      "artefacts": 5
+    },
+    "capture": {
+      "commandsRun": 10,
+      "failingCommands": [],
+      "sanitisationFailures": [],
+      "pnpmStoreRecorded": true,
+      "totalDurationMs": 27688,
+      "keepGoing": true
+    }
+  },
+  "ci": {
+    "status": "success (GitHub-hosted ubuntu-24.04, linux-x64)",
+    "url": "https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42611762215",
+    "note": "Workflow ci on the pushed commit, identified by the url field. UDG-002 still stays In Review until the reviewer accepts the work (clarification C-05)."
+  },
+  "artifacts": [
+    {
+      "path": "boundary-report.json",
+      "sha256": "ac752e724ab17494fb61e91f1057ce82ef141988feb99b923957403e4c852789",
+      "bytes": 253
+    },
+    {
+      "path": "build.log",
+      "sha256": "bede60e9eb440d2c4dc64be641c1579d1accb016012b0471d4cdefd9ddc6a35a",
+      "bytes": 774
+    },
+    {
+      "path": "checksums.sha256",
+      "sha256": "a838eb5aeb67f412b9f35ea3cc2f238eeac8315141c58bd40c5d4d7be7a9b958",
+      "bytes": 2732
+    },
+    {
+      "path": "commands.json",
+      "sha256": "83973632d40a91d81c65a0daf0d096e8507a056cb8961bcea660cf4ff48c4e51",
+      "bytes": 5315
+    },
+    {
+      "path": "config-hashes.json",
+      "sha256": "15e7a2acd815b79ea3a5ef9b3bfe4c3b5706cd28f1f2e94d93f3a6e9a7cb7173",
+      "bytes": 1660
+    },
+    {
+      "path": "environment.json",
+      "sha256": "8e7e065b9337d6b0a173e337f85bec3f7826838f2536b8e974e0f25c7468da61",
+      "bytes": 655
+    },
+    {
+      "path": "junit.xml",
+      "sha256": "2dc6796e3434fd301606efc14ab5704a3e217cd51e7080ef295a106a39fedc12",
+      "bytes": 59976
+    },
+    {
+      "path": "live-rejection-probes.json",
+      "sha256": "f9a6fe6b062b6385d47d4db6194a9f3e6b18bdbf2af9aa75d899d67387a1d97a",
+      "bytes": 869
+    },
+    {
+      "path": "logs/install-frozen.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "logs/install-frozen.stdout.log",
+      "sha256": "534f3ec2a7bbae97ba85dd6c0d91aa835f00d66a44fef86701b71e611866a668",
+      "bytes": 383
+    },
+    {
+      "path": "logs/lint.stderr.log",
+      "sha256": "7384ead2e35d3b5a79702445da48618c8e66d2b367f8e019271963d0393aba78",
+      "bytes": 178
+    },
+    {
+      "path": "logs/lint.stdout.log",
+      "sha256": "96e2a9032d7f4e985433fcb732139952c4c48112dc107c867009c08a93526998",
+      "bytes": 69
+    },
+    {
+      "path": "logs/test-boundaries.stderr.log",
+      "sha256": "75a8861803dbc1265be8fbdbf580083f36ff3ad100983667661514a6b740685d",
+      "bytes": 134
+    },
+    {
+      "path": "logs/test-boundaries.stdout.log",
+      "sha256": "3eee670fb4684fce2983b2f53e0fb1e1792ca155b4255af0ef2b3210bb6718e9",
+      "bytes": 1426
+    },
+    {
+      "path": "logs/test-contract-UDG-001.stderr.log",
+      "sha256": "9bee5598c1da4253853153105994b2d741d121d5b7c49ebf5299c9cd53935d05",
+      "bytes": 117
+    },
+    {
+      "path": "logs/test-contract-UDG-001.stdout.log",
+      "sha256": "19868c8580da54b2ad346a934df88f70db06635da788a1a7bfe993ab7ab08655",
+      "bytes": 257
+    },
+    {
+      "path": "logs/test-contract-UDG-002.stderr.log",
+      "sha256": "86b05ee7b24251865d832e3704193e04f2c871a6568e9f259dd977a78e4dfffc",
+      "bytes": 117
+    },
+    {
+      "path": "logs/test-contract-UDG-002.stdout.log",
+      "sha256": "b20c43124ae3462d4b845428161296057dfc965d531e2b5f85e910499e7fc282",
+      "bytes": 469
+    },
+    {
+      "path": "logs/test-fixtures.stderr.log",
+      "sha256": "5da9dea7980aba3dade1961c094fd49b3acd15c78048ede9fb6de6cf007ca706",
+      "bytes": 117
+    },
+    {
+      "path": "logs/test-fixtures.stdout.log",
+      "sha256": "79755a0dbf4d6a3fda4a14b2d0f8efd1aeb4c2d8ffa130422066dfcd9ed86134",
+      "bytes": 2476
+    },
+    {
+      "path": "logs/test-unit.stderr.log",
+      "sha256": "25c22e40b2e93a34388f009ea85ed45d92a675fedef43560e69edcc46e88bfa2",
+      "bytes": 89
+    },
+    {
+      "path": "logs/test-unit.stdout.log",
+      "sha256": "1467a8642d31a720c04f55b21f3ba1be2102286da7722e5bd95df399b6d9901b",
+      "bytes": 845
+    },
+    {
+      "path": "logs/test.stderr.log",
+      "sha256": "d5b21f394b7eade60c5c7b45b47e8403fe2cb6a99db02c51273cd55b7d44942f",
+      "bytes": 136
+    },
+    {
+      "path": "logs/test.stdout.log",
+      "sha256": "1cc936b5912aa9c5d1220c23b013c5460d1d3b4ace2f8ad3f955e99dd2b7a271",
+      "bytes": 1364
+    },
+    {
+      "path": "logs/typecheck.stderr.log",
+      "sha256": "8199f99e513ba89ff6b4ab729039ace3ed15e313f7a8d11edc0cd9eee77c6407",
+      "bytes": 202
+    },
+    {
+      "path": "logs/typecheck.stdout.log",
+      "sha256": "35453c122dbbad97073c1ce01461be7de92dfab2456d506bb65112550d595e90",
+      "bytes": 1094
+    },
+    {
+      "path": "measurements/UDG-002.json",
+      "sha256": "6788373e594af7c6c8ef78ae06811829ae5a1e36b26d279694fa0cb49d93088d",
+      "bytes": 1458
+    },
+    {
+      "path": "protocol-field-map.json",
+      "sha256": "6f3bc6794b7ff80aa267b093fe428d60f2d75563e881a8f3fb1a21468252fdf7",
+      "bytes": 3224
+    },
+    {
+      "path": "rejection-results.json",
+      "sha256": "fde31d27014247cc8f548967e4790b9ef9c461cfc924f76c9c97bd3426995c61",
+      "bytes": 13080
+    },
+    {
+      "path": "report.json",
+      "sha256": "b23b63d673b187772f5af053a9c183d966d251b02f77c73c5418f748c79b8460",
+      "bytes": 13026
+    },
+    {
+      "path": "roundtrip-results.json",
+      "sha256": "fe58c26e9fcfd09d19c3f3f751bada84cae36246b31ef4e657a3c8e2be43ef72",
+      "bytes": 1225
+    }
+  ]
+}
