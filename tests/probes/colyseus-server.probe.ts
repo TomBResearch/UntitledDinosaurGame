@@ -25,8 +25,14 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-/** The probes Phase 0 was assigned. Order is the order they are reported in. */
-export const PROBE_IDS = ['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12'] as const;
+/**
+ * The probes Phase 0 was assigned, plus PR-13.
+ *
+ * PR-13 is not part of the assigned Phase 0 set: it is the overflow/acknowledgement remedy investigation
+ * the owner authorised on 2026-11-09, run as a minimal Phase-0 probe against the same pins. It is reported
+ * in the same index so one artefact carries both, and it changes no Phase 0 verdict.
+ */
+export const PROBE_IDS = ['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13'] as const;
 
 export type ProbeId = (typeof PROBE_IDS)[number];
 
@@ -38,6 +44,7 @@ export const PROBE_FILES: Readonly<Record<ProbeId, string>> = {
   'PR-3': 'pr3-input-schema.probe.js',
   'PR-8': 'pr8-ack.probe.js',
   'PR-12': 'pr12-epoch.probe.js',
+  'PR-13': 'pr13-overflow-policy.probe.js',
 };
 
 export const PROBE_SUBJECTS: Readonly<Record<ProbeId, string>> = {
@@ -47,6 +54,7 @@ export const PROBE_SUBJECTS: Readonly<Record<ProbeId, string>> = {
   'PR-3': 'DirectInputSchema as the room input declaration, five fields preserved',
   'PR-8': 'what the acknowledgement tracks: received, consumed or applied',
   'PR-12': 'epoch renewal lifecycle in the public API',
+  'PR-13': 'overflow postures: can a supported API prevent unrepresented retirement?',
 };
 
 /** One line of compiler output, resolved to an absolute path and classified by origin. */

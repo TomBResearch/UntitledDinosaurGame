@@ -190,6 +190,218 @@ export class InputRoom extends Room<{ state: RegionState; input: DirectInputFram
   }
 }
 
+/** The overflow posture one scenario exercises. */
+export type OverflowPolicy = 'none' | 'clear' | 'leave' | 'throttle' | 'seqfield' | 'take' | 'drain' | 'sanitize';
+
+/** Options the overflow scenarios pass through `defineRoom(room, options)`. */
+export interface OverflowRoomOptions extends ProbeRoomOptions {
+  policy?: OverflowPolicy;
+  /** Backlog size at which the posture acts. */
+  threshold?: number;
+  /** Library-enforced message-rate ceiling (`Room.maxMessagesPerSecond`). */
+  maxMessagesPerSecond?: number;
+  /** Frames the `take` posture consumes per step (`InputAccessor.take(n)`). */
+  consumeBudget?: number;
+}
+
+/**
+ * Overflow-policy evidence for PR-13: what a room can do *before* the buffer retires a frame it never
+ * represented.
+ *
+ * The tick body is the smallest thing that could behave like a shared world: look at the backlog, apply
+ * the scenario's posture, then take exactly one frame for the step. Every record is an identity rather
+ * than a total, because the question is *which* frames a posture retires, not how many were touched.
+ *
+ * Only public surface is used, and each use is commented with its declaration: `InputAccessor.clear()`,
+ * `Client.leave()` (`Transport.d.ts`: "Disconnect this client from the room"; `Room.kickClient` is
+ * marked operator-only, so it is not used), `Room.send()` and `Room.maxMessagesPerSecond`.
+ */
+export class OverflowRoom extends Room<{ state: RegionState; input: DirectInputFrame }> {
+  /** The posture under test. */
+  policy: OverflowPolicy = 'none';
+  /** Backlog size at which the posture acts. */
+  threshold = 2;
+  /** The bound the library enforces for this accessor. */
+  bufferMaxSize = 4;
+  /** Per-step records in order: what the room represented, and with which intent. */
+  readonly applied: AppliedRecord[] = [];
+  /**
+   * Generations whose values actually entered a solver step.
+   *
+   * This — not "consumed" — is the identity set the prohibition is about. A frame retired by
+   * `drain()` is consumed and acknowledged, but only the newest drained frame is simulated, so the rest
+   * are recorded separately below (`drainedWithoutStep`) and do not count as represented.
+   */
+  readonly simulated: number[] = [];
+  /** Generations a `drain()` retired while only another frame's values were stepped. */
+  readonly drainedWithoutStep: number[] = [];
+  /** Every generation the room ever saw buffered, whether or not it was consumed. */
+  readonly seenBuffered = new Set<number>();
+  /** Generations consumed with `next()`, in order. */
+  readonly consumedGenerations: number[] = [];
+  /** `accessor.size` sampled once per tick — the bounded-buffering measurement. */
+  readonly sizeSamples: number[] = [];
+  /** Disconnects the room caused or observed, with the close code it arrived with, per callback. */
+  readonly disconnects: { kind: 'leave' | 'drop'; sessionId: string; code: number | undefined }[] = [];
+  ticks = 0;
+  clearCalls = 0;
+  consumedCountBeforeClear = -1;
+  consumedCountAfterClear = -1;
+  throttleSignals = 0;
+  /** When the room first sent the backlog signal, for measuring the sender's in-flight window. */
+  firstSignalAt = 0;
+  sanitizeCalls = 0;
+  readonly sanitizedGenerations: number[] = [];
+  sanitizedAndStepped = 0;
+  consumeBudget = 1;
+  private session: string | undefined;
+
+  override onCreate(options: OverflowRoomOptions = {}): void {
+    this.autoDispose = false;
+    this.setState(new RegionSchema());
+    this.policy = options.policy ?? 'none';
+    this.threshold = options.threshold ?? 2;
+    this.bufferMaxSize = options.bufferMaxSize ?? 4;
+    this.consumeBudget = options.consumeBudget ?? 1;
+    if (options.maxMessagesPerSecond !== undefined) this.maxMessagesPerSecond = options.maxMessagesPerSecond;
+
+    // `seqField` is the one declaration option that could change what an acknowledgement means, so the
+    // scenario that tests it names the application's own monotonic field instead of the implicit order.
+    // `sanitize` is tested for the opposite reason: it is the only hook that runs at admission, before a
+    // frame can join the backlog, and the scenario measures what that hook is allowed to do.
+    const sanitizer = this.policy === 'sanitize'
+      ? ((input: DirectInputFrame): void => {
+        // `SanitizeInput<I>` is `(input: I) => void`: it mutates in place and returns nothing, so there
+        // is no "reject" to return. The probe neutralises the intent to make that visible in the record.
+        this.sanitizeCalls += 1;
+        this.sanitizedGenerations.push(input.generation);
+        input.directIntent = false;
+        input.moveX = 0;
+        input.moveZ = 0;
+      })
+      : undefined;
+
+    this.inputs = this.defineInput(DirectInputSchema, {
+      bufferMaxSize: this.bufferMaxSize,
+      ...(this.policy === 'seqfield' ? { seqField: 'generation' } : {}),
+      ...(sanitizer === undefined ? {} : { sanitize: sanitizer }),
+    });
+
+    this.setFixedTimestep((): void => {
+      this.step();
+    }, options.tickRate ?? 20);
+
+    overflowRooms.push(this);
+  }
+
+  override onJoin(client: ServerClient): void {
+    this.session = client.sessionId;
+  }
+
+  override onLeave(client: ServerClient, code?: number): void {
+    this.disconnects.push({ kind: 'leave', sessionId: client.sessionId, code });
+  }
+
+  override onDrop(client: ServerClient, code?: number): void {
+    this.disconnects.push({ kind: 'drop', sessionId: client.sessionId, code });
+  }
+
+  /** One authoritative step. */
+  private step(): void {
+    this.ticks += 1;
+    const sessionId = this.session;
+    if (sessionId === undefined) return;
+    const accessor = this.inputs?.get(sessionId);
+    if (accessor === undefined) return;
+
+    this.sizeSamples.push(accessor.size);
+    for (const frame of accessor.peek()) this.seenBuffered.add(frame.generation);
+
+    const client = this.clients.find((candidate: ServerClient): boolean => candidate.sessionId === sessionId);
+
+    if (accessor.size >= this.threshold && client !== undefined) {
+      if (this.policy === 'clear') {
+        this.consumedCountBeforeClear = accessor.consumedCount;
+        accessor.clear();
+        this.clearCalls += 1;
+        this.consumedCountAfterClear = accessor.consumedCount;
+        this.applied.push({ kind: 'neutral', generation: -1, seq: this.consumedCountAfterClear });
+        return;
+      }
+      if (this.policy === 'leave') {
+        client.leave(4008);
+        return;
+      }
+      if (this.policy === 'throttle') {
+        if (this.firstSignalAt === 0) this.firstSignalAt = Date.now();
+        this.send(client, 'udg-backlog', { on: true });
+        this.throttleSignals += 1;
+      }
+    }
+
+    if (this.policy === 'drain' || this.policy === 'take') {
+      this.stepConsume(accessor);
+      return;
+    }
+
+    const frame = accessor.next();
+    if (frame === undefined) {
+      this.applied.push({ kind: 'neutral', generation: -1, seq: accessor.consumedCount });
+      return;
+    }
+    this.consumedGenerations.push(frame.generation);
+    this.simulated.push(frame.generation);
+    if (this.policy === 'sanitize' && this.sanitizedGenerations.includes(frame.generation)) this.sanitizedAndStepped += 1;
+    this.applied.push({ kind: 'frame', generation: frame.generation, seq: accessor.consumedCount });
+  }
+
+  /**
+   * The two consume primitives the tick can use instead of `next()`.
+   *
+   * `take(n)` is the bounded form the pinned declarations recommend for a shared world ("`take` a bounded
+   * few and sub-step the solver per input. The ack then === inputs actually simulated"). `drain()` is the
+   * form the same comment warns against for a shared world ("`drain()`-then-apply-latest would silently
+   * jump the ack past inputs the server never simulated") — measured here so the warning is evidence and
+   * not a quotation.
+   */
+  private stepConsume(accessor: { drain(): DirectInputFrame[]; take(n: number): DirectInputFrame[] }): void {
+    if (this.policy === 'drain') {
+      const frames = accessor.drain();
+      const newest = frames.at(-1);
+      if (newest === undefined) {
+        this.applied.push({ kind: 'neutral', generation: -1, seq: this.counters().consumedCount });
+        return;
+      }
+      this.simulated.push(newest.generation);
+      for (const frame of frames) if (frame.generation !== newest.generation) this.drainedWithoutStep.push(frame.generation);
+      this.applied.push({ kind: 'frame', generation: newest.generation, seq: this.counters().consumedCount });
+      return;
+    }
+
+    const frames = accessor.take(this.consumeBudget);
+    if (frames.length === 0) {
+      this.applied.push({ kind: 'neutral', generation: -1, seq: this.counters().consumedCount });
+      return;
+    }
+    for (const frame of frames) {
+      this.simulated.push(frame.generation);
+      this.applied.push({ kind: 'frame', generation: frame.generation, seq: this.counters().consumedCount });
+    }
+  }
+
+  /** Identities still buffered at read time. */
+  bufferedGenerations(): number[] {
+    const accessor = this.session === undefined ? undefined : this.inputs?.get(this.session);
+    return accessor === undefined ? [] : accessor.peek().map((frame: DirectInputFrame): number => frame.generation);
+  }
+
+  /** The public counters at read time. */
+  counters(): { size: number; consumedCount: number } {
+    const accessor = this.session === undefined ? undefined : this.inputs?.get(this.session);
+    return accessor === undefined ? { size: -1, consumedCount: -1 } : { size: accessor.size, consumedCount: accessor.consumedCount };
+  }
+}
+
 /** Session-identity evidence for PR-12: which identities the server and the client each expose. */
 export class SessionRoom extends Room<{ state: RegionState }> {
   readonly joins: string[] = [];
@@ -236,6 +448,7 @@ export class SessionRoom extends Room<{ state: RegionState }> {
 export const tickRooms: TickRoom[] = [];
 export const inputRooms: InputRoom[] = [];
 export const sessionRooms: SessionRoom[] = [];
+export const overflowRooms: OverflowRoom[] = [];
 
 export function lastOf<T>(entries: readonly T[]): T | undefined {
   return entries[entries.length - 1];

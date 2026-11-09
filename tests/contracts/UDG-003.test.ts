@@ -145,8 +145,8 @@ const describeInventory = (entries: readonly { readonly relativeFile: string; re
 };
 
 describe('UDG-003 Phase 0 — probe harness', () => {
-  it('runs the assigned probe ids and nothing else', () => {
-    expect(PROBE_IDS).toEqual(['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12']);
+  it('runs the assigned probe ids plus the authorised overflow investigation, and nothing else', () => {
+    expect(PROBE_IDS).toEqual(['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13']);
     expect(run.probes.map((record) => record.id)).toEqual([...PROBE_IDS]);
   });
 
@@ -613,6 +613,157 @@ describe('UDG-003 Phase 0 — PR-12 epoch and identity (PH0-B2 reclassified: the
   });
 });
 
+describe('UDG-003 Phase 0 — PR-13 overflow postures (the owner-authorised remedy investigation)', () => {
+  interface Scenario {
+    sent: number[];
+    simulated: number[];
+    ackedUnrepresented: number[];
+    unackedUnrepresented: number[];
+    maxBuffered: number;
+    bufferMaxSize: number;
+    ackedCount: number;
+    clientLastProcessed: number;
+    clientSent: number;
+    clientPending: number;
+    throttleSignals: number;
+    signalsReceived: number;
+    drainedWithoutStep: number[];
+    sanitizeCalls: number;
+    sanitizedFramesStepped: number;
+    disconnects: { kind: string; sessionId: string; code: number | undefined }[];
+    clientLeaveCode: number | null;
+    error: string | null;
+  }
+
+  const scenario = (key: string): Scenario => observation<Scenario>('PR-13', key);
+
+  it('reproduces the finding it starts from, and shows the bound is real', () => {
+    const none = scenario('N1_baseline');
+    expect(none.error).toBeNull();
+    expect(none.ackedUnrepresented.length).toBeGreaterThan(0);
+    expect(none.ackedUnrepresented.length).toBeLessThanOrEqual(none.ackedCount);
+    expect(none.maxBuffered).toBeLessThanOrEqual(none.bufferMaxSize);
+  });
+
+  it('shows clear() moves the acknowledgement watermark rather than protecting frames', () => {
+    const cleared = scenario('N2_clear');
+    const bookkeeping = observation<{ clearCalls: number; consumedCountBeforeClear: number; consumedCountAfterClear: number }>('PR-13', 'N2_clear');
+    expect(bookkeeping.clearCalls).toBeGreaterThan(0);
+    expect(bookkeeping.consumedCountAfterClear).toBeGreaterThan(bookkeeping.consumedCountBeforeClear);
+    expect(cleared.ackedUnrepresented.length).toBeGreaterThan(0);
+  });
+
+  it('proves a disconnect stops the watermark lying but arrives too late for a fast sender', () => {
+    const leave = scenario('N3_leave');
+    expect(leave.error).toBeNull();
+    expect(leave.disconnects.length).toBeGreaterThan(0);
+    expect(leave.clientLeaveCode).toBe(4008);
+    // The watermark never passes the end of the seat.
+    expect(leave.clientLastProcessed).toBeLessThan(leave.clientSent);
+    // The residue is explicitly unacknowledged rather than silently represented.
+    expect(leave.unackedUnrepresented.length).toBeGreaterThan(0);
+    expect(leave.clientPending).toBeGreaterThan(0);
+    // And the violation still happened before the tick could act: this is enforcement, not prevention.
+    expect(leave.maxBuffered).toBe(leave.bufferMaxSize);
+    expect(leave.ackedUnrepresented.length).toBeGreaterThan(0);
+  });
+
+  it('proves the library rate ceiling cuts an offender off but must sit against the consume rate', () => {
+    const rate = scenario('N4_rate');
+    expect(rate.error).toBeNull();
+    expect(rate.disconnects.length).toBeGreaterThan(0);
+    expect(rate.disconnects.every((entry) => entry.code === 4002)).toBe(true);
+    expect(rate.ackedUnrepresented.length).toBeGreaterThan(0);
+  });
+
+  it('shows a declared sequence field leaves the acknowledgement a send-order watermark', () => {
+    const seqField = scenario('N5_seqField');
+    expect(seqField.error).toBeNull();
+    expect(seqField.clientLastProcessed).toBeLessThanOrEqual(seqField.clientSent);
+    expect(seqField.ackedUnrepresented.length).toBeGreaterThan(0);
+  });
+
+  it('proves a server signal plus an obeying sender keeps every acknowledgement matched by a step', () => {
+    const signal = scenario('N6_signal');
+    expect(signal.error).toBeNull();
+    expect(signal.throttleSignals).toBeGreaterThan(0);
+    expect(signal.signalsReceived).toBeGreaterThan(0);
+    expect(signal.ackedUnrepresented).toEqual([]);
+    expect(signal.unackedUnrepresented).toEqual([]);
+    expect(signal.disconnects).toEqual([]);
+    const window = observation<{ framesSentInsideSignalWindow: number; headroom: number }>('PR-13', 'N6_signalWindow');
+    expect(window.framesSentInsideSignalWindow).toBeLessThanOrEqual(window.headroom);
+  });
+
+  it('measures the drain() ack jump the pinned declarations warn about, and rejects it', () => {
+    const drain = observation<Scenario>('PR-13', 'N7_drain');
+    expect(drain.error).toBeNull();
+    expect(drain.drainedWithoutStep.length).toBeGreaterThan(0);
+    expect(drain.ackedUnrepresented.length).toBeGreaterThan(0);
+    const rejected = byId.get('PR-13')?.result?.checks.find((check) => check.name === 'N7-drain-then-apply-latest-is-rejected-as-a-remedy');
+    expect(rejected?.ok).toBe(true);
+    expect(rejected?.detail).toContain('prohibition');
+  });
+
+  it('proves the consume budget, not a rejection lever, is what prevents the violation', () => {
+    const below = scenario('N8_takeBudgetOne');
+    const above = scenario('N8_takeBudgetAboveRatio');
+    const rule = observation<{
+      arrivalFramesPerSecond: number;
+      stepRatePerSecond: number;
+      minimumBudget: number;
+      budgetOne: { ackedUnrepresented: number[] };
+      budgetAboveRatio: { ackedUnrepresented: number[]; maxBuffered: number; disconnects: number };
+    }>('PR-13', 'N8_takeBudget');
+    expect(rule.minimumBudget).toBe(2);
+    expect(rule.budgetOne.ackedUnrepresented.length).toBeGreaterThan(0);
+    expect(rule.budgetAboveRatio.ackedUnrepresented).toEqual([]);
+    expect(rule.budgetAboveRatio.disconnects).toBe(0);
+    expect(below.error).toBeNull();
+    expect(above.error).toBeNull();
+    expect(above.ackedUnrepresented).toEqual([]);
+    expect(above.unackedUnrepresented).toEqual([]);
+    expect(above.simulated.length).toBe(above.sent.length);
+  });
+
+  it('shows the only admission-time hook can rewrite but cannot refuse', () => {
+    const sanitise = observation<Scenario>('PR-13', 'N9_sanitize');
+    expect(sanitise.error).toBeNull();
+    expect(sanitise.sanitizeCalls).toBeGreaterThan(0);
+    expect(sanitise.sanitizedFramesStepped).toBeGreaterThan(0);
+    expect(sanitise.ackedUnrepresented.length).toBeGreaterThan(0);
+  });
+
+  it('states the mechanism verdict without claiming compatibility, a gate, or client reconciliation', () => {
+    const verdict = observation<{
+      answer: string;
+      whatPreventsTheViolation: string[];
+      whatOnlyCutsAnOffenderOff: string[];
+      whatDoesNotWork: string[];
+      smallestArchitecturalDecision: string[];
+      sdkProofVersusSpikeProof: { sdkProves: string[]; spikeMustStillProve: string[] };
+    }>('PR-13', 'mechanismVerdict');
+    expect(verdict.answer).toContain('take(n)');
+    expect(verdict.answer).toContain('no');
+    expect(verdict.whatDoesNotWork.join(' ')).toContain('clear()');
+    expect(verdict.whatDoesNotWork.join(' ')).toContain('seqField');
+    expect(verdict.whatDoesNotWork.join(' ')).toContain('sanitize()');
+    expect(verdict.whatDoesNotWork.join(' ')).toContain('drain()');
+    expect(verdict.smallestArchitecturalDecision.length).toBeGreaterThanOrEqual(3);
+    // The SDK proves server-side accounting only; client convergence stays UDG-SPIKE-001 work.
+    expect(verdict.sdkProofVersusSpikeProof.spikeMustStillProve.join(' ')).toContain('converges');
+    expect(verdict.sdkProofVersusSpikeProof.spikeMustStillProve.join(' ')).toContain('no part of this probe observes client reconciliation');
+
+    const text = JSON.stringify(byId.get('PR-13')?.result ?? {});
+    expect(text).not.toContain('compatible');
+    expect(text).not.toContain('Gate A');
+    // Nothing in this investigation changes the Phase 0 verdict surface.
+    expect(run.compatibility.stackCompatibility).toBe('not-established');
+    expect(byId.get('PR-0')?.result?.verdict).toBe('blocked');
+    expect(byId.get('PR-13')?.result?.verdict).toBe('pass');
+  });
+});
+
 describe('UDG-003 Phase 0 — boundary and evidence hygiene', () => {
   it('keeps the probe tree free of escape hatches and private package paths', () => {
     const sources = probeSources(ROOT);
@@ -695,8 +846,8 @@ describe('UDG-003 Phase 0 — boundary and evidence hygiene', () => {
       typecheck: { purpose: string };
     };
     expect(index.probes.map((probe) => probe.id)).toEqual([...PROBE_IDS]);
-    expect(index.probes.map((probe) => probe.verdict)).toEqual(['blocked', 'pass', 'pass', 'pass', 'pass', 'pass']);
-    expect(index.probes.filter((probe) => probe.ok).map((probe) => probe.id)).toEqual(['PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12']);
+    expect(index.probes.map((probe) => probe.verdict)).toEqual(['blocked', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass']);
+    expect(index.probes.filter((probe) => probe.ok).map((probe) => probe.id)).toEqual(['PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13']);
     expect(index.compatibility.stackCompatibility).toBe('not-established');
     expect(index.compatibility.pr0).toBe('blocked');
     expect(index.emit.purpose).toContain('--noCheck');
