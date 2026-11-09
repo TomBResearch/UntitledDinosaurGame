@@ -365,13 +365,26 @@ PR-0 is blocked and the stack is `not-established`. Both evidence bundles from t
 (`UDG-001-2026-11-09T20-13-02-455Z-af29668a`, `UDG-002-2026-11-09T20-13-55-141Z-af29668a`) verify with
 **zero issues**.
 
-Retention is unchanged in kind: the host store `/workspace/udg-evidence/ci-run-42690547977` holds both
+Retention is unchanged in kind. The host store `/workspace/udg-evidence/ci-run-42690547977` holds both
 bundles, the `probes/` result directory and the runner log, alongside the per-run `udg-evidence` workflow
-artefact. The durable inventory chain extends to **v16** — 1 488 files, tip
-`98db2f6d915940ab41ea31e6e1740a911402c1fa0620bbd6523d3f450d79194d`, superseding v15
-`72b1f873425529c630a2e8f88d13530d3e2fd95237f8ef84a303da2add985d5f`; the chain v9 → v16 verifies. Records
-cite the chain, never a tip asserted from a record. **No release, tag, archive or storage location was
-created, replaced or deleted**, and **D4 remains undesignated**.
+artefact; both bundles verify with zero issues, as do those of the documentation-only follow-up run
+[42691770887](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42691770887) (`638898b`,
+success — recorded here because a docs-only push still produces bundles, and it is retained as
+`ci-run-42691770887`).
+
+The durable inventory is a chain, and this record deliberately does not present itself as the tip of it:
+each version hashes the previous file, so the current tip is whatever `inventory.json` says when the store
+is read, and it is verified by walking `supersedes` rather than by trusting a record. Entries added while
+preparing this revision: **v16** (1 488 files, superseding v15
+`72b1f873425529c630a2e8f88d13530d3e2fd95237f8ef84a303da2add985d5f`) added the revision-2 run and the
+correction record; **v17** (1 556 files, superseding v16
+`98db2f6d915940ab41ea31e6e1740a911402c1fa0620bbd6523d3f450d79194d`) added the follow-up run. The chain
+v9 → v17 verified when this was written, and each of these records cites the chain, never a tip asserted
+from a record.
+
+**No release, tag, archive or storage location was created, replaced or deleted for this revision**, and
+**D4 — the independent backup destination — remains undesignated**; nothing in this revision provisions
+storage, which the owner has not authorised.
 
 ### 9.8 What this revision did not do
 
