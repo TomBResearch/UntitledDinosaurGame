@@ -11,7 +11,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, cpSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, cpSync, readdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -69,6 +69,56 @@ const record = (path: string, value: unknown): void => {
 
 const sha256File = (absolutePath: string): string =>
   createHash('sha256').update(readFileSync(absolutePath)).digest('hex');
+
+/**
+ * Which workspaces have an implementation, and therefore may export more than an empty module.
+ *
+ * This is a status list, not an exemption list: it is derived from the contract files, so a workspace
+ * cannot declare itself implemented. A task that starts adds its package here as part of the change
+ * that gives it real exports, and the entry map in its contract is what limits those exports.
+ */
+const IMPLEMENTED_WORKSPACES: ReadonlySet<string> = new Set(
+  ['@udg/protocol', '@udg/config'].filter((name) => {
+    const taskFile = name === '@udg/protocol' ? 'docs/contracts/UDG-002.md' : 'docs/contracts/UDG-002.md';
+    return !readFileSync(join(ROOT, taskFile), 'utf8').includes('Implementation status: **Not Started**');
+  }),
+);
+
+/**
+ * The fixture ids the boundary fixture directory declares.
+ *
+ * Read from each fixture.json rather than derived from the directory name, because the id carries its
+ * owning task (`UDG-002-boundaries-domain-no-schema`) and a later task's fixture must be counted with
+ * the name it actually reports.
+ */
+const listBoundaryFixtures = (): string[] => {
+  const root = join(ROOT, 'tests', 'fixtures', 'boundaries');
+  return readdirSync(root)
+    .filter((entry) => existsSync(join(root, entry, 'fixture.json')))
+    .map((entry) => ({ entry, manifest: json<{ fixtureId: string; kind: string }>(`tests/fixtures/boundaries/${entry}/fixture.json`) }))
+    // One directory under tests/fixtures/boundaries is the strict-compiler fixture, which the boundary
+    // checker does not run; it is asserted by its own test in this suite.
+    .filter((item) => item.manifest.kind === 'dependency-boundaries')
+    .map((item) => item.manifest.fixtureId)
+    .sort();
+};
+
+/** The entry-point table in docs/contracts/protocol-v1.md, in `@scope/name/subpath` form. */
+const readContractEntryMap = (): Set<string> => {
+  const path = join(ROOT, 'docs/contracts/protocol-v1.md');
+  if (!existsSync(path)) return new Set();
+  const block = readFileSync(path, 'utf8').split('<!-- entry-map:begin -->')[1]?.split('<!-- entry-map:end -->')[0];
+  if (block === undefined) throw new Error('protocol-v1.md exists but declares no entry map block');
+  const entries = new Set<string>();
+  for (const line of block.split('\n')) {
+    const match = /^\|\s*`(@udg\/[a-z-]+)`\s*\|\s*`([^`]+)`\s*\|/.exec(line);
+    if (match?.[1] === undefined || match[2] === undefined) continue;
+    // Normalise to the *specifier* a consumer writes: the table records './domain', the import is
+    // '@udg/protocol/domain'. Keeping one form stops a comparison silently matching nothing.
+    entries.add(match[2] === '.' ? match[1] : `${match[1]}${match[2].replace(/^\./, '')}`);
+  }
+  return entries;
+};
 
 const json = <T>(relative: string): T => JSON.parse(readFileSync(join(ROOT, relative), 'utf8')) as T;
 
@@ -203,7 +253,17 @@ describe('workspace shape', () => {
     record('workspaces.eachHasTypecheckAndBuild', true);
   });
 
-  it('exports a single empty module per game workspace and the documented entry map', () => {
+  it('exports only the subpaths its owning task has earned', () => {
+    // UDG-001 created eight empty skeletons, so the original assertion was "every workspace exports
+    // exactly "." and its index says export {}". That was an assertion about an empty repository, and it
+    // would now fail for the right reason: UDG-002 legitimately implemented @udg/protocol and
+    // @udg/config. The invariant that actually matters is preserved instead, and is stricter:
+    //
+    //  - every workspace still resolves "." to its own built index;
+    //  - a workspace owned by a task that has not started exports nothing but itself and still compiles
+    //    to an empty module, so no task can smuggle surface area in;
+    //  - a workspace with an implementation may export only the subpaths its owning contract documents.
+    const entryMap = readContractEntryMap();
     for (const workspace of WORKSPACES) {
       const manifest = json<Manifest>(`${workspace.dir}/package.json`);
       const entry = manifest.exports['.'];
@@ -212,15 +272,29 @@ describe('workspace shape', () => {
         expect(entry.types, workspace.name).toBe('./dist/index.d.ts');
         expect(entry.default, workspace.name).toBe('./dist/index.js');
       }
-      expect(Object.keys(manifest.exports), workspace.name).toEqual(['.']);
+
+      // @udg/checks is repository tooling rather than a game workspace: it has always had a real
+      // surface, and its independence from the game packages is asserted separately below.
+      if (workspace.name === '@udg/checks') continue;
+
+      const subpaths = Object.keys(manifest.exports).filter((subpath) => subpath !== '.');
+      if (!IMPLEMENTED_WORKSPACES.has(workspace.name)) {
+        expect(subpaths, `${workspace.name} belongs to a task that has not started`).toEqual([]);
+        const source = readFileSync(join(ROOT, workspace.dir, 'src', 'index.ts'), 'utf8');
+        expect(source, workspace.name).toContain('export {};');
+        expect(source, workspace.name).toContain(workspace.ownerTask);
+        continue;
+      }
+
+      const documented = [...entryMap].filter((entry2) => entry2 === workspace.name || entry2.startsWith(`${workspace.name}/`));
+      expect(documented.length, `${workspace.name} is implemented but documents no entry points`).toBeGreaterThan(0);
+      const undocumented = Object.keys(manifest.exports)
+        .map((subpath) => (subpath === '.' ? workspace.name : `${workspace.name}${subpath.replace(/^\./, '')}`))
+        .filter((entry2) => !documented.includes(entry2));
+      expect(undocumented, `${workspace.name} exports subpaths its contract does not document`).toEqual([]);
     }
-    // Game workspaces are skeletons: they must export nothing until their owning task runs.
-    for (const workspace of WORKSPACES.filter((entry) => entry.name !== '@udg/checks')) {
-      const source = readFileSync(join(ROOT, workspace.dir, 'src', 'index.ts'), 'utf8');
-      expect(source, workspace.name).toContain('export {};');
-      expect(source, workspace.name).toContain(workspace.ownerTask);
-    }
-    record('workspaces.emptySkeletons', true);
+    record('workspaces.emptySkeletons', WORKSPACES.filter((entry) => !IMPLEMENTED_WORKSPACES.has(entry.name)).length);
+    record('workspaces.implemented', [...IMPLEMENTED_WORKSPACES].sort());
   });
 
   it('keeps @udg/checks independent of every other workspace', () => {
@@ -231,28 +305,74 @@ describe('workspace shape', () => {
     record('checks.independentOfGameWorkspaces', true);
   });
 
-  it('records the dependency register and keeps game libraries unselected (clarification C-02)', () => {
+  it('records the dependency register and keeps deferred libraries honest (clarification C-02)', () => {
     const registerPath = 'docs/integration/dependencies.json';
     expect(existsSync(join(ROOT, registerPath)), registerPath).toBe(true);
     const register = json<DependencyRegister>(registerPath);
     expect(register.schemaVersion).toBe(1);
     expect(register.lockfile.sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(register.runtime.node.version).toBe(process.version);
     expect(register.runtime.pnpm.cliVersion).toBe('12.18.0');
     expect(register.packages.length).toBeGreaterThan(0);
 
-    for (const pending of register.pendingGameLibraries) {
-      expect(pending.status, pending.name).toBe('not-selected');
-      expect(pending.ownerTask, pending.name).toMatch(/^UDG-/);
+    // The runtime assertion used to be `register.runtime.node.version === process.version`, which only
+    // proved that the file was written on this machine. The contract's requirement is that the recorded
+    // runtime equals the *pinned* runtime, which is a statement about the repository and holds on a
+    // runner that recorded the file months ago.
+    const pinned = readFileSync(join(ROOT, '.node-version'), 'utf8').trim();
+    expect(`v${pinned}`, 'the register must record the pinned Node version').toBe(register.runtime.node.version);
+    for (const pinLocation of ['.node-version', 'package.json engines', '.github/workflows/ci.yml']) {
+      expect(register.runtime.node.pinnedIn, pinLocation).toContain(pinLocation);
     }
-    const schema = register.pendingGameLibraries.find((entry) => entry.name === '@colyseus/schema');
-    expect(schema?.ownerTask).toBe('UDG-002');
+
+    // Deferred library groups are the interesting part: a group that a task has selected must be present
+    // at exactly the recorded version and licence, and a group that is still deferred must be absent from
+    // the graph and from the lockfile. "not-selected" used to be asserted for all seven groups, which
+    // became false the moment UDG-002 pinned @colyseus/schema.
+    const installed = new Map(register.packages.map((entry) => [entry.name, entry]));
+    const selectedGroups = register.pendingGameLibraries.filter((entry) => entry.status === 'selected');
+    const deferredGroups = register.pendingGameLibraries.filter((entry) => entry.status !== 'selected');
+    expect(selectedGroups.length + deferredGroups.length).toBe(register.pendingGameLibraries.length);
 
     const lockfile = readFileSync(join(ROOT, 'pnpm-lock.yaml'), 'utf8');
-    for (const forbidden of ['@colyseus/', '@dimforge/', 'recast-navigation', '@babylonjs/']) {
-      expect(lockfile.includes(forbidden), forbidden).toBe(false);
-      expect(existsSync(join(ROOT, 'node_modules', forbidden.replace(/\/$/, ''))), forbidden).toBe(false);
+    for (const group of selectedGroups) {
+      expect(group.ownerTask, group.name).toMatch(/^UDG-/);
+      expect(group.selectedPackages.length, group.name).toBeGreaterThan(0);
+      for (const selected of group.selectedPackages) {
+        const entry = installed.get(selected.name);
+        expect(entry, `${selected.name} is recorded as selected but is not a declared package`).toBeDefined();
+        expect(entry?.installedVersion, selected.name).toBe(selected.version);
+        expect(entry?.licence, selected.name).toBe(selected.licence);
+        // A selected group must be declared exactly, never as a range.
+        const specifiers = register.workspaces
+          .flatMap((workspace) => Object.entries(workspace.dependencies ?? {}).filter(([name]) => name === selected.name))
+          .map(([, specifier]) => specifier);
+        expect(specifiers.length, `${selected.name} must be declared by some workspace`).toBeGreaterThan(0);
+        for (const specifier of specifiers) {
+          expect(/^[\w@/.-]+$/.test(specifier) || /^workspace:\*$/.test(specifier), `${selected.name} ${specifier}`).toBe(true);
+        }
+      }
     }
+
+    for (const group of deferredGroups) {
+      expect(group.status, group.name).toBe('not-selected');
+      expect(group.ownerTask, group.name).toMatch(/^UDG-/);
+      expect(group.selectedPackages, group.name).toEqual([]);
+    }
+    // The deferred scopes themselves must stay out of the graph, with the one exception that a selected
+    // group names exactly.
+    const selectedNames = new Set(selectedGroups.flatMap((group) => group.selectedPackages.map((entry) => entry.name)));
+    for (const forbidden of ['@colyseus/core', '@colyseus/sdk', '@colyseus/testing', '@dimforge/', 'recast-navigation', '@babylonjs/', 'react']) {
+      expect(lockfile.includes(forbidden), forbidden).toBe(false);
+      const present = [...installed.keys()].filter((name) => name.startsWith(forbidden.replace(/\/$/, '')));
+      expect(present.filter((name) => !selectedNames.has(name)), forbidden).toEqual([]);
+    }
+    // @colyseus/schema is allowed only because a group names it and its owning task has started.
+    const startedTasks = new Set(selectedGroups.map((group) => group.ownerTask));
+    for (const group of selectedGroups) {
+      const contract = readFileSync(join(ROOT, 'docs/contracts', `${group.ownerTask}.md`), 'utf8');
+      expect(contract, `${group.ownerTask} owns a selected library but is not started`).not.toContain('Implementation status: **Not Started**');
+    }
+    expect(startedTasks.size).toBe(selectedGroups.length);
 
     for (const action of register.ciActions) {
       expect(action.pinnedCommit, action.repo).toMatch(/^[0-9a-f]{40}$/);
@@ -266,9 +386,12 @@ describe('workspace shape', () => {
     expect(fresh.packages.map((entry) => `${entry.name}@${entry.installedVersion}`)).toEqual(
       register.packages.map((entry) => `${entry.name}@${entry.installedVersion}`),
     );
-    expect(fresh.pendingGameLibraries.length).toBe(register.pendingGameLibraries.length);
+    expect(fresh.pendingGameLibraries.map((entry) => `${entry.name}=${entry.status}`)).toEqual(
+      register.pendingGameLibraries.map((entry) => `${entry.name}=${entry.status}`),
+    );
     record('dependencyRegister.current', true);
-    record('dependencyRegister.pendingLibraryGroups', register.pendingGameLibraries.length);
+    record('dependencyRegister.selectedGroups', selectedGroups.map((group) => group.name));
+    record('dependencyRegister.deferredGroups', deferredGroups.length);
     record('dependencyRegister.ciActionsPinned', register.ciActions.length);
   });
 
@@ -342,8 +465,16 @@ describe('dependency boundary checker', () => {
 
     const negative = lines.filter((line) => line.includes('[reject]'));
     const positive = lines.filter((line) => line.includes('[allow]'));
-    expect(positive.length).toBe(1);
-    expect(negative.length).toBeGreaterThanOrEqual(5);
+    // The counts used to be literals tied to the first fixture set. They are derived now, so a later
+    // task that adds a boundary fixture is checked against the fixtures that exist rather than against
+    // a number frozen in UDG-001, while an empty or single-fixture suite still fails.
+    const declared = listBoundaryFixtures();
+    expect(lines.length, 'every declared boundary fixture must produce exactly one result line').toBe(declared.length);
+    expect(positive.length, 'a suite with no allow fixture proves nothing').toBeGreaterThanOrEqual(1);
+    expect(negative.length, 'a suite with no reject fixture proves nothing').toBeGreaterThanOrEqual(5);
+    expect(positive.length + negative.length).toBe(declared.length);
+    const reported = lines.map((line) => /(?:PASS|FAIL) (\S+)/.exec(line)?.[1] ?? '').sort();
+    expect(reported).toEqual(declared);
     // Every reject fixture must be justified by at least one concrete rule id, not a bare failure.
     for (const line of negative) {
       expect(line).toMatch(/actual=[A-Z-]+(?:\|[A-Z-]+)*/);
@@ -411,8 +542,25 @@ describe('fixture manifests', () => {
   it('validates every manifest, pinned file hash and configuration hash', () => {
     const result = run(['node', join(DIST, 'fixtures.js'), '--root', 'tests/fixtures'], ROOT);
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain('fixture validation OK: 7 fixture(s)');
-    record('fixtureManifests.total', 7);
+    // "7 fixture(s)" was a fact about the first fixture set, not an invariant. The invariant is that
+    // the checker reports what it actually discovered, that the discovery is non-empty, and that the
+    // set includes the fixtures this repository contractually requires.
+    const reported = /fixture validation OK: (\d+) fixture\(s\)/.exec(result.stdout)?.[1];
+    expect(reported, `no fixture count in: ${result.stdout}`).toBeTruthy();
+    const total = Number(reported);
+    expect(total).toBeGreaterThan(0);
+    expect(total).toBeGreaterThanOrEqual(7);
+    for (const required of [
+      'UDG-001-boundaries-allowed',
+      'UDG-001-boundaries-cycle',
+      'UDG-001-strict-type-errors',
+    ]) {
+      expect(result.stdout, `${required} must still be validated`).toContain(required);
+    }
+    // The protocol fixtures are standalone files rather than manifest directories; they must be
+    // discovered too, or "fixture validation OK" would silently ignore the protocol case set.
+    expect(total).toBeGreaterThan(listBoundaryFixtures().length);
+    record('fixtureManifests.total', total);
     record('fixtureManifests.allValid', true);
   });
 
@@ -458,24 +606,38 @@ describe('strict compiler enforcement', () => {
 });
 
 describe('task and suite dispatch', () => {
-  it('plans the existing UDG-001 suite and refuses every suite that does not exist yet', () => {
+  it('plans every task that has a suite and refuses every task that does not', () => {
+    // The original assertion was `plans === ['UDG-001']`, which is a snapshot of the first day. The
+    // invariant behind it is what UDG-001's contract actually requires: a task with a suite is planned,
+    // a task without one is refused with exit code 2, and the two sets are exact complements, so no task
+    // can be neither planned nor refused and no task can be planned on an absent suite.
     const plans: string[] = [];
     const refusals: string[] = [];
     for (const taskId of CONTRACT_TASK_IDS) {
       const decision = decideContractRun(ROOT, taskId);
+      const suiteOnDisk = existsSync(join(ROOT, 'tests', 'contracts', `${taskId}.test.ts`));
       if (decision.plan !== undefined) {
         plans.push(taskId);
-        expect(taskId).toBe('UDG-001');
-        expect(planContractRun(taskId).suitePath).toBe('tests/contracts/UDG-001.test.ts');
+        expect(suiteOnDisk, `${taskId} is planned but has no suite on disk`).toBe(true);
+        expect(planContractRun(taskId).suitePath, taskId).toBe(`tests/contracts/${taskId}.test.ts`);
         continue;
       }
       refusals.push(taskId);
+      expect(suiteOnDisk, `${taskId} has a suite on disk but is refused`).toBe(false);
       expect(decision.exitCode, taskId).toBe(2);
       expect(decision.message, taskId).toContain(taskId);
       expect(decision.message, taskId).toContain('refuses to report success');
     }
-    expect(plans).toEqual(['UDG-001']);
-    expect(refusals.length).toBe(CONTRACT_TASK_IDS.length - 1);
+
+    const withSuites = CONTRACT_TASK_IDS.filter((taskId) => existsSync(join(ROOT, 'tests', 'contracts', `${taskId}.test.ts`))).sort();
+    expect(plans.sort()).toEqual(withSuites);
+    expect(plans).toContain('UDG-001');
+    // The sets must partition the contract edition: a task in neither set would be dispatched by
+    // accident, and a task in both would be a suite that both runs and refuses.
+    expect(new Set([...plans, ...refusals]).size).toBe(CONTRACT_TASK_IDS.length);
+    expect(plans.filter((taskId) => refusals.includes(taskId))).toEqual([]);
+    expect(refusals.length).toBe(CONTRACT_TASK_IDS.length - plans.length);
+    record('dispatch.plannedTasks', { count: plans.length, list: plans });
     record('dispatch.refusedTasks', refusals.length);
   });
 
@@ -491,7 +653,16 @@ describe('task and suite dispatch', () => {
   });
 
   it('refuses commands owned by later tasks with an attributed reason', () => {
-    const guarded = ['test:e2e', 'test:spike', 'test:unit', 'assets:build', 'assets:verify'] as const;
+    // The guarded list is derived from the dispatcher rather than repeated here, so a command that
+    // gains a real suite (test:unit did, in UDG-002) stops being asserted as refused, and a newly
+    // guarded command cannot be added without this test covering it.
+    const usage = guardUnavailable(undefined, []).message;
+    const guarded = usage.replace('usage: ', '').trim().split(/\s*\|\s*/).filter((entry) => entry.length > 0).sort();
+    expect(guarded.length).toBeGreaterThan(0);
+    expect(guarded).toContain('test:e2e');
+    expect(guarded).toContain('test:spike');
+
+    const rootScripts = json<{ scripts: Record<string, string> }>('package.json').scripts;
     for (const command of guarded) {
       const guard = guardUnavailable(command, ['--suite', 'camera']);
       expect(guard.exitCode, command).toBe(1);
@@ -501,19 +672,53 @@ describe('task and suite dispatch', () => {
 
       const cli = run(['node', join(DIST, 'dispatch.js'), command], ROOT);
       expect(cli.status, command).toBe(1);
+      expect(`${cli.stdout}${cli.stderr}`, command).toContain('owning task');
+
+      // The root manifest must route the guarded command through the dispatcher, so the refusal is what
+      // `pnpm <command>` actually does rather than what a helper would say if it were called.
+      const script = rootScripts[command];
+      expect(script, `pnpm ${command} must exist`).toBeTruthy();
+      expect(script, `pnpm ${command} must be dispatched`).toContain(`dispatch.js ${command}`);
     }
+
+    // A command that has since been implemented must no longer be guarded, or a real suite would be
+    // reported as unavailable.
+    expect(guarded).not.toContain('test:unit');
+    expect(rootScripts['test:unit']).toContain('vitest');
+
     expect(guardUnavailable('test:whatever', []).exitCode).toBe(2);
-    record('dispatch.guardedCommands', guarded.length);
+    record('dispatch.guardedCommands', { count: guarded.length, list: guarded });
   });
 
   it('refuses an unpopulated task suite through the real command line', () => {
-    const cli = run(['node', join(DIST, 'run-contract.js'), '--task', 'UDG-002'], ROOT);
+    // A task whose contract exists but whose suite does not. UDG-002 has a suite now, so the earlier
+    // choice of task id is stale by design; the disposable tree below keeps the demonstration available
+    // even once every real contract task has a suite, because that is the case being proved.
+    const withoutSuite = CONTRACT_TASK_IDS.find((taskId) => !existsSync(join(ROOT, 'tests', 'contracts', `${taskId}.test.ts`)));
+    expect(withoutSuite, 'the contract edition must still contain unimplemented tasks').toBeTruthy();
+
+    const cli = run(['node', join(DIST, 'run-contract.js'), '--task', withoutSuite as string], ROOT);
     expect(cli.status).toBe(2);
-    expect(cli.stderr).toContain('UDG-002');
-    expect(cli.stderr).toContain('docs/contracts/UDG-002.md');
+    expect(cli.stderr).toContain(withoutSuite as string);
+    expect(cli.stderr).toContain(`docs/contracts/${withoutSuite as string}.md`);
     expect(cli.stdout).not.toContain('Test Files  1 passed');
     record('missingSuite.refused', true);
     record('missingSuite.exitCode', cli.status);
+
+    // Same proof on a synthetic root, so the guarantee does not depend on the repository happening to
+    // contain an unimplemented task: a contract file with no suite must still be refused, not skipped.
+    const scratch = tempDir('live-refusal');
+    try {
+      mkdirSync(join(scratch, 'docs', 'contracts'), { recursive: true });
+      writeFileSync(join(scratch, 'docs', 'contracts', 'UDG-003.md'), '# UDG-003 Synthetic\n');
+      const synthetic = run(['node', join(DIST, 'run-contract.js'), '--task', 'UDG-003'], scratch);
+      expect(synthetic.status).toBe(2);
+      expect(`${synthetic.stdout}${synthetic.stderr}`).toContain('UDG-003');
+      expect(`${synthetic.stdout}${synthetic.stderr}`).toContain('docs/contracts/UDG-003.md');
+      record('missingSuite.syntheticRootRefused', true);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 });
 
@@ -677,6 +882,23 @@ describe('evidence capture schema and verification', () => {
   }
 
   /** Build a bundle with the same writer the capture path uses, then verify it. */
+  /** Every threshold key the plan states, answered so the synthetic bundles isolate one rule each. */
+  const measuredForThresholds = (base: Record<string, unknown>): Record<string, unknown> => {
+    const filled: Record<string, unknown> = structuredClone(base);
+    for (const metric of Object.keys(plan.thresholds)) {
+      const parts = metric.split('.');
+      let cursor = filled;
+      for (const part of parts.slice(0, -1)) {
+        const next = cursor[part];
+        if (typeof next !== 'object' || next === null || Array.isArray(next)) cursor[part] = {};
+        cursor = cursor[part] as Record<string, unknown>;
+      }
+      const leaf = parts[parts.length - 1] as string;
+      if (cursor[leaf] === undefined) cursor[leaf] = 'synthetic';
+    }
+    return filled;
+  };
+
   const buildBundle = (scratch: string, options: BundleOptions = {}): { dir: string; runId: string } => {
     const runId = 'UDG-001-synthetic-00000000';
     const dir = join(scratch, runId);
@@ -714,7 +936,11 @@ describe('evidence capture schema and verification', () => {
       ],
       testCounts: { tests, failures, errors: 0, skipped },
       status,
-      measurements: options.measurements ?? { boundaryFixtures: { total: 6, allMatched: true } },
+      // Verification requires every threshold the plan states to be answered by a measured value. A
+      // default bundle answers all of them, so the cases below isolate the single rule they target
+      // instead of drowning in unrelated unmeasured-threshold issues; a case that passes measurements
+      // explicitly gets exactly what it asked for, including an empty object.
+      measurements: options.measurements === undefined ? measuredForThresholds({ boundaryFixtures: { total: 6, allMatched: true } }) : options.measurements,
     });
     if (options.dropFile !== undefined) rmSync(join(dir, options.dropFile), { force: true });
     return { dir, runId };
@@ -1046,10 +1272,13 @@ describe('CI workflow failure policy', () => {
     return 'success';
   };
 
+  // Step names are asserted by name because the failure-mapping test below is only meaningful if the
+  // steps it names are the steps that exist. They changed once in UDG-002, when capture became a loop
+  // over every task that has a capture plan rather than one hardcoded foundation run.
   const EVIDENCE_STEPS = [
-    'Capture the foundation evidence bundle',
+    'Capture the evidence bundles',
     'Assert the required evidence artefacts exist',
-    'Verify the captured evidence bundle',
+    'Verify the captured evidence bundles',
     'Publish logs and machine-readable results',
   ] as const;
 
@@ -1083,35 +1312,53 @@ describe('CI workflow failure policy', () => {
     const upload = stepNamed('Publish logs and machine-readable results');
     expect(upload?.uses).toMatch(/^actions\/upload-artifact@[0-9a-f]{40}$/);
     expect(upload?.with['if-no-files-found']).toBe('error');
-    expect(upload?.with['name']).toBe('udg-001-evidence');
     expect(upload?.with['retention-days']).toBe('30');
-    // The block scalar must not swallow the sibling keys that follow it.
-    expect((upload?.with['path'] ?? '').split('\n')).toEqual(['artifacts/latest-UDG-001.txt', 'artifacts/UDG-001-*']);
-    const paths = upload?.with['path'] ?? '';
-    expect(paths).toContain('artifacts/latest-UDG-001.txt');
-    expect(paths).toContain('artifacts/UDG-001-*');
     expect(workflow).not.toMatch(/if-no-files-found:\s*(?:warn|ignore)/);
 
-    const capture = stepNamed('Capture the foundation evidence bundle');
+    // Every task with a capture plan must be published, otherwise CI could go green while a bundle that
+    // the plan promised simply never arrives. The globs are checked against the names capture produces.
+    const pathLines = (upload?.with['path'] ?? '').split('\n').map((line) => line.trim()).filter((line) => line.length > 0);
+    expect(pathLines.length).toBeGreaterThanOrEqual(3);
+    const matches = (pattern: string, name: string): boolean =>
+      new RegExp(`^${pattern.split('*').join('.*')}$`).test(name);
+    for (const taskId of Object.keys(CAPTURE_PLANS)) {
+      const covered = ['logs', 'summaries'].map((kind) => {
+        const produced = kind === 'logs' ? `artifacts/latest-${taskId}.txt` : `artifacts/${taskId}-2026-01-01T00-00-00-000Z-abcdef12`;
+        const summarised = `artifacts/${taskId}-ci-summary.json`;
+        const target = kind === 'logs' ? produced : summarised;
+        return pathLines.some((pattern) => matches(pattern, target)) ? 'covered' : `${kind} for ${taskId}`;
+      });
+      expect(covered.filter((entry) => entry !== 'covered'), `${taskId} evidence would not be published`).toEqual([]);
+      // The bundle directory itself must be published, not only its pointer and summary.
+      expect(pathLines.some((pattern) => matches(pattern, `artifacts/${taskId}-2026-01-01T00-00-00-000Z-abcdef12/report.json`))).toBe(true);
+    }
+
+    const capture = stepNamed('Capture the evidence bundles');
     expect(capture?.run).toContain('pnpm evidence:capture');
     expect(capture?.run).toContain('--keep-going'); // full diagnostics on a failing run
+    // Capture iterates the plans, so a task that gains a plan is captured without editing the workflow,
+    // and a workflow that captures nothing at all is an error rather than a quiet success.
+    expect(capture?.run).toContain('evidence.js plans');
+    expect(capture?.run).toContain('for task in');
 
-    const verify = stepNamed('Verify the captured evidence bundle');
+    const verify = stepNamed('Verify the captured evidence bundles');
     expect(verify?.run).toContain('set -euo pipefail');
     expect(verify?.run).toContain('pnpm evidence:verify');
     expect(verify?.run).toContain('pnpm evidence:summary');
+    expect(verify?.run).toContain('artifacts/latest-*.txt');
     record('ci.artifactMissingPolicy', upload?.with['if-no-files-found'] ?? 'missing');
+    record('ci.plansPublished', Object.keys(CAPTURE_PLANS).length);
   });
 
   it('maps every evidence failure to a failed job conclusion', () => {
     expect(jobConclusion({})).toBe('success');
-    expect(jobConclusion({ 'Capture the foundation evidence bundle': 1 })).toBe('failure');
+    expect(jobConclusion({ 'Capture the evidence bundles': 1 })).toBe('failure');
     expect(jobConclusion({ 'Assert the required evidence artefacts exist': 1 })).toBe('failure');
-    expect(jobConclusion({ 'Verify the captured evidence bundle': 1 })).toBe('failure');
+    expect(jobConclusion({ 'Verify the captured evidence bundles': 1 })).toBe('failure');
     expect(jobConclusion({ 'Publish logs and machine-readable results': 1 })).toBe('failure');
     expect(jobConclusion({ 'Verify the committed dependency register': 1 })).toBe('failure');
     // A later evidence step still runs after an earlier failure, so its own failure is reported too.
-    expect(jobConclusion({ 'Capture the foundation evidence bundle': 1, 'Verify the captured evidence bundle': 1 })).toBe('failure');
+    expect(jobConclusion({ 'Capture the evidence bundles': 1, 'Verify the captured evidence bundles': 1 })).toBe('failure');
     record('ci.failureMapping', 'failure');
   });
 
@@ -1127,6 +1374,19 @@ describe('CI workflow failure policy', () => {
       writeFileSync(absolute, content);
     };
 
+    // The step derives its required artefact list from the bundle's own report.json, so the scenarios
+    // have to write real reports. A `{}` report is itself one of the scenarios: a bundle that cannot say
+    // what it must contain must not pass an existence check.
+    const reportFor = (taskId: string, required: readonly string[]) =>
+      JSON.stringify({
+        schemaVersion: 1,
+        taskId,
+        runId: `${taskId}-RUN`,
+        files: required.map((path) => ({ path, sha256: '0'.repeat(64), bytes: 8, required: true })),
+      });
+
+    const universal = ['report.json', 'environment.json', 'commands.json', 'junit.xml', 'build.log', 'checksums.sha256'];
+
     try {
       // 1. Capture never produced a pointer.
       mkdirSync(join(scratch, 'empty/artifacts'), { recursive: true });
@@ -1134,10 +1394,10 @@ describe('CI workflow failure policy', () => {
       expect(empty.status).not.toBe(0);
       expect(`${empty.stdout}${empty.stderr}`).toContain('no run pointer');
 
-      // 2. A pointer exists but the bundle is incomplete and its logs are empty.
+      // 2. A pointer exists, but the bundle is incomplete and its logs are empty.
       write('partial/artifacts/latest-UDG-001.txt', 'artifacts/RUN-PARTIAL\n');
-      for (const file of ['report.json', 'environment.json', 'commands.json', 'boundary-report.json', 'build.log', 'checksums.sha256']) {
-        write(`partial/artifacts/RUN-PARTIAL/${file}`, '{}\n');
+      for (const file of universal.filter((name) => name !== 'junit.xml')) {
+        write(`partial/artifacts/RUN-PARTIAL/${file}`, file === 'report.json' ? reportFor('UDG-001', universal) : 'x\n');
       }
       mkdirSync(join(scratch, 'partial/artifacts/RUN-PARTIAL/logs'), { recursive: true });
       write('partial/artifacts/RUN-PARTIAL/logs/empty.log', '');
@@ -1146,17 +1406,41 @@ describe('CI workflow failure policy', () => {
       expect(`${partial.stdout}${partial.stderr}`).toContain('required evidence artefact missing or empty: junit.xml');
       expect(`${partial.stdout}${partial.stderr}`).toContain('no non-empty command log');
 
-      // 3. A complete bundle passes.
-      write('whole/artifacts/latest-UDG-001.txt', 'artifacts/RUN-WHOLE\n');
-      for (const file of ['report.json', 'environment.json', 'commands.json', 'junit.xml', 'boundary-report.json', 'build.log', 'checksums.sha256']) {
-        write(`whole/artifacts/RUN-WHOLE/${file}`, '{}\n');
+      // 3. A complete bundle passes, including one whose plan requires a task-specific artefact.
+      const wholeRequired = [...universal, 'measurements/UDG-002.json'];
+      write('whole/artifacts/latest-UDG-002.txt', 'artifacts/RUN-WHOLE\n');
+      for (const file of wholeRequired.filter((name) => name !== 'measurements/UDG-002.json')) {
+        write(`whole/artifacts/RUN-WHOLE/${file}`, file === 'report.json' ? reportFor('UDG-002', wholeRequired) : 'x\n');
       }
+      write('whole/artifacts/RUN-WHOLE/measurements/UDG-002.json', JSON.stringify({ schemaVersion: 1, taskId: 'UDG-002' }));
       write('whole/artifacts/RUN-WHOLE/logs/test.stdout.log', 'output\n');
       const whole = runAssertion(join(scratch, 'whole'));
       expect(whole.status, `${whole.stdout}${whole.stderr}`).toBe(0);
       expect(whole.stdout).toContain('all required evidence artefacts present');
 
-      // 4. A capture that cannot start leaves nothing for the assertion or the uploader to find.
+      // 4. A bundle that declares a required artefact it does not carry is refused by the derived list.
+      write('undeclared/artifacts/latest-UDG-002.txt', 'artifacts/RUN-UNDECLARED\n');
+      for (const file of wholeRequired) {
+        write(
+          `undeclared/artifacts/RUN-UNDECLARED/${file}`,
+          file === 'report.json' ? reportFor('UDG-002', wholeRequired) : file === 'measurements/UDG-002.json' ? 'x\n' : 'x\n',
+        );
+      }
+      rmSync(join(scratch, 'undeclared/artifacts/RUN-UNDECLARED/measurements/UDG-002.json'), { force: true });
+      write('undeclared/artifacts/RUN-UNDECLARED/logs/test.stdout.log', 'output\n');
+      const missingDeclared = runAssertion(join(scratch, 'undeclared'));
+      expect(missingDeclared.status).not.toBe(0);
+      expect(`${missingDeclared.stdout}${missingDeclared.stderr}`).toContain('measurements/UDG-002.json');
+
+      // 5. A report that cannot say what it requires is an error, not a vacuous pass.
+      write('opaque/artifacts/latest-UDG-001.txt', 'artifacts/RUN-OPAQUE\n');
+      for (const file of universal) write(`opaque/artifacts/RUN-OPAQUE/${file}`, file === 'report.json' ? '{}' : 'x\n');
+      write('opaque/artifacts/RUN-OPAQUE/logs/test.stdout.log', 'output\n');
+      const opaque = runAssertion(join(scratch, 'opaque'));
+      expect(opaque.status, `${opaque.stdout}${opaque.stderr}`).not.toBe(0);
+      expect(`${opaque.stdout}${opaque.stderr}`).toContain('cannot derive its requirements');
+
+      // 6. A capture that cannot start leaves nothing for the assertion or the uploader to find.
       const orphan = join(scratch, 'orphan');
       mkdirSync(join(orphan, 'artifacts'), { recursive: true });
       const badCapture = run(['node', join(DIST, 'evidence.js'), 'capture', '--task', 'UDG-999', '--out', 'artifacts'], orphan);
@@ -1204,12 +1488,46 @@ describe('planning records stay consistent with the implementation', () => {
     expect(exists.status, exists.stderr).toBe(0);
     expect(exists.stdout.trim()).toBe('commit');
 
+    // Refinement status is an owner decision that legitimately changes over time, so this suite does
+    // not freeze it. What it does require is that the records agree with each other: every refinement
+    // has a row, an approved row names who approved it and when, and a task may only claim a refinement
+    // as approved if the adoption record says so.
     const adoption = readFileSync(join(ROOT, 'docs/contracts/adoption.md'), 'utf8');
-    expect(adoption).toContain('| P01 | **Approved** |');
-    for (const pending of ['P02', 'P03', 'P04', 'P05', 'P06', 'P07', 'P08', 'P09', 'P10']) {
-      expect(adoption).toContain(`| ${pending} | Pending |`);
+    const rows = [...adoption.matchAll(/^\| (P\d{2}) \| ([^|]+) \| ([^|]+) \|/gm)].map((match) => ({
+      id: match[1] as string,
+      status: (match[2] as string).trim(),
+      approver: (match[3] as string).trim(),
+    }));
+    expect(rows.length).toBe(10);
+    expect(rows.map((row) => row.id)).toEqual([
+      'P01', 'P02', 'P03', 'P04', 'P05', 'P06', 'P07', 'P08', 'P09', 'P10',
+    ]);
+    for (const row of rows) {
+      const approved = row.status.startsWith('**Approved');
+      if (!approved) {
+        expect(row.status, row.id).toBe('Pending');
+        continue;
+      }
+      // An approval that names nobody or no date cannot be checked by a later reviewer.
+      expect(row.approver, `${row.id} is approved but records no approver`).toMatch(/TomBResearch|owner/i);
+      expect(row.approver, `${row.id} is approved but records no date`).toMatch(/\d{4}-\d{2}-\d{2}/);
+    }
+    // UDG-001 depends on P01 specifically; that is its own prerequisite, not a general claim.
+    expect(rows.find((row) => row.id === 'P01')?.status).toContain('Approved');
+
+    // A task file may not claim more adoption than the record grants.
+    for (const row of rows.filter((entry) => entry.status.startsWith('**Approved'))) {
+      expect(adoption, `${row.id} approved without a decision channel`).not.toMatch(new RegExp(`\\| ${row.id} \\|[^\\n]*\\| *None *\\|`));
+    }
+    for (const taskFile of ['UDG-001.md', 'UDG-002.md']) {
+      const contract = readFileSync(join(ROOT, 'docs/contracts', taskFile), 'utf8');
+      for (const claim of contract.matchAll(/(P\d{2}) \u2014 \*\*Approved/g)) {
+        const referenced = rows.find((entry) => entry.id === claim[1]);
+        expect(referenced?.status, `${taskFile} claims ${claim[1]} is approved`).toContain('Approved');
+      }
     }
     record('planning.prerequisiteCommit', prerequisite ?? 'missing');
+    record('planning.approvedRefinements', rows.filter((row) => row.status.startsWith('**Approved')).map((row) => row.id));
   });
 
   it('commits a sanitised evidence summary whose integrity fields are complete (C-03)', () => {
@@ -1338,6 +1656,10 @@ describe('planning records stay consistent with the implementation', () => {
 afterAll(() => {
   const target = process.env['UDG_EVIDENCE_MEASUREMENTS'];
   if (target === undefined || target.length === 0) return;
+  // Ownership check: this suite also runs as a child of another task's capture, and a measurements file
+  // written into another task's bundle would carry this task's numbers under that task's name.
+  const owner = process.env['UDG_EVIDENCE_TASK'];
+  if (owner !== undefined && owner !== 'UDG-001') return;
   const absolute = resolve(target);
   mkdirSync(join(absolute, '..'), { recursive: true });
   writeFileSync(absolute, `${JSON.stringify(measured, null, 2)}\n`);

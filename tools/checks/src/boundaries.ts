@@ -37,6 +37,7 @@ import {
 
 export const BOUNDARY_RULE_IDS = [
   'BOUNDARY-SCHEMA-INTO-DOMAIN',
+  'BOUNDARY-DOMAIN-NO-SCHEMA',
   'BOUNDARY-FIRST-PARTY-FORBIDDEN',
   'BOUNDARY-ENGINE-FORBIDDEN',
   'BOUNDARY-UNDECLARED-DEPENDENCY',
@@ -219,6 +220,20 @@ const FIRST_PARTY_PREFIX = '@udg/';
 export const SCHEMA_ENTRY = '@udg/protocol/schema';
 export const SCHEMA_ALLOWED = new Set(['@udg/protocol', '@udg/server', '@udg/client', '@udg/load-test']);
 
+/**
+ * The engine-free core, and the two routes by which it could acquire a schema runtime.
+ *
+ * `BOUNDARY-SCHEMA-INTO-DOMAIN` already refuses a *package* import of `@udg/protocol/schema` from a
+ * consumer that is not allowed one. It cannot see the two routes that matter inside `@udg/protocol`
+ * itself: a direct `@colyseus/*` import, and a relative import of the sibling `src/schema` modules.
+ * Both stay inside one package, so no cross-package rule fires, and the acceptance criterion
+ * "domain entry points import no schema runtime" would rest on review alone. This rule is what makes
+ * that criterion enforced rather than hoped for.
+ */
+export const SCHEMA_FREE_DIRECTORY = 'packages/protocol/src/domain/';
+export const SCHEMA_SOURCE_DIRECTORY = 'packages/protocol/src/schema/';
+export const SCHEMA_RUNTIME_PREFIX = '@colyseus/';
+
 const NODE_BUILTIN = /^(?:node:|fs$|path$|os$|url$|crypto$|child_process$|worker_threads$|stream$|net$|http$|https$)/;
 
 const ruleFor = (pkg: string): PackageRule | undefined => PACKAGE_RULES.find((rule) => rule.pkg === pkg);
@@ -246,6 +261,11 @@ export const ruleTableHash = (): string =>
   sha256Canonical({
     rules: PACKAGE_RULES.map((rule) => ({ ...rule, denied: [...rule.denied] })),
     schemaAllowed: [...SCHEMA_ALLOWED].sort(),
+    schemaFree: {
+      directory: SCHEMA_FREE_DIRECTORY,
+      schemaSource: SCHEMA_SOURCE_DIRECTORY,
+      runtimePrefix: SCHEMA_RUNTIME_PREFIX,
+    },
     ruleIds: BOUNDARY_RULE_IDS,
   });
 
@@ -364,6 +384,8 @@ const analyseFile = (input: AnalyseInput): { analysis: FileAnalysis; violations:
     violations.push({ ruleId, pkg: info.name, file, line, specifier, detail });
   };
 
+  const schemaFree = file.startsWith(SCHEMA_FREE_DIRECTORY);
+
   for (const imported of extractImports(source)) {
     const { specifier, line, kind } = imported;
 
@@ -400,6 +422,14 @@ const analyseFile = (input: AnalyseInput): { analysis: FileAnalysis; violations:
       // Relative specifiers resolve from the importing file, not the package root.
       const targetAbs = resolve(join(absoluteRoot, dirname(file)), specifier);
       const targetRepo = toRepoPath(absoluteRoot, targetAbs);
+      if (schemaFree && targetRepo.startsWith(SCHEMA_SOURCE_DIRECTORY)) {
+        add(
+          'BOUNDARY-DOMAIN-NO-SCHEMA',
+          specifier,
+          line,
+          `${file} is part of the engine-free domain and may not import the schema modules in ${SCHEMA_SOURCE_DIRECTORY} by a relative path. Consumers that need replica classes name @udg/protocol/schema themselves.`,
+        );
+      }
       const owner = ownerOf(packages, targetRepo);
       if (owner !== undefined && owner.dir !== info.dir) {
         add(
@@ -412,6 +442,16 @@ const analyseFile = (input: AnalyseInput): { analysis: FileAnalysis; violations:
         const resolved = resolveTypeScript(targetAbs);
         if (resolved !== undefined) edges.push(toRepoPath(absoluteRoot, resolved));
       }
+      continue;
+    }
+
+    if (schemaFree && specifier.startsWith(SCHEMA_RUNTIME_PREFIX)) {
+      add(
+        'BOUNDARY-DOMAIN-NO-SCHEMA',
+        specifier,
+        line,
+        `${file} is part of the engine-free domain and may not import the schema runtime ${specifier}. Declare types, or name @udg/protocol/schema from the consumer that needs them.`,
+      );
       continue;
     }
 

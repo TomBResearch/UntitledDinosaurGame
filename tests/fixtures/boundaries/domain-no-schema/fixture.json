@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "1.0.0",
+  "fixtureId": "UDG-002-boundaries-domain-no-schema",
+  "kind": "dependency-boundaries",
+  "ownerTask": "UDG-002",
+  "configHash": "076b6a6f6f6ae75fdb3a3ba607df73f456b1ea0ec39cd465942e41730c79ba0d",
+  "seed": null,
+  "note": "packages/protocol/src/domain must stay free of any schema runtime. Both routes into the runtime are refused: the direct @colyseus/* dependency and the relative path to the sibling src/schema modules, neither of which crosses a package boundary and so neither of which BOUNDARY-SCHEMA-INTO-DOMAIN can see.",
+  "expectation": "reject",
+  "expectedRuleIds": [
+    "BOUNDARY-DOMAIN-NO-SCHEMA"
+  ],
+  "files": [
+    {
+      "path": "packages/protocol/package.json",
+      "sha256": "63a17b6bdcd6dff6a4cee24d7bd3d3b209636c97f647cdce408a11ff411cb8aa"
+    },
+    {
+      "path": "packages/protocol/src/domain/state.ts",
+      "sha256": "d8348b2b1fafb17d8aad615aa0dd14fd854a3becfe0641ca9e12eb3b80545d63"
+    },
+    {
+      "path": "packages/protocol/src/schema/PlayerSchema.ts",
+      "sha256": "5c63d58c2d2728a320adb61f9440671f8a5ac14926273b1e2c8f0cc4ea4991e0"
+    }
+  ]
+}

@@ -4,7 +4,7 @@
   "fixtureId": "UDG-001-boundaries-forbidden-engine",
   "kind": "dependency-boundaries",
   "ownerTask": "UDG-001",
-  "configHash": "141ad56e3f81c2321515769ba93353dd2e3982c1749e8a3dbc6d44170bbf71af",
+  "configHash": "076b6a6f6f6ae75fdb3a3ba607df73f456b1ea0ec39cd465942e41730c79ba0d",
   "seed": null,
   "note": "Shared locomotion may not import a concrete engine, and only @udg/server, @udg/client and @udg/load-test may touch the schema entry point. Babylon is prohibited inside the physics adapter.",
   "expectation": "reject",

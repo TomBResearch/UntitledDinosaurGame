@@ -82,13 +82,9 @@ export const UNAVAILABLE_SUITES: Readonly<Record<string, SuiteOwnership>> = {
     contractPath: 'docs/contracts/UDG-007.md',
     requiredArtefact: 'tools/asset-pipeline/src/verify-region.ts and a built region manifest',
   },
-  'test:unit': {
-    command: 'pnpm test:unit',
-    owningTask: 'UDG-002 and every task that first adds logic under test',
-    contractPath: 'docs/contracts/repository.md',
-    requiredArtefact:
-      'Unit suites under tests/unit/<task>/. Point this command at vitest with an explicit include when the first one lands; zero discovered unit tests is never a pass.',
-  },
+  // test:unit was guarded here until UDG-002 created tests/unit/. A command that used to refuse must now
+  // run real suites, so it is wired in the root manifest instead; zero discovered tests still fails,
+  // because vitest.config.ts keeps passWithNoTests false.
 };
 
 /** sha256 of exact file bytes, hex. */

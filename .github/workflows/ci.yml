@@ -1,4 +1,4 @@
-# Foundation CI for the Untitled Dinosaur Game monorepo (UDG-001).
+# CI for the Untitled Dinosaur Game monorepo (UDG-001 foundation, extended by UDG-002).
 #
 # It runs exactly the local command sequence on a clean checkout with a frozen installation and
 # publishes machine-readable results even when a step fails, while every failed required check -
@@ -68,6 +68,9 @@ jobs:
       - name: Build shared libraries, tools and apps
         run: pnpm build
 
+      - name: Run the unit suites
+        run: pnpm test:unit
+
       - name: Run positive and negative dependency fixtures
         run: pnpm test:boundaries
 
@@ -76,6 +79,9 @@ jobs:
 
       - name: Run the UDG-001 task suite
         run: pnpm test:contract -- --task UDG-001
+
+      - name: Run the UDG-002 task suite
+        run: pnpm test:contract -- --task UDG-002
 
       - name: Verify the contract checksum manifest is in sync
         run: pnpm contracts:checksums
@@ -88,52 +94,124 @@ jobs:
       # makes a failing check produce diagnostics instead of a silent skip. No step in this job may
       # set continue-on-error; tests/contracts/UDG-001.test.ts enforces that and executes the
       # artefact assertion below against empty, incomplete and complete bundles.
-      - name: Capture the foundation evidence bundle
+      - name: Capture the evidence bundles
         if: ${{ !cancelled() }}
-        run: pnpm evidence:capture -- --task UDG-001 --out artifacts --keep-going
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @udg/checks build
+          tasks="$(node tools/checks/dist/evidence.js plans)"
+          if [ -z "$tasks" ]; then
+            echo "::error::no task has a capture plan; evidence cannot be produced"
+            exit 1
+          fi
+          for task in $tasks; do
+            echo "capturing the evidence bundle for $task"
+            pnpm evidence:capture -- --task "$task" --out artifacts --keep-going
+          done
 
       - name: Assert the required evidence artefacts exist
         if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -euo pipefail
-          pointer=artifacts/latest-UDG-001.txt
-          if [ ! -s "$pointer" ]; then
-            echo "::error::evidence capture wrote no run pointer ($pointer); no evidence exists to verify"
+          shopt -s nullglob
+          pointers=(artifacts/latest-*.txt)
+          if [ ${#pointers[@]} -eq 0 ]; then
+            echo "::error::evidence capture wrote no run pointer (artifacts/latest-*.txt); no evidence exists to verify"
             exit 1
           fi
-          run_rel="$(tr -d '\r\n' < "$pointer")"
-          # The pointer is repository-relative (artifacts/RUN_ID); normalise to one directory.
-          run_dir="${run_rel#artifacts/}"
-          echo "evidence run directory: artifacts/$run_dir"
+          assert_bundle() {
+            pointer="$1"
+            if [ ! -s "$pointer" ]; then
+              echo "::error::evidence capture wrote an empty run pointer ($pointer); no evidence exists to verify"
+              return 1
+            fi
+            run_rel="$(tr -d '\r\n' < "$pointer")"
+            # The pointer is repository-relative (artifacts/RUN_ID); normalise to one directory.
+            bundle="artifacts/${run_rel#artifacts/}"
+            echo "evidence run directory: $bundle"
+            local failed=0
+            # The universal floor: any task's bundle carries these, whatever its plan declares.
+            for required in report.json environment.json commands.json junit.xml build.log checksums.sha256; do
+              if [ ! -s "$bundle/$required" ]; then
+                echo "::error::required evidence artefact missing or empty: $required ($pointer)"
+                failed=1
+              fi
+            done
+            # Task-specific requirements are read from the bundle itself, so a plan that gains an artefact
+            # cannot slip past this step for want of a hardcoded list somewhere else.
+            if [ -s "$bundle/report.json" ]; then
+              if ! required_from_report="$(node -e '
+                const fs = require("node:fs");
+                const report = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+                if (typeof report.taskId !== "string" || report.taskId === "") {
+                  console.error("report.json declares no taskId; cannot derive its requirements");
+                  process.exit(1);
+                }
+                if (!Array.isArray(report.files)) {
+                  console.error("report.json has no files array; cannot derive its requirements");
+                  process.exit(1);
+                }
+                for (const file of report.files) {
+                  if (file.required === true && typeof file.path === "string") console.log(file.path);
+                }
+              ' "$bundle/report.json")"; then
+                return 1
+              fi
+              while IFS= read -r required; do
+                [ -z "$required" ] && continue
+                if [ ! -s "$bundle/$required" ]; then
+                  echo "::error::required evidence artefact missing or empty: $required (declared by report.json)"
+                  failed=1
+                fi
+              done <<< "$required_from_report"
+            else
+              echo "::error::report.json is absent, so no artefact requirement can be derived"
+              failed=1
+            fi
+            if [ -z "$(find "$bundle/logs" -type f -size +0 -print -quit 2>/dev/null || true)" ]; then
+              echo "::error::no non-empty command log under $bundle/logs"
+              failed=1
+            fi
+            return "$failed"
+          }
           missing=0
-          for required in report.json environment.json commands.json junit.xml boundary-report.json build.log checksums.sha256; do
-            if [ ! -s "artifacts/$run_dir/$required" ]; then
-              echo "::error::required evidence artefact missing or empty: $required"
+          for pointer in "${pointers[@]}"; do
+            if ! assert_bundle "$pointer"; then
               missing=1
             fi
           done
-          if [ -z "$(find "artifacts/$run_dir/logs" -type f -size +0 -print -quit 2>/dev/null || true)" ]; then
-            echo "::error::no non-empty command log under artifacts/$run_dir/logs"
-            missing=1
-          fi
           if [ "$missing" -ne 0 ]; then
             exit 1
           fi
           echo "all required evidence artefacts present"
 
-      - name: Verify the captured evidence bundle
+      - name: Verify the captured evidence bundles
         if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -euo pipefail
-          run_rel="$(tr -d '\r\n' < artifacts/latest-UDG-001.txt)"
-          pnpm evidence:verify -- --run "$run_rel"
-          pnpm evidence:summary -- --run "$run_rel" \
-            --out artifacts/UDG-001-ci-summary.json \
-            --storage "$run_rel" \
-            --ci-status "success (GitHub-hosted ${RUNNER_OS:-Linux}, ${RUNNER_ARCH:-X64})" \
-            --ci-url "${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          shopt -s nullglob
+          pointers=(artifacts/latest-*.txt)
+          if [ ${#pointers[@]} -eq 0 ]; then
+            echo "::error::there is no evidence bundle to verify (no artifacts/latest-*.txt pointer exists)"
+            exit 1
+          fi
+          for pointer in "${pointers[@]}"; do
+            if [ ! -s "$pointer" ]; then
+              echo "::error::run pointer $pointer is empty; nothing to verify"
+              exit 1
+            fi
+            run_rel="$(tr -d '\r\n' < "$pointer")"
+            task="$(basename "$pointer" | sed 's/^latest-//; s/\.txt$//')"
+            pnpm evidence:verify -- --run "$run_rel"
+            pnpm evidence:summary -- --run "$run_rel" \
+              --out "artifacts/${task}-ci-summary.json" \
+              --storage "$run_rel" \
+              --ci-status "success (GitHub-hosted ${RUNNER_OS:-Linux}, ${RUNNER_ARCH:-X64})" \
+              --ci-url "${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          done
 
       # Diagnostics are published after failures (if: !cancelled()) but an absent artefact is itself
       # a failure: a green run must always carry the evidence it claims.
@@ -141,9 +219,10 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: udg-001-evidence
+          name: udg-evidence
           path: |
-            artifacts/latest-UDG-001.txt
-            artifacts/UDG-001-*
+            artifacts/latest-*.txt
+            artifacts/UDG-*-*
+            artifacts/*-ci-summary.json
           if-no-files-found: error
           retention-days: 30

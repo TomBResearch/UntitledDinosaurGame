@@ -4,7 +4,7 @@
   "fixtureId": "UDG-001-boundaries-forbidden-browser-global",
   "kind": "dependency-boundaries",
   "ownerTask": "UDG-001",
-  "configHash": "141ad56e3f81c2321515769ba93353dd2e3982c1749e8a3dbc6d44170bbf71af",
+  "configHash": "076b6a6f6f6ae75fdb3a3ba607df73f456b1ea0ec39cd465942e41730c79ba0d",
   "seed": null,
   "note": "UDG-001 requires that a runtime browser global in simulation is detected. @udg/client is the negative control: DOM use there is legitimate and must not be reported.",
   "expectation": "reject",

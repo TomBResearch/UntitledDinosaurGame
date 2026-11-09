@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "1.0.0",
+  "fixtureId": "UDG-002-boundaries-domain-no-schema-allowed",
+  "kind": "dependency-boundaries",
+  "ownerTask": "UDG-002",
+  "configHash": "076b6a6f6f6ae75fdb3a3ba607df73f456b1ea0ec39cd465942e41730c79ba0d",
+  "seed": null,
+  "note": "The rule must not become a blanket ban on the schema dependency inside @udg/protocol: src/schema declaring and importing the pinned runtime is the permitted shape, and an allow fixture is the only way to notice if the rule is later widened until nothing compiles.",
+  "expectation": "allow",
+  "expectedRuleIds": [],
+  "files": [
+    {
+      "path": "packages/protocol/package.json",
+      "sha256": "63a17b6bdcd6dff6a4cee24d7bd3d3b209636c97f647cdce408a11ff411cb8aa"
+    },
+    {
+      "path": "packages/protocol/src/domain/state.ts",
+      "sha256": "85f28e8ed9c25ae700841fe1c0352166e29a268ea99f371135780172dd6e361b"
+    },
+    {
+      "path": "packages/protocol/src/schema/PlayerSchema.ts",
+      "sha256": "7bcf0b05585ec222464d3fcb6ab7a033b4a9745657fcb76aaedc86eb9dbf7443"
+    }
+  ]
+}

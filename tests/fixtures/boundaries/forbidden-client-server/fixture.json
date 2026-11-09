@@ -4,7 +4,7 @@
   "fixtureId": "UDG-001-boundaries-forbidden-client-server",
   "kind": "dependency-boundaries",
   "ownerTask": "UDG-001",
-  "configHash": "141ad56e3f81c2321515769ba93353dd2e3982c1749e8a3dbc6d44170bbf71af",
+  "configHash": "076b6a6f6f6ae75fdb3a3ba607df73f456b1ea0ec39cd465942e41730c79ba0d",
   "seed": null,
   "note": "ownership.md 2.3: the server may not depend on client or browser UI, and the client may not depend on the server or on filesystem modules. The reciprocal server<->client edges are also reported as a package cycle, because a permitted dependency graph is a DAG.",
   "expectation": "reject",

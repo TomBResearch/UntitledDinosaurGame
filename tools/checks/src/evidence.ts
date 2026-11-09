@@ -121,6 +121,27 @@ export interface CapturePlan {
   readonly taskId: string;
   readonly requiredFiles: readonly string[];
   readonly thresholds: Readonly<Record<string, string>>;
+  /**
+   * A run whose thresholds are measured values is not evidence without them, so the gate that used to
+   * single UDG-001 out by name is now a property of the plan.
+   */
+  readonly requiresMeasurements: boolean;
+  /**
+   * Artefacts that must parse and must declare both a schema version and this run's taskId.
+   *
+   * UDG-001 declares none: its accepted bundles predate the rule (owner clarification U2-1 requires
+   * retained evidence to keep verifying), and the general checks below still apply to them. A new task
+   * that declares an artefact here cannot pass with a `{}` placeholder or a file copied from another run.
+   */
+  readonly identityArtefacts: readonly string[];
+  /** Copy the task's measurements file into the bundle so the measured values are hash-covered bytes. */
+  readonly measurementsIntoBundle?: boolean;
+  /** Task-specific report prose. It used to be written inline as UDG-001 text for every task. */
+  readonly reportProse: Readonly<{
+    profiles: string;
+    notApplicable: readonly { path: string; reason: string }[];
+    summaryCiNote: Readonly<{ noCiRun: string; ciRun: string }>;
+  }>;
   readonly commands: readonly {
     readonly label: string;
     readonly argv: readonly string[];
@@ -143,6 +164,24 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       'build.log',
       'report.json',
     ],
+    requiresMeasurements: true,
+    identityArtefacts: [],
+    reportProse: {
+      profiles:
+        'No network profile applies to a foundation run. Spike runs record LAN, moderate, elevated and poor profiles with achieved RTT and jitter statistics.',
+      notApplicable: [
+        { path: 'traces/', reason: 'No gameplay trace exists for a foundation run; no movement, network or asset behaviour is produced.' },
+        { path: 'metrics/', reason: 'No numeric sampling is performed by UDG-001; spike runs produce raw CSV samples here.' },
+        { path: 'browser/', reason: 'No browser suite exists yet; UDG-004 creates tests/e2e/camera.spec.ts.' },
+        { path: 'decisions/', reason: 'No gate decision belongs to a Foundation task; Gates A, B and C remain Not Run.' },
+      ],
+      summaryCiNote: {
+        noCiRun:
+          'Clarification C-05: UDG-001 stays In Review until .github/workflows/ci.yml runs green on the pushed commit; CI reproduction is not claimed by this summary.',
+        ciRun:
+          'Workflow ci on the pushed commit, identified by the url field. UDG-001 still stays In Review until the reviewer accepts the work (clarification C-05).',
+      },
+    },
     thresholds: {
       'toolchain.node': '=== "v24.22.2" (owner clarification C-01)',
       'toolchain.pnpmCli': '=== "12.18.0" (owner clarification C-01)',
@@ -177,6 +216,87 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       { label: 'build', argv: ['pnpm', 'build'], buildLog: true },
       { label: 'test-boundaries', argv: ['pnpm', 'test:boundaries'] },
       { label: 'test-fixtures', argv: ['pnpm', 'test:fixtures'] },
+      { label: 'test-contract-UDG-001', argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-001'] },
+    ],
+  },
+  'UDG-002': {
+    taskId: 'UDG-002',
+    // Every artefact UDG-002 depends on. measurements/UDG-002.json is written by the task's own suites
+    // and is the artefact the identity rule below pins, so a placeholder cannot pass for measured values.
+    requiredFiles: [
+      'environment.json',
+      'commands.json',
+      'junit.xml',
+      'boundary-report.json',
+      'build.log',
+      'measurements/UDG-002.json',
+      'protocol-field-map.json',
+      'roundtrip-results.json',
+      'rejection-results.json',
+      'config-hashes.json',
+      'live-rejection-probes.json',
+      'report.json',
+    ],
+    requiresMeasurements: true,
+    // Every task artefact carries this run's identity. A required file that cannot name its task is a
+    // placeholder, and a placeholder copied from another run is exactly how a stale bundle passes.
+    identityArtefacts: [
+      'measurements/UDG-002.json',
+      'protocol-field-map.json',
+      'roundtrip-results.json',
+      'rejection-results.json',
+      'config-hashes.json',
+      'live-rejection-probes.json',
+    ],
+    measurementsIntoBundle: true,
+    reportProse: {
+      profiles:
+        'No network profile applies to a protocol and configuration task; nothing here transmits or simulates a link. Spike runs record LAN, moderate, elevated and poor profiles with achieved RTT and jitter statistics.',
+      notApplicable: [
+        { path: 'traces/', reason: 'UDG-002 produces no gameplay trace: it defines and tests types, validation, schema declarations and mapping, and owns no movement, admission or ordering behaviour.' },
+        { path: 'metrics/', reason: 'No numeric sampling is performed by UDG-002; spike runs produce raw CSV samples here.' },
+        { path: 'browser/', reason: 'No browser suite exists yet; UDG-004 creates tests/e2e/camera.spec.ts.' },
+        { path: 'decisions/', reason: 'No gate decision belongs to UDG-002. Gate A is validated by UDG-SPIKE-001 after UDG-003 and UDG-004, and remains Not Run.' },
+        { path: 'assets/', reason: 'UDG-002 consumes no region asset; region bounds are supplied and validated explicitly (owner decision D5), and UDG-007 owns region-greybox-001.' },
+      ],
+      summaryCiNote: {
+        noCiRun:
+          'Clarification C-05: UDG-002 stays In Review until .github/workflows/ci.yml runs green on the pushed commit; CI reproduction is not claimed by this summary.',
+        ciRun:
+          'Workflow ci on the pushed commit, identified by the url field. UDG-002 still stays In Review until the reviewer accepts the work (clarification C-05).',
+      },
+    },
+    thresholds: {
+      'toolchain.node': '=== "v24.22.2" (unchanged from the accepted foundation)',
+      'toolchain.pnpmCli': '=== "12.18.0" (unchanged from the accepted foundation)',
+      'schema.pin': '=== "@colyseus/schema@5.0.45" declared exactly in packages/protocol/package.json',
+      'schema.roundTrips': '>= 1 player, region and direct-input round trips through the pinned codec, each an exact copy after normalisation',
+      'schema.losslessFloat64': '=== true for 0.1 + 0.2, -Math.PI, 5e-324, Number.MAX_VALUE and -Infinity (ADR 0001)',
+      'protocol.requiredIds': '=== true (P01-P12, P21-P34 plus ordering and valid cases exist and execute)',
+      'protocol.executed': '>= 60 fixture cases executed with the declared rejection codes; zero skipped',
+      'protocol.binaryNegative': '>= 1 malformed binary case refused with INVALID_PAYLOAD rather than adopting a partial state',
+      'validation.noNonFiniteEscape': '=== true (no non-finite value is accepted by any validator or mapping path)',
+      'config.hashStable': '=== true, and every digest matches node:crypto for the same canonical form',
+      'config.regionDefaults': '=== 0 production default extents shipped (owner decision D5)',
+      'boundaries.domainImportsSchema': '=== 0 violations, with the reject and allow fixtures both matching',
+      'capture.commandsRun': '>= 8 commands, capture.failingCommands === []',
+    },
+    commands: [
+      { label: 'install-frozen', argv: ['pnpm', 'install', '--frozen-lockfile'] },
+      { label: 'typecheck', argv: ['pnpm', 'typecheck'] },
+      { label: 'lint', argv: ['pnpm', 'lint'], env: { UDG_BOUNDARY_REPORT: 'BUNDLE/boundary-report.json' } },
+      {
+        label: 'test',
+        argv: ['pnpm', 'test'],
+        env: { UDG_EVIDENCE_JUNIT: 'BUNDLE/junit.xml', UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-002.json' },
+        junit: true,
+        measurements: true,
+      },
+      { label: 'build', argv: ['pnpm', 'build'], buildLog: true },
+      { label: 'test-unit', argv: ['pnpm', 'test:unit'] },
+      { label: 'test-boundaries', argv: ['pnpm', 'test:boundaries'] },
+      { label: 'test-fixtures', argv: ['pnpm', 'test:fixtures'] },
+      { label: 'test-contract-UDG-002', argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-002'] },
       { label: 'test-contract-UDG-001', argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-001'] },
     ],
   },
@@ -423,7 +543,14 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
   const runStart = new Date().toISOString();
 
   for (const step of plan.commands) {
-    const env: Record<string, string> = {};
+    // UDG_EVIDENCE_OUT is the bundle itself and UDG_EVIDENCE_TASK says which task owns it. A suite
+    // writes its artefacts only when the ownership matches, because one run's suites invoke another
+    // task's suites as children: the UDG-002 capture runs the UDG-001 suite, and an inherited
+    // destination made that child write UDG-001's measured values into UDG-002's measurements file.
+    // Verification refuses such a file by identity; this variable stops it being written at all. A
+    // suite with these variables unset simply produces no extra artefacts, which is why a required
+    // file stays a verification failure rather than a capture-time one.
+    const env: Record<string, string> = { UDG_EVIDENCE_OUT: absoluteRunDir, UDG_EVIDENCE_TASK: taskId };
     for (const [key, value] of Object.entries(step.env ?? {})) {
       env[key] = value
         .replace('BUNDLE/', `${absoluteRunDir}/`)
@@ -475,6 +602,19 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
   }
 
   writeJson(join(absoluteRunDir, 'environment.json'), environmentRecord(root, runAlias));
+  const measurements = readMeasurements(root, taskId);
+  if (plan.measurementsIntoBundle === true) {
+    // The measured values behind report.measured become hash-covered bytes in the bundle, so a later
+    // reader can check them without trusting the summary that embeds them.
+    const raw = readOptional(measurementsPath(root, taskId));
+    if (raw !== undefined) {
+      writeFileSyncEnsuring(
+        join(absoluteRunDir, 'measurements', `${taskId}.json`),
+        clean(`measurements/${taskId}.json`, `${JSON.stringify(JSON.parse(raw), null, 2)}\n`),
+      );
+    }
+  }
+
   writeJson(join(absoluteRunDir, 'commands.json'), {
     schemaVersion: EVIDENCE_SCHEMA_VERSION,
     runId,
@@ -512,7 +652,7 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
     testCounts: { tests: counts.tests, failures: counts.failures, errors: counts.errors, skipped: counts.skipped },
     status,
     measurements: {
-      ...readMeasurements(root, taskId),
+      ...measurements,
       capture: {
         commandsRun: records.length,
         failingCommands: failing,
@@ -580,7 +720,7 @@ const writeReport = (root: string, plan: CapturePlan, absoluteRunDir: string, ru
     implementationSha: git(root, ['rev-parse', 'HEAD']),
     branch: git(root, ['rev-parse', '--abbrev-ref', 'HEAD']),
     workingTreeDirty: git(root, ['status', '--porcelain']) !== '',
-    prerequisiteShas: prerequisiteShas(root),
+    prerequisiteShas: prerequisiteShas(root, plan.taskId),
     dependencyLockHash: hashOf(root, 'pnpm-lock.yaml'),
     configHashes: {
       taskContract: hashOf(root, `docs/contracts/${plan.taskId}.md`),
@@ -599,7 +739,7 @@ const writeReport = (root: string, plan: CapturePlan, absoluteRunDir: string, ru
     profiles: {
       requested: [],
       achieved: [],
-      note: 'No network profile applies to a foundation run. Spike runs record LAN, moderate, elevated and poor profiles with achieved RTT and jitter statistics.',
+      note: plan.reportProse.profiles,
     },
     suites: input.suites,
     testCounts: input.testCounts,
@@ -607,12 +747,7 @@ const writeReport = (root: string, plan: CapturePlan, absoluteRunDir: string, ru
     measured: input.measurements,
     status: input.status,
     files: files.sort((a, b) => a.path.localeCompare(b.path)),
-    notApplicable: [
-      { path: 'traces/', reason: 'No gameplay trace exists for a foundation run; no movement, network or asset behaviour is produced.' },
-      { path: 'metrics/', reason: 'No numeric sampling is performed by UDG-001; spike runs produce raw CSV samples here.' },
-      { path: 'browser/', reason: 'No browser suite exists yet; UDG-004 creates tests/e2e/camera.spec.ts.' },
-      { path: 'decisions/', reason: 'No gate decision belongs to a Foundation task; Gates A, B and C remain Not Run.' },
-    ],
+    notApplicable: [...plan.reportProse.notApplicable],
     sanitisation: {
       removed: ['environment variable dump', 'absolute local paths', 'user name', 'host name', 'git remote URL', 'any credential or token'],
       aliases: { workingDirectory: 'REPO_ROOT', runner: 'runner-<8 hex derived from the run id>', machine: 'machine-<8 hex>' },
@@ -621,11 +756,17 @@ const writeReport = (root: string, plan: CapturePlan, absoluteRunDir: string, ru
   writeJson(join(absoluteRunDir, 'report.json'), report);
 };
 
-const prerequisiteShas = (root: string): string[] => {
-  const raw = readOptional(join(root, 'docs', 'contracts', 'assignments', 'UDG-001.md'));
+/**
+ * The prerequisite commits a run must name, read from that task's own assignment record.
+ *
+ * It used to read assignments/UDG-001.md for every task, which meant a UDG-002 bundle would have
+ * advertised UDG-001's prerequisite. An empty list is a hard failure at verification time: a run that
+ * cannot name what it was built on has not shown that its prerequisites were checked.
+ */
+const prerequisiteShas = (root: string, taskId: string): string[] => {
+  const raw = readOptional(join(root, 'docs', 'contracts', 'assignments', `${taskId}.md`));
   if (raw === undefined) return [];
-  const found = /Prerequisite commit:\s*([0-9a-f]{40})/.exec(raw);
-  return found?.[1] === undefined ? [] : [found[1]];
+  return [...raw.matchAll(/Prerequisite commit(?: \([^)]*\))?:\s*([0-9a-f]{40})/g)].map((match) => match[1] as string);
 };
 
 const writeChecksums = (absoluteRunDir: string): void => {
@@ -657,6 +798,10 @@ export type VerifyCode =
   | 'EVIDENCE-ENVIRONMENT-FIELD'
   | 'EVIDENCE-SECRET'
   | 'EVIDENCE-MEASUREMENTS-MISSING'
+  | 'EVIDENCE-THRESHOLD-UNMEASURED'
+  | 'EVIDENCE-PREREQUISITE-MISSING'
+  | 'EVIDENCE-ARTEFACT-UNPARSEABLE'
+  | 'EVIDENCE-ARTEFACT-TASK-MISMATCH'
   | 'EVIDENCE-PATH-ESCAPE';
 
 export interface VerifyIssue {
@@ -743,6 +888,14 @@ export const verify = (root: string, runRelative: string): VerifyResult => {
   if (!HEX64.test(report.baselineSpecHash)) issues.push({ code: 'EVIDENCE-SCHEMA-FIELD', detail: 'baselineSpecHash is not 64 hex characters' });
   if (!HEX64.test(report.dependencyLockHash)) issues.push({ code: 'EVIDENCE-SCHEMA-FIELD', detail: 'dependencyLockHash is not 64 hex characters' });
   if (!HEX40.test(report.implementationSha)) issues.push({ code: 'EVIDENCE-SCHEMA-FIELD', detail: 'implementationSha is not 40 hex characters' });
+  if (report.taskId !== undefined && report.prerequisiteShas.length === 0) {
+    issues.push({
+      code: 'EVIDENCE-PREREQUISITE-MISSING',
+      detail:
+        `report.json names no prerequisite commit. docs/contracts/assignments/${report.taskId}.md must record `
+        + 'a "Prerequisite commit: <40 hex>" line for every task that is assigned on top of accepted work.',
+    });
+  }
   for (const sha of report.prerequisiteShas) {
     if (!HEX40.test(sha)) issues.push({ code: 'EVIDENCE-SCHEMA-FIELD', detail: `prerequisite sha "${sha}" is not 40 hex characters` });
   }
@@ -780,6 +933,51 @@ export const verify = (root: string, runRelative: string): VerifyResult => {
     for (const required of plan.requiredFiles) {
       if (!existsSync(join(absoluteRunDir, required))) {
         issues.push({ code: 'EVIDENCE-FILE-MISSING', detail: `required artefact ${required} is absent` });
+      }
+    }
+
+    // A declared artefact is only evidence if it parses and belongs to this run. Without the identity
+    // check, an empty object or a file copied from another task's bundle would satisfy "the file exists".
+    for (const relative of plan.requiredFiles) {
+      if (!relative.endsWith('.json') || relative === 'report.json') continue;
+      const raw = readOptional(join(absoluteRunDir, relative));
+      if (raw === undefined) continue; // already reported as EVIDENCE-FILE-MISSING
+      const parsed = safeJson(raw);
+      if (parsed === undefined) {
+        issues.push({ code: 'EVIDENCE-ARTEFACT-UNPARSEABLE', detail: `${relative} is not valid JSON` });
+        continue;
+      }
+      const object = asRecord(parsed);
+      // An artefact that carries a taskId must carry *this* run's taskId. Arrays and identity-free records
+      // are skipped so that accepted UDG-001 bundles keep verifying (owner clarification U2-1).
+      if (object['taskId'] !== undefined && object['taskId'] !== report.taskId) {
+        issues.push({
+          code: 'EVIDENCE-ARTEFACT-TASK-MISMATCH',
+          detail: `${relative} declares taskId ${String(object['taskId'])} but the run is ${report.taskId}`,
+        });
+      }
+      const version = object['schemaVersion'];
+      if (version !== undefined && !((typeof version === 'number' && Number.isInteger(version) && version > 0) || (typeof version === 'string' && version.length > 0))) {
+        issues.push({ code: 'EVIDENCE-ARTEFACT-UNPARSEABLE', detail: `${relative} declares an unusable schemaVersion` });
+      }
+    }
+
+    for (const relative of plan.identityArtefacts) {
+      const raw = readOptional(join(absoluteRunDir, relative));
+      if (raw === undefined) {
+        issues.push({ code: 'EVIDENCE-FILE-MISSING', detail: `identity artefact ${relative} is absent` });
+        continue;
+      }
+      const object = asRecord(safeJson(raw));
+      if (object['taskId'] !== report.taskId) {
+        issues.push({
+          code: 'EVIDENCE-ARTEFACT-TASK-MISMATCH',
+          detail: `${relative} must declare taskId ${report.taskId}; a placeholder or another run's file is not evidence`,
+        });
+      }
+      const version = object['schemaVersion'];
+      if (!((typeof version === 'number' && Number.isInteger(version) && version > 0) || (typeof version === 'string' && version.length > 0))) {
+        issues.push({ code: 'EVIDENCE-ARTEFACT-UNPARSEABLE', detail: `${relative} must declare a positive schemaVersion` });
       }
     }
   }
@@ -892,8 +1090,25 @@ export const verify = (root: string, runRelative: string): VerifyResult => {
     }
   }
 
-  if (report.taskId === 'UDG-001' && Object.keys(report.measured).length === 0) {
-    issues.push({ code: 'EVIDENCE-MEASUREMENTS-MISSING', detail: 'UDG-001 thresholds require measured values from the contract suite' });
+  // A threshold that no measurement answers is decoration. Every metric the plan's report names must
+  // resolve inside the measured values, so a plan cannot keep promising a number the suites stopped
+  // producing. Accepted UDG-001 bundles satisfy this; the rule was checked against all of them.
+  const resolveMeasured = (dotted: string): unknown =>
+    dotted.split('.').reduce<unknown>((cursor, key) => (cursor as Record<string, unknown> | undefined)?.[key], report.measured);
+  for (const metric of Object.keys(report.thresholds)) {
+    if (resolveMeasured(metric) === undefined) {
+      issues.push({
+        code: 'EVIDENCE-THRESHOLD-UNMEASURED',
+        detail: `${report.taskId} states threshold ${metric} but report.json records no measured value for it`,
+      });
+    }
+  }
+
+  if (plan !== undefined && plan.requiresMeasurements && Object.keys(report.measured).length === 0) {
+    issues.push({
+      code: 'EVIDENCE-MEASUREMENTS-MISSING',
+      detail: `${report.taskId} declares thresholds that must be measured; report.json records no measured values`,
+    });
   }
 
   const scanned = new Set<string>([...report.files.map((ref) => ref.path), ...presentFiles(absoluteRunDir)]);
@@ -991,7 +1206,7 @@ export interface DependencyRegister {
   readonly lockfile: Readonly<{ path: string; sha256: string }>;
   readonly workspaces: readonly { readonly name: string; readonly dir: string; readonly dependencies: Readonly<Record<string, string>> }[];
   readonly packages: readonly DependencyEntry[];
-  readonly pendingGameLibraries: readonly { readonly name: string; readonly status: string; readonly ownerTask: string; readonly reason: string }[];
+  readonly pendingGameLibraries: readonly DeferredLibraryEntry[];
   readonly toolchainNotes: readonly string[];
   readonly ciActions: readonly GithubActionEntry[];
   readonly thirdPartyReferences: readonly { readonly subject: string; readonly source: string; readonly inspectedOn: string }[];
@@ -999,50 +1214,101 @@ export interface DependencyRegister {
   readonly sanitisation: Readonly<{ note: string }>;
 }
 
-const PENDING_GAME_LIBRARIES = [
+/**
+ * The game library groups that M0 defers, and how each one is recognised in the installed graph.
+ *
+ * The status is derived, never asserted: a group is `selected` exactly when one of its member packages
+ * is a declared direct dependency that resolves. Recording `not-selected` next to an installed package
+ * would make the register false on its face, and a task that adds a dependency must not have to edit a
+ * second table to keep it honest (owner clarification U2-2).
+ */
+interface DeferredGroup {
+  readonly name: string;
+  readonly ownerTask: string;
+  readonly reason: string;
+  /** Exact package names, or a `prefix*` entry meaning "any package under this scope". */
+  readonly members: readonly string[];
+}
+
+const DEFERRED_GAME_LIBRARIES: readonly DeferredGroup[] = [
   {
     name: '@colyseus/schema',
-    status: 'not-selected',
     ownerTask: 'UDG-002',
     reason: 'Owner clarification C-02: UDG-002 selects and tests the schema dependency against real encode/decode fixtures.',
+    members: ['@colyseus/schema'],
   },
   {
     name: '@colyseus/core',
-    status: 'not-selected',
     ownerTask: 'UDG-003',
     reason: 'Owner clarification C-02: server and fixed-step input integration belongs to UDG-003 and UDG-SPIKE-001.',
+    members: ['@colyseus/core'],
   },
   {
     name: '@colyseus/sdk',
-    status: 'not-selected',
     ownerTask: 'UDG-SPIKE-001',
     reason: 'Owner clarification C-02: the client SDK and prediction adapter are proven by the Gate A probes.',
+    members: ['@colyseus/sdk'],
   },
   {
     name: '@colyseus/testing',
-    status: 'not-selected',
     ownerTask: 'UDG-003',
     reason: 'Optional per docs/integration/colyseus.md; chosen only if the UDG-003 probes need it.',
+    members: ['@colyseus/testing'],
   },
   {
     name: '@dimforge/rapier3d-compat (or equivalent Rapier package)',
-    status: 'not-selected',
     ownerTask: 'UDG-006',
     reason: 'Rapier version and WASM identity are frozen at Gate B with binary hashes.',
+    members: ['@dimforge/*'],
   },
   {
     name: 'recast-navigation-js package family',
-    status: 'not-selected',
     ownerTask: 'UDG-007',
     reason: 'Recast version and WASM hashes are recorded with the asset pipeline and Gate C evidence.',
+    members: ['recast-navigation*'],
   },
   {
     name: '@babylonjs/* and react',
-    status: 'not-selected',
     ownerTask: 'UDG-004',
     reason: 'Client rendering and UI dependencies are chosen by the browser client task.',
+    members: ['@babylonjs/*', 'react', 'react-dom'],
   },
 ];
+
+/** `@babylonjs/*` matches any scoped package under that scope; any other entry matches exactly. */
+const memberMatches = (member: string, packageName: string): boolean => {
+  if (member.endsWith('/*')) return packageName === member.slice(0, -2) || packageName.startsWith(`${member.slice(0, -1)}`);
+  if (member.endsWith('*')) return packageName.startsWith(member.slice(0, -1));
+  return packageName === member;
+};
+
+export interface DeferredLibraryEntry {
+  readonly name: string;
+  readonly status: 'selected' | 'not-selected';
+  readonly ownerTask: string;
+  readonly reason: string;
+  /** Populated only when the group is selected: the exact packages, versions and licences in the graph. */
+  readonly selectedPackages: readonly { readonly name: string; readonly version: string | null; readonly licence: string | null }[];
+}
+
+const deferredLibraries = (packages: readonly DependencyEntry[]): readonly DeferredLibraryEntry[] =>
+  DEFERRED_GAME_LIBRARIES.map((group) => {
+    const selected = packages.filter((entry) => group.members.some((member) => memberMatches(member, entry.name)));
+    return {
+      name: group.name,
+      status: selected.length > 0 ? 'selected' : 'not-selected',
+      ownerTask: group.ownerTask,
+      reason:
+        selected.length === 0
+          ? group.reason
+          : `${group.reason} Selected by ${group.ownerTask}: ${selected.map((entry) => `${entry.name}@${entry.installedVersion ?? 'unresolved'}`).join(', ')}.`,
+      selectedPackages: selected.map((entry) => ({
+        name: entry.name,
+        version: entry.installedVersion,
+        licence: entry.licence,
+      })),
+    };
+  });
 
 const installedPackageInfo = (
   root: string,
@@ -1175,11 +1441,11 @@ export const buildDependencyRegister = (root: string, command: string): Dependen
     lockfile: { path: 'pnpm-lock.yaml', sha256: hashOf(root, 'pnpm-lock.yaml') },
     workspaces,
     packages,
-    pendingGameLibraries: PENDING_GAME_LIBRARIES,
+    pendingGameLibraries: deferredLibraries(packages),
     toolchainNotes: [
       `Node ${nodeVersion} and pnpm 12.18.0 are pinned by owner clarification C-01 and enforced by package.json engines plus .npmrc engine-strict.`,
       `TypeScript is pinned to ${typescriptVersion}. TypeScript 7.x exists on the registry but the installed typescript-eslint release declares peer typescript "${typescriptEslintPeer ?? 'unknown'}", so the newer compiler line is deferred until the lint toolchain supports it. Changing the compiler line is a dependency-pin decision, not a routine edit.`,
-      'Game libraries are listed under pendingGameLibraries and are deliberately absent from the lockfile until their owning task can prove them (clarification C-02).',
+      'Deferred game libraries carry a derived status: selected only when the owning task has actually declared the package, absent otherwise (clarification C-02).',
       'onlyBuiltDependencies in pnpm-workspace.yaml is the allowlist for dependency build scripts; an unlisted build script fails the install.',
       ciActions.length === 0
         ? 'No CI workflow found yet, so no third-party actions are recorded.'
@@ -1365,6 +1631,20 @@ export interface EvidenceSummary {
   readonly artifacts: readonly { readonly path: RepoPath; readonly sha256: string; readonly bytes: number }[];
 }
 
+/**
+ * The CI sentence in a committed summary is task-specific, because it names the task that stays In Review.
+ * It used to say "UDG-001" for every task, which would have made a UDG-002 summary claim the wrong task.
+ */
+const summaryCiNote = (taskId: string, url: string | undefined): string => {
+  const plan = CAPTURE_PLANS[taskId];
+  if (plan === undefined) {
+    return url === undefined
+      ? `${taskId}: no CI run is recorded in this summary.`
+      : `${taskId}: workflow ci on the pushed commit, identified by the url field.`;
+  }
+  return url === undefined ? plan.reportProse.summaryCiNote.noCiRun : plan.reportProse.summaryCiNote.ciRun;
+};
+
 export const buildEvidenceSummary = (
   root: string,
   absoluteRunDir: string,
@@ -1426,10 +1706,7 @@ export const buildEvidenceSummary = (
       ci: {
         status: ci.status,
         ...(ci.url === undefined ? {} : { url: ci.url }),
-        note:
-          ci.url === undefined
-            ? 'Clarification C-05: UDG-001 stays In Review until .github/workflows/ci.yml runs green on the pushed commit; CI reproduction is not claimed by this summary.'
-            : 'Workflow ci on the pushed commit, identified by the url field. UDG-001 still stays In Review until the reviewer accepts the work (clarification C-05).',
+        note: summaryCiNote(report.taskId, ci.url),
       },
       artifacts,
     },
@@ -1489,6 +1766,12 @@ const main = (): number => {
   if (mode === 'verify') return verifyMain(flags);
   if (mode === 'dependencies') return dependenciesMain(flags);
   if (mode === 'summary') return summaryMain(flags);
+  if (mode === 'plans') {
+    // CI iterates this list, so a task that gains a capture plan is exercised without editing the
+    // workflow, and a workflow that names a task with no plan is visible as a gap.
+    for (const taskId of Object.keys(CAPTURE_PLANS).sort()) process.stdout.write(`${taskId}\n`);
+    return 0;
+  }
   if (mode === 'checksums') {
     const write = flags['write'] === true;
     const result = updateContractChecksums(process.cwd(), write);
@@ -1505,6 +1788,7 @@ const main = (): number => {
       '  evidence.js verify    --run artifacts/RUN_ID [--report <file>]\n' +
       '  evidence.js dependencies [--out docs/integration/dependencies.json] [--verify]\n' +
       '  evidence.js summary   --run <bundle> [--out <file>] [--storage <location>] [--ci-status <s>] [--ci-url <u>]\n' +
+      '  evidence.js plans      (list the task ids that have a capture plan)\n' +
       '  evidence.js checksums [--write]\n',
   );
   return 2;
