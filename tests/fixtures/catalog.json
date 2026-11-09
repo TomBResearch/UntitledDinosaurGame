@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 1,
+  "ownerTask": "UDG-002",
+  "note": "Every fixture in this repository, in either layout, with the case ids that docs/validation/fixtures.md 7.2 makes mandatory. Declaring a fixture is what stops the checker from reporting success over a file nobody runs, and declaring required case ids is what stops a required case from being deleted and the run still passing. protocol/valid.json and the two boundary fixtures added by UDG-002 carry no 7.2 ids; their cases are required by the task's own acceptance criteria and are listed here so removal still fails. Added cases beyond the required set are permitted by 7.2 and are not pinned as required, so a case may be reworked without editing this file.",
+  "fixtures": [
+    {
+      "path": "protocol/valid.json",
+      "layout": "standalone-json",
+      "fixtureId": "UDG-002-protocol-valid",
+      "requiredCaseIds": [
+        "V01",
+        "V02",
+        "V03",
+        "V04",
+        "V05",
+        "V06",
+        "V07",
+        "V08",
+        "V09",
+        "V10",
+        "V11",
+        "V12",
+        "V13",
+        "V14",
+        "V15",
+        "V16",
+        "V17",
+        "V18",
+        "V19"
+      ],
+      "sha256": "47f058a1ec5943eabfd9d7b720aa369f1d011e1a8bc2f58f537621bfc3417a7a"
+    },
+    {
+      "path": "protocol/malformed.json",
+      "layout": "standalone-json",
+      "fixtureId": "UDG-002-protocol-malformed",
+      "requiredCaseIds": [
+        "P01",
+        "P02",
+        "P03",
+        "P04",
+        "P05",
+        "P06",
+        "P07",
+        "P08",
+        "P09",
+        "P10",
+        "P11",
+        "P12"
+      ],
+      "sha256": "8d13a9316a4c588e5c8da572545d024f301ce20a3d965df7aedef429a1267f68"
+    },
+    {
+      "path": "protocol/ordering.json",
+      "layout": "standalone-json",
+      "fixtureId": "UDG-002-protocol-ordering",
+      "requiredCaseIds": [
+        "P13",
+        "P14",
+        "P15",
+        "P16",
+        "P17",
+        "P18",
+        "P19",
+        "P20"
+      ],
+      "sha256": "c61c060fb8c7b430c3e427707c0a09c098aa552027372fc4bd7a729722207b23"
+    },
+    {
+      "path": "boundaries/allowed",
+      "layout": "manifest-directory",
+      "fixtureId": "UDG-001-boundaries-allowed",
+      "requiredCaseIds": []
+    },
+    {
+      "path": "boundaries/cycle",
+      "layout": "manifest-directory",
+      "fixtureId": "UDG-001-boundaries-cycle",
+      "requiredCaseIds": []
+    },
+    {
+      "path": "boundaries/domain-no-schema",
+      "layout": "manifest-directory",
+      "fixtureId": "UDG-002-boundaries-domain-no-schema",
+      "requiredCaseIds": []
+    },
+    {
+      "path": "boundaries/domain-no-schema-allowed",
+      "layout": "manifest-directory",
+      "fixtureId": "UDG-002-boundaries-domain-no-schema-allowed",
+      "requiredCaseIds": []
+    },
+    {
+      "path": "boundaries/forbidden-browser-global",
+      "layout": "manifest-directory",
+      "fixtureId": "UDG-001-boundaries-forbidden-browser-global",
+      "requiredCaseIds": []
+    },
+    {
+      "path": "boundaries/forbidden-client-server",
+      "layout": "manifest-directory",
+      "fixtureId": "UDG-001-boundaries-forbidden-client-server",
+      "requiredCaseIds": []
+    },
+    {
+      "path": "boundaries/forbidden-engine",
+      "layout": "manifest-directory",
+      "fixtureId": "UDG-001-boundaries-forbidden-engine",
+      "requiredCaseIds": []
+    },
+    {
+      "path": "boundaries/forbidden-undeclared-and-config",
+      "layout": "manifest-directory",
+      "fixtureId": "UDG-001-boundaries-forbidden-undeclared-and-config",
+      "requiredCaseIds": []
+    },
+    {
+      "path": "boundaries/strict-type-errors",
+      "layout": "manifest-directory",
+      "fixtureId": "UDG-001-strict-type-errors",
+      "requiredCaseIds": []
+    }
+  ],
+  "groups": {
+    "protocol": {
+      "requiresBinaryCase": true
+    }
+  }
+}

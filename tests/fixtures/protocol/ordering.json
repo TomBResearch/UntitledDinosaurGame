@@ -1,0 +1,401 @@
+{
+  "fixtureVersion": "udg-protocol-fixtures-1",
+  "fixtureId": "UDG-002-protocol-ordering",
+  "kind": "protocol-ordering",
+  "ownerTask": "UDG-002",
+  "protocolVersion": "udg-m0-1.0.0",
+  "configHash": "948f8c10fc404e2ebdb015abc8e30b8e66caf357347db3a2636ace96687a208a",
+  "seed": null,
+  "boundsProvenance": "test-only-synthetic",
+  "bounds": {
+    "x": {
+      "min": -100,
+      "max": 100
+    },
+    "y": {
+      "min": -10,
+      "max": 50
+    },
+    "z": {
+      "min": -100,
+      "max": 100
+    }
+  },
+  "spawn": {
+    "x": 0,
+    "y": 0.9,
+    "z": 0
+  },
+  "context": {
+    "sessionEpoch": 7,
+    "generationWatermark": 10,
+    "currentRouteRevision": 3,
+    "entityId": "entity-001",
+    "manifestHash": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "note": "P13 to P20 are the required ordering set from docs/validation/fixtures.md 7.2; P21 onward are added cases, which 7.2 permits while forbidding removal. Ordering here is the pure rule from interfaces/protocol.md 4.2 and 4.3: a forward gap of at most 64 is admitted, a larger gap causes RESYNC_REQUIRED without raising a watermark, a stale generation is superseded, and the same identifier with a different payload conflicts. The watermark store, cutoff and resync emission are UDG-003 behaviour under P03 and owner clarification U2-6, so these cases call functions that read numbers and return decisions and cannot mutate anything.",
+  "cases": [
+    {
+      "caseId": "P13",
+      "note": "a stale epoch is refused before any other consideration",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 6,
+        "generation": 11,
+        "directIntent": true,
+        "moveX": 0.5,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "EPOCH_MISMATCH"
+        ],
+        "asserts": {
+          "stateUnchanged": true
+        }
+      }
+    },
+    {
+      "caseId": "P14",
+      "note": "a generation at or below the watermark is superseded",
+      "target": "admitGeneration",
+      "encoding": "json",
+      "input": {
+        "generation": 10
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "SUPERSEDED"
+        ]
+      }
+    },
+    {
+      "caseId": "P15",
+      "note": "a forward gap of 65 exceeds the admitted window of 64",
+      "target": "admitGeneration",
+      "encoding": "json",
+      "input": {
+        "generation": 75
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "RESYNC_REQUIRED"
+        ],
+        "asserts": {
+          "watermarkUnchanged": true
+        }
+      }
+    },
+    {
+      "caseId": "P16",
+      "note": "the same identifier with an identical payload is a replay of the cached result",
+      "target": "compareRequestIdentity",
+      "encoding": "json",
+      "input": {
+        "cached": {
+          "requestId": "move-001",
+          "payloadHash": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "incoming": {
+          "requestId": "move-001",
+          "payloadHash": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "replay": true
+        }
+      }
+    },
+    {
+      "caseId": "P17",
+      "note": "the same identifier with a different payload conflicts",
+      "target": "compareRequestIdentity",
+      "encoding": "json",
+      "input": {
+        "cached": {
+          "requestId": "move-001",
+          "payloadHash": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "incoming": {
+          "requestId": "move-001",
+          "payloadHash": "3333333333333333333333333333333333333333333333333333333333333333"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "REQUEST_ID_CONFLICT"
+        ]
+      }
+    },
+    {
+      "caseId": "P18",
+      "note": "the generation overflow boundary: one above the declared maximum is refused rather than wrapped",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 4294967295,
+        "directIntent": true,
+        "moveX": 0.5,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_GENERATION"
+        ],
+        "asserts": {
+          "noWraparound": true
+        }
+      }
+    },
+    {
+      "caseId": "P19",
+      "note": "an old completion for a superseded route revision cannot be applied, which is also the post-disconnect case",
+      "target": "validateRouteStatus",
+      "encoding": "json",
+      "input": {
+        "entityId": "entity-001",
+        "sessionEpoch": 7,
+        "generation": 18,
+        "routeRevision": 2,
+        "status": "ARRIVED",
+        "serverTick": 4400
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "SUPERSEDED"
+        ],
+        "asserts": {
+          "stateUnchanged": true
+        }
+      }
+    },
+    {
+      "caseId": "P20",
+      "note": "a protocol version outside the supported set is refused with no range logic",
+      "target": "validateJoin",
+      "encoding": "json",
+      "input": {
+        "protocolVersion": "udg-m0-0.9.0",
+        "configHash": "MATCH_CONFIG_HASH",
+        "manifestHash": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "PROTOCOL_MISMATCH"
+        ]
+      }
+    },
+    {
+      "caseId": "P21",
+      "note": "a configuration hash that does not match the server's own digest",
+      "target": "validateJoin",
+      "encoding": "json",
+      "input": {
+        "protocolVersion": "MATCH_PROTOCOL_VERSION",
+        "configHash": "4444444444444444444444444444444444444444444444444444444444444444",
+        "manifestHash": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "CONFIG_MISMATCH"
+        ]
+      }
+    },
+    {
+      "caseId": "P22",
+      "note": "an asset manifest hash that does not match the server's",
+      "target": "validateJoin",
+      "encoding": "json",
+      "input": {
+        "protocolVersion": "MATCH_PROTOCOL_VERSION",
+        "configHash": "MATCH_CONFIG_HASH",
+        "manifestHash": "5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "ASSET_MISMATCH"
+        ]
+      }
+    },
+    {
+      "caseId": "P23",
+      "note": "a one-shot request carrying a stale epoch",
+      "target": "validateMoveTo",
+      "encoding": "json",
+      "input": {
+        "requestId": "move-stale-epoch",
+        "sessionEpoch": 6,
+        "generation": 11,
+        "x": 0,
+        "y": 0.9,
+        "z": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "EPOCH_MISMATCH"
+        ]
+      }
+    },
+    {
+      "caseId": "P24",
+      "note": "a cancellation carrying a stale epoch",
+      "target": "validateCancelPath",
+      "encoding": "json",
+      "input": {
+        "requestId": "cancel-stale-epoch",
+        "sessionEpoch": 6,
+        "generation": 11
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "EPOCH_MISMATCH"
+        ]
+      }
+    },
+    {
+      "caseId": "P25",
+      "note": "a completion for a route revision that does not exist yet is a payload error, not a future acceptance",
+      "target": "validateRouteStatus",
+      "encoding": "json",
+      "input": {
+        "entityId": "entity-001",
+        "sessionEpoch": 7,
+        "generation": 21,
+        "routeRevision": 4,
+        "status": "ARRIVED",
+        "serverTick": 4401
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P26",
+      "note": "a status for a different entity than the one the session owns",
+      "target": "validateRouteStatus",
+      "encoding": "json",
+      "input": {
+        "entityId": "entity-999",
+        "sessionEpoch": 7,
+        "generation": 21,
+        "routeRevision": 3,
+        "status": "ARRIVED",
+        "serverTick": 4402
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P27",
+      "note": "generation zero is not usable for a one-shot request either",
+      "target": "validateMoveTo",
+      "encoding": "json",
+      "input": {
+        "requestId": "move-zero-generation",
+        "sessionEpoch": 7,
+        "generation": 0,
+        "x": 0,
+        "y": 0.9,
+        "z": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_GENERATION"
+        ]
+      }
+    },
+    {
+      "caseId": "P28",
+      "note": "an identifier outside [A-Za-z0-9_-] is refused before any cache lookup",
+      "target": "validateMoveTo",
+      "encoding": "json",
+      "input": {
+        "requestId": "move 001",
+        "sessionEpoch": 7,
+        "generation": 11,
+        "x": 0,
+        "y": 0.9,
+        "z": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P29",
+      "note": "a request identifier that is not the cached one cannot be a replay",
+      "target": "compareRequestIdentity",
+      "encoding": "json",
+      "input": {
+        "cached": {
+          "requestId": "move-001",
+          "payloadHash": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "incoming": {
+          "requestId": "move-002",
+          "payloadHash": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P30",
+      "note": "an empty payload is a structural failure and never a supersession or resync",
+      "target": "admitGeneration",
+      "encoding": "json",
+      "input": {},
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P31",
+      "note": "a negative generation is invalid rather than superseded",
+      "target": "admitGeneration",
+      "encoding": "json",
+      "input": {
+        "generation": -1
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_GENERATION"
+        ]
+      }
+    }
+  ]
+}

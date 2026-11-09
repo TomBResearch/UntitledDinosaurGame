@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "UDG @udg/protocol workspace. domain declarations, wire envelopes, validation and replica schemas. Implemented by UDG-002; intentionally empty in the UDG-001 foundation.",
+  "description": "UDG @udg/protocol workspace. domain declarations, wire envelopes, validation and replica schemas. Implemented by UDG-002: types, bounds and mapping only, with no movement, admission or SDK behaviour.",
   "license": "UNLICENSED",
   "engines": {
     "node": "24.22.2",
@@ -15,6 +15,18 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./domain": {
+      "types": "./dist/domain/index.d.ts",
+      "default": "./dist/domain/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema/index.d.ts",
+      "default": "./dist/schema/index.js"
+    },
+    "./mapping": {
+      "types": "./dist/mapping/index.d.ts",
+      "default": "./dist/mapping/index.js"
     }
   },
   "files": [
@@ -26,5 +38,8 @@
   },
   "devDependencies": {
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@colyseus/schema": "5.0.45"
   }
 }

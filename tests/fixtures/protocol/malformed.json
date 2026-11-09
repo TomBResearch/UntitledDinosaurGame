@@ -1,0 +1,720 @@
+{
+  "fixtureVersion": "udg-protocol-fixtures-1",
+  "fixtureId": "UDG-002-protocol-malformed",
+  "kind": "protocol-wire-negative",
+  "ownerTask": "UDG-002",
+  "protocolVersion": "udg-m0-1.0.0",
+  "configHash": "948f8c10fc404e2ebdb015abc8e30b8e66caf357347db3a2636ace96687a208a",
+  "seed": null,
+  "boundsProvenance": "test-only-synthetic",
+  "bounds": {
+    "x": {
+      "min": -100,
+      "max": 100
+    },
+    "y": {
+      "min": -10,
+      "max": 50
+    },
+    "z": {
+      "min": -100,
+      "max": 100
+    }
+  },
+  "spawn": {
+    "x": 0,
+    "y": 0.9,
+    "z": 0
+  },
+  "context": {
+    "sessionEpoch": 7,
+    "generationWatermark": 10,
+    "currentRouteRevision": 3,
+    "entityId": "entity-001",
+    "manifestHash": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "note": "P01 to P12 are the required malformed set from docs/validation/fixtures.md 7.2; P21 to P24 are added cases, which 7.2 permits while forbidding removal. NaN and infinities are injected as real binary doubles because JSON cannot represent them, and a set that only used JSON would prove nothing about the wire path (7.1). Every case names the refusal it expects: passing because something threw is not a pass.",
+  "cases": [
+    {
+      "caseId": "P01",
+      "note": "NaN in a replicated float64 field, injected as the real IEEE-754 double",
+      "target": "fromReplica",
+      "encoding": "binary",
+      "binary": {
+        "codec": "schema-v5",
+        "schema": "PlayerSchema",
+        "base": "@player-motion",
+        "patch": {
+          "field": "x",
+          "value": {
+            "number": "NaN"
+          }
+        }
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ],
+        "asserts": {
+          "stateUnchanged": true
+        }
+      }
+    },
+    {
+      "caseId": "P02",
+      "note": "positive and negative infinity in the velocity fields",
+      "target": "fromReplica",
+      "encoding": "binary",
+      "binary": {
+        "codec": "schema-v5",
+        "schema": "PlayerSchema",
+        "base": "@player-motion",
+        "patch": {
+          "field": "vy",
+          "value": {
+            "number": "Infinity"
+          }
+        }
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ],
+        "asserts": {
+          "stateUnchanged": true
+        }
+      }
+    },
+    {
+      "caseId": "P03",
+      "note": "a numeric string where a number is declared",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 11,
+        "directIntent": true,
+        "moveX": "0.5",
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ],
+        "asserts": {
+          "neutralisesToZero": true
+        }
+      }
+    },
+    {
+      "caseId": "P04",
+      "note": "null in a number field",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 11,
+        "directIntent": true,
+        "moveX": null,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ],
+        "asserts": {
+          "neutralisesToZero": true
+        }
+      }
+    },
+    {
+      "caseId": "P05",
+      "note": "an array where a scalar is declared",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 11,
+        "directIntent": true,
+        "moveX": [
+          0
+        ],
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ],
+        "asserts": {
+          "neutralisesToZero": true
+        }
+      }
+    },
+    {
+      "caseId": "P06",
+      "note": "a missing declared field never becomes a default",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 11,
+        "moveX": 0.5,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P07",
+      "note": "an unknown application field is rejected rather than ignored",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 11,
+        "directIntent": true,
+        "moveX": 0.5,
+        "moveZ": 0,
+        "boost": 2
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P08",
+      "note": "an oversized identifier, and a unicode identifier which is a rejection rather than a normalisation",
+      "target": "validateMoveTo",
+      "encoding": "json",
+      "input": {
+        "requestId": "012345678901234567890123456789012345678901234567890123456789012345678",
+        "sessionEpoch": 7,
+        "generation": 11,
+        "x": 0,
+        "y": 0.9,
+        "z": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P09",
+      "note": "an integer beyond the safe double range cannot be a generation",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 9007199254740992,
+        "directIntent": true,
+        "moveX": 0.5,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_GENERATION"
+        ]
+      }
+    },
+    {
+      "caseId": "P10",
+      "note": "an enum value outside the closed set, in both a status payload and a canonical state",
+      "target": "validateRouteStatus",
+      "encoding": "json",
+      "input": {
+        "entityId": "entity-001",
+        "sessionEpoch": 7,
+        "generation": 20,
+        "routeRevision": 3,
+        "status": "FLYING",
+        "serverTick": 4321
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P11",
+      "note": "a truncated frame: the framing failure stays contained to the offender and yields no state",
+      "target": "fromReplica",
+      "encoding": "binary",
+      "binary": {
+        "codec": "schema-v5",
+        "schema": "PlayerSchema",
+        "base": "@player-motion",
+        "truncateTo": 3
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ],
+        "asserts": {
+          "contained": true,
+          "stateUnchanged": true
+        }
+      }
+    },
+    {
+      "caseId": "P12",
+      "note": "client-authoritative fields are refused on sight: position, speed, elapsed time, route, authority tick and a private sequence",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 11,
+        "directIntent": true,
+        "moveX": 0.5,
+        "moveZ": 0,
+        "position": {
+          "x": 99,
+          "y": 0.9,
+          "z": 99
+        }
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P21",
+      "note": "tagged NaN in an axis, expanded by the loader (docs/validation/fixtures.md 7.1)",
+      "target": "validateDirectFrame",
+      "encoding": "json-tagged",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 11,
+        "directIntent": true,
+        "moveX": {
+          "number": "NaN"
+        },
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ],
+        "asserts": {
+          "neutralisesToZero": true
+        }
+      }
+    },
+    {
+      "caseId": "P22",
+      "note": "tagged negative infinity in the second axis",
+      "target": "validateDirectFrame",
+      "encoding": "json-tagged",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 11,
+        "directIntent": true,
+        "moveX": 0,
+        "moveZ": {
+          "number": "-Infinity"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ],
+        "asserts": {
+          "neutralisesToZero": true
+        }
+      }
+    },
+    {
+      "caseId": "P23",
+      "note": "tagged NaN in a destination coordinate",
+      "target": "validateMoveTo",
+      "encoding": "json-tagged",
+      "input": {
+        "requestId": "move-nan",
+        "sessionEpoch": 7,
+        "generation": 11,
+        "x": {
+          "number": "NaN"
+        },
+        "y": 0.9,
+        "z": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P24",
+      "note": "an axis outside the inclusive range is refused, never clamped to the limit",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 11,
+        "directIntent": true,
+        "moveX": 1.0000001,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ],
+        "asserts": {
+          "notClamped": true
+        }
+      }
+    },
+    {
+      "caseId": "P25",
+      "note": "a negative or fractional generation is invalid, including one that is merely a whole-number float above the declared maximum",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 10.5,
+        "directIntent": true,
+        "moveX": 0.5,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_GENERATION"
+        ]
+      }
+    },
+    {
+      "caseId": "P26",
+      "note": "generation zero with a real intention is invalid; only the neutral initial frame may use zero",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 0,
+        "directIntent": true,
+        "moveX": 0.5,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_GENERATION"
+        ]
+      }
+    },
+    {
+      "caseId": "P27",
+      "note": "a keepalive frame that smuggles an intention is invalid and must neutralise, not move",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 12,
+        "directIntent": false,
+        "moveX": 1,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ],
+        "asserts": {
+          "neutralisesToZero": true
+        }
+      }
+    },
+    {
+      "caseId": "P28",
+      "note": "epoch zero is not a server-issued epoch",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 0,
+        "generation": 11,
+        "directIntent": true,
+        "moveX": 0.5,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P29",
+      "note": "a destination outside the explicitly supplied volume is refused and never clamped inside",
+      "target": "validateMoveTo",
+      "encoding": "json",
+      "input": {
+        "requestId": "move-far",
+        "sessionEpoch": 7,
+        "generation": 11,
+        "x": 1000,
+        "y": 0.9,
+        "z": 0
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "OUT_OF_BOUNDS"
+        ],
+        "asserts": {
+          "notClamped": true
+        }
+      }
+    },
+    {
+      "caseId": "P30",
+      "note": "a hash field that is not 64 lowercase hexadecimal characters",
+      "target": "validateJoin",
+      "encoding": "json",
+      "input": {
+        "protocolVersion": "MATCH_PROTOCOL_VERSION",
+        "configHash": "ABC",
+        "manifestHash": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P31",
+      "note": "a non-finite integrator scalar must not be projected into a replica",
+      "target": "toReplica",
+      "encoding": "json-tagged",
+      "input": {
+        "player": "@player-motion",
+        "patch": {
+          "path": "locomotion.kinematic.verticalVelocity",
+          "value": {
+            "number": "NaN"
+          }
+        }
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P32",
+      "note": "an out-of-range integer attempted against a uint8 enum field is refused by mapping before the codec can wrap it",
+      "target": "toReplica",
+      "encoding": "json",
+      "input": {
+        "player": "@player-motion",
+        "patch": {
+          "path": "locomotion.mode",
+          "value": "sidling"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P33",
+      "note": "the same rule for a client-supplied speed and elapsed time",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 11,
+        "directIntent": true,
+        "moveX": 0.5,
+        "moveZ": 0,
+        "speed": 12,
+        "elapsedMs": 33
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P34",
+      "note": "a client-supplied route and authority tick are refused",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 11,
+        "directIntent": true,
+        "moveX": 0.5,
+        "moveZ": 0,
+        "routeRevision": 9,
+        "authorityTick": 55
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ]
+      }
+    },
+    {
+      "caseId": "P35",
+      "note": "an unnormalised yaw is refused by mapping rather than quietly wrapped",
+      "target": "toReplica",
+      "encoding": "json",
+      "input": {
+        "player": "@player-yaw-pi"
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ],
+        "asserts": {
+          "stateUnchanged": true
+        }
+      }
+    },
+    {
+      "caseId": "P36",
+      "note": "a signed zero in canonical state is refused, because the wire would turn it into +0",
+      "target": "toReplica",
+      "encoding": "json",
+      "input": {
+        "player": "@player-negative-zero"
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "INVALID_PAYLOAD"
+        ],
+        "asserts": {
+          "stateUnchanged": true
+        }
+      }
+    }
+  ],
+  "playerStates": {
+    "@player-motion": {
+      "entityId": "entity-001",
+      "sessionEpoch": 7,
+      "connected": true,
+      "locomotion": {
+        "kinematic": {
+          "position": {
+            "x": 12.25,
+            "y": 0.9,
+            "z": -3.5
+          },
+          "yaw": -2.718281828459045,
+          "velocity": {
+            "x": 4,
+            "y": -0.4905,
+            "z": 0
+          },
+          "grounded": true,
+          "verticalVelocity": -1.2345678901234567
+        },
+        "mode": "direct",
+        "route": null,
+        "intentGeneration": 42,
+        "lastAuthorityTick": 1234
+      }
+    },
+    "@player-yaw-pi": {
+      "entityId": "entity-001",
+      "sessionEpoch": 7,
+      "connected": true,
+      "locomotion": {
+        "kinematic": {
+          "position": {
+            "x": 0,
+            "y": 0.9,
+            "z": 0
+          },
+          "yaw": 3.141592653589793,
+          "velocity": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "grounded": true,
+          "verticalVelocity": 0
+        },
+        "mode": "idle",
+        "route": null,
+        "intentGeneration": 1,
+        "lastAuthorityTick": 1
+      }
+    },
+    "@player-negative-zero": {
+      "entityId": "entity-001",
+      "sessionEpoch": 7,
+      "connected": true,
+      "locomotion": {
+        "kinematic": {
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "yaw": 0,
+          "velocity": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "grounded": true,
+          "verticalVelocity": 0
+        },
+        "mode": "idle",
+        "route": null,
+        "intentGeneration": 0,
+        "lastAuthorityTick": 0
+      },
+      "signedZero": [
+        "locomotion.kinematic.position.x",
+        "locomotion.kinematic.position.y",
+        "locomotion.kinematic.position.z",
+        "locomotion.kinematic.yaw",
+        "locomotion.kinematic.velocity.x",
+        "locomotion.kinematic.velocity.y",
+        "locomotion.kinematic.velocity.z"
+      ]
+    }
+  }
+}

@@ -1,0 +1,636 @@
+{
+  "fixtureVersion": "udg-protocol-fixtures-1",
+  "fixtureId": "UDG-002-protocol-valid",
+  "kind": "protocol-valid",
+  "ownerTask": "UDG-002",
+  "protocolVersion": "udg-m0-1.0.0",
+  "configHash": "948f8c10fc404e2ebdb015abc8e30b8e66caf357347db3a2636ace96687a208a",
+  "seed": null,
+  "boundsProvenance": "test-only-synthetic",
+  "bounds": {
+    "x": {
+      "min": -100,
+      "max": 100
+    },
+    "y": {
+      "min": -10,
+      "max": 50
+    },
+    "z": {
+      "min": -100,
+      "max": 100
+    }
+  },
+  "spawn": {
+    "x": 0,
+    "y": 0.9,
+    "z": 0
+  },
+  "context": {
+    "sessionEpoch": 7,
+    "generationWatermark": 10,
+    "currentRouteRevision": 3,
+    "entityId": "entity-001",
+    "manifestHash": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "note": "Positive protocol cases. Every extent here is test-only synthetic: the region asset belongs to UDG-007 and no production default exists (owner decision D5), so a case that needs containment carries its own labelled volume. Expected values are written as the exact IEEE-754 doubles the contract requires, not as tolerances, because ADR 0001 makes wire and mapping round trips exact after normalisation.",
+  "cases": [
+    {
+      "caseId": "V01",
+      "note": "full forward intent at the axis limit",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 11,
+        "directIntent": true,
+        "moveX": 1,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "axes": {
+            "moveX": 1,
+            "moveZ": 0
+          }
+        }
+      }
+    },
+    {
+      "caseId": "V02",
+      "note": "diagonal beyond unit length is normalised, not clamped per axis",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 12,
+        "directIntent": true,
+        "moveX": -1,
+        "moveZ": -1
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "axes": {
+            "moveX": -0.7071067811865475,
+            "moveZ": -0.7071067811865475
+          }
+        }
+      }
+    },
+    {
+      "caseId": "V03",
+      "note": "a real release sample carries directIntent with zero axes",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 13,
+        "directIntent": true,
+        "moveX": 0,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "axes": {
+            "moveX": 0,
+            "moveZ": 0
+          },
+          "directIntent": true
+        }
+      }
+    },
+    {
+      "caseId": "V04",
+      "note": "a neutral keepalive keeps path mode alive and reads as no intent",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 14,
+        "directIntent": false,
+        "moveX": 0,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "axes": {
+            "moveX": 0,
+            "moveZ": 0
+          },
+          "directIntent": false,
+          "neutralInput": true
+        }
+      }
+    },
+    {
+      "caseId": "V05",
+      "note": "the spawn position is inside the synthetic test volume",
+      "target": "validateMoveTo",
+      "encoding": "json",
+      "input": {
+        "requestId": "move-001",
+        "sessionEpoch": 7,
+        "generation": 15,
+        "x": 0,
+        "y": 0.9,
+        "z": 0
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "wire": {
+            "requestId": "move-001",
+            "sessionEpoch": 7,
+            "generation": 15,
+            "x": 0,
+            "y": 0.9,
+            "z": 0
+          }
+        }
+      }
+    },
+    {
+      "caseId": "V06",
+      "note": "cancellation needs no destination and no bounds decision",
+      "target": "validateCancelPath",
+      "encoding": "json",
+      "input": {
+        "requestId": "cancel-001",
+        "sessionEpoch": 7,
+        "generation": 16
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "requestId": "cancel-001",
+          "stamp": {
+            "sessionEpoch": 7,
+            "generation": 16
+          }
+        }
+      }
+    },
+    {
+      "caseId": "V07",
+      "note": "join metadata that matches the server identity",
+      "target": "validateJoin",
+      "encoding": "json",
+      "input": {
+        "protocolVersion": "MATCH_PROTOCOL_VERSION",
+        "configHash": "MATCH_CONFIG_HASH",
+        "manifestHash": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "caseId": "V08",
+      "note": "route pair rule: revision 0 with index 0 means no route",
+      "target": "roundTrip",
+      "encoding": "json",
+      "input": {
+        "player": "@player-idle"
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "pair": {
+            "routeRevision": 0,
+            "nextWaypointIndex": 0
+          },
+          "roundTripExact": true
+        }
+      }
+    },
+    {
+      "caseId": "V09",
+      "note": "route pair rule: a positive revision with index 0 is an active route at its first waypoint",
+      "target": "roundTrip",
+      "encoding": "json",
+      "input": {
+        "player": "@player-path"
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "pair": {
+            "routeRevision": 5,
+            "nextWaypointIndex": 0
+          },
+          "roundTripExact": true
+        }
+      }
+    },
+    {
+      "caseId": "V10",
+      "note": "the full prediction-relevant scalar set survives a round trip, including verticalVelocity distinct from vy",
+      "target": "roundTrip",
+      "encoding": "json",
+      "input": {
+        "player": "@player-motion"
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "roundTripExact": true,
+          "scalars": {
+            "entityId": "entity-001",
+            "x": 12.25,
+            "y": 0.9,
+            "z": -3.5,
+            "yaw": -2.718281828459045,
+            "vx": 4,
+            "vy": -0.4905,
+            "vz": 0,
+            "grounded": true,
+            "verticalVelocity": -1.2345678901234567,
+            "movementMode": 1,
+            "intentGeneration": 42,
+            "sessionEpoch": 7,
+            "connected": true,
+            "lastAuthorityTick": 1234
+          }
+        }
+      }
+    },
+    {
+      "caseId": "V11",
+      "note": "negative zero is normalised to positive zero by validation, so an exact-copy assertion downstream is meaningful",
+      "target": "validateDirectFrame",
+      "encoding": "json-tagged",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 15,
+        "directIntent": true,
+        "moveX": {
+          "number": "-0"
+        },
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "positiveZeroFields": [
+            "moveX",
+            "moveZ"
+          ]
+        }
+      }
+    },
+    {
+      "caseId": "V12",
+      "note": "a normalised yaw at the closed end of the interval survives the wire unchanged",
+      "target": "roundTrip",
+      "encoding": "json",
+      "input": {
+        "player": "@player-yaw-wrapped"
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "roundTripExact": true,
+          "yawWrapped": -3.141592653589793
+        }
+      }
+    },
+    {
+      "caseId": "V13",
+      "note": "a forward gap exactly at the admitted window is admitted",
+      "target": "admitGeneration",
+      "encoding": "json",
+      "input": {
+        "generation": 74
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "admittedGeneration": 74
+        }
+      }
+    },
+    {
+      "caseId": "V14",
+      "note": "the same identifier with an identical payload is a replay, not a recomputation",
+      "target": "compareRequestIdentity",
+      "encoding": "json",
+      "input": {
+        "cached": {
+          "requestId": "move-001",
+          "payloadHash": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "incoming": {
+          "requestId": "move-001",
+          "payloadHash": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "replay": true
+        }
+      }
+    },
+    {
+      "caseId": "V15",
+      "note": "a completion for the route the entity is actually on is accepted",
+      "target": "validateRouteStatus",
+      "encoding": "json",
+      "input": {
+        "entityId": "entity-001",
+        "sessionEpoch": 7,
+        "generation": 20,
+        "routeRevision": 3,
+        "status": "ARRIVED",
+        "serverTick": 4321
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "status": "ARRIVED",
+          "routeRevision": 3
+        }
+      }
+    },
+    {
+      "caseId": "V16",
+      "note": "the top of the epoch range is usable, so an overflow is detectable rather than silent",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 4294967294,
+        "directIntent": true,
+        "moveX": 0.5,
+        "moveZ": 0
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "generation": 4294967294
+        }
+      }
+    },
+    {
+      "caseId": "V17",
+      "note": "an axis at each inclusive limit is valid; the limit is a rejection boundary, not a clamp",
+      "target": "validateDirectFrame",
+      "encoding": "json",
+      "input": {
+        "sessionEpoch": 7,
+        "generation": 17,
+        "directIntent": true,
+        "moveX": -1,
+        "moveZ": 1
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "axes": {
+            "moveX": -0.7071067811865475,
+            "moveZ": 0.7071067811865475
+          }
+        }
+      }
+    },
+    {
+      "caseId": "V18",
+      "note": "region identity, version and hash fields round trip without loss",
+      "target": "roundTripRegion",
+      "encoding": "json",
+      "input": {
+        "worldId": "world-001",
+        "regionId": "region-greybox-001",
+        "serverTick": 4294967294,
+        "protocolVersion": "MATCH_PROTOCOL_VERSION",
+        "configVersion": "m0-config-1",
+        "configHash": "MATCH_CONFIG_HASH",
+        "manifestHash": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "regionRoundTripExact": true
+        }
+      }
+    },
+    {
+      "caseId": "V19",
+      "note": "the smallest positive subnormal and a large finite value both survive as float64",
+      "target": "roundTrip",
+      "encoding": "json",
+      "input": {
+        "player": "@player-extremes"
+      },
+      "expect": {
+        "ok": true,
+        "asserts": {
+          "roundTripExact": true
+        }
+      }
+    }
+  ],
+  "playerStates": {
+    "@player-idle": {
+      "entityId": "entity-001",
+      "sessionEpoch": 7,
+      "connected": true,
+      "locomotion": {
+        "kinematic": {
+          "position": {
+            "x": 0,
+            "y": 0.9,
+            "z": 0
+          },
+          "yaw": 0,
+          "velocity": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "grounded": true,
+          "verticalVelocity": 0
+        },
+        "mode": "idle",
+        "route": null,
+        "intentGeneration": 0,
+        "lastAuthorityTick": 100
+      }
+    },
+    "@player-path": {
+      "entityId": "entity-001",
+      "sessionEpoch": 7,
+      "connected": true,
+      "locomotion": {
+        "kinematic": {
+          "position": {
+            "x": 1.5,
+            "y": 0.9,
+            "z": -2.25
+          },
+          "yaw": 0.5,
+          "velocity": {
+            "x": 0,
+            "y": -0.1,
+            "z": -4
+          },
+          "grounded": true,
+          "verticalVelocity": -0.1
+        },
+        "mode": "path",
+        "route": {
+          "revision": 5,
+          "nextWaypointIndex": 0
+        },
+        "intentGeneration": 31,
+        "lastAuthorityTick": 900
+      }
+    },
+    "@player-motion": {
+      "entityId": "entity-001",
+      "sessionEpoch": 7,
+      "connected": true,
+      "locomotion": {
+        "kinematic": {
+          "position": {
+            "x": 12.25,
+            "y": 0.9,
+            "z": -3.5
+          },
+          "yaw": -2.718281828459045,
+          "velocity": {
+            "x": 4,
+            "y": -0.4905,
+            "z": 0
+          },
+          "grounded": true,
+          "verticalVelocity": -1.2345678901234567
+        },
+        "mode": "direct",
+        "route": null,
+        "intentGeneration": 42,
+        "lastAuthorityTick": 1234
+      }
+    },
+    "@player-negative-zero": {
+      "entityId": "entity-001",
+      "sessionEpoch": 7,
+      "connected": true,
+      "locomotion": {
+        "kinematic": {
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "yaw": 0,
+          "velocity": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "grounded": true,
+          "verticalVelocity": 0
+        },
+        "mode": "idle",
+        "route": null,
+        "intentGeneration": 0,
+        "lastAuthorityTick": 0
+      },
+      "signedZero": [
+        "locomotion.kinematic.position.x",
+        "locomotion.kinematic.position.y",
+        "locomotion.kinematic.position.z",
+        "locomotion.kinematic.yaw",
+        "locomotion.kinematic.velocity.x",
+        "locomotion.kinematic.velocity.y",
+        "locomotion.kinematic.velocity.z"
+      ]
+    },
+    "@player-yaw-pi": {
+      "entityId": "entity-001",
+      "sessionEpoch": 7,
+      "connected": true,
+      "locomotion": {
+        "kinematic": {
+          "position": {
+            "x": 0,
+            "y": 0.9,
+            "z": 0
+          },
+          "yaw": 3.141592653589793,
+          "velocity": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "grounded": true,
+          "verticalVelocity": 0
+        },
+        "mode": "idle",
+        "route": null,
+        "intentGeneration": 1,
+        "lastAuthorityTick": 1
+      }
+    },
+    "@player-extremes": {
+      "entityId": "entity-001",
+      "sessionEpoch": 7,
+      "connected": true,
+      "locomotion": {
+        "kinematic": {
+          "position": {
+            "x": 5e-324,
+            "y": 0.9,
+            "z": 1.7976931348623157e+308
+          },
+          "yaw": -1.5707963267948966,
+          "velocity": {
+            "x": 5e-324,
+            "y": -1.7976931348623157e+308,
+            "z": 0
+          },
+          "grounded": false,
+          "verticalVelocity": -5e-324
+        },
+        "mode": "direct",
+        "route": {
+          "revision": 1,
+          "nextWaypointIndex": 7
+        },
+        "intentGeneration": 1,
+        "lastAuthorityTick": 1
+      }
+    },
+    "@player-yaw-wrapped": {
+      "entityId": "entity-001",
+      "sessionEpoch": 7,
+      "connected": true,
+      "locomotion": {
+        "kinematic": {
+          "position": {
+            "x": 0,
+            "y": 0.9,
+            "z": 0
+          },
+          "yaw": -3.141592653589793,
+          "velocity": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "grounded": true,
+          "verticalVelocity": 0
+        },
+        "mode": "idle",
+        "route": null,
+        "intentGeneration": 1,
+        "lastAuthorityTick": 1
+      }
+    }
+  }
+}

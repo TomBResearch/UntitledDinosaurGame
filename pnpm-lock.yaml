@@ -207,6 +207,10 @@ importers:
         version: 5.9.3
 
   packages/config:
+    dependencies:
+      '@udg/protocol':
+        specifier: workspace:*
+        version: link:../protocol
     devDependencies:
       typescript:
         specifier: 5.9.3
@@ -225,6 +229,10 @@ importers:
         version: 5.9.3
 
   packages/protocol:
+    dependencies:
+      '@colyseus/schema':
+        specifier: 5.0.45
+        version: 5.0.45(typescript@5.9.3)
     devDependencies:
       typescript:
         specifier: 5.9.3
@@ -252,6 +260,15 @@ packages:
 
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
+
+  '@colyseus/schema@5.0.45':
+    resolution: {integrity: sha512-Q4J5FbKuc1eYzX/aC+6GCw64u3SNDOgSS14pzScIbk1AqeZMgFKBnlUyeYFsK/bbWSMaWc3WugxhTf4BuGxF8w==}
+    hasBin: true
+    peerDependencies:
+      typescript: '>=5.0.0'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
 
   '@eslint-community/eslint-utils@4.10.1':
     resolution: {integrity: sha512-cuadcxVFE8sDK6iWJbs8Sn0av2Nrh2QSGQhVlBW9AaAHqHwjWsZHT8LJ4hFGPh7ASBV2deFdM7H/DPjulmh8rg==}
@@ -1056,6 +1073,10 @@ snapshots:
     dependencies:
       hashery: 1.5.1
       keyv: 5.6.0
+
+  '@colyseus/schema@5.0.45(typescript@5.9.3)':
+    optionalDependencies:
+      typescript: 5.9.3
 
   '@eslint-community/eslint-utils@4.10.1(eslint@10.14.0)':
     dependencies:
