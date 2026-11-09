@@ -156,8 +156,9 @@ Evidence retained in the host store `/workspace/udg-evidence` as `ci-run-4267620
 runner log. Both bundles of the successful run verify with zero issues. No release, tag or new storage
 location was created for Phase 0, and **D4 remains open**.
 
-This section is a documentation-only follow-up to `673e2dd3`; it changes this file and the checksum
-manifest entry for it, and reports the runs above rather than a new one.
+This section is a documentation-only follow-up to `673e2dd3`. It changes only this file: the checksum
+manifest covers the contract corpus, not `assignments/`, so `pnpm contracts:checksums` reports no drift
+here. It reports the runs above rather than a new one.
 
 ## 6. Deviations and amendments actually applied
 
