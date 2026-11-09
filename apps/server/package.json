@@ -21,11 +21,12 @@
     "dist"
   ],
   "scripts": {
+    "//scripts": "typecheck:probes is the compiler gate and currently fails with PH0-B1; build:probes emits runnable probe JavaScript with --noCheck for measurement only and is deliberately excluded from build, so the accepted build path stays fully typechecked.",
     "clean": "node --input-type=module -e \"import{rmSync}from'node:fs';for(const p of ['dist','probes/dist'])rmSync(p,{recursive:true,force:true});\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:probes": "tsc -p tsconfig.probes.json --noEmit",
     "build:probes": "tsc -p tsconfig.probes.json --noCheck",
-    "build": "pnpm run clean && tsc -p tsconfig.json && tsc -p tsconfig.probes.json --noCheck"
+    "build": "pnpm run clean && tsc -p tsconfig.json"
   },
   "dependencies": {
     "@colyseus/core": "0.18.27",

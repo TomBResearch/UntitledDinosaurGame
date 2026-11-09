@@ -1,14 +1,21 @@
 /**
  * PR-0 — is the pinned stack usable under this repository's compiler policy?
  *
- * The probe has two halves. The compile half *is* the probe: `pnpm --filter @udg/server typecheck`
- * typechecks this file and every other probe module with `skipLibCheck: false`, `strict`,
- * `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess`, so a signature that differs from the
- * declarations is a compile error and not a runtime surprise. This module also *references* the symbols
- * the later probes depend on, in a typed position, so removing or renaming one breaks the build rather
- * than producing `undefined` at run time.
+ * The probe has two halves, and they must not be conflated.
  *
- * The runtime half records what was actually checked, and proves that no escape hatch was used.
+ * **The compile half is the verdict.** `pnpm --filter @udg/server typecheck:probes` typechecks this
+ * file and every other probe module with `skipLibCheck: false`, `strict`,
+ * `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess`, so a signature that differs from the
+ * declarations is a compile error and not a runtime surprise. The harness runs that command, writes the
+ * report, and passes it here with `--typecheck-report`; when it exits non-zero this probe reports
+ * **blocked** and fails, because reproducing a failure is not the same as establishing compatibility.
+ * The `--noCheck` emit that lets the other probes run is a diagnostic measurement aid, never an accepted
+ * build path, and this probe says so in its own result file.
+ *
+ * **The typed-reference half** references the symbols the later probes depend on, in a typed position,
+ * so removing or renaming one breaks the build rather than producing `undefined` at run time. The
+ * runtime half records what was actually checked and proves that no escape hatch was used — including
+ * casts to `never`, which silence exactly the mismatch PR-0 exists to find.
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -32,7 +39,7 @@ import { WebSocketTransport } from '@colyseus/ws-transport';
 import { DirectInputSchema, PlayerSchema, RegionSchema, DIRECT_INPUT_FIELDS } from '@udg/protocol/schema';
 import { validateDirectFrame } from '@udg/protocol';
 
-import { outputPath, runProbe, type DirectInputFrame } from './support.js';
+import { flagValue, outputPath, runProbe, stripNonCode, type DirectInputFrame } from './support.js';
 
 const declaredInput = DirectInputSchema;
 const declaredState = RegionSchema;
@@ -139,35 +146,86 @@ async function main(): Promise<void> {
     const sources = readdirSync(probeDir)
       .filter((entry) => entry.endsWith('.ts'))
       .map((entry) => join(probeDir, entry));
-    // The banned markers are assembled at runtime so that this file cannot match its own scan, and
-    // the type-position patterns are anchored to code syntax so prose cannot trip them.
+    // The banned markers are assembled at runtime so that this file cannot match its own scan.
     const directive = '@' + 'ts-';
     const anyToken = 'an' + 'y';
     const escapePatterns: readonly (readonly [string, RegExp])[] = [
       ['any-annotation', new RegExp(`:\\s*${anyToken}\\b|\\bas ${anyToken}\\b|<${anyToken}>|\\b${anyToken}\\[\\]|\\|\\s*${anyToken}\\b|&\\s*${anyToken}\\b`)],
       ['error-suppression', new RegExp(directive + '(ignore|expect-error|nocheck)')],
-      ['unknown-cast', new RegExp('as ' + 'unknown' + ' as')],
+      ['unknown-cast', new RegExp('as\\s+unk' + 'nown\\b')],
+      // A cast to `never` satisfies any parameter type, so it can turn a wrong signature into a clean
+      // compile — precisely the failure PR-0 exists to report. The reconnection callback is the case
+      // that would otherwise look clean.
+      ['never-cast', new RegExp('as\\s+nev' + 'er\\b')],
       ['lint-suppression', new RegExp('eslint' + '-(disable|enable)')],
+      // Importing a package's internal path bypasses its public entry points. Reading a declaration file
+      // as text for a visibility measurement is not an import and is not matched here.
+      ['private-package-import', new RegExp("from\\s+['\"]@col" + 'yseus/[a-z-]+/(build|src)/')],
     ];
     const offenders: string[] = [];
     for (const file of sources) {
-      const text = readFileSync(file, 'utf8');
+      // Comments and literals are removed first, so a docstring quoting a declaration path or writing the
+      // words "as never" while banning them is not reported as an offender.
+      const code = stripNonCode(readFileSync(file, 'utf8'));
       const relative = file.slice(root.length + 1);
       for (const [label, pattern] of escapePatterns) {
-        if (pattern.test(text)) offenders.push(`${relative}: ${label}`);
+        if (pattern.test(code)) offenders.push(`${relative}: ${label}`);
       }
-      if (new RegExp('@colyseus' + '/[a-z-]+/(build|src)/').test(text)) offenders.push(`${relative}: private package path`);
-      if (/\bprocess\.exit\(/.test(text) && !relative.includes('support.ts')) offenders.push(`${relative}: exits the process outside the harness`);
+      if (/\bprocess\.exit\(/.test(code) && !relative.includes('support.ts')) offenders.push(`${relative}: exits the process outside the harness`);
     }
+    checks.observe('escapeHatchPatterns', escapePatterns.map(([label]) => label));
     checks.check(
       'no-escape-hatches',
       offenders.length === 0,
       offenders.length === 0 ? `${String(sources.length)} probe modules are clean` : offenders.join('; '),
     );
+    // The compile half of PR-0: the harness ran the strict typecheck and hands the report over, because
+    // no probe can see the exit status of the command that built it.
+    const reportPath = flagValue(process.argv.slice(2), '--typecheck-report');
+    if (reportPath === undefined || !existsSync(reportPath)) {
+      checks.check('strict-typecheck-report-present', false, `PR-0 needs --typecheck-report <file>; got ${String(reportPath)}`);
+      checks.block('PR-0 is BLOCKED: without the strict typecheck report there is no evidence the pinned stack compiles.');
+    } else {
+      const report = JSON.parse(readFileSync(reportPath, 'utf8')) as {
+        command?: string;
+        exitCode?: number;
+        diagnostics?: readonly { readonly code?: string; readonly insideRepository?: boolean }[];
+      };
+      const diagnostics = report.diagnostics ?? [];
+      const insideRepository = diagnostics.filter((diagnostic) => diagnostic.insideRepository === true);
+      const insideDeclarations = diagnostics.length - insideRepository.length;
+      checks.observe('strictTypecheck', {
+        command: report.command ?? 'unknown',
+        exitCode: report.exitCode ?? -1,
+        diagnostics: diagnostics.length,
+        inRepositoryCode: insideRepository.length,
+        inThirdPartyDeclarations: insideDeclarations,
+      });
+      checks.check('strict-typecheck-report-present', true, `report from ${reportPath.slice(root.length + 1)}`);
+      checks.check(
+        'strict-typecheck-has-no-first-party-diagnostics',
+        insideRepository.length === 0,
+        `${String(insideRepository.length)} diagnostic(s) in repository code`,
+      );
+      const compiles = report.exitCode === 0 && diagnostics.length === 0;
+      checks.check(
+        'strict-typecheck-passes',
+        compiles,
+        `'${report.command ?? 'tsc'}' exited ${String(report.exitCode)} with ${String(diagnostics.length)} diagnostic(s) (${String(insideDeclarations)} inside third-party declarations)`,
+      );
+      if (!compiles) {
+        checks.block(
+          `PH0-B1: the strict probe typecheck ('${report.command ?? 'tsc --noEmit'}') exits ${String(report.exitCode)} with ${String(diagnostics.length)} diagnostics${insideDeclarations === diagnostics.length ? ', every one inside a third-party declaration' : ''}. PR-0 is BLOCKED, not passed: the pinned stack has not been shown to compile under this repository's policy, so its compatibility is NOT established. Emitting JavaScript with --noCheck keeps the other probes measurable and is a diagnostic path only, never the accepted build path.`,
+        );
+      }
+    }
+
     checks.observe('probeModules', sources.map((file) => file.slice(root.length + 1)));
     checks.observe('repositoryRootIsGit', existsSync(join(root, '.git')) || existsSync(join(root, '.git-ref')));
 
+    checks.limit('The escape-hatch scan strips comments and literals before matching, so a banned pattern written inside a string is invisible to it; the strict compile plus the no-any/no-never rule is what a cast cannot hide.');
     checks.limit('A compile proves the declarations match; it proves nothing about behaviour. That is what PR-2, PR-3, PR-8 and PR-12 are for.');
+    checks.limit('PR-0 reports blocked while the strict typecheck fails. The other probes still measure real behaviour on emitted JavaScript, and their results say so; none of them implies the stack typechecks.');
     checks.limit('PR-0 cannot show that an API the pinned set does not have is missing, because the repository does not import one. The api-map records each absent name as "not used, and why".');
   });
 }

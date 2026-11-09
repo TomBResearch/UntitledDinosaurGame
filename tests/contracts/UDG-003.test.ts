@@ -6,17 +6,25 @@
  * probe project, executes the emitted JavaScript in separate processes and reads the recorded result
  * files — instead of asserting a description of a run.
  *
- * Two things are deliberately true at the time of writing, and both are asserted rather than waived:
+ * One rule governs this file: **a diagnostic suite that reproduces a failure has not established
+ * compatibility.** Five probes measuring real behaviour on emitted JavaScript is not a working stack, so
+ * the compiler verdict is carried separately and asserted separately:
  *
- * - **PH0-B1**: the probe project does not typecheck, because the pinned third-party declarations
- *   reference a DOM-only global (`HeadersInit`), default-import `node:http` under
- *   `esModuleInterop: false`, and contain one generic constraint that TypeScript 5.9.3 rejects. The
- *   inventory below is pinned: the suite fails if the set changes in either direction, so a fix is
- *   as loud as a regression, and nobody can quietly widen the compiler policy to make it disappear.
- * - **PH0-B2**: there is no epoch-renewal API in the pinned set, so the application owns epochs.
+ * - **PH0-B1** keeps **PR-0 blocked**. The probe project does not typecheck, because the pinned
+ *   third-party declarations reference a DOM-only global (`HeadersInit`), default-import `node:http`
+ *   under `esModuleInterop: false`, and contain one generic constraint that TypeScript rejects. PR-0
+ *   therefore reports `verdict: "blocked"` and fails; `ok: true` for PR-0 would mean PH0-B1 was closed
+ *   without this file being updated. The third-party inventory below is pinned in both directions, so a
+ *   fix is as loud as a regression and nobody can widen the compiler policy to make it disappear.
+ *   `--noCheck` appears on an explicit emit command only, is excluded from the package `build` script,
+ *   and is asserted to be exactly that: a way to obtain measurable JavaScript, never a build path.
+ * - **PH0-B2** is **reclassified, not a blocker**: `sessionEpoch` is a UDG protocol concept that UDG
+ *   owns. Colyseus 0.18 has no epoch concept and is not expected to have one, so this is a design
+ *   obligation for Phase 2, not a library defect. PR-12 records the supported lifecycle primitives, the
+ *   renewal procedure still required, and what remains unproved.
  *
  * Nothing here claims a gate. Gate A stays Not Run, and D-7 is decided by the owner from PR-8's
- * recorded observation, not by this file.
+ * identity-level evidence, not by this file.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -30,6 +38,7 @@ import {
   PROBE_IDS,
   probeSources,
   runColyseusProbes,
+  stripNonCode,
   type ProbeId,
   type ProbeRecord,
   type ProbeRun,
@@ -89,6 +98,8 @@ beforeAll(() => {
       command: record.command,
       exitCode: record.exitCode,
       ok: record.result?.ok ?? false,
+      verdict: record.result?.verdict ?? (record.result === undefined ? 'error' : record.result.ok ? 'pass' : 'fail'),
+      blockedReason: record.result?.blockedReason,
       checks: record.result?.checks ?? [],
       observations: record.result?.observations ?? {},
       limitations: record.result?.limitations ?? [],
@@ -103,6 +114,7 @@ beforeAll(() => {
     thirdPartyDiagnostics: run.thirdPartyDiagnostics,
     pinnedInventory: PH0_B1.map(([file, code, count]) => ({ file, code, count })),
   });
+  keepArtefact('compatibility-verdict.json', run.compatibility);
   keepArtefact('dependency-graph.json', byId.get('PR-1')?.result?.observations ?? {});
 }, 900_000);
 
@@ -182,6 +194,15 @@ describe('UDG-003 Phase 0 — PR-0 compiler policy and blocker PH0-B1', () => {
     expect(serverManifest.scripts?.['typecheck:probes']).toContain('--noEmit');
   });
 
+  it('keeps --noCheck out of the accepted build path', () => {
+    const serverManifest = JSON.parse(readFileSync(join(ROOT, 'apps', 'server', 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+    // `build` is what CI runs and what a release would ship. Unchecked probe JavaScript must never be
+    // part of it; it exists only so the measurement probes can run while PH0-B1 is open.
+    expect(serverManifest.scripts?.['build'] ?? '', 'the accepted build path must not contain --noCheck').not.toContain('--noCheck');
+    expect(serverManifest.scripts?.['build'] ?? '').toContain('tsc -p tsconfig.json');
+    expect(serverManifest.scripts?.['build:probes'] ?? '').toContain('--noCheck');
+  });
+
   it('has no first-party type errors of its own', () => {
     expect(
       run.repositoryDiagnostics.map((d) => `${d.relativeFile}(${String(d.line)},${String(d.column)}) ${d.code}: ${d.message}`),
@@ -221,15 +242,54 @@ describe('UDG-003 Phase 0 — PR-0 compiler policy and blocker PH0-B1', () => {
     expect(constraint[0]).toContain('does not satisfy the constraint');
   });
 
-  it('reports each probe as passing on its own terms', () => {
-    const failures = run.probes.flatMap((record) =>
-      record.result === undefined
-        ? [`${record.id}: ${record.failureDetail ?? 'no result'}`]
-        : record.result.ok
-          ? []
-          : record.result.checks.filter((check) => !check.ok).map((check) => `${record.id} ${check.name} :: ${check.detail}`),
-    );
+  it('reports every probe but PR-0 as passing on its own terms', () => {
+    const failures = run.probes
+      .filter((record) => record.id !== 'PR-0')
+      .flatMap((record) =>
+        record.result === undefined
+          ? [`${record.id}: ${record.failureDetail ?? 'no result'}`]
+          : record.result.ok
+            ? []
+            : record.result.checks.filter((check) => !check.ok).map((check) => `${record.id} ${check.name} :: ${check.detail}`),
+      );
     expect(failures).toEqual([]);
+  });
+
+  it('reports PR-0 as blocked rather than passed while PH0-B1 is open', () => {
+    const record = byId.get('PR-0');
+    expect(record?.result, 'PR-0 must produce a result file').toBeDefined();
+    const result = record?.result as NonNullable<ProbeRecord['result']>;
+    expect(result.ok, 'a blocked PR-0 is a failed probe, never a green one').toBe(false);
+    expect(result.verdict).toBe('blocked');
+    expect(result.blockedReason).toContain('PH0-B1');
+    expect(result.blockedReason).toContain('NOT established');
+    const failing = result.checks.filter((check) => !check.ok).map((check) => check.name);
+    expect(failing).toContain('strict-typecheck-passes');
+    expect(failing).toContain('compatibility-blocked');
+    // The block must come from the strict typecheck, not from a probe inventing its own verdict.
+    expect(result.observations['strictTypecheck']).toMatchObject({ exitCode: 2, inRepositoryCode: 0 });
+    expect(result.observations['strictTypecheck']).toHaveProperty('inThirdPartyDeclarations');
+  });
+
+  it('publishes a compatibility verdict that refuses to call the stack compatible', () => {
+    expect(run.compatibility.stackCompatibility).toBe('not-established');
+    expect(run.compatibility.pr0).toBe('blocked');
+    expect(run.compatibility.diagnostics.inRepositoryCode).toBe(0);
+    expect(run.compatibility.acceptedBuildPath).toContain('typecheck:probes');
+    expect(run.compatibility.diagnosticEmission).toContain('--noCheck');
+    expect(run.compatibility.probes.find((probe) => probe.id === 'PR-0')?.verdict).toBe('blocked');
+    const verdictPath = join(PROBE_OUT, 'compatibility-verdict.json');
+    expect(existsSync(verdictPath), 'the machine-readable verdict is a deliverable').toBe(true);
+    const written = JSON.parse(readFileSync(verdictPath, 'utf8')) as {
+      taskId: string;
+      stackCompatibility: string;
+      pr0: string;
+      reading: string;
+    };
+    expect(written.taskId).toBe(TASK);
+    expect(written.stackCompatibility).toBe('not-established');
+    expect(written.pr0).toBe('blocked');
+    expect(written.reading).toContain('not-established');
   });
 });
 
@@ -322,23 +382,105 @@ describe('UDG-003 Phase 0 — PR-3 input declaration and codec', () => {
   });
 });
 
-describe('UDG-003 Phase 0 — PR-8 acknowledgement semantics (D-7 evidence)', () => {
+describe('UDG-003 Phase 0 — PR-8 acknowledgement semantics, traced by frame identity (D-7 evidence)', () => {
   it('does not acknowledge a frame that was merely received', () => {
-    const buffered = observation<{ serverConsumed: number; clientLastProcessed: number; clientSent: number }>('PR-8', 'S1_bufferedNotConsumed');
+    const buffered = observation<{
+      sent: { seq: number; generation: number }[];
+      pendingGenerations: number[];
+      serverConsumedCount: number;
+      clientLastProcessed: number;
+      clientSent: number;
+      appliedKinds: string[];
+    }>('PR-8', 'S1_bufferedNotConsumed');
     expect(buffered.clientSent).toBe(3);
-    expect(buffered.serverConsumed).toBe(0);
+    expect(buffered.sent.map((entry) => entry.generation)).toEqual([1, 2, 3]);
+    expect(buffered.pendingGenerations).toEqual([1, 2, 3]);
+    expect(buffered.serverConsumedCount).toBe(0);
     expect(buffered.clientLastProcessed).toBe(0);
+    expect(buffered.appliedKinds).toEqual([]);
   });
 
-  it('acknowledges a frame that was consumed, even when the application then refused it', () => {
-    const refused = observation<{ serverConsumed: number; clientLastProcessed: number; refusedWasRecorded: boolean }>('PR-8', 'S3_consumedThenRefused');
+  it('acknowledges the frame the room applied, and names that frame by sequence', () => {
+    const applied = observation<{
+      serverConsumedCount: number;
+      clientLastProcessed: number;
+      appliedLog: { kind: string; generation: number; seq: number }[];
+      retiredGenerations: number[];
+      stillPendingGenerations: number[];
+    }>('PR-8', 'S2_consumedAndApplied');
+    expect(applied.appliedLog.at(-1)).toMatchObject({ kind: 'frame', generation: 1 });
+    expect(applied.clientLastProcessed).toBe(1);
+    expect(applied.retiredGenerations).toEqual([1]);
+    expect(applied.stillPendingGenerations).toEqual([2, 3]);
+  });
+
+  it('acknowledges a consumed frame the application refused, while state still advanced on neutral input', () => {
+    const refused = observation<{
+      serverConsumedCount: number;
+      clientLastProcessed: number;
+      refusedWasRecorded: boolean;
+      refusedGeneration: number;
+      appliedLog: { kind: string; generation: number }[];
+    }>('PR-8', 'S3_consumedThenRefused');
     expect(refused.refusedWasRecorded).toBe(true);
-    expect(refused.serverConsumed).toBe(1);
+    expect(refused.serverConsumedCount).toBe(1);
     expect(refused.clientLastProcessed).toBe(1);
+    // A refusal is not a no-step: the authoritative neutral input advanced state in its place.
+    expect(refused.appliedLog.at(-1)).toMatchObject({ kind: 'neutral', generation: refused.refusedGeneration });
+    expect(refused.appliedLog.at(-1)?.generation).toBe(1);
   });
 
-  it('does not acknowledge frames the buffer dropped', () => {
-    expect(observation<boolean>('PR-8', 'S4-droppedFramesAcked')).toBe(false);
+  it('has no public surface that withholds or retracts an acknowledgement', () => {
+    expect(observation<string[]>('PR-8', 'inputHandleAckRelatedMembers')).toEqual([]);
+    expect(observation<number>('PR-8', 'inputHandleMemberCount')).toBeGreaterThan(0);
+  });
+
+  it('traces overflow by identity: the evicted frames are retired by the ack and never represented in state', () => {
+    const overflow = observation<{
+      bufferMaxSize: number;
+      sent: { seq: number; generation: number }[];
+      pendingGenerations: number[];
+      serverConsumedCount: number;
+      clientLastProcessed: number;
+      clientSent: number;
+      clientPendingCount: number;
+      applicationConsumeCalls: number;
+      retiredByWatermark: number[];
+      stillUnacked: number[];
+      clientReplayableGenerations: number[];
+      appliedLog: unknown[];
+    }>('PR-8', 'S4_overflowIdentityTrace');
+    expect(overflow.sent.map((entry) => entry.generation)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(overflow.bufferMaxSize).toBe(2);
+    expect(overflow.pendingGenerations).toEqual([5, 6]);
+    // Nothing was consumed by the application, so every retirement came from overflow eviction.
+    expect(overflow.applicationConsumeCalls).toBe(0);
+    expect(overflow.serverConsumedCount).toBe(4);
+    expect(overflow.clientLastProcessed).toBe(4);
+    expect(overflow.retiredByWatermark).toEqual([1, 2, 3, 4]);
+    expect(overflow.stillUnacked).toEqual([5, 6]);
+    expect(overflow.clientPendingCount).toBe(overflow.clientSent - overflow.clientLastProcessed);
+    expect(observation<number[]>('PR-8', 'S4_droppedByOverflow')).toEqual([1, 2, 3, 4]);
+    expect(overflow.appliedLog).toEqual([]);
+    // The client prunes on the watermark alone: it cannot tell a dropped frame from an applied one.
+    expect(overflow.clientReplayableGenerations).toEqual([5, 6]);
+  });
+
+  it('keeps the first submission\u2019s reading on the record as a superseded conclusion', () => {
+    const superseded = observation<{
+      previousObservation: Record<string, number>;
+      previousExpression: string;
+      previousConclusion: string;
+      whyThatWasWrong: string;
+      correctedConclusion: string;
+      preservedEvidence: string;
+    }>('PR-8', 'S4_supersededFirstReading');
+    expect(superseded.previousObservation).toMatchObject({ clientSent: 6, bufferSize: 2, serverConsumed: 4, clientLastProcessed: 4 });
+    expect(superseded.previousExpression).toContain('clientLastProcessed + bufferSize < clientSent');
+    expect(superseded.previousConclusion).toContain('never acknowledged');
+    expect(superseded.whyThatWasWrong).toContain('4 + 2 = 6');
+    expect(superseded.correctedConclusion).toContain('covers them');
+    expect(superseded.preservedEvidence).toContain('42678254682');
   });
 
   it('does not acknowledge a synthesised idle frame', () => {
@@ -346,20 +488,53 @@ describe('UDG-003 Phase 0 — PR-8 acknowledgement semantics (D-7 evidence)', ()
     expect(idle).toMatchObject({ serverBefore: 0, serverAfter: 0, clientBefore: 0, clientAfter: 0 });
   });
 
-  it('answers D-7 with what the counter actually tracks', () => {
-    expect(observation<string>('PR-8', 'acknowledgementTracks')).toBe('consumed');
+  it('states what one acknowledgement means, and what it cannot say', () => {
+    const semantics = observation<{
+      kind: string;
+      valueEquivalences: Record<string, boolean>;
+      retirementRuleObserved: string;
+      countedAsConsumed: string[];
+      refusedFrameRetired: boolean;
+      droppedFrameRetired: boolean;
+      synthesisedIdleAdvancesNeither: boolean;
+      distinguishesAppliedFromRefused: boolean;
+      distinguishesAppliedFromDropped: boolean;
+    }>('PR-8', 'acknowledgementSemantics');
+    expect(semantics.kind).toContain('sequence watermark');
+    expect(Object.values(semantics.valueEquivalences)).toEqual([true, true]);
+    expect(semantics.retirementRuleObserved).toContain('seq <= 4');
+    expect(semantics.countedAsConsumed).toEqual([
+      'next() applied to state',
+      'next() consumed then refused by the application',
+      'overflow eviction',
+    ]);
+    expect(semantics.refusedFrameRetired).toBe(true);
+    expect(semantics.droppedFrameRetired).toBe(true);
+    expect(semantics.synthesisedIdleAdvancesNeither).toBe(true);
+    expect(semantics.distinguishesAppliedFromRefused).toBe(false);
+    expect(semantics.distinguishesAppliedFromDropped).toBe(false);
+  });
+
+  it('answers D-7 from identities, distinguishes refused from dropped, and leaves the decision to the owner', () => {
     const answer = observation<{
-      tracksConsumed: boolean;
-      distinguishesAppliedFromConsumed: boolean;
-      publicApiToWithholdOrRetract: string;
+      answer: string;
+      evidence: string[];
+      distinctionTheAckCannotMake: string;
+      distinctionTheApplicationCanMake: string;
+      whatThatRecordDoesNotProve: string;
+      decision: string;
     }>('PR-8', 'd7Answer');
-    expect(answer.tracksConsumed).toBe(true);
-    expect(answer.distinguishesAppliedFromConsumed).toBe(false);
-    expect(answer.publicApiToWithholdOrRetract).toContain('none found');
+    expect(answer.answer).toBe('no, not by itself');
+    expect(answer.evidence.join(' ')).toContain('generations 1, 2, 3, 4');
+    expect(answer.distinctionTheAckCannotMake).toContain('applied vs refused vs dropped');
+    expect(answer.distinctionTheApplicationCanMake).toContain('per-frame');
+    // An application journal is server-side evidence; it does not prove the client stops predicting.
+    expect(answer.whatThatRecordDoesNotProve).toContain('UDG-SPIKE-001');
+    expect(answer.decision).toContain('owner');
   });
 });
 
-describe('UDG-003 Phase 0 — PR-12 epoch and identity (blocker PH0-B2)', () => {
+describe('UDG-003 Phase 0 — PR-12 epoch and identity (PH0-B2 reclassified: the epoch is UDG-owned)', () => {
   it('has no public epoch-renewal declaration', () => {
     const hits = observation<string[]>('PR-12', 'epochDeclarations');
     expect(hits.filter((entry) => entry.includes(': decl ')).map((entry) => entry.split(': decl ')[1])).toEqual(['readonly epoch: number;']);
@@ -378,6 +553,57 @@ describe('UDG-003 Phase 0 — PR-12 epoch and identity (blocker PH0-B2)', () => 
   it('issues a distinct identity per join, the primitive an application-level epoch must hang off', () => {
     const record = byId.get('PR-12');
     expect(record?.result?.checks.find((check) => check.name === 'new-session-yields-a-new-identity')?.ok).toBe(true);
+    expect(record?.result?.checks.find((check) => check.name === 'epoch-renewal-is-outside-library-scope')?.ok).toBe(true);
+  });
+
+  it('separates the SDK input-handle epoch from the UDG protocol epoch', () => {
+    const separation = observation<{
+      sdkInputEpoch: { owns: string };
+      udgSessionEpoch: { owns: string; declaredIn: string };
+      mustNotBeConfused: string;
+    }>('PR-12', 'sdkEpochAndUdgEpochAreDistinct');
+    expect(separation.sdkInputEpoch.owns).toContain('client input handle');
+    expect(separation.udgSessionEpoch.declaredIn).toContain('@udg/protocol');
+    expect(separation.mustNotBeConfused).toContain('does not renew');
+  });
+
+  it('records the supported lifecycle primitives an application epoch can build on', () => {
+    const primitives = observation<Record<string, unknown>>('PR-12', 'supportedLifecyclePrimitives');
+    expect(Object.keys(primitives).sort()).toEqual([
+      'inputHandleReset',
+      'joinIssuesIdentity',
+      'reconnectionPreservesIdentity',
+      'reconnectionRequiresServerConsent',
+      'transportDropCallback',
+    ]);
+    expect(primitives['reconnectionPreservesIdentity']).toBe(true);
+  });
+
+  it('names the renewal procedure UDG still has to build, without building it', () => {
+    const procedure = observation<{ status: string; steps: string[] }>('PR-12', 'applicationRenewalProcedureStillRequired');
+    expect(procedure.status).toContain('implemented nowhere');
+    expect(procedure.steps.length).toBeGreaterThanOrEqual(4);
+    expect(procedure.steps.join(' ')).toContain('RESYNC_REQUIRED');
+    expect(procedure.steps.join(' ')).toContain('4_294_967_295');
+    expect(observation<string[]>('PR-12', 'remainsUnproved').length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('no longer reports the absent epoch API as a blocker or a library defect', () => {
+    const record = byId.get('PR-12');
+    expect(observation<unknown>('PR-12', 'blocked')).toBeUndefined();
+    expect(record?.result?.verdict).toBe('pass');
+    const text = JSON.stringify(record?.result ?? {});
+    expect(text).not.toContain('BLOCKED');
+    expect(text).toContain('rather than a library defect');
+    // No failing check may blame the library for a concept it never claimed to own.
+    expect(record?.result?.checks.filter((check) => !check.ok)).toEqual([]);
+    expect(record?.result?.limitations.join(' ')).toContain('does not implement renewal');
+    // The reset counter is measured where it is defined, and leaves the session identity alone.
+    expect(observation<{ before: number; after: number; sessionIdUnchanged: boolean }>('PR-12', 'inputHandleEpoch')).toEqual({
+      before: 0,
+      after: 1,
+      sessionIdUnchanged: true,
+    });
   });
 
   it('records only that a reconnection token exists, never its value', () => {
@@ -393,15 +619,33 @@ describe('UDG-003 Phase 0 — boundary and evidence hygiene', () => {
     expect(sources.length).toBeGreaterThan(0);
     const directive = '@' + 'ts-';
     const anyPattern = new RegExp([':', '\\s*an', 'y\\b|\\bas an', 'y\\b|<an', 'y>|\\ban', 'y\\[\\]'].join(''));
+    // Comments and literal text are removed first: the probe sources quote declaration paths and quote the
+    // casts they ban while banning them, and a scanner that flags prose gets ignored.
     const offenders: string[] = [];
     for (const source of sources) {
-      if (anyPattern.test(source.text)) offenders.push(`${source.path}: any in a type position`);
-      for (const marker of [`${directive}ignore`, `${directive}expect-error`, `${directive}nocheck`, 'as ' + 'unknown as', 'eslint-' + 'disable']) {
-        if (source.text.includes(marker)) offenders.push(`${source.path}: ${marker}`);
+      const code = stripNonCode(source.text);
+      if (anyPattern.test(code)) offenders.push(`${source.path}: any in a type position`);
+      for (const marker of [`${directive}ignore`, `${directive}expect-error`, `${directive}nocheck`, 'as ' + 'unknown', 'as ' + 'never', 'eslint-' + 'disable']) {
+        if (code.includes(marker)) offenders.push(`${source.path}: ${marker}`);
       }
-      if (new RegExp('@colyseus' + '/[a-z-]+/(build|src)/').test(source.text)) offenders.push(`${source.path}: private package path`);
+      // Importing an internal path is the escape hatch; quoting one as evidence is not.
+      if (new RegExp("from\\s+['\"]@col" + 'yseus/[a-z-]+/(build|src)/').test(code)) offenders.push(`${source.path}: private package import`);
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('uses the declared client type in the reconnection callback, never a cast to never', () => {
+    const rooms = probeSources(ROOT).find((source) => source.path.endsWith('rooms.ts'));
+    expect(rooms, 'rooms.ts is part of the probe tree').toBeDefined();
+    const code = stripNonCode(rooms?.text ?? '');
+    expect(code).toContain('override onLeave(client: ServerClient');
+    expect(code).not.toContain('as ' + 'never');
+    // The typed parameter is handed over as declared — no cast, no wrapper.
+    expect(code.match(/allowReconnection\(([^)]*)\)/)?.[1]).toMatch(/^client,\s*\d+$/);
+    // PR-0 bans the same pattern, so the rule is enforced by the compile-facing probe as well as here.
+    const patterns = observation<string[]>('PR-0', 'escapeHatchPatterns');
+    expect(patterns).toContain('never-cast');
+    expect(byId.get('PR-0')?.result?.checks.find((check) => check.name === 'no-escape-hatches')?.ok).toBe(true);
   });
 
   it('gives the probe entry point no third-party import', () => {
@@ -437,12 +681,26 @@ describe('UDG-003 Phase 0 — boundary and evidence hygiene', () => {
     expect(map).toContain('PH0-B1');
     expect(map).toContain('PH0-B2');
     expect(map).toContain('provisional');
+    // The map must carry the compiler status unambiguously, not leave it to be inferred from prose.
+    expect(map).toContain('not-established');
+    expect(map).toContain('BLOCKED');
+    expect(map).toContain('--noCheck');
   });
 
   it('writes probe evidence only when this task owns the run', () => {
-    const index = JSON.parse(readFileSync(join(PROBE_OUT, 'probe-run-index.json'), 'utf8')) as { probes: { id: string; ok: boolean }[] };
+    const index = JSON.parse(readFileSync(join(PROBE_OUT, 'probe-run-index.json'), 'utf8')) as {
+      probes: { id: string; ok: boolean; verdict: string }[];
+      compatibility: { stackCompatibility: string; pr0: string };
+      emit: { purpose: string };
+      typecheck: { purpose: string };
+    };
     expect(index.probes.map((probe) => probe.id)).toEqual([...PROBE_IDS]);
-    expect(index.probes.every((probe) => probe.ok)).toBe(true);
+    expect(index.probes.map((probe) => probe.verdict)).toEqual(['blocked', 'pass', 'pass', 'pass', 'pass', 'pass']);
+    expect(index.probes.filter((probe) => probe.ok).map((probe) => probe.id)).toEqual(['PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12']);
+    expect(index.compatibility.stackCompatibility).toBe('not-established');
+    expect(index.compatibility.pr0).toBe('blocked');
+    expect(index.emit.purpose).toContain('--noCheck');
+    expect(index.typecheck.purpose).toContain('accepted compiler gate');
 
     if (!OWNS_EVIDENCE_RUN) {
       // A run this task does not own must not receive this task's artefacts.
@@ -450,7 +708,7 @@ describe('UDG-003 Phase 0 — boundary and evidence hygiene', () => {
       return;
     }
     const directory = resolve(ROOT, EVIDENCE_DIR as string);
-    for (const name of ['probe-results.json', 'probe-project-typecheck.json', 'dependency-graph.json']) {
+    for (const name of ['probe-results.json', 'probe-project-typecheck.json', 'compatibility-verdict.json', 'dependency-graph.json']) {
       const path = join(directory, name);
       expect(existsSync(path), name).toBe(true);
       const body = JSON.parse(readFileSync(path, 'utf8')) as { schemaVersion: number; taskId: string };

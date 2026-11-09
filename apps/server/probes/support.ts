@@ -29,6 +29,9 @@ export interface DirectInputFrame {
   moveZ: number;
 }
 
+/** One measurement result: it passed, it failed, or it could not be attempted as stated. */
+export type ProbeVerdict = 'pass' | 'fail' | 'blocked';
+
 export interface ProbeCheck {
   readonly name: string;
   readonly ok: boolean;
@@ -40,6 +43,13 @@ export interface ProbeResult {
   readonly probeId: string;
   readonly subject: string;
   readonly ok: boolean;
+  /**
+   * A compatibility probe passes only when the thing it was asked to establish holds. Reproducing a
+   * failure is not passing: when a precondition of the probe is itself unmet, the probe says `blocked`
+   * and fails, so a green diagnostic suite can never be read as a green compatibility result.
+   */
+  readonly verdict: ProbeVerdict;
+  readonly blockedReason?: string;
   readonly checks: readonly ProbeCheck[];
   readonly observations: Readonly<Record<string, unknown>>;
   readonly limitations: readonly string[];
@@ -51,6 +61,7 @@ export class CheckList {
   readonly #checks: ProbeCheck[] = [];
   readonly #observations: Record<string, unknown> = {};
   readonly #limitations: string[] = [];
+  #blockedReason: string | undefined;
 
   check(name: string, ok: boolean, detail: string): boolean {
     this.#checks.push({ name, ok, detail });
@@ -65,16 +76,28 @@ export class CheckList {
     this.#limitations.push(text);
   }
 
+  /**
+   * Mark the probe blocked. The reason is also recorded as a failing check, because a reader that only
+   * looks at the checks must still see that this probe did not succeed.
+   */
+  block(reason: string): void {
+    this.#blockedReason = reason;
+    this.#checks.push({ name: 'compatibility-blocked', ok: false, detail: reason });
+  }
+
   get failed(): boolean {
     return this.#checks.some((entry) => !entry.ok);
   }
 
   build(probeId: string, subject: string, startedAt: string): ProbeResult {
+    const failed = this.failed;
     return {
       schemaVersion: 1,
       probeId,
       subject,
-      ok: !this.failed,
+      ok: !failed,
+      verdict: this.#blockedReason !== undefined ? 'blocked' : failed ? 'fail' : 'pass',
+      ...(this.#blockedReason === undefined ? {} : { blockedReason: this.#blockedReason }),
       checks: this.#checks,
       observations: this.#observations,
       limitations: this.#limitations,
@@ -92,6 +115,70 @@ export function outputPath(argv: readonly string[]): string {
     throw new Error('a Phase 0 probe requires --out <file>');
   }
   return resolve(value);
+}
+
+/**
+ * Strip comments and string/template literal contents so pattern scans see code only.
+ *
+ * Probe documentation legitimately quotes `@colyseus/core/build/...` and the words "as never" while
+ * explaining what is banned. A scanner that flags prose gets ignored, and an escape-hatch scan has to
+ * keep its credibility. The strict compile is the real guarantee; this is the extra layer, and it is
+ * deliberately conservative about prose.
+ */
+export function stripNonCode(text: string): string {
+  let output = '';
+  let state: 'code' | 'lineComment' | 'blockComment' | 'singleQuote' | 'doubleQuote' | 'template' = 'code';
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] ?? '';
+    const next = text[index + 1] ?? '';
+    if (state === 'code') {
+      if (char === '/' && next === '/') {
+        state = 'lineComment';
+        index += 1;
+        continue;
+      }
+      if (char === '/' && next === '*') {
+        state = 'blockComment';
+        index += 1;
+        continue;
+      }
+      if (char === "'" || char === '"' || char === '`') {
+        state = char === "'" ? 'singleQuote' : char === '"' ? 'doubleQuote' : 'template';
+        continue;
+      }
+      output += char;
+      continue;
+    }
+    if (state === 'lineComment') {
+      if (char === '\n') {
+        state = 'code';
+        output += char;
+      }
+      continue;
+    }
+    if (state === 'blockComment') {
+      if (char === '*' && next === '/') {
+        state = 'code';
+        index += 1;
+      }
+      continue;
+    }
+    if (char === '\\') {
+      index += 1;
+      continue;
+    }
+    if ((state === 'singleQuote' && char === "'") || (state === 'doubleQuote' && char === '"') || (state === 'template' && char === '`')) {
+      state = 'code';
+    }
+  }
+  return output;
+}
+
+/** Read `--flag value` from a probe's argv, or undefined when the flag was not passed. */
+export function flagValue(argv: readonly string[], flag: string): string | undefined {
+  const index = argv.indexOf(flag);
+  const value = index >= 0 ? argv[index + 1] : undefined;
+  return value === undefined || value === '' ? undefined : value;
 }
 
 export function writeResult(path: string, result: ProbeResult): void {

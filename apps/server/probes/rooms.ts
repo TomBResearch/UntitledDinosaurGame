@@ -7,7 +7,7 @@
  * Keeping them in one module also keeps each probe file about its own measurement.
  */
 
-import { Room, type StepContext } from '@colyseus/core';
+import { Room, type Client as ServerClient, type StepContext } from '@colyseus/core';
 import { DIRECT_INPUT_FIELDS, DirectInputSchema, RegionSchema, type RegionSchema as RegionState } from '@udg/protocol/schema';
 
 import type { DirectInputFrame } from './support.js';
@@ -17,6 +17,15 @@ export interface ProbeRoomOptions {
   tickRate?: number;
   bufferMaxSize?: number;
   declareIdle?: boolean;
+}
+
+/** One step the room represented, either from a client frame or from the authoritative neutral input. */
+export interface AppliedRecord {
+  readonly kind: 'frame' | 'neutral';
+  /** The frame's generation when a client frame was applied; the neutral step records what it replaced. */
+  readonly generation: number;
+  /** The client sequence number the library was about to acknowledge, when one was known. */
+  readonly seq: number;
 }
 
 /** One consumed frame as the room saw it. */
@@ -82,9 +91,19 @@ export class InputRoom extends Room<{ state: RegionState; input: DirectInputFram
     inputRooms.push(this);
   }
 
-  override onJoin(client: { sessionId: string }): void {
+  override onJoin(client: ServerClient): void {
     this.sessionIds.push(client.sessionId);
   }
+
+  /**
+   * What the room represented in state, in order.
+   *
+   * This is a model of the application's side of the acknowledgement, written by the probe and not by
+   * Colyseus: a frame the application *refuses* is still replaced by an authoritative neutral step,
+   * while a frame the buffer *dropped* never reaches state at all. PR-8 needs the two to be separable,
+   * because the library ack treats both as "consumed".
+   */
+  readonly applied: AppliedRecord[] = [];
 
   /** Read the buffer without consuming: size, ack counter and a peek of the pending frames. */
   observeBuffer(sessionId: string): void {
@@ -95,10 +114,29 @@ export class InputRoom extends Room<{ state: RegionState; input: DirectInputFram
     this.consumedCounts.push(accessor.consumedCount);
   }
 
+  /**
+   * Identity snapshot of what is pending right now, oldest first.
+   *
+   * Note what is *not* here: the value the library acknowledges with (`ackSeq`) lives on the internal
+   * `InputBuffer` and is not part of the public `InputAccessor` type, so a room cannot read the ack it is
+   * causing. `consumedCount` is public and, for reliable inputs, the declarations state the two coincide;
+   * the client's `lastProcessed` is the other observable. PR-8 measures both and reports the gap.
+   */
+  pendingIdentities(sessionId: string): { generations: number[]; size: number; consumedCount: number } {
+    const accessor = this.inputs?.get(sessionId);
+    if (accessor === undefined) return { generations: [], size: 0, consumedCount: -1 };
+    return {
+      generations: accessor.peek().map((frame) => frame.generation),
+      size: accessor.size,
+      consumedCount: accessor.consumedCount,
+    };
+  }
+
   /** Consume exactly one frame — the shared-world primitive `next()`. */
   consumeOne(sessionId: string, refuse = false): void {
     const accessor = this.inputs?.get(sessionId);
     if (accessor === undefined) return;
+    const ackBefore = accessor.consumedCount;
     const frame = accessor.next();
     this.nextResult = frame === undefined ? 'undefined' : 'frame';
     this.consumed.push({
@@ -109,6 +147,14 @@ export class InputRoom extends Room<{ state: RegionState; input: DirectInputFram
       wasIdle: accessor.wasIdle,
       consumedCountAfter: accessor.consumedCount,
       refused: refuse,
+    });
+    // What the application represented for this step: a refused frame is replaced by the authoritative
+    // neutral input, so state *is* advanced; the difference from an applied frame is which intent the
+    // step carried, not whether a step happened.
+    this.applied.push({
+      kind: refuse || frame === undefined ? 'neutral' : 'frame',
+      generation: frame?.generation ?? -1,
+      seq: ackBefore + 1,
     });
     this.index += 1;
     this.accessorSize.push(accessor.size);
@@ -169,11 +215,11 @@ export class SessionRoom extends Room<{ state: RegionState }> {
    * `allowReconnection` within this method"). Without it the token the client holds is simply
    * refused, which is a fact the probe must not mistake for a transport failure.
    */
-  override onLeave(client: { sessionId: string }, code?: number): void {
+  override onLeave(client: ServerClient, code?: number): void {
     this.leaves.push({ sessionId: client.sessionId, code });
-    const seat = this.allowReconnection(client as never, 10);
+    const seat = this.allowReconnection(client, 10);
     void seat
-      .then((rejoined: { sessionId: string }) => {
+      .then((rejoined: ServerClient) => {
         this.reconnections.push(rejoined.sessionId);
       })
       .catch(() => {
@@ -181,7 +227,7 @@ export class SessionRoom extends Room<{ state: RegionState }> {
       });
   }
 
-  override onDrop(client: { sessionId: string }): void {
+  override onDrop(client: ServerClient): void {
     this.drops.push(client.sessionId);
   }
 }

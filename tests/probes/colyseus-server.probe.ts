@@ -81,6 +81,8 @@ export interface ProbeResultFile {
   readonly startedAt: string;
   readonly finishedAt: string;
   readonly ok: boolean;
+  readonly verdict?: 'pass' | 'fail' | 'blocked';
+  readonly blockedReason?: string;
   readonly checks: readonly CheckRecord[];
   readonly observations: Readonly<Record<string, unknown>>;
   readonly limitations: readonly string[];
@@ -97,8 +99,27 @@ export interface ProbeRecord {
   readonly failureDetail: string | undefined;
 }
 
+/**
+ * What Phase 0 as a whole establishes about the pinned stack.
+ *
+ * Kept separate from the probe outcomes on purpose: five probes can pass while the stack remains
+ * unproven, and a reader must not have to infer that from context.
+ */
+export interface CompatibilityVerdict {
+  readonly stackCompatibility: 'not-established' | 'established';
+  readonly pr0: 'pass' | 'blocked' | 'fail' | 'missing';
+  readonly strictTypecheckCommand: string;
+  readonly strictTypecheckExitCode: number;
+  readonly diagnostics: { readonly total: number; readonly inRepositoryCode: number; readonly inThirdPartyDeclarations: number };
+  readonly acceptedBuildPath: string;
+  readonly diagnosticEmission: string;
+  readonly probes: readonly { readonly id: ProbeId; readonly verdict: string; readonly ok: boolean }[];
+  readonly reading: string;
+}
+
 export interface ProbeRun {
   readonly emit: CommandResult;
+  readonly compatibility: CompatibilityVerdict;
   readonly typecheck: CommandResult;
   readonly diagnostics: readonly ProbeDiagnostic[];
   readonly repositoryDiagnostics: readonly ProbeDiagnostic[];
@@ -180,13 +201,15 @@ export const typecheckProbes = (root: string): CommandResult =>
 const resultPathFor = (outDir: string, id: ProbeId): string => join(outDir, `${id.replace('/', '-')}.probe-result.json`);
 
 /** Run one emitted probe in its own process and read back the result file it wrote. */
-export function runProbe(root: string, outDir: string, id: ProbeId): ProbeRecord {
+export function runProbe(root: string, outDir: string, id: ProbeId, typecheckReport?: string): ProbeRecord {
   const emitted = join(serverDirectory(root), 'probes', 'dist', 'probes', PROBE_FILES[id]);
   const out = resultPathFor(outDir, id);
   mkdirSync(outDir, { recursive: true });
   if (existsSync(out)) rmSync(out);
 
-  const executed = run([process.execPath, emitted, '--out', out], serverDirectory(root), PROBE_TIMEOUT_MS);
+  const argv = [process.execPath, emitted, '--out', out];
+  if (typecheckReport !== undefined) argv.push('--typecheck-report', typecheckReport);
+  const executed = run(argv, serverDirectory(root), PROBE_TIMEOUT_MS);
   let result: ProbeResultFile | undefined;
   let failureDetail: string | undefined;
   if (existsSync(out)) {
@@ -203,7 +226,7 @@ export function runProbe(root: string, outDir: string, id: ProbeId): ProbeRecord
   return {
     id,
     subject: PROBE_SUBJECTS[id],
-    command: `${process.execPath} ${relative(root, emitted)} --out ${relative(root, out)}`,
+    command: `${process.execPath} ${relative(root, emitted)} --out ${relative(root, out)}${typecheckReport === undefined ? '' : ` --typecheck-report ${relative(root, typecheckReport)}`}`,
     exitCode: executed.exitCode,
     timedOut: executed.timedOut,
     resultPath: out,
@@ -229,16 +252,49 @@ export function runColyseusProbes(root: string, outDir: string): ProbeRun {
     rawOutput: `${typecheck.stdout}${typecheck.stderr}`.slice(0, 200_000),
   });
 
-  const probes = PROBE_IDS.map((id) => runProbe(root, outDir, id));
+  const reportPath = join(outDir, 'probe-project-typecheck.json');
+  const probes = PROBE_IDS.map((id) => runProbe(root, outDir, id, reportPath));
+
+  const inRepositoryCode = diagnostics.filter((diagnostic) => diagnostic.insideRepository).length;
+  const pr0 = probes.find((record) => record.id === 'PR-0');
+  const compatibility: CompatibilityVerdict = {
+    stackCompatibility: typecheck.exitCode === 0 && diagnostics.length === 0 ? 'established' : 'not-established',
+    pr0: pr0?.result?.verdict ?? (pr0 === undefined ? 'missing' : pr0.result?.ok === true ? 'pass' : 'fail'),
+    strictTypecheckCommand: typecheck.command,
+    strictTypecheckExitCode: typecheck.exitCode,
+    diagnostics: {
+      total: diagnostics.length,
+      inRepositoryCode,
+      inThirdPartyDeclarations: diagnostics.length - inRepositoryCode,
+    },
+    acceptedBuildPath: 'pnpm --filter @udg/server typecheck:probes (strict, --noEmit) — currently failing with PH0-B1',
+    diagnosticEmission: 'pnpm --filter @udg/server build:probes uses tsc --noCheck to obtain runnable JavaScript only; it is not a compatibility result and must not become the accepted build path',
+    probes: probes.map((record) => ({
+      id: record.id,
+      verdict: record.result?.verdict ?? (record.result === undefined ? 'error' : record.result.ok ? 'pass' : 'fail'),
+      ok: record.result?.ok ?? false,
+    })),
+    reading:
+      'Five probes measuring real behaviour is not a compatible stack. PR-0 carries the compiler verdict; while it is blocked, stackCompatibility stays not-established regardless of the other results.',
+  };
+  writeJson(join(outDir, 'compatibility-verdict.json'), { schemaVersion: 1, taskId: 'UDG-003', ...compatibility });
   writeJson(join(outDir, 'probe-run-index.json'), {
-    emit: { command: emit.command, exitCode: emit.exitCode, timedOut: emit.timedOut },
-    typecheck: { command: typecheck.command, exitCode: typecheck.exitCode, diagnosticCount: diagnostics.length },
+    emit: { command: emit.command, exitCode: emit.exitCode, timedOut: emit.timedOut, purpose: 'diagnostic emission only (--noCheck)' },
+    typecheck: { command: typecheck.command, exitCode: typecheck.exitCode, diagnosticCount: diagnostics.length, purpose: 'the accepted compiler gate' },
+    compatibility: {
+      stackCompatibility: compatibility.stackCompatibility,
+      pr0: compatibility.pr0,
+      strictTypecheckExitCode: compatibility.strictTypecheckExitCode,
+      diagnostics: compatibility.diagnostics,
+    },
     probes: probes.map((record) => ({
       id: record.id,
       subject: record.subject,
       command: record.command,
       exitCode: record.exitCode,
       ok: record.result?.ok ?? false,
+      verdict: record.result?.verdict ?? (record.result === undefined ? 'error' : record.result.ok ? 'pass' : 'fail'),
+      blockedReason: record.result?.blockedReason,
       checks: record.result?.checks.length ?? 0,
       failures: (record.result?.checks ?? []).filter((check) => !check.ok).map((check) => `${check.name} :: ${check.detail}`),
       resultFile: relative(root, record.resultPath),
@@ -247,12 +303,70 @@ export function runColyseusProbes(root: string, outDir: string): ProbeRun {
   });
   return {
     emit,
+    compatibility,
     typecheck,
     diagnostics,
     repositoryDiagnostics: diagnostics.filter((diagnostic) => diagnostic.insideRepository),
     thirdPartyDiagnostics: diagnostics.filter((diagnostic) => !diagnostic.insideRepository),
     probes,
   };
+}
+
+/**
+ * Remove comments and literal text before an escape-hatch scan, mirroring `stripNonCode` in
+ * `apps/server/probes/support.ts`.
+ *
+ * The probe sources quote declaration paths and quote the very casts they ban while explaining them, so a
+ * raw-text scan reports clean files as offenders. PR-0 applies the probe-side copy to the same tree and
+ * reports its own verdict; this copy keeps the suite's independent check honest about prose.
+ */
+export function stripNonCode(text: string): string {
+  let output = '';
+  let state: 'code' | 'lineComment' | 'blockComment' | 'singleQuote' | 'doubleQuote' | 'template' = 'code';
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] ?? '';
+    const next = text[index + 1] ?? '';
+    if (state === 'code') {
+      if (char === '/' && next === '/') {
+        state = 'lineComment';
+        index += 1;
+        continue;
+      }
+      if (char === '/' && next === '*') {
+        state = 'blockComment';
+        index += 1;
+        continue;
+      }
+      if (char === "'" || char === '"' || char === '`') {
+        state = char === "'" ? 'singleQuote' : char === '"' ? 'doubleQuote' : 'template';
+        continue;
+      }
+      output += char;
+      continue;
+    }
+    if (state === 'lineComment') {
+      if (char === '\n') {
+        state = 'code';
+        output += char;
+      }
+      continue;
+    }
+    if (state === 'blockComment') {
+      if (char === '*' && next === '/') {
+        state = 'code';
+        index += 1;
+      }
+      continue;
+    }
+    if (char === '\\') {
+      index += 1;
+      continue;
+    }
+    if ((state === 'singleQuote' && char === "'") || (state === 'doubleQuote' && char === '"') || (state === 'template' && char === '`')) {
+      state = 'code';
+    }
+  }
+  return output;
 }
 
 /** The probe modules as they exist on disk, for the escape-hatch and api-map assertions. */
