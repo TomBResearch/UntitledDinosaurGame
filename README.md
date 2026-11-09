@@ -141,9 +141,12 @@ on the accepted implementation `1c735c2` and run
 [42511785889](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42511785889) on the
 reviewed submission `0e586b6` each completed with 19 of 19 steps success on `ubuntu-24.04`, and the
 published evidence bundles verify with zero issues. The project owner recorded acceptance on
-2026-11-08, so UDG-001 is **Verified**. Gates A, B and C remain Not Run and P02 to P10 remain
-pending, so no later task is assigned; the local reproduction of the identical command sequence and
-the CI bundles are retained and verified.
+2026-11-08, so UDG-001 is **Verified**. UDG-002 was authorised by the same owner decision set that
+adopted P02 and P06 on 2026-11-08, is **In Review** with the owner as reviewer, and its own CI history
+— including two red runs and the green submission run — is recorded in
+[the UDG-002 completion record](docs/contracts/assignments/UDG-002-completion.md). P03 to P05 and P07
+to P10 remain pending and Gates A, B and C remain Not Run, so no task beyond UDG-002 is assigned; the
+local reproduction of the identical command sequence and the CI bundles are retained and verified.
 
 ## Evidence
 

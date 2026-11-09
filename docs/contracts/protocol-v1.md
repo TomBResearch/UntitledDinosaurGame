@@ -75,7 +75,7 @@ re-exports these as `PROTOCOL_LIMITS` rather than copying them, so a wire-limit 
 | --- | --- | --- |
 | `UINT32_MIN` / `UINT32_MAX` | `0` / `4294967295` | width reference, not a valid epoch |
 | `EPOCH_MIN` / `EPOCH_MAX` | `1` / `4294967295` | epoch `0` means "no epoch" |
-| `GENERATION_MIN` / `GENERATION_MAX` | `0` / `4294967294` | one below uint32 max so overflow is detectable |
+| `GENERATION_MIN` / `GENERATION_MAX` | `0` / `4294967294` | one below uint32 max so overflow is detectable; this is the bound applied to `intentGeneration` by the frame validators **and** by mapping in both directions |
 | `MAX_GENERATION_FORWARD_GAP` | `64` | constant only; the admission **policy** is UDG-003 under P03 |
 | `MIN_REQUEST_ID_LENGTH` / `MAX_REQUEST_ID_LENGTH` | `1` / `64` | `REQUEST_ID_PATTERN` = `[A-Za-z0-9_-]{1,64}` |
 | `MAX_IDENTIFIER_LENGTH` | `64` | ASCII identifiers only: `[A-Za-z0-9_-]{1,64}` |
@@ -182,7 +182,7 @@ declaration field-for-field, name-for-name and width-for-width.
 | 10 | `movementMode` | `uint8` | `locomotion.mode` | enum table below; an unlisted value is refused |
 | 11 | `routeRevision` | `uint32` | `locomotion.route.revision` | `0` means no route |
 | 12 | `nextWaypointIndex` | `uint32` | `locomotion.route.nextWaypointIndex` | legal `0` while a route is active |
-| 13 | `intentGeneration` | `uint32` | `locomotion.intentGeneration` | |
+| 13 | `intentGeneration` | `uint32` | `locomotion.intentGeneration` | width `uint32`, domain range `0 … GENERATION_MAX`; `4294967295` is refused by `toReplica` and by `readReplicaIssues`, so no state validates on one side and fails on the other |
 | 14 | `sessionEpoch` | `uint32` | `sessionEpoch` | must be ≥ `EPOCH_MIN`, which is also the truncation tripwire |
 | 15 | `connected` | `boolean` | `connected` | |
 | 16 | `lastAuthorityTick` | `uint32` | `locomotion.lastAuthorityTick` | |
@@ -206,16 +206,45 @@ future mode cannot silently read as `idle`.
 
 ### 6.2 Route sentinel
 
+One sentinel crosses the wire; the domain spells absence as `null`. The rule (owner decision D1) is
+applied on each side and **has no option, flag or alternate entry point**: `checkPlayerState` and
+`toReplica` take the state alone. A caller that could switch the rule off could project a replica that
+decodes to a different canonical state than the one it was built from, which is the only reason the
+rule exists.
+
+Canonical `LocomotionState.route`, checked by `checkPlayerState` before `toReplica` writes anything:
+
+| Canonical value | Meaning | Accepted |
+| --- | --- | --- |
+| `null` | no route | yes — projected as the `0 / 0` sentinel |
+| `{ revision: > 0, nextWaypointIndex: any uint32 }` | active route; index `0` is its first waypoint | yes |
+| `{ revision: 0, nextWaypointIndex: 0 }` | nothing the domain can mean: absence is `null` | no, issue on `routeRevision` |
+| `{ revision: 0, nextWaypointIndex: > 0 }` | no route with a waypoint pointer | no, issues on `routeRevision` and `nextWaypointIndex` |
+| `< 0`, fractional, `> uint32` in either field | not representable | no |
+
+The `revision: 0` rows are the round-trip rule, not tidiness. Projected, `{ 0, 0 }` would travel as the
+absence sentinel and return as `null`, so the caller would receive a different canonical value than the
+one it passed in; `{ 0, > 0 }` would travel as a pair no reader may reconstruct. Refusing both is what
+makes "every accepted canonical state round trips exactly" true rather than nearly true.
+
+Decoded wire pair, checked by `readReplicaIssues` (widths) and then by `readPlayerReplica`,
+`fromReplica` and `readPlayerMap` (the pair rule, which the field-level checker deliberately leaves to
+the reader):
+
 | `routeRevision` | `nextWaypointIndex` | Meaning | Accepted |
 | --- | --- | --- | --- |
-| `0` | `0` | no route | yes |
+| `0` | `0` | no route | yes, reconstructed as `null` |
 | `> 0` | `0` | active route, at its first waypoint | yes |
+| `> 0` | `> 0` | active route, at a later waypoint | yes |
 | `0` | `> 0` | no route with a waypoint pointer | no, `INVALID_PAYLOAD` |
 | `< 0`, fractional, `> uint32` | any | not representable | no, `INVALID_PAYLOAD` |
 
 `null` never crosses the wire: an absent route becomes the `0 / 0` sentinel on the way out and the
 `null` route on the way back. Waypoint-count bounds belong to the server route store (UDG-003 and
-UDG-007), not to the projection layer, which cannot know a path's length.
+UDG-007), not to the projection layer, which cannot know a path's length. Proof: `tests/unit/udg-002/mapping.test.ts`
+round-trips every accepted canonical route and every accepted wire pair in both directions, re-projects
+each reconstruction onto the same wire pair, and refuses each malformed shape at every supported entry
+point.
 
 ### 6.3 Normalisation order
 
@@ -287,7 +316,7 @@ authority is still pending (the P07 controller and gravity numbers) are named in
 | 1, 3, 4, 5 | `tests/unit/udg-002/validation.test.ts`, `tests/fixtures/protocol/malformed.json` |
 | 2 | `tests/contracts/UDG-001.test.ts` entry-map test, `BOUNDARY-DOMAIN-NO-SCHEMA` fixtures |
 | 6, 6.1–6.4 | `tests/unit/udg-002/schema-roundtrip.test.ts`, `mapping.test.ts`, `tests/fixtures/protocol/valid.json` |
-| 6.2 | `tests/fixtures/protocol/ordering.json`, `tests/unit/udg-002/validation.test.ts` |
+| 6.2 | `tests/unit/udg-002/mapping.test.ts` (both directions, exact round trip, no-bypass regression), `tests/fixtures/protocol/valid.json` V08/V09, `ordering.json` |
 | 7 | `tests/unit/udg-002/config.test.ts` |
 | P01–P20 fixture coverage | `tests/unit/udg-002/fixtures.test.ts` |
 | Task acceptance list | `tests/contracts/UDG-002.test.ts` |
