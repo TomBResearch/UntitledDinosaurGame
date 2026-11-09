@@ -1,8 +1,8 @@
 # Contracts adoption record
 
-Status: **Partially adopted — P01, P02 and P06 approved 2026-11-08; P03 to P05 and P07 to P10 pending**
+Status: **Partially adopted — P01, P02, P03 and P06 approved (P03 on 2026-11-09); P04, P05 and P07 to P10 pending**
 
-Implementation assignment: **UDG-001** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)) and **UDG-002** (authorised 2026-11-08, see [P02 and P06 adoption](#p02-and-p06-adoption-recorded-2026-11-08); **accepted and Verified 2026-11-09**, see [UDG-002 acceptance](#udg-002-acceptance-recorded-2026-11-09)). No task beyond UDG-002 is assigned.
+Implementation assignment: **UDG-001** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)) and **UDG-002** (authorised 2026-11-08, see [P02 and P06 adoption](#p02-and-p06-adoption-recorded-2026-11-08); **accepted and Verified 2026-11-09**, see [UDG-002 acceptance](#udg-002-acceptance-recorded-2026-11-09)), and **UDG-003 Phase 0 only** (authorised 2026-11-09, see [P03 adoption](#p03-adoption-and-udg-003-phase-0-authorisation-recorded-2026-11-09)). Nothing beyond UDG-003 Phase 0 is assigned: UDG-003 Phases 1 to 3, UDG-004 and every later task stay unassigned.
 
 Integration owner: **Project owner, GitHub account `TomBResearch`** — recorded 2026-11-08 at the owner's instruction as both integration owner and project reviewer. Replace with the owner's preferred display name on request; the identity, not the decision, is what may be restated.
 
@@ -16,7 +16,7 @@ The proposal definitions and deadlines have one owner: [scope and authority](sco
 | --- | --- | --- | --- |
 | P01 | **Approved** | Project owner (`TomBResearch`) / 2026-11-08 | Owner instruction recorded as clarifications C-01 to C-06 below. No ADR: the rulings change no baseline clause, protocol, timestep or collision owner. |
 | P02 | **Approved** | Project owner (`TomBResearch`) / 2026-11-08 | Decision D1 of the [UDG-002 readiness proposal](assignments/UDG-002-readiness-proposal.md) revision 2, section 1. No ADR: the ruling elaborates baseline §4 to §5 and moves no protocol shape, timestep or collision owner. |
-| P03 | Pending | Unassigned | None |
+| P03 | **Approved** | Project owner (`TomBResearch`) / 2026-11-09 | Owner instruction recorded as clarifications Q-01 to Q-03 below, on revision 3 of the [UDG-003 readiness proposal](assignments/UDG-003-readiness-proposal.md) reviewed at `df59e540fc880b41a599c33c97e34fab4d7d7fa9`. No ADR: P03 elaborates baseline §5 and moves no protocol shape, timestep or collision owner. |
 | P04 | Pending | Unassigned | None |
 | P05 | Pending | Unassigned | None |
 | P06 | **Approved (deferred-freeze form)** | Project owner (`TomBResearch`) / 2026-11-08 | Decision D2 of the same proposal, section 2, recorded as [ADR 0001 Replica precision policy](../adr/0001-replica-precision-policy.md) (Accepted). Concrete encoding widths and SDK integration remain subject to Gate A validation. |
@@ -81,6 +81,64 @@ Implementation clarifications recorded with the approval, binding on UDG-002:
 
 Still pending after this instruction: P03, P04, P05, P07, P08, P09 and P10. Gates A, B and C remain Not Run.
 UDG-003 and every later task remain unassigned and Not Started.
+
+## P03 adoption and UDG-003 Phase 0 authorisation recorded 2026-11-09
+
+The owner authorised proceeding with **UDG-003 Phase 0 only**, on the basis of revision 3 of the
+[UDG-003 readiness proposal](assignments/UDG-003-readiness-proposal.md), and adopted **P03** with the
+binding clarifications Q-01 to Q-03 below. Phases 1 to 3 are **not** authorised, no spike gate moved,
+and decision D-7 stays open pending probe evidence.
+
+```text
+Reviewed proposal            docs/contracts/assignments/UDG-003-readiness-proposal.md, revision 3,
+                             reviewed at df59e540fc880b41a599c33c97e34fab4d7d7fa9
+                             file SHA-256   d794f9c8ef30c1af23a71b342202195728d44f69c75b610abf86d1baf008d470
+Passing CI at review         https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42658548670
+Contract edition             UDG-CONTRACTS-M0-001 v1.0, repository edition 1 (unchanged)
+Manifest at review           docs/contracts/checksums.json, 58 entries
+                             file SHA-256   afe610ead0f5ac8478ac865883b524d015f97bbb3d0486df903f0e5c5658d780
+                             This adoption commit regenerates the manifest, so the manifest of the adoption
+                             edition is identified by this commit rather than by a self-referential digest.
+UDG-003 task contract        docs/contracts/UDG-003.md at review, SHA-256
+                             096f3ff0755569230b884cf4138be035845e28d44ad7332dc6bbd0c9e0cafaf5
+Prerequisites                UDG-001 Verified (1c735c2d845e399cc8b3cc33adac4ba7a6081387, CI 42511785889)
+                             UDG-002 Verified (372be938f0dd825ff89fac56da7dc29d0789098f, CI 42627324928,
+                             acceptance recorded at d364d2dafbc88f469ef60e5e61c5e5c5c6cfd7e4)
+                             P01/P02/P06 adoption 74ffdaaba1bc3617999c99e73c7f197ebd01a570
+Baseline                     UDG-SPEC-M0-002 v0.2, SHA-256
+                             b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf
+Shared requirement sources   docs/interfaces/movement-authority.md
+                             0eaf5eb9d67cf34265ec28486b4b9b012ff42b2e0044ac8c98d49e8d28169f84
+                             docs/integration/colyseus.md
+                             8bba03fcfb12ac9042c78b3a570e9ff2f2170031079f7f5ac1c3565f78b1090c
+Approval channel             Owner instruction, 2026-11-09, recording decisions D-1 to D-7 with D-7 left
+                             undecided, and the three binding P03 clarifications below
+Assignment record            assignments/UDG-003-phase-0.md (Phase 0 only)
+```
+
+| Decision | Owner ruling | Effect |
+| --- | --- | --- |
+| D-1 | **P03 approved**, as drafted in §1 of the reviewed proposal, with the binding clarifications Q-01 to Q-03 | [movement-authority.md 5.1–5.5](../interfaces/movement-authority.md) and [protocol.md 4.2–4.4](../interfaces/protocol.md) keep ownership; P03-a to P03-i become the adopted elaboration that UDG-003 implements. No ADR |
+| D-2 | **The §2.1 pins are approved as provisional candidates only.** Compatibility is established by the authorised installation and the executed probes, never by registry metadata | Authorised install set: `@colyseus/core`, `@colyseus/ws-transport`, `@colyseus/sdk`, `@colyseus/schema` (already installed by UDG-002) and the resolved `express`. What actually resolves is what the register records, even where it differs from the proposed value; a PR-0, PR-2 or PR-3 failure ends Phase 0 with a blocker, not a relaxed compiler policy or a hand-rolled loop |
+| D-3 | **`@colyseus/sdk` is permitted** as the transport smoke and probe client, with dependency-register ownership and the limitations recorded **under UDG-003**. Prediction validation remains **UDG-SPIKE-001**'s responsibility. `@colyseus/testing` is left unselected | The register group for `@colyseus/sdk` moves to owner `UDG-003` with its reason recording the limitation, so the package can be declared without a Not-Started task owning a selected library. No prediction, reconciliation or correction-replay behaviour is probed or claimed here; the api-map records every prediction-side name as "not used, and why" |
+| D-4 | **Server abuse policy stays outside `configHash`**, with its own recorded digest | `ProtocolLimits` and the frozen UDG-002 `configHash` (`948f8c10fc40…`) are untouched. Abuse limits (1024 B payload, 64 per room, 8 per entity, 40 fps with burst 40) are server-side policy with a digest of their own, recorded where they are enforced. This is UDG-003's D-4 and does not reopen the UDG-002 D4 backup decision, which stays open |
+| D-5 | **The explicit synthetic-region mechanism and its opt-in are approved** | Required `UDG_REGION_BOUNDS_PATH`, mandatory `"provenance": "test-only-synthetic"` label, explicit `UDG_ALLOW_SYNTHETIC_REGION=1`, and a derived non-asset `manifestHash` documented as not an asset manifest. No UDG-007 asset is required, per U2-4 |
+| D-6 | **Supporting paths and controlled grants are approved only as needed for adoption, assignment and Phase 0** | Grants are listed per Phase in [assignments/UDG-003-phase-0.md](assignments/UDG-003-phase-0.md). A-3, A-4, A-5, A-6 and A-6b of the proposal's amendment schedule are **deferred**, because nothing in Phase 0 makes them necessary; deferral is recorded there rather than silently skipped |
+| D-7 | **Undecided, pending the acknowledgement probe.** No requirement is waived | PR-8 must show experimentally what the pinned acknowledgement tracks. The prohibition on acknowledging frames that were never represented in state stays in force, and the outcome is returned for decision with its evidence |
+
+Binding P03 clarifications recorded with the approval. They are part of the P03 adoption for assigned
+work and are reproduced here rather than copied into task files.
+
+| ID | Owner ruling | Resolves |
+| --- | --- | --- |
+| Q-01 | Queue selection, screening and backlog purging operate **only on the frozen eligible snapshot**. Observations that arrive after the cutoff remain untouched until a later tick | P03-b cutoff and P03-c stages Q/S/C: a tick must not act on input it never froze |
+| Q-02 | Removal is explicit: the selected continuous observation leaves the queue **exactly once**, and each processed discrete request leaves its queue **exactly once**. Retained frames keep FIFO order. The accounting invariant and the arrival-during-tick cases are tested, not assumed | P03-c stage C and P03-f queue policy: double removal and silent retention are both observable failures |
+| Q-03 | The frozen-batch duplicate registry must retain the original request's **arrival ordinal**, its **payload identity** and its **eventual shared disposition**, so an identical retry can neither create another terminal record nor cause another transition | P03-d stage S batch registry and P03-g `result` stream: "shares one disposition" has to be reconstructible from the record |
+
+Still pending after this instruction: P04, P05, P07, P08, P09 and P10. **Gates A, B and C remain Not
+Run** and no spike gate decision exists. UDG-003 Phases 1 to 3 stay unassigned, UDG-004 and every later
+task stay Not Started, and the UDG-002 D4 independent-backup destination stays undesignated with that
+risk open.
 
 ## UDG-001 acceptance recorded 2026-11-08
 
