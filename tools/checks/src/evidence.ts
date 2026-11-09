@@ -86,6 +86,21 @@ export interface EvidenceFileRef {
   readonly required: boolean;
 }
 
+/**
+ * One captured run, as the gate reads it.
+ *
+ * Two digests here look alike and are not interchangeable, and a record that quotes one under the other
+ * label misstates its own evidence:
+ *
+ *  - `contractHash` is the digest of the **contracts index**, `docs/contracts/README.md`. It belongs to
+ *    the `contractId`/`contractVersion` triple and identifies the edition of the whole contract set.
+ *  - `configHashes.taskContract` is the digest of **the task's own contract file**,
+ *    `docs/contracts/<taskId>.md`, hashed at the revision the run executed.
+ *
+ * So a record naming `docs/contracts/UDG-002.md` must quote `configHashes.taskContract`, and a record
+ * quoting `contractHash` must name the index. `pnpm evidence:summary` carries both fields through under
+ * the same names, and `tests/contracts/UDG-002.test.ts` refuses a pair of records that swap them.
+ */
 export interface EvidenceReport {
   readonly schemaVersion: number;
   readonly runId: string;
