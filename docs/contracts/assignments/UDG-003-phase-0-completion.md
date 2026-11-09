@@ -555,6 +555,12 @@ a gate pass.
 | run | head | result | what the artefact says |
 | --- | --- | --- | --- |
 | `42719371983` | `21079545` | **success**, 23 steps + post steps, 0 failed | probe index reads `PR-0=blocked(43)`, `PR-1/2/3/8/12=pass`, **`PR-13=pass(20 checks, 0 failed)`**; `compatibility-verdict.json` keeps `stackCompatibility: "not-established"`, `pr0: "blocked"`, `strictTypecheckExitCode: 2`, `diagnostics: { total: 27, inRepositoryCode: 0, inThirdPartyDeclarations: 27 }` |
+| `42720409890` | `05678637` | **success**, 0 failed | the same artefact surface after the record commit above: `PR-0=blocked`, five passing probes unchanged, `PR-13=pass` with 20 checks, `stackCompatibility: "not-established"`; both bundles verify with 0 issues and the runner log is retained |
+
+Convention adopted here so the table cannot fall behind its own head: a **records-only** commit whose content is
+the transcription of a CI run records the runs that preceded it, and the run that covers the records-only head is
+retained in the durable store and named in the inventory chain rather than transcribed into a further commit.
+Without that rule a run would have to record itself.
 
 CI-measured PR-13 values, which the recommendation quotes (they differ from the local run only in generation
 counts, never in direction): N1 9 of 14 acknowledged frames never entered a step, peak backlog 4 of 4; N2
@@ -566,12 +572,13 @@ retiring 6 frames without a step and 12 acknowledgements without a step; N8 budg
 step, budget 3 → none, peak 2 of 4, minimum budget 2; N9 `sanitize` running 14 times, 5 frames stepped after
 rewriting, 9 acknowledgements without a step.
 
-Retained in the durable host store as `ci-run-42719371983`: both evidence bundles (each `PASS evidence verify …
-(0 issue(s))`), the `probes/` artefact including `PR-13.probe-result.json`, and `runner/runner-log.txt.gz`. This
-revision appends one entry to the `UDG-003-PHASE-0-2026-11-09` record in the store's inventory chain (inventory
-version 20, 1 762 files, superseding version 19); the chain v9 → v20 was re-verified with matching `supersedes`
-digests and no duplicate `ciRuns`, and `inventory.json` mirrors version 20. Records cite the chain entry, never a
-tip hash asserted from a record.
+Retained in the durable host store as `ci-run-42719371983` and `ci-run-42720409890`: in each, both evidence bundles
+(each `PASS evidence verify … (0 issue(s))`), the `probes/` artefact including `PR-13.probe-result.json`, and
+`runner/runner-log.txt.gz`. This revision appends an entry for each run named in the table — chain version 20 for
+`42719371983` (1 762 files, superseding version 19) and version 21 for `42720409890` — and the chain was re-verified
+end to end with matching `supersedes` digests and no duplicate `ciRuns`. Per the convention above, the store's
+newest version also covers the run that carries this record, and `inventory.json` mirrors that newest version.
+Records cite the chain entry, never a tip hash asserted from a record.
 
 **No release, tag, archive or storage location was created, replaced or deleted for this revision, and D4 remains
 undesignated.**
