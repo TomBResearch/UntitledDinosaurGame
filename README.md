@@ -56,7 +56,9 @@ node --version   # must print v24.22.2
 
 ```sh
 pnpm install --frozen-lockfile    # exact committed dependency graph; refuses a mutated lockfile
-pnpm typecheck                    # strict no-emit checks for the root config and every workspace
+pnpm typecheck                    # builds the workspace libraries, then strict no-emit checks
+                                  # (pnpm test does the same: a suite that asserts against built
+                                  # output has to be able to produce it on a fresh checkout)
 pnpm lint                         # ESLint plus dependency-boundary and cycle checks
 pnpm test                         # all populated unit and Node integration suites
 pnpm build                        # clean, then build shared libraries, tools and both apps

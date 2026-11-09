@@ -1067,6 +1067,32 @@ describe('regression and scope', () => {
     record('regression.UDG001', 'green');
   });
 
+  it('builds the libraries before anything asserts against their output', () => {
+    // This suite and the unit suites assert against packages/*/dist, because that is what a consumer
+    // loads. A fresh checkout has no dist, so on the first GitHub-hosted run of this task `pnpm
+    // typecheck` failed with TS2307 for every built-module import while passing on any machine that had
+    // built before: the local tree was carrying state the gate did not create. The scripts now produce
+    // what they assert against, so the gate order is not a hidden prerequisite of a correct run.
+    const manifest = json<{ scripts: Record<string, string> }>('package.json');
+    const buildsLibraries = manifest.scripts['build:libraries'] ?? '';
+    expect(buildsLibraries, 'the library build must be one named step').toContain('./packages/*');
+    // The tokens that actually assert. A script that builds and then runs neither is not a check, so an
+    // absent token is a failure rather than an infinite distance that would pass the ordering test.
+    const assertionTokens = ['vitest', 'typecheck:root', 'tsc'];
+    for (const script of ['typecheck', 'test', 'test:unit']) {
+      const body = manifest.scripts[script] ?? '';
+      expect(body, `pnpm ${script} must build the libraries it asserts against`).toContain('run build:libraries');
+      const positions = assertionTokens
+        .map((token) => body.indexOf(token))
+        .filter((position) => position >= 0);
+      expect(positions.length, `pnpm ${script} must run something that asserts`).toBeGreaterThan(0);
+      expect(body.indexOf('run build:libraries'), `pnpm ${script} must build before it asserts`).toBeLessThan(
+        Math.min(...positions),
+      );
+    }
+    record('gate.buildsBeforeAsserting', true);
+  });
+
   it('has a populated unit suite per surface the contract lists', () => {
     const directory = join(ROOT, 'tests', 'unit', 'udg-002');
     const files = ['config.test.ts', 'fixtures.test.ts', 'mapping.test.ts', 'schema-roundtrip.test.ts', 'validation.test.ts'];
