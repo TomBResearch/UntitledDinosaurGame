@@ -16,12 +16,17 @@ Task ID and final implementation SHA:
   Submission set        8aebbd15 feat(protocol) · 1284b423 feat(config) · cf35a133 chore(checks)
                         e6be6aa9 docs(readme) · 830a326a test(UDG-002) · 2321bb4e fix(gate)
                         a2a2318e fix(test)
-  Correction set        bf4984bc fix(protocol) · 41159df3 test(UDG-002) · c82020bc docs(checks)
-                        69f114b6 docs(udg) — the four review corrections, described under "Review
+  Correction set        bf4984b8 fix(protocol) · 41159dfd test(UDG-002) · c82020b9 docs(checks)
+                        69f114b3 docs(udg) — the four review corrections, described under "Review
                         corrections applied in this revision"
-  Record set            this commit: the assignment, this completion record and the regenerated
-                        committed evidence summary. A commit cannot quote its own SHA or its own CI
-                        run, so both are named by the durable inventory appended after it, as before.
+  Record set            the commits after the correction set: the assignment, this completion record
+                        and the regenerated committed evidence summary. The first edition of this
+                        text is b527d33217ef4c88def30075515bcac3695845f5, whose own CI run
+                        42623876835 is success with 23 of 23 steps; a commit cannot quote its own SHA
+                        or its own CI run, so any later record commit — including the one that fixes
+                        four 8-character shas this file first quoted wrongly, which the reviewer
+                        should know about rather than discover — is carried by the durable inventory
+                        written after it, named in "Retention" below.
   The gate commands below were run at this head, which is what CI verifies. Per-commit CI is not
   configured, and the intermediate commits of one submission set are not individually green by
   construction: the UDG-002 suites, the amended UDG-001 assertions and the tooling that supports them
