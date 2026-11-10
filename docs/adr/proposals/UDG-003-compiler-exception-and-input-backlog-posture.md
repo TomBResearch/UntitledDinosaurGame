@@ -1,7 +1,35 @@
 # ADR proposal — Colyseus declaration checking, and the input-backlog posture that replaces silent retirement
 
-Status: **Proposed — awaiting the integration owner. Nothing in this document is adopted, no compiler setting is
-changed, no dependency is changed, and no Phase 1 work has started.**
+Status: **Part A Accepted as [ADR-0002](../0002-server-declaration-checking-exception.md), confined to the two
+`apps/server` projects on the owner's instruction of 2026-11-10. Part B is Not approved**: the owner returned it
+with five corrections (§0 below), and the replacement recommendation is
+[UDG-003-input-consumption-rule.md](UDG-003-input-consumption-rule.md). Disposition of this document:
+
+| part | owner disposition | what that means now |
+| --- | --- | --- |
+| A (compiler policy) | **Accepted — option A4, `apps/server/tsconfig.json` and `apps/server/tsconfig.probes.json` only** | Applied with the owner's conditions: everything else keeps `skipLibCheck: false`; the full declaration check is retained as a separate pinned diagnostic; UDG's own emitted declarations keep a strict check of their own; PR-0 is restated. Extending the exception to `apps/client` or anything else needs that project's own review |
+| B (input backlog) | **Not approved as the backlog solution** | §4 and §4.3 are corrected in place under §0 and are not a solution record; Phase 1 stays unassigned and no baseline clause has been amended |
+
+Nothing in this document establishes runtime compatibility, and no gate has been run. The measurements below stand;
+several of the conclusions drawn from them on 2026-11-09 did not, and are corrected rather than deleted.
+
+## 0. Corrections applied on owner review, 2026-11-10
+
+Each correction names the sentence it supersedes. The original text is kept in place under a `SUPERSEDED by C-n`
+marker so a reader can see what was claimed before and why it was wrong.
+
+| id | Correction | Where |
+| --- | --- | --- |
+| C-1 | `take(n)` **changes the adopted one-input-per-entity-per-tick requirement**. Consuming more than one continuous frame for an entity in a tick is an amendment to [movement-authority.md §5.1 and §5.2](../../interfaces/movement-authority.md) and to the v0.2 §7.1 anti-cheat constraint, so it is a baseline/P03 amendment requiring an accepted ADR — not "configuration of declared options". §4.3 item 1 is superseded | §4.2, §4.3 |
+| C-2 | PR-13's `simulated`/`applied` arrays are **probe bookkeeping, not an executed movement solver**. No locomotion step, integrator, collision query or authority code ran and no state field was advanced from an input value. What was measured is which frame identities a room read through a consume primitive inside a fixed-step callback, and what the client's watermark then retired. "Represented" in this document means *read in a step and logged*, which is a proxy for representation, not evidence of movement | §4 header, §4.1, §9 of the api map |
+| C-3 | The sizing formula is a **necessary capacity consideration, not a sufficient guarantee**. It bounds mean arrival against mean consumption; it says nothing about bursts inside a sampling interval, jitter, a stalled tick, or a sender that is deliberately over-rate, and the library's ceiling is a per-second average that arrives after over-rate frames are already buffered | §4.2 "measured sizing rule" |
+| C-4 | An obedient loopback sender (N6) and a disconnect that lands after eviction (N3, N4) **do not establish the required protection**. The first assumes the behaviour that needs enforcing; the second shows the violation occurring and then stopping. Neither demonstrates protection against a sender that does not comply | §4.1 N3/N4/N6 conclusions |
+| C-5 | The claim that a larger budget is "exactly the work the current design already does when it drains on catch-up" is **removed**. The accepted contract forbids draining a burst and simulating only its last frame, and forbids moving a character repeatedly to empty a queue, so no such catch-up draining exists in the design to be continuous with | §5 impact, §4.2 N8 note |
+
+The verdict of the measurements themselves is unchanged: no public mechanism refuses an over-quota frame, and
+`clear()`, `seqField`, `sanitize()` and `drain()`-then-apply-latest all fail the prohibition. What changed is that
+`take(n)` is presented as a **proposal to amend the rule**, with the amendment cost named, rather than as a
+configuration choice available to a room.
 
 Decision ID and title: ADR-P-0002 — confine `skipLibCheck` to the network-facing projects as an explicit declared
 exception (Part A), and prevent unrepresented acknowledgement by sizing consumption to the admitted input rate
