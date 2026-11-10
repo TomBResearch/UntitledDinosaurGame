@@ -708,3 +708,43 @@ Probe artefacts for the revision-4 runs are retained in the durable host store (
 with the runner logs, and the inventory chain is extended rather than rewritten; records cite the chain, never a tip
 hash asserted from a record. Raw bundles stay out of Git. No release, tag, archive or storage location was created or
 altered, and **D4 remains undesignated**: no retention provisioning was authorised by this decision.
+
+### 11.8 CI reproduction
+
+Run **`42792412198`** on head `ee15f92a` — **success**, 22 steps, none failed. It is the first CI run of the applied
+exception, and the retained artefacts read:
+
+| surface | CI value |
+| --- | --- |
+| probe verdicts | `PR-0=pass(49) PR-1=pass(43) PR-2=pass(7) PR-3=pass(10) PR-8=pass(15) PR-12=pass(6) PR-13=pass(20)` |
+| accepted compiler gate | exit **0**, 0 diagnostics — purpose recorded in the index as "the accepted compiler gate under the ADR-0002 exception: first-party code against the pinned declarations" |
+| retained full declaration check | exit **2**, **27** diagnostics in **7** groups, **0** in repository code |
+| UDG-owned emitted declarations | exit **0**, 0 diagnostics, under `skipLibCheck: false` with no server/SDK/transport in the program |
+| `compatibility-verdict.json` | `stackCompatibility: "not-established"`, `pr0: "pass"`, `compilerPolicy.approvedProjects` = the two `apps/server` configs, four `notClaimed` entries |
+| new CI step | "Typecheck UDG-owned emitted declarations strictly (ADR-0002)" ran and passed |
+
+Both per-task bundles in the retained artefact verify with `PASS evidence verify … (0 issue(s))`, and the runner log
+is retained. A green run here means the suite's assertions hold — including that the vendor inventory still matches
+its pinned document and that the exception has not spread — and it does **not** mean the stack is compatible, which
+the artefact states in its own `reading` field.
+
+Under the recording convention adopted in §10, the run that covers *this* records-only commit is named in the
+inventory chain rather than transcribed into a further commit, because a run cannot record itself.
+
+### 11.9 Disclosed incident in the evidence store (not a repository or contract issue)
+
+While extending the inventory chain after run `42792412198`, a **stale copy** of the chain generator — an older
+revision whose constants still named version 19 — was executed instead of the current one. It overwrote
+`/workspace/udg-evidence/inventory-v19.json` with a same-day snapshot, so that file is no longer the historical
+snapshot it was, and `inventory-v20.json`'s `supersedes` digest no longer matches it; the original v19 bytes are
+unrecoverable.
+
+Nothing else was touched: no evidence directory, CI artefact, bundle, `report.json`, `checksums.sha256`, runner log,
+probe artefact, or repository file. v20–v22 are byte-identical to before. v19 was **not** re-minted (it cannot be) and
+v20–v22 were deliberately **not** rebuilt to repair the single digest link, because doing so would replace three sound
+historical snapshots with today's data to make one link verify. Chain verification from v9 forward therefore reports
+exactly one expected discontinuity, `v19 → v20`, and the incident is recorded both as
+`INTEGRITY-2026-11-10.md` beside the store and as an `integrityIncidents` entry carried forward inside the inventory
+itself, so a reader of any later version sees it without having been told. The generator now refuses to run unless
+its version constants are consecutive and refuses to overwrite an existing `inventory-vN.json`, and the stale copy was
+replaced with a pointer to the guarded one.
