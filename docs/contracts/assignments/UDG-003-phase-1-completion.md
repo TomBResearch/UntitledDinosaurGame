@@ -221,12 +221,34 @@ run that produced them.
 | `58ecb18` | implement the transport-independent Phase 1 authority core (+ `@udg/config` grant, regenerated dependency register) |
 | `7efa463` | pin the cutoff, admission and neutral rules |
 | `1bf8740` | cover navigation refusal, identity, bounds, lifecycle, journal and cadence |
-| this submission | the vector suite, the Phase 1 contract assertions, these records |
+| `11cb58b` | the vector suite and the Phase 1 contract assertions (§6–§7) |
+| `73d48c9` | this record, the status line, the integration link (A7) and the re-pinned checksum manifest (A6) |
 
-**CI: not yet run for this submission.** The head and run id are recorded in a follow-up commit, the same way
-Phase 0 recorded its runs; until then no CI claim is made anywhere in this file. The previously accepted
-revision-4 basis remains `8987139f18653b05e57e64d0b14cdd1c753b6612` with CI `42794023731`, and that run is
-evidence for ADR-0002's compiler scope only — not for Phase 1.
+**CI for the submitted head `73d48c96895305f5773d716e012c13489ea62e4a`: run `42914263581`, conclusion
+`success`** — [workflow run](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42914263581).
+All 20 steps green on a GitHub-hosted `linux-x64` runner: frozen-lockfile install, `pnpm typecheck`, `pnpm lint`,
+`pnpm test`, `pnpm build`, `declarations:strict`, `test:unit`, `test:boundaries`, `test:fixtures`, the UDG-001
+(49), UDG-002 (31) and UDG-003 (64) task suites, `contracts:checksums`, `dependencies:verify`, evidence
+capture, the required-artefact assertions, evidence verification and publication. So AC-15's local-and-CI
+half is satisfied for the commands CI actually runs; the bundle half is qualified in the note below.
+
+Retained for that run (`/workspace/udg-evidence/ci-run-42914263581/`, outside Git): the artefact directory,
+both per-task bundles — `UDG-001-2026-11-10T22-26-38-965Z-73d48c96` and
+`UDG-002-2026-11-10T22-27-52-156Z-73d48c96`, each verifying with `PASS evidence verify … (0 issue(s))` — the
+probe results, and `runner/runner-log.txt.gz`. The Phase 0 surface is unchanged at this head: **PR-0 pass
+(49 checks), PR-1 pass (43), PR-2 pass (7), PR-3 pass (10), PR-8 pass (15), PR-12 pass (6), PR-13 pass (20)**,
+the declaration inventory still **27 third-party diagnostics / 0 repository diagnostics**, and
+`stackCompatibility` still **`not-established`**. Nothing in a green run at this head is a compatibility claim:
+Phase 1 added no transport code for a compatibility claim to attach to.
+
+The evidence store gained a **second inventory record** rather than more runs on Phase 0's:
+`inventory-v25.json` (mirror `inventory.json`, 2 114 files) adds `UDG-003-PHASE-1-2026-11-12` carrying this
+submission's head, status **In Review**, the vector directory and its byte-stability, the absence of a
+capture plan, Gates A/B/C **Not Run**, `stackCompatibility: not-established`, the open decisions and
+`releases: none`. Chain verification over `v10 … v25` reports exactly one discontinuity — `v19 → v20`, the
+disclosed `INTEGRITY-2026-11-10` incident — and every other hop matches on version, digest and file count.
+Per the records-only convention adopted in the Phase 0 record §10.5b, the run produced by *this* commit is
+named in the chain rather than transcribed into a further commit.
 
 **Evidence-bundle gap, disclosed rather than papered over.** §6 item 7 asks for "the retained bundle's
 verification result", and AC-15 speaks of "both bundles verified". That machinery is the capture plan
@@ -234,10 +256,10 @@ verification result", and AC-15 speaks of "both bundles verified". That machiner
 were granted `tools/checks/**`, UDG-003 was not — Phase 1's grants are A1–A8 and none of them touches the
 evidence tooling. So this phase produces **no `UDG-003` evidence bundle**, and claiming one would be false.
 What the submission does carry is: the CI run's own conclusion and runner log for the published head, the
-vectors in §8 with their digests, the command table in §5, and the UDG-001/UDG-002 bundles that CI still
-captures and verifies on every push to `main` — which is what AC-15's "both bundles" actually refers to.
-Adding a `UDG-003` capture plan is a small, well-defined change to a controlled path; it needs an explicit
-grant and is listed in §11 as a decision the owner owes rather than being done here.
+vectors in §8 with their digests, the command table in §5, and the UDG-001/UDG-002 bundles that CI captures
+and verifies on every push to `main` — verified with 0 issues at this head, which is what AC-15's "both
+bundles" actually refers to. Adding a `UDG-003` capture plan is a small, well-defined change to a controlled
+path; it needs an explicit grant and is listed in §11 as a decision the owner owes rather than being done here.
 
 ## 10. What Phase 1 did not do
 
@@ -254,7 +276,9 @@ grant and is listed in §11 as a decision the owner owes rather than being done 
 - No multiple-input consumption, no `sessionEpoch` renewal procedure, no replica/patch stages (M, P).
 - Not decided by Phase 1: AC-1 (200-tick 40 m reference trace), AC-3c (abuse population), AC-7 (an offender's
   message through a transport), AC-9 (startup/disposal), AC-10/AC-11/AC-12, AC-13 (bounds-file startup),
-  AC-15 (root commands green in CI is the *submission* criterion, recorded in §9 as not yet run), and the
+  AC-15 (root commands green locally **and** in CI is a *submission* criterion rather than a phase claim, so it
+  is not marked passed here; §9 records both halves for the commands CI runs, with the bundle qualification
+  recorded there), and the
   route-dependent cases O01, O03, O04, O05, O08, O10, O11, which are **deferred, not faked**.
 - **Gates A, B and C remain Not Run.** Compiling and unit-testing an authority core is not a gate pass.
   Phases 2 and 3 remain unassigned, so UDG-003 is not eligible for Verified at any phase.
