@@ -281,6 +281,19 @@ unassigned; Gate A, B and C **Not Run**; P04, P05, P07–P10 Pending; widths pro
 **D-7 open**; **D4 open**. `stackCompatibility` remains **not-established**: a documented declaration-checking
 exception is not a compatibility result.
 
+## UDG-003 ADR-0002 acceptance and Phase 1 authorisation recorded 2026-11-11
+
+| Item | Recorded position |
+|---|---|
+| ADR-0002 acceptance | The owner accepted the compiler exception and its safeguards at `8987139f18653b05e57e64d0b14cdd1c753b6612`, whose retained CI run `42794023731` concluded `success`. The acceptance covers **the scoped compiler policy and its retained checks** — not complete runtime compatibility, and not UDG-003 acceptance. |
+| Phase authorised | **Phase 1 only**: the transport-independent authority core of the approved phase plan. Pinned assignment: [UDG-003-phase-1.md](assignments/UDG-003-phase-1.md). |
+| Phase 1 boundary | No SDK/transport integration, no `RegionRoom` or lifecycle transport wiring, no physics, no navigation, no client prediction, no multiple-input consumption. The adopted one-input-per-entity-per-tick rule is implemented exactly: no backlog consumption, no coalescing, no `take(n)`. |
+| Part B | **Not adopted**, including as a narrowed guarantee. `D-7` remains open and continues to block transport acceptance; the Phase-1 authorisation does not waive it, and Phase 1 introduces no `inputDisposition` port because closing `D-7` is a separate owner decision. |
+| Phases 2–3 | Unassigned. The contract-named `apps/server/src/movement/MovementAuthorityAdapter.ts` is not created in Phase 1. |
+| Gates | A, B and C remain **Not Run**. UDG-003 remains incomplete until the remaining phases and blockers are resolved. |
+| Evidence store | The damaged `inventory-v19.json` and `INTEGRITY-2026-11-10.md` are preserved exactly; no historical inventory or downstream link is rebuilt to manufacture continuity; new snapshots are create-only and fail before overwriting; the known `v19 → v20` discontinuity is carried forward and stated. `D4` (independent backup destination) remains open, and no external storage, release, tag or archive is authorised. |
+| Not repeated | No broad input-backlog survey and no upstream publication during this assignment. |
+
 ## Reviewed edition and pins for the P01 approval
 
 ```text
