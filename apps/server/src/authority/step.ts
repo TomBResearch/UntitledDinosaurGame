@@ -102,6 +102,8 @@ export interface EntityRefusal {
   readonly arrival: ArrivalRecord;
   readonly code: RejectionCode;
   readonly disposition: Disposition;
+  /** The request-identity hash P03-g requires on a discrete row, or `null` where none was derived. */
+  readonly payloadHash: string | null;
   /** `false` for an arbitration loser: screened refusals are never recorded as losses (P03-g). */
   readonly screened: boolean;
 }
@@ -109,6 +111,7 @@ export interface EntityRefusal {
 export interface EntityAnswer {
   readonly arrival: ArrivalRecord;
   readonly requestId: string;
+  readonly payloadHash: string | null;
   readonly dedupe: 'cache' | 'batch';
   readonly code: RejectionCode | null;
 }
@@ -180,6 +183,12 @@ export interface AdmissionStats {
   readonly discreteHighWater: number;
   readonly cacheDepth: number;
   readonly overflowCauses: Readonly<Partial<Record<OverflowCause, number>>>;
+  /**
+   * The O12 seam's own totals. A route completion is not an observed arrival, so counting one as a
+   * refusal would make AC-17's arithmetic over report arrivals that never existed.
+   */
+  readonly routeCompletionsCommitted: number;
+  readonly routeCompletionsDiscarded: number;
 }
 
 /** Control arrivals are server-generated; the same room-wide bound as discrete traffic is enough. */
@@ -239,6 +248,14 @@ export class AuthorityCore {
   readonly #dispositions = new Map<EntityId, Map<Disposition, number>>();
   readonly #overflowCauses = new Map<OverflowCause, number>();
   readonly #recentlyRemoved = new Map<ArrivalOrdinal, ArrivalRecord>();
+
+  /**
+   * The arrivals stage L removed because the association ended, for this tick only.
+   *
+   * They are journalled where they are dropped, but the entity outcome has to name them too: otherwise a
+   * reviewer reading one tick cannot tell that the backlog was dropped rather than never queued (AC-3a).
+   */
+  readonly #droppedThisTick = new Map<EntityId, ArrivalRecord[]>();
   #resultRows: JournalRow[] = [];
   readonly #stepper: EntityStepper;
   readonly #clock: FixedStepClock;
@@ -493,6 +510,7 @@ export class AuthorityCore {
 
     // --- F. The first statement of the tick is the cutoff (P03-b).
     const cutoff: Cutoff = { tick: this.#clock.tick, ordinal: this.#order.current };
+    this.#droppedThisTick.clear();
     const stages: Stage[] = ['F'];
     const rows: JournalRow[] = [];
     const results: TerminalResult[] = [];
@@ -623,6 +641,7 @@ export class AuthorityCore {
     } else if (control === 'leave' || control === 'expiry') {
       if (entity !== undefined) {
         const dropped = [...entity.continuousQueue.clear(), ...entity.discreteQueue.clear()];
+        this.#droppedThisTick.set(entity.entityId, dropped);
         for (const item of dropped) {
           this.#count('dropped:lifecycle', entity.entityId);
           rows.push(this.#observationRow(item, cutoff.tick, 'dropped:lifecycle', null, false));
@@ -712,7 +731,7 @@ export class AuthorityCore {
           refused: [],
           answered: [],
           purged: [],
-          dropped: [],
+          dropped: this.#droppedThisTick.get(entity.entityId) ?? [],
           events,
           continuousDepth: view.continuousDepth,
           discreteDepth: view.discreteDepth,
@@ -764,6 +783,8 @@ export class AuthorityCore {
         arrival: screening.arrival,
         code: screening.refusal,
         disposition: dispositionForCode(screening.refusal),
+        // A continuous observation carries no request identity: there is no hash to record (P03-g).
+        payloadHash: null,
         screened: true,
       });
     }
@@ -772,7 +793,7 @@ export class AuthorityCore {
 
     const after = entity.view();
     rows.push(this.#intentionRow(plan, screening, candidates, cutoff, entity.entityId));
-    rows.push(...this.#recordDispositions(plan, screening, cutoff, refused, answered, entity.entityId));
+    rows.push(...this.#recordDispositions(plan, cutoff, refused, answered, entity.entityId));
 
     for (const arrival of after.continuous) {
       rows.push(this.#observationRow(arrival, cutoff.tick, 'queued', null, false));
@@ -801,7 +822,7 @@ export class AuthorityCore {
       refused,
       answered,
       purged: plan.purge,
-      dropped: [],
+      dropped: this.#droppedThisTick.get(entity.entityId) ?? [],
       events,
       continuousDepth: after.continuousDepth,
       discreteDepth: after.discreteDepth,
@@ -908,12 +929,19 @@ export class AuthorityCore {
     // the intention row's `consumed` reference (P03-g).
     for (const refusal of discrete.refusals) {
       const disposition = dispositionForCode(refusal.code);
-      refused.push({ arrival: refusal.arrival, code: refusal.code, disposition, screened: true });
+      refused.push({
+        arrival: refusal.arrival,
+        code: refusal.code,
+        disposition,
+        payloadHash: refusal.payloadHash,
+        screened: true,
+      });
     }
     for (const answer of discrete.answers) {
       answered.push({
         arrival: answer.arrival,
         requestId: answer.requestId,
+        payloadHash: answer.payloadHash,
         dedupe: answer.dedupe,
         code: answer.code,
       });
@@ -925,6 +953,7 @@ export class AuthorityCore {
         arrival: source,
         code: loser.code,
         disposition: dispositionForCode(loser.code),
+        payloadHash: loser.candidate.payloadHash,
         screened: false,
       });
     }
@@ -992,28 +1021,46 @@ export class AuthorityCore {
    */
   #recordDispositions(
     plan: CommitPlan,
-    screening: ContinuousScreening | null,
     cutoff: Cutoff,
     refused: readonly EntityRefusal[],
     answered: readonly EntityAnswer[],
     entityId: EntityId,
   ): JournalRow[] {
-    const decided = new Map<ArrivalOrdinal, { disposition: Disposition; code: RejectionCode | null }>();
-    if (plan.consumed !== null) decided.set(plan.consumed.ordinal, { disposition: 'consumed', code: null });
+    interface Decided {
+      readonly disposition: Disposition;
+      readonly code: RejectionCode | null;
+      readonly payloadHash: string | null;
+      readonly screened: boolean;
+    }
+    const decided = new Map<ArrivalOrdinal, Decided>();
+    const unscreened = (disposition: Disposition, code: RejectionCode | null): Decided => ({
+      disposition,
+      code,
+      payloadHash: null,
+      screened: false,
+    });
+    if (plan.consumed !== null) decided.set(plan.consumed.ordinal, unscreened('consumed', null));
     // A committed discrete intention is consumed by definition — the request became an intention rather
     // than an answer. Stage Q's `consumed` only ever names a continuous observation, so without this the
     // winning request would be observed and never disposed, and AC-17 would not reconcile.
     if (plan.winner !== null && plan.winner.kind !== 'direct') {
-      decided.set(plan.winner.ordinal, { disposition: 'consumed', code: null });
+      decided.set(plan.winner.ordinal, unscreened('consumed', null));
     }
     for (const item of refused) {
-      decided.set(item.arrival.ordinal, { disposition: item.disposition, code: item.code });
+      // The refusal carries its own `screened` flag: a `NAVIGATION_BUSY` is a screening refusal and an
+      // arbitration loss is not, and P03-g requires the journal to keep those apart.
+      decided.set(item.arrival.ordinal, {
+        disposition: item.disposition,
+        code: item.code,
+        payloadHash: item.payloadHash,
+        screened: item.screened,
+      });
     }
     for (const item of answered) {
-      decided.set(item.arrival.ordinal, { disposition: 'answered', code: item.code });
+      decided.set(item.arrival.ordinal, unscreened('answered', item.code));
     }
     for (const purged of plan.purge) {
-      decided.set(purged.arrival.ordinal, { disposition: 'purged', code: purged.code });
+      decided.set(purged.arrival.ordinal, unscreened('purged', purged.code));
     }
 
     const rows: JournalRow[] = [];
@@ -1022,9 +1069,16 @@ export class AuthorityCore {
         ordinal === plan.consumed?.ordinal ? plan.consumed : this.#findQueuedOrRefused(entityId, ordinal);
       if (arrival === null) continue;
       this.#count(entry.disposition, entityId);
-      const screened =
-        screening !== null && screening.arrival.ordinal === ordinal && screening.refusal !== null;
-      rows.push(this.#observationRow(arrival, cutoff.tick, entry.disposition, entry.code, screened));
+      rows.push(
+        this.#observationRow(
+          arrival,
+          cutoff.tick,
+          entry.disposition,
+          entry.code,
+          entry.screened,
+          entry.payloadHash,
+        ),
+      );
     }
     return rows;
   }
@@ -1097,12 +1151,15 @@ export class AuthorityCore {
       // O12: the input decision is already committed, so a completion that no longer matches the
       // watermark is discarded with a terminal SUPERSEDED rather than committed.
       if (completion.generation !== entity.view().watermark) {
+        // A completion is not an observed *arrival*, so counting it as a refusal would break AC-17's
+        // arithmetic for the entity. It is counted in its own totals instead.
         discarded += 1;
-        this.#count('refused:superseded', completion.entityId);
         continue;
       }
       committed += 1;
     }
+    this.#routeCommitted += committed;
+    this.#routeDiscarded += discarded;
     return { committed, discarded };
   }
 
@@ -1149,6 +1206,12 @@ export class AuthorityCore {
     disposition: Disposition,
     reason: RejectionCode | null,
     screened: boolean,
+    /**
+     * P03-g requires the request-identity hash on a discrete observation row. It is `null` in the two
+     * cases where no identity exists to record: a continuous observation, and a request whose identity
+     * never parsed. A *queued* discrete request has not been validated yet, so it has no hash either.
+     */
+    payloadHash: string | null = null,
   ): JournalRow {
     return this.#journal.observationRow(arrival, {
       alias: this.aliasFor(arrival.entityId),
@@ -1156,6 +1219,7 @@ export class AuthorityCore {
       disposition,
       reason,
       screened,
+      payloadHash,
     });
   }
 
@@ -1252,6 +1316,11 @@ export class AuthorityCore {
     };
   }
 
+  /** Totals for the O12 route-completion seam, kept apart from arrival dispositions (AC-17). */
+  #routeCommitted = 0;
+
+  #routeDiscarded = 0;
+
   stats(): AdmissionStats {
     const counters: Partial<Record<Disposition, number>> = {};
     for (const [disposition, count] of this.#counters) counters[disposition] = count;
@@ -1266,6 +1335,8 @@ export class AuthorityCore {
       discreteHighWater: this.#discreteHighWater,
       cacheDepth,
       overflowCauses: causes,
+      routeCompletionsCommitted: this.#routeCommitted,
+      routeCompletionsDiscarded: this.#routeDiscarded,
     };
   }
 

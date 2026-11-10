@@ -98,7 +98,8 @@ export const toReplayInputs = (
   const ticks: ReplayTickBoundary[] = [];
   for (const row of rows) {
     switch (row.type) {
-      case 'event':
+      case 'event': {
+        if (events.some((entry) => entry.arrivalOrdinal === row.arrivalOrdinal)) break;
         events.push({
           type: 'event',
           arrivalOrdinal: row.arrivalOrdinal,
@@ -110,7 +111,12 @@ export const toReplayInputs = (
           eligibleTick: row.eligibleTick,
         });
         break;
-      case 'observation':
+      }
+      case 'observation': {
+        // One arrival is described by as many rows as it took dispositions across ticks. The *input* is
+        // the arrival, so the first description is the one to replay and later ones are deduplicated —
+        // otherwise a replay would ingest the same message twice and decide differently.
+        if (observations.some((entry) => entry.ordinal === row.arrivalOrdinal)) break;
         observations.push({
           ordinal: row.arrivalOrdinal,
           entityId: row.entityId,
@@ -121,6 +127,7 @@ export const toReplayInputs = (
           raw: row.raw,
         });
         break;
+      }
       default:
         break;
     }
@@ -187,6 +194,11 @@ export interface ObservationRowInput {
   readonly disposition: Disposition;
   readonly reason: RejectionCode | null;
   readonly screened: boolean;
+  /**
+   * The request-identity hash, from stage S. `null` for a continuous observation, an unvalidated identity
+   * or a request that has not been screened yet (P03-g).
+   */
+  readonly payloadHash: string | null;
 }
 
 /** The run's journal: rows, the tick hash chain and the hashing helpers. */
@@ -231,7 +243,7 @@ export class Journal {
       rawHash: arrival.rawHash,
       malformed: arrival.malformed,
       requestId: requestIdOf(arrival),
-      payloadHash: null,
+      payloadHash: input.payloadHash,
       disposition: input.disposition,
       reason: input.reason,
       screened: input.screened,

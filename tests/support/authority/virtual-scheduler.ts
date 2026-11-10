@@ -80,6 +80,8 @@ export class VirtualScheduler implements Scheduler {
       this.#time.set(Math.max(this.#time.nowMs(), due.atMs));
       due.callback();
     }
-    this.#time.set(target);
+    // Never backwards: a callback may itself move virtual time on, and a clock that rewinds would let a
+    // suite observe an ordering the real clock could not produce.
+    this.#time.set(Math.max(this.#time.nowMs(), target));
   }
 }

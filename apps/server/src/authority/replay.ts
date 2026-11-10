@@ -113,6 +113,14 @@ export const replayRun = (options: ReplayOptions): ReplayResult => {
   return { ok: true, core, outcomes, rows: core.journalRows, chain: core.chain };
 };
 
+/**
+ * Re-offer one recorded arrival to a fresh core.
+ *
+ * The replay clock starts at zero and is advanced only by the tick boundaries below, so no arrival is fed
+ * with a received timestamp: ordering comes from the arrival ordinal and the cutoff, which is the only
+ * ordering the rules recognise (P03-b). Passing the ordinal here would be a lie about time that happens
+ * to be invisible in the journal.
+ */
 const feed = (core: AuthorityCore, arrival: ReplayObservation): void => {
   const payload = payloadFromRendered(arrival.raw);
   if (arrival.control === 'join') {
@@ -121,22 +129,22 @@ const feed = (core: AuthorityCore, arrival: ReplayObservation): void => {
       y: numberField(payload, 'spawnY'),
       z: numberField(payload, 'spawnZ'),
     };
-    core.join(arrival.entityId, arrival.declaredEpoch ?? 1, spawn, arrival.ordinal);
+    core.join(arrival.entityId, arrival.declaredEpoch ?? 1, spawn);
     return;
   }
   if (arrival.control === 'leave') {
-    core.leave(arrival.entityId, arrival.ordinal);
+    core.leave(arrival.entityId);
     return;
   }
   if (arrival.control === 'expiry') {
-    core.expire(arrival.entityId, arrival.ordinal);
+    core.expire(arrival.entityId);
     return;
   }
   if (arrival.control === 'epochChange') {
-    core.epochChange(arrival.entityId, arrival.declaredEpoch ?? 1, arrival.ordinal);
+    core.epochChange(arrival.entityId, arrival.declaredEpoch ?? 1);
     return;
   }
-  core.ingest(arrival.entityId, payload, arrival.ordinal);
+  core.ingest(arrival.entityId, payload);
 };
 
 const numberField = (payload: Readonly<Record<string, unknown>>, key: string): number => {

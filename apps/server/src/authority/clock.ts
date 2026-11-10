@@ -28,9 +28,13 @@ export interface FixedStepClockOptions {
 
 export type ClockFailure = 'tick-rate-not-integer-milliseconds' | 'patch-interval-not-a-whole-number-of-ticks';
 
+/** What the clock did last: how long it armed the callback for, and how late that callback ran. */
 export interface TickScheduleSample {
   readonly scheduledDelayMs: number;
+  /** How far past its due time the most recent callback fired. `0` is exactly on time. */
   readonly driftMs: number;
+  /** Whether the delay was clamped, which is the only way it can differ from a whole period. */
+  readonly clamped: boolean;
 }
 
 /**
@@ -53,8 +57,8 @@ export class FixedStepClock {
   #handle: ScheduledHandle | null = null;
   #deadlineMs: number;
   #lastFireAtMs: number | null = null;
-  #lastSample: TickScheduleSample | null = null;
-  #boundReached = false;
+  #lastDelayMs: number | null = null;
+  #lastDriftMs: number | null = null;
   readonly #network: Readonly<NetworkConfig>;
   readonly #scheduler: Scheduler;
   readonly #time: TimeSource;
@@ -102,14 +106,27 @@ export class FixedStepClock {
     return this.#running;
   }
 
-  /** `true` once the counter has stopped rather than wrapped (protocol.md 4.4). */
+  /**
+   * `true` when the counter is at the bound and cannot advance, which is the state in which no further
+   * tick body may run (protocol.md 4.4). It is a property of the counter, not of an attempted advance.
+   */
   get boundReached(): boolean {
-    return this.#boundReached;
+    return this.#tick >= UINT32_MAX;
   }
 
-  /** The most recent arming decision, recorded so the clamp is assertable rather than asserted. */
+  /**
+   * The most recent arming decision and the lateness of the tick that ran under it.
+   *
+   * Both are recorded rather than derived on demand, so a suite can assert what the clock actually asked
+   * the scheduler for instead of trusting a comment about clamping (P03-a).
+   */
   get lastSample(): TickScheduleSample | null {
-    return this.#lastSample;
+    if (this.#lastDelayMs === null || this.#lastDriftMs === null) return null;
+    return {
+      scheduledDelayMs: this.#lastDelayMs,
+      driftMs: this.#lastDriftMs,
+      clamped: this.#lastDelayMs !== this.tickDurationMs,
+    };
   }
 
   /** The patch schedule is independent of the tick schedule; only its cadence is derived here (PR-10). */
@@ -121,6 +138,7 @@ export class FixedStepClock {
   start(onTick: (tick: ServerTick) => void): void {
     if (this.#running) return;
     this.#running = true;
+    // The deadline is the time the next callback is due.
     this.#deadlineMs = this.#time.nowMs() + this.tickDurationMs;
     this.#arm(onTick);
   }
@@ -142,7 +160,6 @@ export class FixedStepClock {
    */
   advance(): boolean {
     if (this.#tick >= UINT32_MAX) {
-      this.#boundReached = true;
       this.stop();
       return false;
     }
@@ -155,11 +172,19 @@ export class FixedStepClock {
     return this.#tick >= UINT32_MAX;
   }
 
+  /**
+   * Arm the next callback for a whole period after the deadline, which is the time the most recent tick
+   * actually ran.
+   *
+   * That is deliberate: a stalled clock skips the periods it missed instead of running them late, because
+   * every tick stands for exactly `dt` of simulated time and a burst of steps would advance the simulation
+   * further than its inputs justify (P03-a). The clamp is the backstop for a scheduler that fires *early*:
+   * the delay can never be zero or negative, so the loop cannot spin.
+   */
   #arm(onTick: (tick: ServerTick) => void): void {
-    const nowMs = this.#time.nowMs();
-    const remainingMs = this.#deadlineMs + this.tickDurationMs - nowMs;
-    const delayMs = Math.min(this.tickDurationMs, Math.max(MIN_DELAY_MS, remainingMs));
-    this.#lastSample = { scheduledDelayMs: delayMs, driftMs: nowMs - this.#deadlineMs };
+    const delayMs = Math.min(this.tickDurationMs, Math.max(MIN_DELAY_MS, this.#deadlineMs - this.#time.nowMs()));
+    this.#lastDelayMs = delayMs;
+    if (this.#lastDriftMs === null) this.#lastDriftMs = 0;
     this.#handle = this.#scheduler.set(() => {
       this.#fire(onTick);
     }, delayMs);
@@ -168,15 +193,20 @@ export class FixedStepClock {
   #fire(onTick: (tick: ServerTick) => void): void {
     if (!this.#running) return;
     const firedAtMs = this.#time.nowMs();
-    const driftMs = firedAtMs - (this.#deadlineMs + this.tickDurationMs);
+    const driftMs = firedAtMs - this.#deadlineMs;
     this.#lastFireAtMs = firedAtMs;
+    this.#lastDriftMs = driftMs;
     // One callback, one tick. A late callback is a single late tick: the elapsed time beyond the
     // period is deliberately not converted into extra steps (P03-a). The counter itself is advanced by
     // the authority step, so the tick it executed and the tick it recorded are the same value.
     onTick(this.#tick);
-    if (this.#boundReached) return;
+    // At the bound there is no next tick to arm for: the loop stops here rather than firing into a
+    // counter that refuses to move (protocol.md 4.4).
+    if (this.boundReached) {
+      this.stop();
+      return;
+    }
     this.#deadlineMs = firedAtMs + this.tickDurationMs;
-    this.#lastSample = { scheduledDelayMs: this.#lastSample?.scheduledDelayMs ?? 0, driftMs };
     this.#arm(onTick);
   }
 

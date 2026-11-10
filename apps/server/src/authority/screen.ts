@@ -10,6 +10,7 @@
 
 import {
   compareRequestIdentity,
+  REQUEST_ID_PATTERN,
   validateCancelPath,
   validateDirectFrame,
   validateMoveTo,
@@ -122,6 +123,56 @@ export const payloadHashOf = (kind: 'moveTo' | 'cancelPath', request: ValidatedR
           requestId: request.requestId,
           sessionEpoch: request.stamp.sessionEpoch,
           generation: request.stamp.generation,
+        },
+  );
+
+/**
+ * The requestId of a recognised request whose payload failed validation.
+ *
+ * P03-d's `refuse` helper writes exactly one terminal record "for a discrete request whose requestId
+ * parsed", and no cache record for an unparsable identity. The pattern is the protocol's own, so this
+ * cannot decide that a request the protocol would not name is nameable.
+ */
+const parsedRequestId = (arrival: ArrivalRecord): string | null => {
+  const rendered = arrival.raw['requestId'];
+  if (rendered === undefined || rendered.kind !== 'value') return null;
+  if (typeof rendered.value !== 'string') return null;
+  return REQUEST_ID_PATTERN.test(rendered.value) ? rendered.value : null;
+};
+
+/**
+ * The identity hash of a request that never validated, taken from the copy-on-record rendering.
+ *
+ * The value is still deterministic, which is what lets a retry of the same rejected destination answer
+ * identically instead of being re-decided. A validated request hashes the *validated* fields instead
+ * (signed zero normalised), so a same-id retry that changes an invalid payload into a valid one is a
+ * conflict rather than a replay — which is the right answer, because the payloads differ.
+ */
+const renderedField = (arrival: ArrivalRecord, field: string): string | number | boolean | null => {
+  const rendered = arrival.raw[field];
+  if (rendered === undefined) return null;
+  return rendered.kind === 'value' ? rendered.value : rendered.render;
+};
+
+const renderedPayloadHashOf = (kind: 'moveTo' | 'cancelPath', arrival: ArrivalRecord, requestId: string): string =>
+  canonicalHash(
+    kind === 'moveTo'
+      ? {
+          kind: 'udg-request-identity',
+          requestId,
+          sessionEpoch: renderedField(arrival, 'sessionEpoch'),
+          generation: renderedField(arrival, 'generation'),
+          destination: {
+            x: renderedField(arrival, 'x'),
+            y: renderedField(arrival, 'y'),
+            z: renderedField(arrival, 'z'),
+          },
+        }
+      : {
+          kind: 'udg-request-identity',
+          requestId,
+          sessionEpoch: renderedField(arrival, 'sessionEpoch'),
+          generation: renderedField(arrival, 'generation'),
         },
   );
 
@@ -264,32 +315,23 @@ export const screenDiscrete = (
     cacheWrites.push(cachedIdentity(view, requestId, payloadHash, terminal, context.nowMs));
   };
 
-  for (const arrival of arrivals) {
-    const isMoveTo = arrival.kind === 'moveTo';
-    let request: ValidatedRequest;
-    if (isMoveTo) {
-      const validated = validateMoveTo(payloadFromRendered(arrival.raw), commandContext);
-      if (!validated.ok) {
-        // Identity is not trusted from an invalid payload, so nothing is cached for it.
-        refusals.push({ arrival, code: validated.code, requestId: null, payloadHash: null, cacheable: false, stage: 'S' });
-        continue;
-      }
-      request = {
-        requestId: validated.value.requestId,
-        stamp: validated.value.stamp,
-        destination: validated.value.destination,
-      };
-    } else {
-      const validated = validateCancelPath(payloadFromRendered(arrival.raw), commandContext);
-      if (!validated.ok) {
-        refusals.push({ arrival, code: validated.code, requestId: null, payloadHash: null, cacheable: false, stage: 'S' });
-        continue;
-      }
-      request = { requestId: validated.value.requestId, stamp: validated.value.stamp, destination: null };
-    }
-    const payloadHash = payloadHashOf(isMoveTo ? 'moveTo' : 'cancelPath', request);
-    const requestId = request.requestId;
-
+  /**
+   * The identity step, shared by validated and unvalidated requests.
+   *
+   * P03's `refuse` helper writes exactly one terminal record "for a discrete request whose requestId
+   * parsed", and P03 §5 requires a refused `UDG_MOVE_TO` to be "cached so a retry answers identically".
+   * Because the adopted validator raises `OUT_OF_BOUNDS` from inside `validateMoveTo`, an out-of-bounds
+   * retry would otherwise be re-decided forever instead of answered from the record the first refusal
+   * wrote — so a request with a parsable identity goes through the same cache and batch checks as a
+   * validated one, with the signature rendered from the copy-on-record payload. The reading, and the
+   * line of P03-d it reconciles with, are recorded in the completion record rather than assumed.
+   */
+  const viaIdentity = (
+    arrival: ArrivalRecord,
+    requestId: string,
+    payloadHash: string,
+    onFresh: () => void,
+  ): void => {
     const hit: IdentityEntry | undefined = view.identities.lookup(view.entityId, view.epoch, requestId);
     if (hit !== undefined) {
       const comparison = compareRequestIdentity(
@@ -318,7 +360,7 @@ export const screenDiscrete = (
               sharesOrdinal: null,
             },
       );
-      continue;
+      return;
     }
 
     const inBatch = batch.get(requestId);
@@ -333,41 +375,91 @@ export const screenDiscrete = (
         terminal: null,
         sharesOrdinal: same ? inBatch.ordinal : null,
       });
-      continue;
+      return;
     }
 
     batch.set(requestId, arrival.ordinal, { requestId, payloadHash, ordinal: arrival.ordinal });
+    onFresh();
+  };
 
-    const generation = request.stamp.generation;
-    if (generation < view.watermark) {
-      refuseAndCache(arrival, 'SUPERSEDED', requestId, payloadHash);
-      continue;
-    }
-    // Equality is never a new discrete intention, whatever the latched kind (T-8).
-    if (generation === view.watermark) {
-      refuseAndCache(arrival, 'INVALID_GENERATION', requestId, payloadHash);
-      continue;
-    }
-    if (generation - view.watermark > context.gapWindow) {
-      refuseAndCache(arrival, 'RESYNC_REQUIRED', requestId, payloadHash);
-      continue;
-    }
+  for (const arrival of arrivals) {
+    const isMoveTo = arrival.kind === 'moveTo';
+    const kind = isMoveTo ? 'moveTo' : 'cancelPath';
 
+    /**
+     * A payload that failed validation still gets one terminal record when its requestId parsed, because
+     * protocol.md 4.3 caches refusals and not only acceptances. An unparsable identity yields a journal
+     * row and no cache record (P03-d `refuse`).
+     */
+    const unvalidated = (code: RejectionCode): void => {
+      const requestId = parsedRequestId(arrival);
+      if (requestId === null) {
+        refusals.push({ arrival, code, requestId: null, payloadHash: null, cacheable: false, stage: 'S' });
+        return;
+      }
+      const payloadHash = renderedPayloadHashOf(kind, arrival, requestId);
+      viaIdentity(arrival, requestId, payloadHash, () => {
+        refuseAndCache(arrival, code, requestId, payloadHash);
+      });
+    };
+
+    let request: ValidatedRequest;
     if (isMoveTo) {
-      // UDG-003 has no navigation. `validateMoveTo` has already applied containment against the
-      // validated volume, so an outside destination reached `OUT_OF_BOUNDS` here already and this is
-      // the honest remaining refusal.
-      refuseAndCache(arrival, 'NAVIGATION_BUSY', requestId, payloadHash);
-      continue;
+      const validated = validateMoveTo(payloadFromRendered(arrival.raw), commandContext);
+      if (!validated.ok) {
+        unvalidated(validated.code);
+        continue;
+      }
+      request = {
+        requestId: validated.value.requestId,
+        stamp: validated.value.stamp,
+        destination: validated.value.destination,
+      };
+    } else {
+      const validated = validateCancelPath(payloadFromRendered(arrival.raw), commandContext);
+      if (!validated.ok) {
+        unvalidated(validated.code);
+        continue;
+      }
+      request = { requestId: validated.value.requestId, stamp: validated.value.stamp, destination: null };
     }
 
-    candidates.push({
-      kind: 'cancel',
-      generation,
-      ordinal: arrival.ordinal,
-      axes: null,
-      requestId,
-      payloadHash,
+    const payloadHash = payloadHashOf(kind, request);
+    const requestId = request.requestId;
+
+    viaIdentity(arrival, requestId, payloadHash, () => {
+      const generation = request.stamp.generation;
+      if (generation < view.watermark) {
+        refuseAndCache(arrival, 'SUPERSEDED', requestId, payloadHash);
+        return;
+      }
+      // Equality is never a new discrete intention, whatever the latched kind (T-8).
+      if (generation === view.watermark) {
+        refuseAndCache(arrival, 'INVALID_GENERATION', requestId, payloadHash);
+        return;
+      }
+      if (generation - view.watermark > context.gapWindow) {
+        refuseAndCache(arrival, 'RESYNC_REQUIRED', requestId, payloadHash);
+        return;
+      }
+
+      if (isMoveTo) {
+        // UDG-003 has no navigation, so a destination that survived validation, identity and the
+        // generation window is still terminal-refused here: never a candidate, no `H` change, no `path`
+        // latch and no route mutation (P03 §5, AC-8). A destination outside the validated volume never
+        // reaches this line, because the adopted validator refuses it as `OUT_OF_BOUNDS` earlier.
+        refuseAndCache(arrival, 'NAVIGATION_BUSY', requestId, payloadHash);
+        return;
+      }
+
+      candidates.push({
+        kind: 'cancel',
+        generation,
+        ordinal: arrival.ordinal,
+        axes: null,
+        requestId,
+        payloadHash,
+      });
     });
   }
 

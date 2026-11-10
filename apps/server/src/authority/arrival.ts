@@ -66,9 +66,32 @@ export const renderValue = (value: unknown): RenderedValue => {
   return { kind: 'invalid', type: describeType(value), render: `${RENDERED_INVALID_PREFIX}${type}>` };
 };
 
-/** The value a replay substitutes for a rendered field. Lossless for JSON-representable values. */
-export const replayValue = (rendered: RenderedValue): unknown =>
-  rendered.kind === 'value' ? rendered.value : rendered.render;
+/**
+ * The non-finite numbers, addressed by the rendering that stands for them.
+ *
+ * JSON cannot carry them, which is exactly why they are rendered as markers; a replay has to put the
+ * number back, or the re-rendered field would say something different from the field that was refused.
+ */
+const NON_FINITE_BY_RENDER: Readonly<Record<string, number>> = Object.freeze({
+  [`${RENDERED_INVALID_PREFIX}NaN>`]: Number.NaN,
+  [`${RENDERED_INVALID_PREFIX}Infinity>`]: Number.POSITIVE_INFINITY,
+  [`${RENDERED_INVALID_PREFIX}-Infinity>`]: Number.NEGATIVE_INFINITY,
+});
+
+/**
+ * The value a replay substitutes for a rendered field.
+ *
+ * Lossless for JSON-representable values and for the non-finite numbers, which are what a decoded payload
+ * actually produces when it is malformed. A rendered object, function or bigint has no JSON representation
+ * to come back from, so it replays as its render string: screening still refuses it with the same code,
+ * because a string is no more a finite number than the object was, and that residual difference is
+ * recorded rather than papered over.
+ */
+export const replayValue = (rendered: RenderedValue): unknown => {
+  if (rendered.kind === 'value') return rendered.value;
+  const numeric = NON_FINITE_BY_RENDER[rendered.render];
+  return numeric ?? rendered.render;
+};
 
 export const renderPayload = (
   raw: Readonly<Record<string, unknown>>,
