@@ -68,6 +68,13 @@ jobs:
       - name: Build shared libraries, tools and apps
         run: pnpm build
 
+      # ADR-0002 excepts declaration checking in the two apps/server projects. This step is one of the
+      # conditions attached to that exception: UDG's own emitted declarations stay under
+      # `skipLibCheck: false`, and the project deliberately never imports @colyseus/core, @colyseus/sdk or
+      # @colyseus/ws-transport, so a mistake in the type surface UDG publishes cannot hide behind the exception.
+      - name: Typecheck UDG-owned emitted declarations strictly (ADR-0002)
+        run: pnpm run declarations:strict
+
       - name: Run the unit suites
         run: pnpm test:unit
 

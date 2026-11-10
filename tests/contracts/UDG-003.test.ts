@@ -10,14 +10,18 @@
  * compatibility.** Five probes measuring real behaviour on emitted JavaScript is not a working stack, so
  * the compiler verdict is carried separately and asserted separately:
  *
- * - **PH0-B1** keeps **PR-0 blocked**. The probe project does not typecheck, because the pinned
- *   third-party declarations reference a DOM-only global (`HeadersInit`), default-import `node:http`
- *   under `esModuleInterop: false`, and contain one generic constraint that TypeScript rejects. PR-0
- *   therefore reports `verdict: "blocked"` and fails; `ok: true` for PR-0 would mean PH0-B1 was closed
- *   without this file being updated. The third-party inventory below is pinned in both directions, so a
- *   fix is as loud as a regression and nobody can widen the compiler policy to make it disappear.
- *   `--noCheck` appears on an explicit emit command only, is excluded from the package `build` script,
- *   and is asserted to be exactly that: a way to obtain measurable JavaScript, never a build path.
+ * - **PH0-B1** is **closed by exception, not by a fix**. The pinned third-party declarations reference a
+ *   DOM-only global (`HeadersInit`), default-import `node:http` under `esModuleInterop: false`, and contain
+ *   one generic constraint TypeScript rejects. [ADR-0002](../../docs/adr/0002-server-declaration-checking-exception.md)
+ *   accepts `skipLibCheck: true` for `apps/server/tsconfig.json` and `apps/server/tsconfig.probes.json` only,
+ *   so **PR-0 now claims exactly one thing**: first-party code typechecks against the pinned declarations
+ *   under that documented exception. What this file used to prove about the vendor defects is retained in a
+ *   different place: the retained full check (`typecheck:probes:full`) still produces them, the inventory
+ *   below is pinned in **both** documents - here and
+ *   `docs/integration/colyseus-declaration-inventory.json` - and PR-0 fails if the two ever disagree, so an
+ *   added vendor defect stays a build failure even though the accepted gate no longer sees it.
+ *   `stackCompatibility` stays **not-established**: ADR-0002 changes what the compiler looks at, not whether
+ *   the stack works. `--noCheck` still appears on an explicit emit command only and is excluded from `build`.
  * - **PH0-B2** is **reclassified, not a blocker**: `sessionEpoch` is a UDG protocol concept that UDG
  *   owns. Colyseus 0.18 has no epoch concept and is not expected to have one, so this is a design
  *   obligation for Phase 2, not a library defect. PR-12 records the supported lifecycle primitives, the
@@ -109,9 +113,13 @@ beforeAll(() => {
   keepArtefact('probe-project-typecheck.json', {
     command: run.typecheck.command,
     exitCode: run.typecheck.exitCode,
-    blocker: 'PH0-B1',
+    compilerPolicy: 'ADR-0002 exception (skipLibCheck: true) in the two apps/server projects only',
+    history: 'PH0-B1 closed by exception, not by a fix; the defects below are still produced by the retained full check',
+    fullCheckCommand: run.fullCheck.command,
+    fullCheckExitCode: run.fullCheck.exitCode,
     repositoryDiagnostics: run.repositoryDiagnostics,
     thirdPartyDiagnostics: run.thirdPartyDiagnostics,
+    firstPartyDeclarationCheck: { command: run.declarations.command, exitCode: run.declarations.exitCode },
     pinnedInventory: PH0_B1.map(([file, code, count]) => ({ file, code, count })),
   });
   keepArtefact('compatibility-verdict.json', run.compatibility);
@@ -167,7 +175,7 @@ describe('UDG-003 Phase 0 — probe harness', () => {
 });
 
 describe('UDG-003 Phase 0 — PR-0 compiler policy and blocker PH0-B1', () => {
-  it('keeps the shared compiler policy unrelaxed for the probe project', () => {
+  it('keeps the shared compiler policy, with ADR-0002 as its only server-scoped exception', () => {
     const base = JSON.parse(readFileSync(join(ROOT, 'tsconfig.base.json'), 'utf8')) as { compilerOptions: Record<string, unknown> };
     const probe = JSON.parse(readFileSync(join(ROOT, 'apps', 'server', 'tsconfig.probes.json'), 'utf8')) as {
       extends?: string;
@@ -180,10 +188,28 @@ describe('UDG-003 Phase 0 — PR-0 compiler policy and blocker PH0-B1', () => {
     expect(base.compilerOptions['noUncheckedIndexedAccess']).toBe(true);
     expect(base.compilerOptions['skipLibCheck']).toBe(false);
     expect(base.compilerOptions['esModuleInterop']).toBe(false);
-    // Relaxing these is the owner's D-2 decision, not this suite's.
-    for (const flag of ['skipLibCheck', 'allowSyntheticDefaultImports', 'noImplicitAny', 'exactOptionalPropertyTypes', 'noUncheckedIndexedAccess', 'esModuleInterop']) {
+    // Everything except the approved exception stays unrelaxed. Widening it further is the owner's decision,
+    // not this suite's.
+    for (const flag of ['allowSyntheticDefaultImports', 'noImplicitAny', 'exactOptionalPropertyTypes', 'noUncheckedIndexedAccess', 'esModuleInterop']) {
       expect(probe.compilerOptions?.[flag], `probe project must not set ${flag}`).toBeUndefined();
     }
+    // ADR-0002 is the only setting the two server projects may set, and only with the ADR named beside it.
+    for (const name of ['tsconfig.json', 'tsconfig.probes.json']) {
+      const text = readFileSync(join(ROOT, 'apps', 'server', name), 'utf8');
+      expect(text, `apps/server/${name} must apply the approved exception`).toContain('"skipLibCheck": true');
+      expect(text, `apps/server/${name} must name ADR-0002 where it relaxes the policy`).toContain('ADR-0002');
+      expect(text, 'DOM globals remain prohibited (D-12)').not.toMatch(/"DOM(\.Iterable)?"/);
+    }
+    // The repository's whole exception surface: two server projects under ADR-0002, plus the root tooling
+    // project under UDG-001 decision D1 (playwright-core/vitest declarations). A fourth is a policy change.
+    const excepted = [
+      'tsconfig.json',
+      'tsconfig.base.json',
+      'tsconfig.declarations.json',
+      'apps/server/tsconfig.json',
+      'apps/server/tsconfig.probes.json',
+    ].filter((name) => readFileSync(join(ROOT, name), 'utf8').includes('"skipLibCheck": true'));
+    expect(excepted.sort()).toEqual(['apps/server/tsconfig.json', 'apps/server/tsconfig.probes.json', 'tsconfig.json']);
     // `--noCheck` appears only in the emit command, never in a config file.
     const serverManifest = JSON.parse(readFileSync(join(ROOT, 'apps', 'server', 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
     const noCheckInConfig = ['tsconfig.json', 'tsconfig.probes.json'].some((name) =>
@@ -209,11 +235,31 @@ describe('UDG-003 Phase 0 — PR-0 compiler policy and blocker PH0-B1', () => {
     ).toEqual([]);
   });
 
-  it('records third-party declaration failures as the pinned blocker PH0-B1', () => {
-    expect(run.typecheck.exitCode, 'PH0-B1 is open, so a clean typecheck would mean the inventory below is stale').not.toBe(0);
+  it('still produces the vendor declaration defects through the retained full check', () => {
+    // The accepted gate no longer looks inside declarations; the retained check does, and must still find
+    // exactly what was recorded. A clean full check would mean the pins moved and nobody updated the record.
+    expect(run.typecheck.exitCode, 'the accepted gate passes under ADR-0002').toBe(0);
+    expect(run.fullCheck.exitCode, 'the retained full check must still fail, or these defects are gone and the record is stale').not.toBe(0);
     const inventory = describeInventory(run.thirdPartyDiagnostics);
     const expected = PH0_B1.map(([file, code, count]) => `${file}|${code} x${String(count)}`).sort().join('\n');
     expect(inventory).toBe(expected);
+    // The same inventory is pinned in a document PR-0 compares against, so suite and probe cannot drift.
+    const pinnedPath = join(ROOT, 'docs', 'integration', 'colyseus-declaration-inventory.json');
+    expect(existsSync(pinnedPath), 'the pinned declaration inventory is an ADR-0002 condition').toBe(true);
+    const pinned = JSON.parse(readFileSync(pinnedPath, 'utf8')) as {
+      adr: string;
+      totalDiagnostics: number;
+      entries: { origin: string; code: string; count: number }[];
+    };
+    expect(pinned.adr).toContain('0002');
+    expect(pinned.totalDiagnostics).toBe(27);
+    const fromDocument = pinned.entries
+      .map((entry) => `${entry.origin.split('::')[1] ?? entry.origin}|${entry.code} x${String(entry.count)}`)
+      .sort()
+      .join('\n');
+    expect(fromDocument).toBe(expected);
+    // UDG's own emitted declarations keep a strict check that never imports the problematic stack.
+    expect(run.declarations.exitCode, 'UDG-owned declarations must typecheck under skipLibCheck: false').toBe(0);
     // Every diagnostic is inside an installed declaration file: nothing is being blamed on the repo.
     for (const diagnostic of run.thirdPartyDiagnostics) {
       expect(diagnostic.file).toContain('node_modules');
@@ -255,29 +301,58 @@ describe('UDG-003 Phase 0 — PR-0 compiler policy and blocker PH0-B1', () => {
     expect(failures).toEqual([]);
   });
 
-  it('reports PR-0 as blocked rather than passed while PH0-B1 is open', () => {
+  it('reports PR-0 as passing on its restated claim, and never beyond it', () => {
     const record = byId.get('PR-0');
     expect(record?.result, 'PR-0 must produce a result file').toBeDefined();
     const result = record?.result as NonNullable<ProbeRecord['result']>;
-    expect(result.ok, 'a blocked PR-0 is a failed probe, never a green one').toBe(false);
-    expect(result.verdict).toBe('blocked');
-    expect(result.blockedReason).toContain('PH0-B1');
-    expect(result.blockedReason).toContain('NOT established');
-    const failing = result.checks.filter((check) => !check.ok).map((check) => check.name);
-    expect(failing).toContain('strict-typecheck-passes');
-    expect(failing).toContain('compatibility-blocked');
-    // The block must come from the strict typecheck, not from a probe inventing its own verdict.
-    expect(result.observations['strictTypecheck']).toMatchObject({ exitCode: 2, inRepositoryCode: 0 });
-    expect(result.observations['strictTypecheck']).toHaveProperty('inThirdPartyDeclarations');
+    expect(result.verdict).toBe('pass');
+    expect(result.ok).toBe(true);
+    // The claim itself, in the probe's own words, next to the list of things it refuses to claim.
+    const gate = JSON.stringify(result.observations['acceptedGate']);
+    expect(gate).toContain('first-party code typechecks against the pinned declarations');
+    expect(gate).toContain('runtime behaviour, reconciliation or transport compatibility follows from compilation');
+    expect(gate).toContain('apps/client');
+    expect(result.observations['acceptedGate']).toMatchObject({ exitCode: 0, inRepositoryCode: 0, diagnostics: 0 });
+    // The vendor defects are still measured, and still equal to the pinned document.
+    expect(result.observations['fullDeclarationCheck']).toMatchObject({ totalDiagnostics: 27, inRepositoryCode: 0, inThirdPartyDeclarations: 27 });
+    expect(result.observations['udgEmittedDeclarations']).toMatchObject({ exitCode: 0, diagnostics: 0 });
+    const names = result.checks.map((check) => check.name);
+    for (const required of [
+      'accepted-typecheck-passes-under-the-exception',
+      'exception-confined-to-the-approved-projects',
+      'adr-0002-tags-exactly-its-two-projects',
+      'exception-projects-name-the-adr-and-load-no-dom-lib',
+      'exception-projects-use-no-suppression-or-shims',
+      'vendor-declaration-inventory-matches-the-pinned-inventory',
+      'the-exception-hides-no-repository-diagnostics',
+      'udg-emitted-declarations-typecheck-with-skiplibcheck-false',
+    ]) {
+      expect(names, `PR-0 must assert ${required}`).toContain(required);
+    }
+    expect(result.checks.filter((check) => !check.ok).map((check) => `${check.name} :: ${check.detail}`)).toEqual([]);
+    // The superseded posture must not survive as a hidden assertion: PR-0 no longer claims the vendor
+    // declarations compile, and it must not be readable as though it did.
+    expect(names).not.toContain('strict-typecheck-passes');
+    expect(names).not.toContain('compatibility-blocked');
+    expect(result.blockedReason).toBeUndefined();
   });
 
-  it('publishes a compatibility verdict that refuses to call the stack compatible', () => {
-    expect(run.compatibility.stackCompatibility).toBe('not-established');
-    expect(run.compatibility.pr0).toBe('blocked');
-    expect(run.compatibility.diagnostics.inRepositoryCode).toBe(0);
-    expect(run.compatibility.acceptedBuildPath).toContain('typecheck:probes');
+  it('publishes a compatibility verdict that a compiler exception cannot turn into a compatibility claim', () => {
+    expect(run.compatibility.stackCompatibility, 'a compiler-policy exception is not a compatibility result').toBe('not-established');
+    expect(run.compatibility.pr0).toBe('pass');
+    expect(run.compatibility.acceptedGate.exitCode).toBe(0);
+    expect(run.compatibility.acceptedGate.diagnostics.total).toBe(0);
+    expect(run.compatibility.fullDeclarationCheck.totalDiagnostics).toBe(27);
+    expect(run.compatibility.fullDeclarationCheck.exitCode).not.toBe(0);
+    expect(run.compatibility.firstPartyDeclarations.exitCode).toBe(0);
+    expect(run.compatibility.compilerPolicy.approvedProjects).toEqual([
+      'apps/server/tsconfig.json',
+      'apps/server/tsconfig.probes.json',
+    ]);
+    expect(run.compatibility.acceptedBuildPath).toContain('build');
+    expect(run.compatibility.acceptedBuildPath).not.toContain('--noCheck');
     expect(run.compatibility.diagnosticEmission).toContain('--noCheck');
-    expect(run.compatibility.probes.find((probe) => probe.id === 'PR-0')?.verdict).toBe('blocked');
+    expect(run.compatibility.probes.find((probe) => probe.id === 'PR-0')?.verdict).toBe('pass');
     const verdictPath = join(PROBE_OUT, 'compatibility-verdict.json');
     expect(existsSync(verdictPath), 'the machine-readable verdict is a deliverable').toBe(true);
     const written = JSON.parse(readFileSync(verdictPath, 'utf8')) as {
@@ -285,11 +360,13 @@ describe('UDG-003 Phase 0 — PR-0 compiler policy and blocker PH0-B1', () => {
       stackCompatibility: string;
       pr0: string;
       reading: string;
+      acceptedGate: { claim: string; notClaimed: string[] };
     };
     expect(written.taskId).toBe(TASK);
     expect(written.stackCompatibility).toBe('not-established');
-    expect(written.pr0).toBe('blocked');
+    expect(written.pr0).toBe('pass');
     expect(written.reading).toContain('not-established');
+    expect(written.acceptedGate.notClaimed.join(' ')).toContain('runtime behaviour');
   });
 });
 
@@ -759,7 +836,7 @@ describe('UDG-003 Phase 0 — PR-13 overflow postures (the owner-authorised reme
     expect(text).not.toContain('Gate A');
     // Nothing in this investigation changes the Phase 0 verdict surface.
     expect(run.compatibility.stackCompatibility).toBe('not-established');
-    expect(byId.get('PR-0')?.result?.verdict).toBe('blocked');
+    expect(byId.get('PR-0')?.result?.verdict, 'PR-0 passes on its restated claim, which is not a compatibility claim').toBe('pass');
     expect(byId.get('PR-13')?.result?.verdict).toBe('pass');
   });
 });
@@ -834,24 +911,29 @@ describe('UDG-003 Phase 0 — boundary and evidence hygiene', () => {
     expect(map).toContain('provisional');
     // The map must carry the compiler status unambiguously, not leave it to be inferred from prose.
     expect(map).toContain('not-established');
-    expect(map).toContain('BLOCKED');
+    expect(map).toContain('ADR-0002');
+    expect(map).toContain('colyseus-declaration-inventory.json');
+    expect(map).toContain('typecheck:probes:full');
     expect(map).toContain('--noCheck');
   });
 
   it('writes probe evidence only when this task owns the run', () => {
     const index = JSON.parse(readFileSync(join(PROBE_OUT, 'probe-run-index.json'), 'utf8')) as {
       probes: { id: string; ok: boolean; verdict: string }[];
-      compatibility: { stackCompatibility: string; pr0: string };
       emit: { purpose: string };
       typecheck: { purpose: string };
+      fullCheck: { purpose: string };
+      compatibility: { stackCompatibility: string; pr0: string; fullCheckDiagnostics: number };
     };
     expect(index.probes.map((probe) => probe.id)).toEqual([...PROBE_IDS]);
-    expect(index.probes.map((probe) => probe.verdict)).toEqual(['blocked', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass']);
-    expect(index.probes.filter((probe) => probe.ok).map((probe) => probe.id)).toEqual(['PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13']);
+    expect(index.probes.map((probe) => probe.verdict)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass']);
+    expect(index.probes.filter((probe) => probe.ok).map((probe) => probe.id)).toEqual(['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13']);
     expect(index.compatibility.stackCompatibility).toBe('not-established');
-    expect(index.compatibility.pr0).toBe('blocked');
+    expect(index.compatibility.pr0).toBe('pass');
+    expect(index.compatibility.fullCheckDiagnostics).toBe(27);
     expect(index.emit.purpose).toContain('--noCheck');
     expect(index.typecheck.purpose).toContain('accepted compiler gate');
+    expect(index.fullCheck.purpose).toContain('full declaration check');
 
     if (!OWNS_EVIDENCE_RUN) {
       // A run this task does not own must not receive this task's artefacts.

@@ -9,29 +9,54 @@ probe ids.
 
 ## 0. Compiler status, stated separately
 
-Three questions are easy to conflate, so they are answered apart. Read this before any row below: the
-behaviour probes run on emitted JavaScript, and none of them shows that the stack compiles.
+**Status: the accepted compiler gate passes, under [ADR-0002](../adr/0002-server-declaration-checking-exception.md).
+That is not a compatibility result, and `stackCompatibility` stays `not-established`.**
 
-| Question | Command | Measured | Status |
-| --- | --- | --- | --- |
-| Does the pinned stack typecheck under this repository's policy? | `pnpm --filter @udg/server typecheck:probes` (`tsc -p tsconfig.probes.json --noEmit`) | exit **2**; 27 diagnostics, **0 in repository code** | **BLOCKED** — PH0-B1 |
-| Can the probes be executed at all? | `pnpm --filter @udg/server build:probes` (`tsc -p tsconfig.probes.json --noCheck`) | exit 0 | **diagnostic emission only** — not a compatibility claim, and deliberately excluded from `pnpm build` |
-| Is the candidate stack compatible? | `artifacts/probes/compatibility-verdict.json`, mirrored into `probe-run-index.json` | `stackCompatibility: "not-established"`, `pr0: "blocked"` | **not established** |
+Three questions were being collapsed into "does it typecheck", so they are stated apart.
 
-**PR-0 carries the compiler verdict.** The strict typecheck is its compile half; while that command
-exits non-zero, PR-0 reports `verdict: "blocked"` and fails, and its `ok` is `false`. A suite that
-reproduces the compiler's errors is evidence *about* the failure. Reading five passing behaviour probes
-as a compatible stack would be a category error, so the suite asserts the blocked verdict rather than
-tolerating it.
+| question | answer today | where it is proven |
+| --- | --- | --- |
+| Does first-party code typecheck against the pinned declarations? | **yes** — `pnpm --filter @udg/server typecheck` and `typecheck:probes` exit 0 with 0 diagnostics, under the ADR-0002 exception | PR-0 check `accepted-typecheck-passes-under-the-exception`, artefact `probe-project-typecheck.json` |
+| Are the vendor declaration defects fixed? | **no** — 27 diagnostics in 7 groups remain, listed and pinned | `pnpm --filter @udg/server typecheck:probes:full`, [colyseus-declaration-inventory.json](colyseus-declaration-inventory.json), PR-0 check `vendor-declaration-inventory-matches-the-pinned-inventory` |
+| Is the pinned stack compatible at runtime? | **not established** — PR-1…PR-13 measure behaviour; Gate A is Not Run | `compatibility-verdict.json` reads `not-established` |
 
-Two findings gate Phase 1:
+**The exception, and exactly how far it reaches.** `skipLibCheck: true` appears in three projects under two separate
+authorities, and PR-0 pins that set so a fourth project acquiring it fails the build:
 
-- **PH0-B1 (blocker)** — the pinned declarations do not typecheck under the repository compiler policy.
-  Inventory, classification, remedy investigation and recommendation:
-  [§5](#5-blocker-ph0-b1-third-party-declarations-do-not-typecheck).
-- **PH0-B2 (reclassified — a design obligation, not a blocker and not a library defect)** — `sessionEpoch`
-  is a UDG protocol concept that UDG owns; Colyseus 0.18 has no epoch concept and is not expected to
-  have one. [§6](#6-reclassified-ph0-b2-the-session-epoch-is-udg-owned).
+| project | authority | reason |
+| --- | --- | --- |
+| `apps/server/tsconfig.json` | [ADR-0002](../adr/0002-server-declaration-checking-exception.md), owner decision 2026-11-10 | the pinned Colyseus declarations (§5) are not checkable under a Node-only `lib` |
+| `apps/server/tsconfig.probes.json` | ADR-0002 | the probe project imports the same stack |
+| `tsconfig.json` (root tooling) | [UDG-001 decision D1](../contracts/assignments/UDG-001.md), predates this ADR | `playwright-core` declarations reference `SVGElement`/`HTMLElement`; `vitest` default-imports `node:path` |
+
+`tsconfig.base.json` keeps `skipLibCheck: false`, and so do `packages/*`, `tools/*` and every other project.
+**`apps/client` is not covered**; extending the exception there needs that project's own owner review.
+
+**What is still checked inside the excepted projects.** `strict`, `noImplicitAny`, `exactOptionalPropertyTypes`,
+`noUncheckedIndexedAccess`, `esModuleInterop: false`, `verbatimModuleSyntax` — everything inherited — plus every
+application call against the pinned declarations. Measured before the decision (proposal §3.2–§3.5): 20 injected
+first-party errors fail identically with and without the exception; `window`, `document` and `HTMLElement` still error
+because `lib` is untouched; 13 of 15 invalid calls against the public API still error; 752 first-party call
+expressions keep identical resolved signatures, none acquiring a type from the six defective files.
+
+**What keeps the exception from becoming invisible**, each asserted by PR-0 rather than promised:
+
+- the complete declaration inventory is pinned and compared — an added file, a new code, a changed count or a
+  vanished entry fails (`vendor-declaration-inventory-matches-the-pinned-inventory`);
+- the retained full check must still *fail*: a clean `typecheck:probes:full` would mean the pins moved and this
+  record is stale (`retained-full-declaration-check-ran`);
+- UDG's own emitted declarations are typechecked strictly with `skipLibCheck: false` and without importing
+  `@colyseus/core`, `@colyseus/sdk` or `@colyseus/ws-transport` — `pnpm run declarations:strict`
+  (`tsconfig.declarations.json`). Before it was accepted, a deliberate `UdgMissingName` reference injected into
+  `packages/protocol/dist/index.d.ts` was verified to produce `TS2304` and a non-zero exit, so the check is known not
+  to be vacuous;
+- no suppression comment, ambient `declare global`/`declare module` shim, `any`/`unknown`/`never` cast or internal
+  package import appears in the excepted projects (`exception-projects-use-no-suppression-or-shims`).
+
+**What PR-0 does not claim**, recorded in its own result file under `explicitlyNotClaimed`: that the vendor defects
+are fixed; that runtime behaviour, reconciliation or transport compatibility follows from compilation; that
+`apps/client` or any other project is covered; that `build:probes` — which emits with `--noCheck` — is a build path.
+`build` does not use it, and the contract suite asserts that.
 
 ## 1. Installed set
 
@@ -61,7 +86,7 @@ run against the same pins and reported in the same artefact ([§9](#9-pr-13-over
 
 | Probe | Module | Question | Outcome |
 | --- | --- | --- | --- |
-| `PR-0` | `apps/server/probes/pr0-compile.probe.ts` | does the pinned stack compile under the repository policy | **BLOCKED, 43 checks, `ok: false`, `verdict: "blocked"`** — the strict typecheck it reports on exits 2 with 27 third-party diagnostics (PH0-B1); its typed-reference and escape-hatch halves pass |
+| `PR-0` | `apps/server/probes/pr0-compile.probe.ts` | does first-party code typecheck against the pinned declarations under the accepted exception, and is that exception still exactly as approved | **passes, 49 checks** — the accepted gate exits 0 with 0 diagnostics under ADR-0002; the probe also pins the exception's scope, compares the retained vendor-declaration inventory against its pinned document, and re-checks UDG's own emitted declarations with `skipLibCheck: false`. The claim is deliberately narrower than the pre-exception one (§0) |
 | `PR-1` | `apps/server/probes/pr1-graph.probe.ts` | what actually resolved, and is there one schema runtime | passes, 43 checks |
 | `PR-2` | `apps/server/probes/pr2-fixed-step.probe.ts` | is there a public fixed-step facility at the advertised dt | passes, 7 checks |
 | `PR-3` | `apps/server/probes/pr3-input-schema.probe.ts` | is the adopted input schema the room's declaration, with five fields intact | passes, 10 checks |
@@ -170,10 +195,20 @@ watermark alone and is never told to stop predicting from a retired frame. Provi
 UDG-SPIKE-001's work, and PR-8 deliberately does not claim it.
 ## 5. Blocker PH0-B1: third-party declarations do not typecheck
 
-`pnpm --filter @udg/server typecheck:probes` (`tsc -p tsconfig.probes.json --noEmit`, inheriting
-`tsconfig.base.json` unchanged) exits **2** with **27 diagnostics, none in repository code**. PR-0 reads
-that report and reports itself blocked; `tests/contracts/UDG-003.test.ts` pins the same inventory in both
-directions, so a fix is as loud as a regression and the shape cannot drift with the pins.
+**Disposition (owner decision, 2026-11-10): closed by exception, not by a fix.**
+[ADR-0002](../adr/0002-server-declaration-checking-exception.md) accepts `skipLibCheck: true` for the two
+`apps/server` projects, so the accepted gate now exits 0 and PR-0 reports a deliberately narrower claim (§0). The
+27 diagnostics below are unchanged: they are still produced by `pnpm --filter @udg/server typecheck:probes:full`,
+still inventoried in [colyseus-declaration-inventory.json](colyseus-declaration-inventory.json), and any change to
+that inventory fails the build. Phase 1 remains unassigned, and nothing in §5.1–§5.3 is contradicted by the
+exception — including the finding that no published pin and no TypeScript version avoids these defects. Everything
+below is the record of the investigation while PH0-B1 was open, kept because it is the evidence for the decision.
+
+`pnpm --filter @udg/server typecheck:probes` (`tsc -p tsconfig.probes.json --noEmit`) used to exit **2** with
+**27 diagnostics, none in repository code**; it now exits 0, and the same project checked with `--skipLibCheck false`
+(`pnpm --filter @udg/server typecheck:probes:full`) produces the inventory below. PR-0 reads both reports, and
+`tests/contracts/UDG-003.test.ts` pins the same inventory in both directions, so a fix is as loud as a regression and
+the shape cannot drift with the pins.
 
 | Declaration file | Code | Count | Cause |
 | --- | --- | --- | --- |
@@ -242,7 +277,15 @@ and it would quietly split first-party behaviour from the probe project's.
 
 ### 5.4 Recommendation (owner decision; nothing below is adopted)
 
-**R0 — recommended: keep PH0-B1 open and change nothing.** The pinned stack stays
+**Disposition of this recommendation (2026-11-10).** The owner did not accept R0 for the two `apps/server`
+projects, and accepted **A4/R4** there instead, with four conditions: the retained full check, the pinned compared
+inventory, the strict first-party declaration check, and a restated PR-0 (§0). R0's warning stands, now as a
+recorded and accepted risk: an upstream type regression whose *exported* type degrades is invisible inside the
+excepted projects, and the compensating control is the inventory comparison rather than the compiler. R1 and R2
+remain uninteresting — they leave PR-0's claim unchanged in kind — and R3/R5 remain rejected. **`apps/client` was
+explicitly excluded from the approval.**
+
+**R0 — recommendation as issued on 2026-11-09: keep PH0-B1 open and change nothing.** The pinned stack stays
 `stackCompatibility: not-established` and Phase 1 stays unassigned. Cost: probe JavaScript keeps running
 through `--noCheck` as measurement only. Upstream actions worth opening: (i) Colyseus emitting
 declarations that do not require the DOM lib for a Node target (class A), (ii) `@colyseus/sdk`'s
@@ -280,6 +323,12 @@ inventory vanish by destroying the instrument.
 > what it demonstrably keeps checking, which projects would need it, and its residual risk — recorded in
 > [§10](#10-compiler-policy-candidate-skiplibcheck-confined-to-the-network-facing-projects) and in
 > [ADR-P-0002 Part A](../adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md).
+>
+> **Outcome (2026-11-10):** the owner accepted this candidate for the two `apps/server` projects as
+> [ADR-0002](../adr/0002-server-declaration-checking-exception.md). The repository posture is therefore no longer
+> "nothing adopted": it is "excepted where documented, inventoried where excepted". PR-0 is restated rather than
+> blocked, `stackCompatibility` is unchanged at `not-established`, and the exception does not reach `apps/client`
+> or any project other than the two named.
 
 **R5 — rejected: a package patch or vendored `.d.ts`.** Editing a pinned dependency's declarations
 means UDG maintains a fork of the type surface, and the dependency register would describe a package
@@ -345,8 +394,10 @@ Phase 0 assignment), and would need its own evidence.
   shows the client prunes on the watermark alone; an application journal records what the server stepped
   and is **not** evidence that a client stops predicting from a retired frame. UDG-SPIKE-001 owns that.
 - No gate. Gate A stays **Not Run**, encoding widths stay provisional under ADR 0001, and the pins in
-  [§1](#1-installed-set) stay candidates until the owner resolves PH0-B1. The stack is
-  `not-established`, and no probe result in this file should be quoted as a compatibility endorsement.
+  [§1](#1-installed-set) stay candidates: PH0-B1 was closed by an accepted compiler exception rather than by a
+  release that fixes the declarations, so nothing has happened that would justify promoting a pin. The stack is
+  `not-established`, and no probe result in this file should be quoted as a compatibility endorsement — including
+  PR-0, which now claims only that first-party code typechecks against the pinned declarations under ADR-0002.
 
 ## 9. PR-13 overflow postures: can a supported mechanism prevent unrepresented retirement?
 
@@ -395,6 +446,17 @@ The recommendation built on this table, and the four-item architectural decision
 [ADR proposal ADR-P-0002](../adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md) Part B.
 
 ## 10. Compiler-policy candidate: `skipLibCheck` confined to the network-facing projects
+
+**Disposition: accepted as [ADR-0002](../adr/0002-server-declaration-checking-exception.md) for
+`apps/server/tsconfig.json` and `apps/server/tsconfig.probes.json` only** (owner decision, 2026-11-10). `apps/client`
+was expressly excluded, and every other project keeps `skipLibCheck: false` — except the root tooling project, which
+has carried it since [UDG-001 decision D1](../contracts/assignments/UDG-001.md) for unrelated reasons (§0). Applied
+with the conditions in §0: strict first-party checking preserved, no DOM globals, no suppression comments, no
+dependency patches, no ambient shims, the full check retained as a pinned compared inventory, UDG's own declarations
+kept under a strict check of their own, and PR-0 restated.
+
+_The evaluation below is the measurement as proposed on 2026-11-09; where it says nothing is adopted, that is the
+state at the time of measuring._
 
 The measured evaluation of the owner's Route 1 — what the exception hides, what it keeps checking, which projects
 would need it, and the residual risk — is in

@@ -16,6 +16,7 @@
     "build:libraries": "pnpm --filter \"./packages/*\" build",
     "typecheck": "pnpm --filter @udg/checks build && pnpm run build:libraries && pnpm run typecheck:root && pnpm -r typecheck",
     "typecheck:root": "tsc -p tsconfig.json --noEmit",
+    "declarations:strict": "pnpm run build:libraries && tsc -p tsconfig.declarations.json --noEmit",
     "lint": "pnpm run lint:source && pnpm run lint:boundaries",
     "lint:source": "eslint .",
     "lint:boundaries": "pnpm --filter @udg/checks build && node tools/checks/dist/boundaries.js --workspace-root .",

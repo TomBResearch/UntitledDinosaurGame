@@ -25,6 +25,7 @@ marker so a reader can see what was claimed before and why it was wrong.
 | C-3 | The sizing formula is a **necessary capacity consideration, not a sufficient guarantee**. It bounds mean arrival against mean consumption; it says nothing about bursts inside a sampling interval, jitter, a stalled tick, or a sender that is deliberately over-rate, and the library's ceiling is a per-second average that arrives after over-rate frames are already buffered | §4.2 "measured sizing rule" |
 | C-4 | An obedient loopback sender (N6) and a disconnect that lands after eviction (N3, N4) **do not establish the required protection**. The first assumes the behaviour that needs enforcing; the second shows the violation occurring and then stopping. Neither demonstrates protection against a sender that does not comply | §4.1 N3/N4/N6 conclusions |
 | C-5 | The claim that a larger budget is "exactly the work the current design already does when it drains on catch-up" is **removed**. The accepted contract forbids draining a burst and simulating only its last frame, and forbids moving a character repeatedly to empty a queue, so no such catch-up draining exists in the design to be continuous with | §5 impact, §4.2 N8 note |
+| C-6 | Recorded during the Part A application, not by the owner: §3.3/§3.4 said the root test project "needs nothing", which is true of the Colyseus stack and misleading about repository policy, because that project has carried `skipLibCheck: true` since UDG-001 decision D1. Corrected in place; the confinement assertion in PR-0 names all three projects and their separate authorities | §3.3, §3.4, ADR-0002 |
 
 The verdict of the measurements themselves is unchanged: no public mechanism refuses an over-quota frame, and
 `clear()`, `seqField`, `sanitize()` and `drain()`-then-apply-latest all fail the prohibition. What changed is that
@@ -206,6 +207,13 @@ So "confined to the Colyseus integration projects" is honest only if it means: *
 `tsconfig.json` and `tsconfig.probes.json`) and `apps/client`, from the moment each imports the pinned network
 stack** — that is, every project that talks to the network, which is most of the interesting code. It is not a
 narrow exception; the accurate description is "declaration checking is off for the network-facing workspaces".
+
+**Corrected on owner review (C-6), 2026-11-10:** the sentence above counts only projects that would acquire the
+setting *from this candidate*. The repository already had one: the root tooling project `tsconfig.json` has carried
+`skipLibCheck: true` since **UDG-001 decision D1**, because `playwright-core`'s declarations reference DOM types and
+`vitest`'s default-imports `node:path`. So the accurate statement of the repository's policy after Part A is three
+projects under two authorities — the two server projects under ADR-0002 and the root tooling project under UDG-001
+D1 — and PR-0 asserts that exact set together with which authority each project cites.
 
 ### 3.5 Residual risk, stated accurately
 

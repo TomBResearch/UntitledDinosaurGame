@@ -116,13 +116,42 @@ export interface ProbeRecord {
 export interface CompatibilityVerdict {
   readonly stackCompatibility: 'not-established' | 'established';
   readonly pr0: 'pass' | 'blocked' | 'fail' | 'missing';
-  readonly strictTypecheckCommand: string;
-  readonly strictTypecheckExitCode: number;
-  readonly diagnostics: { readonly total: number; readonly inRepositoryCode: number; readonly inThirdPartyDeclarations: number };
+  /** ADR-0002: declaration checking is excepted in exactly these projects, and in no others. */
+  readonly compilerPolicy: {
+    readonly exception: string;
+    readonly approvedProjects: readonly string[];
+    readonly everythingElse: string;
+  };
+  /** The accepted gate: first-party code checked against the pinned declarations. */
+  readonly acceptedGate: {
+    readonly command: string;
+    readonly exitCode: number;
+    readonly diagnostics: { readonly total: number; readonly inRepositoryCode: number; readonly inThirdPartyDeclarations: number };
+    readonly claim: string;
+    readonly notClaimed: readonly string[];
+  };
+  /** The retained full check, which still reports the vendor declaration defects. */
+  readonly fullDeclarationCheck: {
+    readonly command: string;
+    readonly exitCode: number;
+    readonly totalDiagnostics: number;
+    readonly inventoryEntries: number;
+    readonly pinnedInventory: string;
+  };
+  /** UDG's own emitted declarations, checked strictly and without the server/SDK stack. */
+  readonly firstPartyDeclarations: { readonly command: string; readonly exitCode: number; readonly purpose: string };
   readonly acceptedBuildPath: string;
   readonly diagnosticEmission: string;
   readonly probes: readonly { readonly id: ProbeId; readonly verdict: string; readonly ok: boolean }[];
   readonly reading: string;
+}
+
+/** One declaration-error class, normalised so a peer-hash directory change cannot masquerade as a new defect. */
+export interface DeclarationInventoryEntry {
+  readonly origin: string;
+  readonly code: string;
+  readonly count: number;
+  readonly message: string;
 }
 
 export interface ProbeRun {
@@ -130,6 +159,10 @@ export interface ProbeRun {
   readonly compatibility: CompatibilityVerdict;
   readonly typecheck: CommandResult;
   readonly diagnostics: readonly ProbeDiagnostic[];
+  readonly fullCheck: CommandResult;
+  readonly fullDiagnostics: readonly ProbeDiagnostic[];
+  readonly declarations: CommandResult;
+  readonly declarationInventory: readonly DeclarationInventoryEntry[];
   readonly repositoryDiagnostics: readonly ProbeDiagnostic[];
   readonly thirdPartyDiagnostics: readonly ProbeDiagnostic[];
   readonly probes: readonly ProbeRecord[];
@@ -202,21 +235,84 @@ export function parseDiagnostics(output: string, cwd: string, root: string): rea
 export const emitProbes = (root: string): CommandResult =>
   run([process.execPath, compilerPath(root), '-p', 'tsconfig.probes.json', '--noCheck'], serverDirectory(root), PROBE_TIMEOUT_MS);
 
-/** Typecheck the probe project with the shared policy. Currently expected to fail on PH0-B1. */
+/**
+ * The accepted compiler gate. Since ADR-0002 the two `apps/server` projects set `skipLibCheck: true`, so this
+ * checks first-party code and every application call against the pinned declarations while no longer checking
+ * inside those declarations. It is a weaker claim than the pre-exception one and PR-0 labels it as such.
+ */
 export const typecheckProbes = (root: string): CommandResult =>
   run([process.execPath, compilerPath(root), '-p', 'tsconfig.probes.json', '--noEmit'], serverDirectory(root), PROBE_TIMEOUT_MS);
 
+/**
+ * The retained full declaration check (ADR-0002 condition 4).
+ *
+ * Same project, `skipLibCheck: false`, so the vendor defects keep being produced even though the accepted gate no
+ * longer sees them. The output is inventoried and PR-0 compares it against
+ * `docs/integration/colyseus-declaration-inventory.json`, which makes a new vendor diagnostic a review event.
+ */
+export const fullCheckProbes = (root: string): CommandResult =>
+  run(
+    [process.execPath, compilerPath(root), '-p', 'tsconfig.probes.json', '--noEmit', '--skipLibCheck', 'false'],
+    serverDirectory(root),
+    PROBE_TIMEOUT_MS,
+  );
+
+/** Strict check of UDG-owned emitted declarations, which never imports the server or SDK stack (ADR-0002 condition 5). */
+export const checkFirstPartyDeclarations = (root: string): CommandResult =>
+  run([process.execPath, compilerPath(root), '-p', 'tsconfig.declarations.json', '--noEmit'], root, PROBE_TIMEOUT_MS);
+
+/**
+ * `package@version::path-in-package` for a declaration file.
+ *
+ * The pnpm store directory carries a peer-dependency suffix that changes whenever an unrelated pin moves, so the
+ * suffix is dropped: an inventory diff then means a real change in the vendor type surface, not a reshuffle of
+ * store paths.
+ */
+export function declarationOrigin(relativeFile: string): string {
+  const store = /node_modules\/\.pnpm\/([^/]+)\/node_modules\/(.+)$/.exec(relativeFile);
+  if (store?.[1] !== undefined && store[2] !== undefined) {
+    return `${store[1].split('_')[0]!.replace(/\+/g, '/')}::${store[2]}`;
+  }
+  const index = relativeFile.lastIndexOf('node_modules/');
+  return index === -1 ? `repository::${relativeFile}` : `unpacked::${relativeFile.slice(index + 'node_modules/'.length)}`;
+}
+
+/** Group parsed diagnostics into the inventory that is compared against the pinned document. */
+export function buildDeclarationInventory(diagnostics: readonly ProbeDiagnostic[]): readonly DeclarationInventoryEntry[] {
+  const grouped = new Map<string, DeclarationInventoryEntry>();
+  for (const diagnostic of diagnostics) {
+    const origin = declarationOrigin(diagnostic.relativeFile);
+    const key = `${origin}|${diagnostic.code}`;
+    const existing = grouped.get(key);
+    if (existing === undefined) {
+      grouped.set(key, { origin, code: diagnostic.code, count: 1, message: diagnostic.message });
+    } else {
+      grouped.set(key, { ...existing, count: existing.count + 1 });
+    }
+  }
+  return [...grouped.values()].sort(
+    (a, b) => a.origin.localeCompare(b.origin) || a.code.localeCompare(b.code),
+  );
+}
+
 const resultPathFor = (outDir: string, id: ProbeId): string => join(outDir, `${id.replace('/', '-')}.probe-result.json`);
 
+/** Reports a probe may be handed, because no probe can see the exit status of the command that built it. */
+export interface ProbeReports {
+  readonly typecheck?: string;
+  readonly declaration?: string;
+}
+
 /** Run one emitted probe in its own process and read back the result file it wrote. */
-export function runProbe(root: string, outDir: string, id: ProbeId, typecheckReport?: string): ProbeRecord {
+export function runProbe(root: string, outDir: string, id: ProbeId, reports?: ProbeReports): ProbeRecord {
   const emitted = join(serverDirectory(root), 'probes', 'dist', 'probes', PROBE_FILES[id]);
   const out = resultPathFor(outDir, id);
   mkdirSync(outDir, { recursive: true });
   if (existsSync(out)) rmSync(out);
 
   const argv = [process.execPath, emitted, '--out', out];
-  if (typecheckReport !== undefined) argv.push('--typecheck-report', typecheckReport);
+  if (reports?.typecheck !== undefined) argv.push('--typecheck-report', reports.typecheck);
+  if (reports?.declaration !== undefined) argv.push('--declaration-report', reports.declaration);
   const executed = run(argv, serverDirectory(root), PROBE_TIMEOUT_MS);
   let result: ProbeResultFile | undefined;
   let failureDetail: string | undefined;
@@ -234,7 +330,14 @@ export function runProbe(root: string, outDir: string, id: ProbeId, typecheckRep
   return {
     id,
     subject: PROBE_SUBJECTS[id],
-    command: `${process.execPath} ${relative(root, emitted)} --out ${relative(root, out)}${typecheckReport === undefined ? '' : ` --typecheck-report ${relative(root, typecheckReport)}`}`,
+    command: [
+      process.execPath,
+      relative(root, emitted),
+      '--out',
+      relative(root, out),
+      ...(reports?.typecheck === undefined ? [] : ['--typecheck-report', relative(root, reports.typecheck)]),
+      ...(reports?.declaration === undefined ? [] : ['--declaration-report', relative(root, reports.declaration)]),
+    ].join(' '),
     exitCode: executed.exitCode,
     timedOut: executed.timedOut,
     resultPath: out,
@@ -248,52 +351,145 @@ export function runColyseusProbes(root: string, outDir: string): ProbeRun {
   // Each probe runs with apps/server as its working directory, so a relative output directory would
   // mean two different places depending on who asked. Anchor it once, here.
   outDir = resolve(root, outDir);
+  mkdirSync(outDir, { recursive: true });
+
   const emit = emitProbes(root);
+
+  // The accepted compiler gate (ADR-0002): first-party code checked against the pinned declarations.
   const typecheck = typecheckProbes(root);
   const diagnostics = parseDiagnostics(`${typecheck.stdout}\n${typecheck.stderr}`, serverDirectory(root), root);
-  mkdirSync(outDir, { recursive: true });
   writeJson(join(outDir, 'probe-project-typecheck.json'), {
     command: typecheck.command,
     cwd: relative(root, typecheck.cwd),
     exitCode: typecheck.exitCode,
+    policy: 'apps/server/tsconfig.probes.json as accepted, including the ADR-0002 declaration-checking exception',
+    claim: 'first-party probe code typechecks against the pinned declarations under the documented ADR-0002 exception',
     diagnostics,
     rawOutput: `${typecheck.stdout}${typecheck.stderr}`.slice(0, 200_000),
   });
 
-  const reportPath = join(outDir, 'probe-project-typecheck.json');
-  const probes = PROBE_IDS.map((id) => runProbe(root, outDir, id, reportPath));
+  // The retained full check: the vendor declaration defects are still produced, inventoried and compared.
+  const fullCheck = fullCheckProbes(root);
+  const fullDiagnostics = parseDiagnostics(`${fullCheck.stdout}\n${fullCheck.stderr}`, serverDirectory(root), root);
+  const declarationInventory = buildDeclarationInventory(fullDiagnostics);
+  const inRepositoryCode = fullDiagnostics.filter((diagnostic) => diagnostic.insideRepository).length;
+  writeJson(join(outDir, 'declaration-inventory.json'), {
+    schemaVersion: 1,
+    command: fullCheck.command,
+    exitCode: fullCheck.exitCode,
+    pinnedInventory: 'docs/integration/colyseus-declaration-inventory.json',
+    adr: 'ADR-0002',
+    totalDiagnostics: fullDiagnostics.length,
+    inRepositoryCode,
+    inThirdPartyDeclarations: fullDiagnostics.length - inRepositoryCode,
+    entries: declarationInventory,
+    rawOutput: `${fullCheck.stdout}${fullCheck.stderr}`.slice(0, 200_000),
+  });
 
-  const inRepositoryCode = diagnostics.filter((diagnostic) => diagnostic.insideRepository).length;
+  // UDG's own emitted declarations, checked strictly and without the server/SDK stack.
+  const declarations = checkFirstPartyDeclarations(root);
+  const declarationDiagnostics = parseDiagnostics(`${declarations.stdout}\n${declarations.stderr}`, root, root);
+  writeJson(join(outDir, 'first-party-declarations.json'), {
+    schemaVersion: 1,
+    command: declarations.command,
+    exitCode: declarations.exitCode,
+    policy: 'skipLibCheck: false in tsconfig.declarations.json; no @colyseus/core, @colyseus/sdk or @colyseus/ws-transport',
+    purpose: 'a mistake in UDG-owned emitted declarations must stay a build failure despite the server exception',
+    diagnostics: declarationDiagnostics,
+    rawOutput: `${declarations.stdout}${declarations.stderr}`.slice(0, 200_000),
+  });
+
+  const probes = PROBE_IDS.map((id) =>
+    runProbe(root, outDir, id, {
+      typecheck: join(outDir, 'probe-project-typecheck.json'),
+      declaration: join(outDir, 'declaration-inventory.json'),
+    }),
+  );
+
   const pr0 = probes.find((record) => record.id === 'PR-0');
   const compatibility: CompatibilityVerdict = {
-    stackCompatibility: typecheck.exitCode === 0 && diagnostics.length === 0 ? 'established' : 'not-established',
+    // Compilation cannot establish runtime compatibility, and since ADR-0002 the accepted gate no longer even
+    // looks inside the vendor declarations. The previous formula (accepted gate clean => established) would have
+    // flipped this field on the strength of a compiler flag, so the claim is no longer derived from it at all:
+    // only Phase 1 behaviour plus the UDG-SPIKE-001 gate can move this, by owner decision.
+    stackCompatibility: 'not-established',
     pr0: pr0?.result?.verdict ?? (pr0 === undefined ? 'missing' : pr0.result?.ok === true ? 'pass' : 'fail'),
-    strictTypecheckCommand: typecheck.command,
-    strictTypecheckExitCode: typecheck.exitCode,
-    diagnostics: {
-      total: diagnostics.length,
-      inRepositoryCode,
-      inThirdPartyDeclarations: diagnostics.length - inRepositoryCode,
+    compilerPolicy: {
+      exception: 'ADR-0002: skipLibCheck true, accepted by the owner on 2026-11-10',
+      approvedProjects: ['apps/server/tsconfig.json', 'apps/server/tsconfig.probes.json'],
+      everythingElse:
+        'tsconfig.base.json keeps skipLibCheck: false; the only other project carrying the setting is the root tooling project tsconfig.json, under UDG-001 decision D1 and unrelated to ADR-0002',
     },
-    acceptedBuildPath: 'pnpm --filter @udg/server typecheck:probes (strict, --noEmit) — currently failing with PH0-B1',
-    diagnosticEmission: 'pnpm --filter @udg/server build:probes uses tsc --noCheck to obtain runnable JavaScript only; it is not a compatibility result and must not become the accepted build path',
+    acceptedGate: {
+      command: typecheck.command,
+      exitCode: typecheck.exitCode,
+      diagnostics: {
+        total: diagnostics.length,
+        inRepositoryCode: diagnostics.filter((diagnostic) => diagnostic.insideRepository).length,
+        inThirdPartyDeclarations: diagnostics.filter((diagnostic) => !diagnostic.insideRepository).length,
+      },
+      claim: 'first-party code typechecks against the pinned declarations under the documented ADR-0002 exception',
+      notClaimed: [
+        'the vendor declaration defects are fixed - they are inventoried, not resolved',
+        'runtime behaviour, reconciliation or transport compatibility follows from compilation',
+        'apps/client or any other project is covered by this exception',
+        'this project is the accepted build path, which is `pnpm run build` with no --noCheck',
+      ],
+    },
+    fullDeclarationCheck: {
+      command: fullCheck.command,
+      exitCode: fullCheck.exitCode,
+      totalDiagnostics: fullDiagnostics.length,
+      inventoryEntries: declarationInventory.length,
+      pinnedInventory: 'docs/integration/colyseus-declaration-inventory.json',
+    },
+    firstPartyDeclarations: {
+      command: declarations.command,
+      exitCode: declarations.exitCode,
+      purpose: 'strict check of UDG-owned emitted declarations without importing the server or SDK stack',
+    },
+    acceptedBuildPath:
+      'pnpm --filter @udg/server build — `tsc -p tsconfig.json`, fully typechecked; the unchecked emit is never part of it, and the typecheck scripts are the compile assertions',
+    diagnosticEmission:
+      'pnpm --filter @udg/server build:probes uses tsc --noCheck to obtain runnable JavaScript only; it is not a compatibility result and must not become the accepted build path',
     probes: probes.map((record) => ({
       id: record.id,
       verdict: record.result?.verdict ?? (record.result === undefined ? 'error' : record.result.ok ? 'pass' : 'fail'),
       ok: record.result?.ok ?? false,
     })),
     reading:
-      'Five probes measuring real behaviour is not a compatible stack. PR-0 carries the compiler verdict; while it is blocked, stackCompatibility stays not-established regardless of the other results.',
+      'PR-0 claims only that first-party code typechecks against the pinned declarations under the ADR-0002 exception. ' +
+      'The vendor declaration diagnostics remain, runtime behaviour is unproven, and stackCompatibility stays ' +
+      'not-established regardless of what the compiler reports.',
   };
   writeJson(join(outDir, 'compatibility-verdict.json'), { schemaVersion: 1, taskId: 'UDG-003', ...compatibility });
   writeJson(join(outDir, 'probe-run-index.json'), {
     emit: { command: emit.command, exitCode: emit.exitCode, timedOut: emit.timedOut, purpose: 'diagnostic emission only (--noCheck)' },
-    typecheck: { command: typecheck.command, exitCode: typecheck.exitCode, diagnosticCount: diagnostics.length, purpose: 'the accepted compiler gate' },
+    typecheck: {
+      command: typecheck.command,
+      exitCode: typecheck.exitCode,
+      diagnosticCount: diagnostics.length,
+      purpose: 'the accepted compiler gate under the ADR-0002 exception: first-party code against the pinned declarations',
+    },
+    fullCheck: {
+      command: fullCheck.command,
+      exitCode: fullCheck.exitCode,
+      diagnosticCount: fullDiagnostics.length,
+      purpose: 'the retained full declaration check, inventoried and compared against the pinned inventory',
+    },
+    declarations: {
+      command: declarations.command,
+      exitCode: declarations.exitCode,
+      diagnosticCount: declarationDiagnostics.length,
+      purpose: 'strict check of UDG-owned emitted declarations, without the server/SDK stack',
+    },
     compatibility: {
       stackCompatibility: compatibility.stackCompatibility,
       pr0: compatibility.pr0,
-      strictTypecheckExitCode: compatibility.strictTypecheckExitCode,
-      diagnostics: compatibility.diagnostics,
+      acceptedGateExitCode: compatibility.acceptedGate.exitCode,
+      fullCheckExitCode: compatibility.fullDeclarationCheck.exitCode,
+      fullCheckDiagnostics: compatibility.fullDeclarationCheck.totalDiagnostics,
+      declarationInventoryEntries: compatibility.fullDeclarationCheck.inventoryEntries,
     },
     probes: probes.map((record) => ({
       id: record.id,
@@ -309,13 +505,18 @@ export function runColyseusProbes(root: string, outDir: string): ProbeRun {
       failureDetail: record.failureDetail,
     })),
   });
+
   return {
     emit,
     compatibility,
     typecheck,
     diagnostics,
-    repositoryDiagnostics: diagnostics.filter((diagnostic) => diagnostic.insideRepository),
-    thirdPartyDiagnostics: diagnostics.filter((diagnostic) => !diagnostic.insideRepository),
+    fullCheck,
+    fullDiagnostics,
+    declarations,
+    declarationInventory,
+    repositoryDiagnostics: fullDiagnostics.filter((diagnostic) => diagnostic.insideRepository),
+    thirdPartyDiagnostics: fullDiagnostics.filter((diagnostic) => !diagnostic.insideRepository),
     probes,
   };
 }

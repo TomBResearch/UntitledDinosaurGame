@@ -19,10 +19,20 @@ Affected task IDs and contract clauses:
 [definition of done](../contracts/definition-of-done.md),
 [package boundaries](../contracts/ownership.md).
 
-**Not affected, explicitly:** `apps/client` and every other workspace, package, tool and the root test project.
-The owner's approval covers the two named files only. Extending it to `apps/client` — which carries 3 declaration
-diagnostics of its own once it imports `@colyseus/sdk` (proposal §3.4) — is a decision for the task that owns that
-project, reviewed on its own evidence.
+**Not affected, explicitly:** `apps/client` and every other workspace, package and tool. The owner's approval covers
+the two named files only. Extending it to `apps/client` — which carries 3 declaration diagnostics of its own once it
+imports `@colyseus/sdk` (proposal §3.4) — is a decision for the task that owns that project, reviewed on its own
+evidence.
+
+**One relaxation already existed, and this ADR does not absorb it.** The root tooling project
+[`tsconfig.json`](../../tsconfig.json) has carried `skipLibCheck: true` since UDG-001 decision **D1**
+([assignment §D1](../contracts/assignments/UDG-001.md), recorded in the
+[completion record](../contracts/assignments/UDG-001-completion.md)), for a different reason: `playwright-core`'s
+declaration bundle references `SVGElement`/`HTMLElement`/`HTMLElementTagNameMap` and `vitest`'s default-imports
+`node:path`, neither checkable under a non-DOM `lib`. That project imports no Colyseus package, gains nothing from
+this ADR, and is retained unchanged. The consequence is that "declaration checking is excepted" is not a single
+repository-wide property with one owner: three projects carry the setting under two separate authorities, and PR-0
+asserts the exact set and which authority each one cites, so a fourth project acquiring the flag fails the build.
 
 ## Trigger and reproduction
 
@@ -61,7 +71,9 @@ resolved signatures with 0 expressions acquiring a type from the six defective d
 The owner approved **A4 as an explicit, documented exception for the current `apps/server` projects only**:
 
 1. `apps/server/tsconfig.json` and `apps/server/tsconfig.probes.json` set `skipLibCheck: true`, each with a comment
-   naming this ADR. No other compiler option is relaxed by it, and no other project receives it.
+   naming this ADR. No other compiler option is relaxed by it, and no other project receives it — so the complete set
+   of projects where declaration checking is excepted is exactly those two plus the pre-existing UDG-001 D1 tooling
+   project. Anything beyond those three requires the owner.
 2. What must remain unchanged: `strict`, `noImplicitAny`, `exactOptionalPropertyTypes`,
    `noUncheckedIndexedAccess`, `esModuleInterop: false`, `verbatimModuleSyntax`, and every other setting inherited
    from `tsconfig.base.json`, which keeps `skipLibCheck: false`. All boundary rules stay as they are, and the
@@ -121,13 +133,24 @@ Negative, and accepted knowingly:
    escaping fixtures). UDG's own typed wrappers plus contract tests remain the defence, not the compiler.
 3. `apps/server` now has a documented weaker policy than the rest of the repository. That asymmetry is a
    reviewer-visible property, asserted by PR-0 and the contract suite rather than trusted.
+4. There are now two authorities for the same compiler setting (this ADR for the server projects, UDG-001 D1 for the
+   root tooling project). A reader who assumes one policy per repository will be wrong, and a future relaxation could
+   hide behind the precedent. PR-0 therefore pins the exact project set **and** which authority each project cites, so
+   borrowing the precedent without saying so fails.
+
+## Correction to the Route 1 measurement
+
+Proposal §3.4 measured which projects *would* need the exception for the Colyseus stack and reported that the root
+test project "needs nothing". That is true of Colyseus and misleading as written: the root tooling project already had
+the setting under UDG-001 D1. The statement is corrected here rather than edited away, because the per-project
+measurement itself is still what it was.
 
 ## Validation required and performed
 
 | check | where |
 | --- | --- |
 | the accepted gate exits 0 with 0 diagnostics | `pnpm --filter @udg/server typecheck`, `typecheck:probes`, PR-0 check 1 |
-| the exception is confined to the two files and documented | PR-0 config scan, UDG-003 contract suite, `pnpm lint` boundaries unchanged |
+| the exception is confined to the two files, each citing this ADR, and no third project acquires it beyond the pre-existing UDG-001 D1 tooling project | PR-0 config scan (`exception-confined-to-the-approved-projects`, `adr-0002-tags-exactly-its-two-projects`), UDG-003 contract suite, `pnpm lint` boundaries unchanged |
 | no DOM globals, no suppression comments, no ambient shims, no internal imports | PR-0 escape-hatch and policy scans |
 | full declaration inventory matches the pinned inventory exactly | PR-0 inventory check; artefact `declaration-inventory.json` |
 | UDG-owned emitted declarations typecheck strictly without the server/SDK stack | `pnpm run declarations:strict`, CI step, contract suite |

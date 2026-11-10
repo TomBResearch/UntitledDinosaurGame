@@ -1,5 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
+  "//": "ADR-0002 exception, accepted by the owner on 2026-11-10 and confined to this file and tsconfig.probes.json: skipLibCheck is true here because the pinned @colyseus/core / @colyseus/sdk / @colyseus/ws-transport / @colyseus/better-call declarations carry 27 defects that no published pin or TypeScript version avoids. Everything else stays as inherited from tsconfig.base.json, which keeps skipLibCheck: false for every other project. Still checked here: strict, noImplicitAny, exactOptionalPropertyTypes, noUncheckedIndexedAccess and every other inherited setting, so first-party code and every application call against the pinned declarations are typechecked. Not claimed: that the vendor defects are fixed — docs/integration/colyseus-declaration-inventory.json pins them and the probe suite fails on any change — or that runtime compatibility follows from compilation. No DOM lib, no suppression comments, no ambient shims, no dependency patches.",
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
@@ -9,7 +10,8 @@
     ],
     "types": [
       "node"
-    ]
+    ],
+    "skipLibCheck": true
   },
   "include": [
     "src/**/*.ts"

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "//": "Strict declaration check for UDG-owned packages, required by ADR-0002. It typechecks the *emitted declarations* of @udg/protocol and @udg/config with skipLibCheck: false, so a mistake in UDG's own published type surface stays a build failure even in the two projects where vendor declaration checking is excepted. It deliberately excludes apps/server and never imports @colyseus/core, @colyseus/sdk or @colyseus/ws-transport: the only third-party declarations it sees belong to @colyseus/schema, which measure clean. Run it after pnpm run build:libraries, which produces the declarations it reads.",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2024"],
+    "types": [],
+    "skipLibCheck": false
+  },
+  "include": ["packages/protocol/dist/**/*.d.ts", "packages/config/dist/**/*.d.ts"]
+}

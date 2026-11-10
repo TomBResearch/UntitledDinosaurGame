@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Pinned inventory of third-party declaration diagnostics retained by the ADR-0002 exception. The accepted compiler gates skip checking inside declaration files; this file is what keeps the vendor defects visible. pnpm --filter @udg/server typecheck:probes:full reproduces it, and PR-0 compares the live inventory against this document and fails on any difference.",
+  "adr": "docs/adr/0002-server-declaration-checking-exception.md",
+  "producedBy": "pnpm --filter @udg/server typecheck:probes:full",
+  "project": "apps/server/tsconfig.probes.json run with --skipLibCheck false",
+  "pins": {
+    "@colyseus/core": "0.18.27",
+    "@colyseus/sdk": "0.18.9",
+    "@colyseus/ws-transport": "0.18.4",
+    "@colyseus/better-call": "1.3.3",
+    "@colyseus/schema": "5.0.45",
+    "typescript": "5.9.3",
+    "@types/node": "24.19.2"
+  },
+  "classification": {
+    "A: declaration assumes the DOM lib (no global HeadersInit for a Node-only consumer)": [
+      "TS2304"
+    ],
+    "B: published declaration default-imports node:http (needs esModuleInterop, which this repository keeps off)": [
+      "TS1192"
+    ],
+    "C: defect inside the vendor package own published types": [
+      "TS2344"
+    ]
+  },
+  "totalDiagnostics": 27,
+  "entries": [
+    {
+      "origin": "@colyseus/better-call@1.3.3::@colyseus/better-call/dist/context.d.mts",
+      "code": "TS2304",
+      "count": 18,
+      "message": "Cannot find name 'HeadersInit'."
+    },
+    {
+      "origin": "@colyseus/better-call@1.3.3::@colyseus/better-call/dist/endpoint.d.mts",
+      "code": "TS2304",
+      "count": 1,
+      "message": "Cannot find name 'HeadersInit'."
+    },
+    {
+      "origin": "@colyseus/better-call@1.3.3::@colyseus/better-call/dist/error.d.mts",
+      "code": "TS2304",
+      "count": 3,
+      "message": "Cannot find name 'HeadersInit'."
+    },
+    {
+      "origin": "@colyseus/core@0.18.27::@colyseus/core/build/router/node.d.ts",
+      "code": "TS1192",
+      "count": 1,
+      "message": "Module '\"http\"' has no default export."
+    },
+    {
+      "origin": "@colyseus/sdk@0.18.9::@colyseus/sdk/build/HTTP.d.ts",
+      "code": "TS2304",
+      "count": 1,
+      "message": "Cannot find name 'HeadersInit'."
+    },
+    {
+      "origin": "@colyseus/sdk@0.18.9::@colyseus/sdk/build/HTTP.d.ts",
+      "code": "TS2344",
+      "count": 2,
+      "message": "Type 'UnionToIntersection<MethodOptions<API, \"DELETE\">> extends infer T ? { [K_1 in keyof T]: T[K_1]; } : never' does not satisfy the constraint '{ [K in keyof UnionToIntersection<MethodOptions<API, \"DELETE\">>]: UnionToIntersection<MethodOptions<API, \"DELETE\">>[K]; }'."
+    },
+    {
+      "origin": "@colyseus/ws-transport@0.18.4::@colyseus/ws-transport/build/WebSocketTransport.d.ts",
+      "code": "TS1192",
+      "count": 1,
+      "message": "Module '\"http\"' has no default export."
+    }
+  ],
+  "reviewRule": "Any added file, added or changed diagnostic code, changed count or vanished entry must fail the probe suite. Clearing it requires a pin change plus an update to this document that says which release fixed which class. Deleting an entry because the accepted gates no longer print it is not a fix."
+}

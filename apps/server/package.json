@@ -21,10 +21,11 @@
     "dist"
   ],
   "scripts": {
-    "//scripts": "typecheck:probes is the compiler gate and currently fails with PH0-B1; build:probes emits runnable probe JavaScript with --noCheck for measurement only and is deliberately excluded from build, so the accepted build path stays fully typechecked.",
+    "//scripts": "typecheck and typecheck:probes are the accepted compiler gates and pass under the ADR-0002 declaration-checking exception (skipLibCheck true in those two projects only). typecheck:probes:full is the retained full check: same project with skipLibCheck false, so the vendor declaration defects keep being reported; its inventory is pinned in docs/integration/colyseus-declaration-inventory.json and PR-0 fails if it changes. build:probes emits runnable probe JavaScript with --noCheck for measurement only and is deliberately excluded from build, so the accepted build path stays fully typechecked.",
     "clean": "node --input-type=module -e \"import{rmSync}from'node:fs';for(const p of ['dist','probes/dist'])rmSync(p,{recursive:true,force:true});\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:probes": "tsc -p tsconfig.probes.json --noEmit",
+    "typecheck:probes:full": "tsc -p tsconfig.probes.json --noEmit --skipLibCheck false",
     "build:probes": "tsc -p tsconfig.probes.json --noCheck",
     "build": "pnpm run clean && tsc -p tsconfig.json"
   },

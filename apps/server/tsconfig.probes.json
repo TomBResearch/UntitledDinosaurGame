@@ -1,12 +1,13 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "//": "Workspace-local probe project (UDG-003 Phase 0). Module resolution walks up from the importing file, so code that imports @colyseus/* must live in the workspace that declares the dependency — a probe under tests/ could never see apps/server/node_modules. It inherits tsconfig.base.json unchanged: strict, skipLibCheck false, and no relaxation here. Output is emitted to probes/dist, which the root dist/ ignore rule already excludes from Git.",
+  "//": "Workspace-local probe project (UDG-003 Phase 0). Module resolution walks up from the importing file, so code that imports @colyseus/* must live in the workspace that declares the dependency — a probe under tests/ could never see apps/server/node_modules. Output is emitted to probes/dist, which the root dist/ ignore rule already excludes from Git. Policy: ADR-0002 exception only. skipLibCheck is true here and in tsconfig.json and nowhere else, because the pinned vendor declarations carry 27 recorded defects; every other setting is inherited unchanged from tsconfig.base.json (strict, noImplicitAny, exactOptionalPropertyTypes, noUncheckedIndexedAccess, esModuleInterop false, no DOM lib), so first-party probe code and its calls against the pinned declarations remain fully typechecked. The full declaration check is retained separately as `pnpm --filter @udg/server typecheck:probes:full`, its inventory is pinned in docs/integration/colyseus-declaration-inventory.json, and PR-0 fails if that inventory changes. See docs/adr/0002-server-declaration-checking-exception.md.",
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "probes/dist",
     "rootDir": ".",
     "lib": ["ES2024"],
-    "types": ["node"]
+    "types": ["node"],
+    "skipLibCheck": true
   },
   "include": ["probes/**/*.ts"],
   "exclude": ["probes/dist", "node_modules", "dist"]
