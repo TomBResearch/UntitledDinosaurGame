@@ -31,7 +31,8 @@
  * identity-level evidence, not by this file.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -952,5 +953,439 @@ describe('UDG-003 Phase 0 — boundary and evidence hygiene', () => {
 
   it('is a task id the dispatcher accepts', () => {
     expect(CONTRACT_TASK_IDS).toContain(TASK);
+  });
+});
+
+/**
+ * Phase 1 — the transport-independent movement authority core.
+ *
+ * Phase 1 is assigned the authority core and nothing that touches a socket: no SDK transport, no
+ * `RegionRoom`, no lifecycle transport wiring, no physics, no navigation, no client prediction and no
+ * multiple-input consumption. That makes the assertions here mostly *negative*, so they are written the
+ * same way the Phase 0 boundary suite is: scan the code that is actually shipped, after comments and
+ * literal text are removed, and additionally **execute the emitted module** in a child process with ports
+ * this file owns. A unit test that imports TypeScript source through a transform proves the transform
+ * works; running `dist/authority/*.js` under plain Node proves the artefact does.
+ */
+
+const AUTHORITY_SOURCE_DIRECTORY = join(ROOT, 'apps', 'server', 'src', 'authority');
+const AUTHORITY_MODULES = [
+  'types',
+  'determinism',
+  'clock',
+  'arrival',
+  'bounded',
+  'entity',
+  'admit',
+  'screen',
+  'commit',
+  'step',
+  'journal',
+  'replay',
+] as const;
+
+/** A child-process script that runs the *emitted* core against ports written here, independently. */
+const EMITTED_RUN_SCRIPT = `
+import { pathToFileURL } from 'node:url';
+
+const [, , dist, libraries, boundsJson] = process.argv;
+const load = async (relative) => import(pathToFileURL(\`\${dist}/\${relative}\`).href);
+const stepModule = await load('authority/step.js');
+const journalModule = await load('authority/journal.js');
+const replayModule = await load('authority/replay.js');
+const clockModule = await load('authority/clock.js');
+const configModule = await import(pathToFileURL(\`\${libraries}/config/dist/index.js\`).href);
+
+const config = configModule.withConfigOverrides(configModule.DEFAULT_SERVER_CONFIG, {
+  region: { bounds: JSON.parse(boundsJson) },
+});
+
+let nowMs = 0;
+let handle = 0;
+const tasks = new Map();
+const time = { nowMs: () => nowMs };
+const scheduler = {
+  set: (callback, delayMs) => {
+    handle += 1;
+    tasks.set(handle, { at: nowMs + delayMs, callback });
+    return { scheduledBy: 'contract-suite', id: handle };
+  },
+  clear: (given) => {
+    tasks.delete(given.id);
+  },
+};
+const advance = (ms) => {
+  const target = nowMs + ms;
+  for (;;) {
+    const due = [...tasks.entries()]
+      .filter(([, task]) => task.at <= target)
+      .sort((a, b) => a[1].at - b[1].at || a[0] - b[0])[0];
+    if (due === undefined) break;
+    nowMs = Math.max(nowMs, due[1].at);
+    tasks.delete(due[0]);
+    due[1].callback();
+  }
+  nowMs = target;
+};
+
+const speed = config.movement.speed;
+let stepCalls = 0;
+const stepper = {
+  step: (request) => {
+    stepCalls += 1;
+    // The flat reference relation only: this script proves the emitted artefact runs and counts, not
+    // that any locomotion model exists (UDG-005 owns locomotion, UDG-006 owns collision).
+    const dx = request.input.moveX * speed * request.dtSeconds;
+    const dz = request.input.moveZ * speed * request.dtSeconds;
+    const position = request.state.kinematic.position;
+    return {
+      state: {
+        ...request.state,
+        kinematic: {
+          ...request.state.kinematic,
+          position: { x: position.x + dx, y: position.y, z: position.z + dz },
+        },
+      },
+      horizontalDisplacement: Math.hypot(dx, dz),
+    };
+  },
+};
+
+const clock = clockModule.FixedStepClock.create({ network: config.network, scheduler, time, tickOrigin: 0 });
+const core = stepModule.AuthorityCore.build({
+  config,
+  stepper,
+  time,
+  clock,
+  runId: 'udg-003-emitted-run',
+  regionProvenance: 'test-only-synthetic',
+});
+
+core.join('e1', 1, { x: 0, y: 0, z: 0 });
+clock.start(() => {
+  core.step();
+});
+
+// The wire shape, exactly as the transport would deliver it: the core classifies on declared fields and
+// the adopted protocol validators decide validity.
+const frame = (sessionEpoch, generation, moveX, moveZ) => ({
+  sessionEpoch,
+  generation,
+  directIntent: true,
+  moveX,
+  moveZ,
+});
+const keepalive = (sessionEpoch, generation) => ({
+  sessionEpoch,
+  generation,
+  directIntent: false,
+  moveX: 0,
+  moveZ: 0,
+});
+
+const seen = [];
+const tick = (payloads) => {
+  for (const payload of payloads) core.ingest('e1', payload);
+  advance(config.network.tickRate === 0 ? 0 : 1000 / config.network.tickRate);
+  const entity = core.view('e1');
+  seen.push({ tick: core.tick, watermark: entity?.watermark ?? null, balanced: core.reconciliation('e1').balanced });
+};
+
+// Generation 1 is a driven frame; 2 is a keepalive; 3 carries a discrete cancel that supersedes a queued
+// frame; a move request must be refused without ever becoming a candidate.
+tick([frame(1, 1, 1, 0)]);
+tick([frame(1, 2, 0, 1), keepalive(1, 2)]);
+tick([
+  frame(1, 3, 1, 1),
+  { requestId: 'emit-cancel', sessionEpoch: 1, generation: 4 },
+  { requestId: 'emit-move', sessionEpoch: 1, generation: 4, x: 1, y: 1, z: 1 },
+]);
+tick([]);
+
+// Counted before the replay shares the stepper: this is the original run's step count.
+const originalSteps = stepCalls;
+const originalTip = core.chainTip;
+const originalRows = core.journalRows.length;
+
+const rows = core.journalRows;
+const codes = rows
+  .filter((row) => row.type === 'observation' && row.requestId === 'emit-move')
+  .map((row) => row.reason ?? row.disposition);
+const moveCandidates = rows
+  .filter((row) => row.type === 'intention')
+  .flatMap((row) => row.candidates ?? [])
+  .filter((candidate) => candidate.kind === 'path');
+
+const replayed = replayModule.replayRun({
+  prologue: core.prologue(),
+  inputs: journalModule.toReplayInputs(rows, core.chain),
+  config,
+  stepper,
+  time,
+  clock: clockModule.FixedStepClock.create({ network: config.network, scheduler, time, tickOrigin: 0 }),
+  runId: 'udg-003-emitted-replay',
+});
+
+process.stdout.write(
+  JSON.stringify({
+    ok: true,
+    tickCount: seen.length,
+    watermark: core.view('e1')?.watermark ?? null,
+    latchedKind: core.view('e1')?.latchedKind ?? null,
+    held: core.view('e1')?.heldDirectGeneration ?? null,
+    stepCalls: originalSteps,
+    moveRefusal: codes,
+    moveCandidates: moveCandidates.length,
+    routeFieldIsNull: core.view('e1')?.state.locomotion.route === null,
+    dispositionsBalanced: core.reconciliation('e1').balanced,
+    replayOk: replayed.ok === true,
+    originalTip,
+    replayTip: replayed.ok === true ? replayed.core.chainTip : null,
+    rows: originalRows,
+    journalRowTypes: [...new Set(rows.map((row) => row.type))].sort(),
+    routeStatusRows: rows.filter((row) => row.type === 'routeStatus').length,
+    replayRows: replayed.ok === true ? replayed.rows.length : 0,
+    terminalCacheRecords: core.stats().cacheDepth,
+  }),
+);
+`;
+
+describe('UDG-003 Phase 1 — the authority core exists and stays off the package surface', () => {
+  it('has exactly the modules the Phase 1 record names', () => {
+    const present = readdirSync(AUTHORITY_SOURCE_DIRECTORY).filter((name) => name.endsWith('.ts')).sort();
+    expect(present).toEqual([...AUTHORITY_MODULES].map((name) => `${name}.ts`).sort());
+    for (const name of AUTHORITY_MODULES) {
+      const text = readFileSync(join(AUTHORITY_SOURCE_DIRECTORY, `${name}.ts`), 'utf8');
+      expect(text.length, name).toBeGreaterThan(200);
+    }
+  });
+
+  it('leaves the workspace entry point and public surface exactly as UDG-001 pinned them', () => {
+    const entry = stripNonCode(readFileSync(join(ROOT, 'apps', 'server', 'src', 'index.ts'), 'utf8'))
+      .replace(/\/\/# sourceMappingURL=.*/g, '')
+      .trim();
+    expect(entry).toBe('export {};');
+    const manifest = JSON.parse(readFileSync(join(ROOT, 'apps', 'server', 'package.json'), 'utf8')) as {
+      main?: string;
+      types?: string;
+      exports?: Record<string, unknown>;
+    };
+    // Declared-but-unimplemented is still the state: the entry map row is the one UDG-001 recorded.
+    expect(manifest.main).toBe('./dist/index.js');
+    expect(manifest.types).toBe('./dist/index.d.ts');
+    expect(Object.keys(manifest.exports ?? {})).toEqual(['.']);
+    // The entry map is the whole public surface (protocol-v1.md). Phase 1 must not appear in it.
+    const entryMap = readFileSync(join(ROOT, 'docs', 'contracts', 'protocol-v1.md'), 'utf8');
+    const table = entryMap.slice(
+      entryMap.indexOf('<!-- entry-map:begin -->'),
+      entryMap.indexOf('<!-- entry-map:end -->'),
+    );
+    expect(table.length).toBeGreaterThan(0);
+    expect(table).not.toContain('@udg/server');
+    expect(table).not.toContain('authority');
+    // And the source tree the map would have to point at is not reachable as a subpath export.
+    expect(Object.keys(manifest.exports ?? {})).toEqual(['.']);
+  });
+
+  it('runs the emitted module in a child process against ports this file owns', () => {
+    // Build first: the accepted build path is fully typechecked, so a green build is part of the claim.
+    const environment = { ...process.env, PATH: `${join(ROOT, 'node_modules', '.bin')}:${process.env['PATH'] ?? ''}` };
+    const built = spawnSync('pnpm', ['--filter', '@udg/server', 'build'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: environment,
+      shell: process.platform === 'win32',
+    });
+    expect(built.status, `build failed: ${built.stderr}`).toBe(0);
+    const emittedEntry = join(ROOT, 'apps', 'server', 'dist', 'index.js');
+    expect(existsSync(emittedEntry), 'dist/index.js').toBe(true);
+    const emitted = stripNonCode(readFileSync(emittedEntry, 'utf8'))
+      .replace(/\/\/# sourceMappingURL=.*/g, '')
+      .trim();
+    expect(emitted).toBe('export {};');
+    // The declaration file is equally empty: nothing in the workspace becomes importable.
+    const declarations = stripNonCode(
+      readFileSync(join(ROOT, 'apps', 'server', 'dist', 'index.d.ts'), 'utf8'),
+    ).trim();
+    expect(declarations).toBe('export {};');
+
+    const directory = join(ROOT, 'artifacts', 'udg-003-phase-1');
+    mkdirSync(directory, { recursive: true });
+    const script = join(directory, 'emitted-run.mjs');
+    writeFileSync(script, EMITTED_RUN_SCRIPT, 'utf8');
+    const bounds = JSON.stringify({
+      x: { min: -50, max: 50 },
+      y: { min: -5, max: 20 },
+      z: { min: -50, max: 50 },
+    });
+    const run = spawnSync(
+      process.execPath,
+      [script, join(ROOT, 'apps', 'server', 'dist'), join(ROOT, 'packages'), bounds],
+      { cwd: ROOT, encoding: 'utf8' },
+    );
+    expect(run.status, `emitted run failed: ${run.stderr}`).toBe(0);
+    const result = JSON.parse(run.stdout) as {
+      tickCount: number;
+      watermark: number;
+      latchedKind: string;
+      held: number | null;
+      stepCalls: number;
+      moveRefusal: string[];
+      moveCandidates: number;
+      routeFieldIsNull: boolean;
+      dispositionsBalanced: boolean;
+      replayOk: boolean;
+      originalTip: string;
+      replayTip: string | null;
+      rows: number;
+      journalRowTypes: string[];
+      routeStatusRows: number;
+      replayRows: number;
+      terminalCacheRecords: number;
+    };
+    // Three ticks of work and one idle tick; the last driven frame is superseded, the cancel wins.
+    expect(result.tickCount).toBe(4);
+    expect(result.watermark).toBe(4);
+    expect(result.latchedKind).toBe('cancel');
+    expect(result.held).toBeNull();
+    // Every connected entity steps exactly once per tick, whatever the input did.
+    expect(result.stepCalls).toBe(4);
+    expect(result.moveRefusal).toEqual(['NAVIGATION_BUSY']);
+    expect(result.moveCandidates).toBe(0);
+    // `route` is the adopted protocol field and it stays null: Phase 1 constructs no route, and no
+    // UDG_ROUTE_STATUS-shaped state appears anywhere in the journal.
+    expect(result.routeFieldIsNull).toBe(true);
+    expect(result.routeStatusRows).toBe(0);
+    expect(result.journalRowTypes).not.toContain('routeStatus');
+    expect(result.journalRowTypes).toContain('observation');
+    expect(result.dispositionsBalanced).toBe(true);
+    expect(result.replayOk).toBe(true);
+    expect(result.replayTip).toBe(result.originalTip);
+    expect(result.replayRows).toBe(result.rows);
+    // One record per request with a terminal disposition: the accepted cancel and the refused move.
+    expect(result.terminalCacheRecords).toBe(2);
+    expect(result.originalTip).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe('UDG-003 Phase 1 — what the authority source may not contain', () => {
+  const sources = AUTHORITY_MODULES.map((name) => ({
+    name,
+    text: readFileSync(join(AUTHORITY_SOURCE_DIRECTORY, `${name}.ts`), 'utf8'),
+  }));
+
+  it('imports no transport, engine, browser, or platform module', () => {
+    const offenders: string[] = [];
+    for (const source of sources) {
+      const code = stripNonCode(source.text);
+      const specifiers = [...code.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((match) => match[1] ?? '');
+      for (const specifier of specifiers) {
+        const allowed =
+          specifier === '@udg/config' ||
+          specifier === '@udg/protocol' ||
+          specifier.startsWith('./') ||
+          specifier.startsWith('../');
+        if (!allowed) offenders.push(`${source.name}: ${specifier}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('reaches for no wall clock, entropy, timer, filesystem, network or environment', () => {
+    const forbidden = [
+      'Date.now',
+      'new Date',
+      'performance.now',
+      'Math.random',
+      'setTimeout',
+      'setInterval',
+      'node:fs',
+      'node:net',
+      'node:http',
+      'process.env',
+      'globalThis',
+    ];
+    const offenders: string[] = [];
+    for (const source of sources) {
+      const code = stripNonCode(source.text);
+      for (const marker of forbidden) if (code.includes(marker)) offenders.push(`${source.name}: ${marker}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('uses no escape hatch, no locale collation and no DOM global', () => {
+    const directive = '@' + 'ts-';
+    const anyPattern = new RegExp([':', '\\s*an', 'y\\b|\\bas an', 'y\\b|<an', 'y>|\\ban', 'y\\[\\]'].join(''));
+    const offenders: string[] = [];
+    for (const source of sources) {
+      const code = stripNonCode(source.text);
+      if (anyPattern.test(code)) offenders.push(`${source.name}: any in a type position`);
+      for (const marker of [
+        `${directive}ignore`,
+        `${directive}expect-error`,
+        `${directive}nocheck`,
+        'as ' + 'unknown',
+        'as ' + 'never',
+        'eslint-' + 'disable',
+        'declare ' + 'global',
+        'module.' + 'augmentation',
+        'declare ' + 'module',
+        'localeCompare',
+        'document.',
+        'window.',
+        'localStorage',
+      ]) {
+        if (code.includes(marker)) offenders.push(`${source.name}: ${marker}`);
+      }
+      // A non-null assertion is the other way to silence a bound you refused to prove.
+      if (/!\s*[.)\]]/.test(code)) offenders.push(`${source.name}: non-null assertion`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('names the stage order P03 states and no stage it has not reached', () => {
+    // String literals are stripped by `stripNonCode`, so the literal itself is read from the raw source.
+    const raw = sources.find((source) => source.name === 'types')?.text ?? '';
+    const literal = raw.match(/export const STAGE_ORDER[^\n]*=\s*\[([^\]]*)\]/)?.[1] ?? '';
+    expect([...literal.matchAll(/'([A-Z])'/g)].map((match) => match[1])).toEqual([
+      'F',
+      'L',
+      'Q',
+      'S',
+      'A',
+      'C',
+      'R',
+      'X',
+    ]);
+    // The executor names each stage where it runs it, so the single-letter literals in source order are
+    // the stage order as executed. Anything outside the assigned eight - M and P above all - is a failure.
+    const rawStep = sources.find((source) => source.name === 'step')?.text ?? '';
+    expect([...rawStep.matchAll(/'([A-Z])'/g)].map((match) => match[1])).toEqual([
+      'F',
+      'L',
+      'Q',
+      'S',
+      'A',
+      'C',
+      'R',
+      'X',
+    ]);
+  });
+
+  it('enters no room, no SDK type and no navigation implementation', () => {
+    const offenders: string[] = [];
+    for (const source of sources) {
+      const code = stripNonCode(source.text);
+      // A word-boundary test, because `discretePerRoom` is a queue capacity and not an SDK room.
+      for (const pattern of [/\bRoom\b/, /\bColyseus\b/, /matchMake/, /NavMesh/, /pathfind/, /\bnavigate\(/]) {
+        if (pattern.test(code)) offenders.push(`${source.name}: ${pattern.source}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+    // And the phase-1 record says the same thing about the parts it did not build.
+    const record = readFileSync(join(ROOT, 'docs', 'contracts', 'assignments', 'UDG-003-phase-1.md'), 'utf8');
+    for (const phrase of ['RegionRoom', 'MovementAuthorityAdapter', 'unassigned', 'D-7']) {
+      expect(record, phrase).toContain(phrase);
+    }
   });
 });
