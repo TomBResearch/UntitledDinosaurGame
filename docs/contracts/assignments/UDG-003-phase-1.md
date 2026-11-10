@@ -54,7 +54,7 @@ Consequences that bind this assignment:
 | Gates A/B/C | `acceptance-gates.md` | **Not Run** — unaffected by this phase |
 | D-7, D4 | `adoption.md`; D4 undesignated | **Open**, and recorded open here |
 
-Contract text relied on, unchanged by this assignment: [UDG-003.md](../UDG-003.md) (Behaviour and interfaces, Tests and acceptance); [UDG-SPIKE-003.md](../UDG-SPIKE-003.md) §5; [protocol.md](../protocol.md) §4.1–§4.4; [movement-authority.md](../../interfaces/movement-authority.md) §5.1–§5.3, §5.5; [domain.md](../../interfaces/domain.md) §4.1; and P03 clauses **a–m** with stages **F L Q S A C R X M P**, traces **T-1…T-8** and acceptance criteria **AC-1…AC-20** in [UDG-003-readiness-proposal.md](UDG-003-readiness-proposal.md) §1 and §3.7.
+Contract text relied on, unchanged by this assignment: [UDG-003.md](../UDG-003.md) (Behaviour and interfaces, Tests and acceptance); [UDG-SPIKE-003.md](../UDG-SPIKE-003.md) §5; [protocol.md](../protocol.md) §4.1–§4.4; [movement-authority.md](../../interfaces/movement-authority.md) §5.1–§5.3, §5.5; [domain.md](../../interfaces/domain.md) §4.1; and P03 clauses **a–i** with stages **F L Q S A C R X M P**, traces **T-1…T-8** and acceptance criteria **AC-1…AC-20** in [UDG-003-readiness-proposal.md](UDG-003-readiness-proposal.md) §1 and §3.7.
 
 No requirement, threshold, timestep, collision outcome or protocol meaning is changed here. The `UDG_MOVE_TO` refusal, the `NAVIGATION_BUSY` code and the deferral of `path` semantics stay as P03 and the contract state them.
 

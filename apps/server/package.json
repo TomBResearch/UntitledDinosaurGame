@@ -33,6 +33,7 @@
     "@colyseus/core": "0.18.27",
     "@colyseus/sdk": "0.18.9",
     "@colyseus/ws-transport": "0.18.4",
+    "@udg/config": "workspace:*",
     "@udg/protocol": "workspace:*"
   },
   "devDependencies": {

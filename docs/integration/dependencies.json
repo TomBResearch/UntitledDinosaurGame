@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "generated": {
-    "at": "2026-11-09T18:25:25.113Z",
+    "at": "2026-11-10T20:45:39.122Z",
     "taskId": "UDG-001",
     "command": "pnpm dependencies:record",
-    "commit": "1e9bd1b4099ab7f2777c82f9fe703d0a0b4b8366"
+    "commit": "23f28693ae174c3eaa554eb34e18036d85780290"
   },
   "runtime": {
     "node": {
@@ -26,7 +26,7 @@
   },
   "lockfile": {
     "path": "pnpm-lock.yaml",
-    "sha256": "bbfe68e33a072ecbd1974fe32f54e1a238d0f697737320ba554eceae8dd0777d"
+    "sha256": "072827662df4e665641491511021f2dfc00b26b4f3198e61b81e28fc5bd0f420"
   },
   "workspaces": [
     {
@@ -87,6 +87,7 @@
         "@colyseus/core": "0.18.27",
         "@colyseus/sdk": "0.18.9",
         "@colyseus/ws-transport": "0.18.4",
+        "@udg/config": "workspace:*",
         "@udg/protocol": "workspace:*",
         "@types/debug": "4.1.12",
         "@types/express": "5.0.4",
@@ -211,6 +212,16 @@
       "licenceSource": "node_modules/@udg/checks/package.json",
       "importedBy": [
         "."
+      ]
+    },
+    {
+      "name": "@udg/config",
+      "declared": "workspace:*",
+      "installedVersion": "0.0.0",
+      "licence": "UNLICENSED",
+      "licenceSource": "node_modules/@udg/config/package.json",
+      "importedBy": [
+        "apps/server"
       ]
     },
     {
