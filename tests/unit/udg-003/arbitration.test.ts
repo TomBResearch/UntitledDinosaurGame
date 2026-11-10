@@ -47,7 +47,7 @@ const snapshot = (harness: ReturnType<typeof build>) => {
     continuous: view.continuous.map((arrival) => arrival.ordinal),
     discrete: view.discrete.map((arrival) => arrival.ordinal),
     rows: harness.rows().length,
-    journalLength: harness.core.journalRows.length,
+    streamedRows: harness.core.retention().streamedRows,
   };
 };
 
@@ -205,10 +205,11 @@ describe('arbitration order (P03 §3 A, AC-10)', () => {
       'direct:3',
       'cancel:3',
     ]);
-    // Asking is not doing: the queues, watermark, latch and journal are exactly as they were.
+    // Asking is not doing: the queues, watermark, latch, journal and retained state are exactly as they
+    // were after the first ask - which is only a real assertion because each side is read twice, once per ask.
     expect(afterSecond).toEqual(afterFirst);
-    expect(afterFirst.journalLength).toBe(afterFirst.journalLength);
-    expect(afterFirst.rows).toBe(afterFirst.rows);
+    expect(afterSecond.rows).toBe(afterFirst.rows);
+    expect(afterSecond.streamedRows).toBe(afterFirst.streamedRows);
   });
 });
 

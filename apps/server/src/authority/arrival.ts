@@ -171,6 +171,19 @@ export interface BuildArrivalInput {
   readonly entityId: EntityId;
   readonly raw: unknown;
   readonly receivedAtMs: number;
+  /**
+   * The field-by-field rendering to record instead of deriving one from `raw` (replay only).
+   *
+   * JSON cannot carry an object, an array or a bigint, so a message that arrived with one of those is
+   * journalled as an `invalid` field descriptor. Reconstructing a payload from that descriptor and rendering
+   * it again would describe the field differently the second time - the artefact would say "object" on the
+   * first run and "string" on the replay - and the replay would no longer reproduce the record it replays.
+   *
+   * Only the replay path supplies this, from the record it was handed; no client message can, because the
+   * transport adapter calls `ingest` with the payload alone. A tampered artefact can say anything about its
+   * own fields, which is no more than a tampered artefact can already say about its payload.
+   */
+  readonly rendered?: Readonly<Record<string, RenderedValue>>;
 }
 
 /** Copy a decoded message into the frozen record the queues and the journal hold. */
@@ -180,7 +193,11 @@ export const buildArrival = (input: BuildArrivalInput): ArrivalRecord => {
     typeof input.raw === 'object' && input.raw !== null && !Array.isArray(input.raw)
       ? { ...(input.raw as Record<string, unknown>) }
       : { value: input.raw };
-  const { rendered, malformed } = renderPayload(source);
+  const derived = renderPayload(source);
+  const rendered = input.rendered === undefined ? derived.rendered : Object.freeze({ ...input.rendered });
+  const malformed = input.rendered === undefined
+    ? derived.malformed
+    : Object.freeze(Object.keys(input.rendered).filter((key) => input.rendered?.[key]?.kind === 'invalid'));
   return Object.freeze({
     ordinal: input.ordinal,
     entityId: input.entityId,

@@ -15,6 +15,7 @@ import { FixedStepClock } from '../../../apps/server/src/authority/clock.js';
 import type { AuthorityCore, RouteCompletion, TickOutcome } from '../../../apps/server/src/authority/step.js';
 import { AuthorityCore as AuthorityCoreClass } from '../../../apps/server/src/authority/step.js';
 import { toReplayInputs } from '../../../apps/server/src/authority/journal.js';
+import { JournalCollector } from './journal-collector.js';
 import type { ReplayInputs, TickChainRecord } from '../../../apps/server/src/authority/journal.js';
 import { replayFromInputs, withDigestsBlankedForReplay } from './replay-helpers.js';
 import type { ReplayOutcome } from './replay-helpers.js';
@@ -39,6 +40,11 @@ export const CONFIG_WITH_BOUNDS: Readonly<ServerConfig> = withConfigOverrides(DE
 export interface HarnessOptions {
   readonly config?: Readonly<ServerConfig>;
   readonly tickOrigin?: number;
+  /**
+   * Where the injected clock starts. A scenario that cares about the terminal-request cache window sets this,
+   * because the prologue records the reading the run began on and a replay must restore from the same place.
+   */
+  readonly startMs?: number;
   readonly runId?: string;
   readonly routeCompletions?: () => readonly RouteCompletion[];
   readonly startArmed?: boolean;
@@ -76,7 +82,7 @@ export const tryHarness = (options: HarnessOptions = {}): HarnessResult => {
 export const createHarness = (
   options: HarnessOptions = {},
 ): Harness | { readonly failure: string } => {
-  const time = new VirtualTime(0);
+  const time = new VirtualTime(options.startMs ?? 0);
   const scheduler = new VirtualScheduler(time);
   const config = options.config ?? CONFIG_WITH_BOUNDS;
   const tickOrigin = options.tickOrigin ?? 0;
@@ -86,12 +92,16 @@ export const createHarness = (
 
   const stepper = new ReferenceStepper(config.movement.speed);
   const completions = options.routeCompletions;
+  // The core retains no journal, so the harness injects the collector it reads back. Journal growth in a
+  // test is therefore a harness decision, never a property of the authority under test.
+  const journal = new JournalCollector();
   const core = AuthorityCoreClass.build({
     config,
     stepper,
     time,
     clock,
     runId: options.runId ?? 'udg-003-phase-1-run',
+    sink: journal,
     regionProvenance: 'test-only-synthetic',
     ...(completions === undefined ? {} : { routeCompletions: completions }),
   });
@@ -113,18 +123,18 @@ export const createHarness = (
     },
     stop: () => clock.stop(),
     replay: (runId = `${options.runId ?? 'udg-003-phase-1-run'}-replay`) =>
-      replayFrom(harness, core.prologue(), toReplayInputs(core.journalRows, core.chain), runId, completions),
+      replayFrom(harness, core.prologue(), toReplayInputs(journal.rows(), journal.chain()), runId, completions),
     replayWithoutDigests: (runId = `${options.runId ?? 'udg-003-phase-1-run'}-stripped-replay`) =>
       replayFrom(
         harness,
         core.prologue(),
-        withDigestsBlankedForReplay(core.journalRows, core.chain),
+        withDigestsBlankedForReplay(journal.rows(), journal.chain()),
         runId,
         completions,
       ),
-    replayInputs: () => toReplayInputs(core.journalRows, core.chain),
-    rows: () => core.journalRows,
-    chain: () => core.chain,
+    replayInputs: () => toReplayInputs(journal.rows(), journal.chain()),
+    rows: () => journal.rows(),
+    chain: () => journal.chain(),
   };
   if (options.startArmed === true) harness.start();
   return harness;
@@ -137,23 +147,16 @@ const replayFrom = (
   runId: string,
   completions: (() => readonly RouteCompletion[]) | undefined,
 ): ReplayOutcome => {
-  const time = new VirtualTime(0);
-  const scheduler = new VirtualScheduler(time);
-  const clock = FixedStepClock.create({
-    network: original.config.network,
-    scheduler,
-    time,
-    tickOrigin: prologue.tickOrigin,
-  });
-  if (!('dtSeconds' in clock)) return { ok: false, reason: 'replay-clock-not-derivable', detail: clock.error };
+  // The replay's clock is not supplied here: `replayRun` rebuilds it from the readings the original
+  // recorded. This scheduler exists only because the clock port demands one; replay never waits on it.
+  const scheduler = new VirtualScheduler(new VirtualTime(0));
   const stepper = new ReferenceStepper(original.config.movement.speed);
   return replayFromInputs({
     prologue,
     inputs,
     config: original.config,
     stepper,
-    time,
-    clock,
+    scheduler,
     runId,
     ...(completions === undefined ? {} : { routeCompletions: completions }),
   });

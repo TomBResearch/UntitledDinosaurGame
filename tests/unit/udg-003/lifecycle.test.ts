@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { SPAWN, createHarness } from '../../support/authority/harness.js';
 import type { Harness } from '../../support/authority/harness.js';
 import { cancel, frame } from '../../support/authority/payloads.js';
-import { advanceWatermark, eventRows, observationRows, stepOne } from '../../support/authority/scenarios.js';
+import { advanceWatermark, eventRows, observationRows, stateRows, stepOne } from '../../support/authority/scenarios.js';
 
 let runCounter = 0;
 const build = (runId: string): Harness => {
@@ -92,16 +92,26 @@ describe('leave and expiry (AC-3a, P03-c L)', () => {
     // Not stepped: a disconnected entity receives no movement step at all.
     expect(outcome.entities[0]?.stepped).toBe(false);
     expect(harness.stepper.calls.length).toBe(calls);
-    // Its state is preserved and still journalled, rather than being reset or invented.
-    expect(harness.core.view('e1')?.state.locomotion.kinematic.position).toEqual(parked);
-    expect(harness.core.view('e1')?.continuousDepth).toBe(0);
-    expect(harness.core.view('e1')?.discreteDepth).toBe(0);
-    expect(harness.core.reconciliation('e1').balanced).toBe(true);
+    // The final canonical state is journalled rather than reset or invented - and the journal, not the
+    // core, is where it lives. Reviewer correction 3: a departed entity's bookkeeping is released once its
+    // evidence exists, so `view` reports nothing while the state row still names the parked position.
+    const lastState = stateRows(harness.rows()).filter((row) => row.entityId === 'e1').at(-1);
+    expect(lastState?.state.locomotion.kinematic.position).toEqual(parked);
+    expect(lastState?.state.connected).toBe(false);
+    expect(harness.core.view('e1')).toBeUndefined();
+    expect(harness.core.retention().entities).toBe(0);
+    // Releasing the bookkeeping must not lose the arithmetic: the entity is reported as no longer known,
+    // and the run's totals are in `stats()`, not in a per-entity map the core would have to keep forever.
+    const released = harness.core.reconciliation('e1');
+    expect(released.known).toBe(false);
+    expect(released.balanced).toBe(true);
+    expect(harness.core.stats().releasedEntities).toBe(1);
   });
 
   it('accepts no movement source after a leave', () => {
     const harness = joined('udg-003-leave-refuses');
     harness.core.leave('e1');
+    const calls = harness.stepper.calls.length;
     harness.step();
     for (const payload of [frame(1, 3, 1, 0), cancel('c1', 1, 3)]) {
       const outcome = harness.core.ingest('e1', payload);
@@ -112,9 +122,11 @@ describe('leave and expiry (AC-3a, P03-c L)', () => {
       }
     }
     const after = harness.step();
-    expect(after.entities[0]?.consumed).toBeNull();
-    expect(after.entities[0]?.stepped).toBe(false);
-    expect(harness.core.view('e1')?.watermark).toBe(0);
+    // The entity is gone from the core, so the tick reports no entity work at all: no consumption, no step.
+    expect(after.entities).toEqual([]);
+    const refusedAfterLeave = observationRows(harness.rows()).filter((row) => row.disposition === 'refused:epoch');
+    expect(refusedAfterLeave).toHaveLength(2);
+    expect(harness.stepper.calls.length).toBe(calls);
   });
 
   it('expiry departs the entity and keeps its final state for the journal', () => {
@@ -126,10 +138,14 @@ describe('leave and expiry (AC-3a, P03-c L)', () => {
     expect(outcome.entities[0]?.lifecycle).toBe('departed');
     expect(outcome.entities[0]?.events).toEqual(['expiry']);
     expect(outcome.entities[0]?.stepped).toBe(false);
-    expect(harness.core.view('e1')?.state.locomotion.kinematic.position).toEqual(parked);
+    const lastState = stateRows(harness.rows()).filter((row) => row.entityId === 'e1').at(-1);
+    expect(lastState?.state.locomotion.kinematic.position).toEqual(parked);
+    expect(lastState?.state.connected).toBe(false);
+    expect(harness.core.view('e1')).toBeUndefined();
     // A departed entity is never stepped again, whatever arrives afterwards.
     const calls = harness.stepper.calls.length;
-    harness.core.ingest('e1', frame(1, 9, 1, 0));
+    const refusal = harness.core.ingest('e1', frame(1, 9, 1, 0));
+    expect(refusal.decision.ok).toBe(false);
     harness.step();
     expect(harness.stepper.calls.length).toBe(calls);
   });

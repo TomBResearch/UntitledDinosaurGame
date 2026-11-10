@@ -17,6 +17,8 @@ import type { PlayerSimulationState, RejectionCode, ServerTick } from '@udg/prot
 
 import type {
   ArrivalRecord,
+  ArrivalOrigin,
+  ControlKind,
   Disposition,
   EventRow,
   IntentionRow,
@@ -34,6 +36,28 @@ import type {
 /** The chain starts from a fixed, content-free value so two runs with the same inputs agree. */
 export const GENESIS_HASH = canonicalHash({ genesis: 'udg-003-phase-1-authority' });
 
+/**
+ * Where a journal and its tick chain go (reviewer correction 3, Phase 1).
+ *
+ * The authority must not be the thing that remembers its own history: a long run with repeated joins and
+ * expiries would otherwise grow an array of every row ever written, which is exactly the "state that grows
+ * with the run" P03-g forbids inside the step. The core therefore hands each row to an injected sink the
+ * moment it exists and retains only the chain tip.
+ *
+ * A sink that keeps everything in an array is a legitimate *consumer* - the test harness and the evidence
+ * capture both are one - but it is a consumer, and its growth is its own business, not the authority's.
+ */
+export interface JournalSink {
+  recordRow(row: JournalRow): void;
+  recordTickChain(record: TickChainRecord): void;
+}
+
+/** A sink that discards everything: the shape a caller uses when it wants cadence, not evidence. */
+export const discardingSink = (): JournalSink => ({
+  recordRow: () => undefined,
+  recordTickChain: () => undefined,
+});
+
 /** The per-tick chain record. It is a comparison output, so it is deliberately not a `JournalRow`. */
 export interface TickChainRecord {
   readonly type: 'tickChain';
@@ -43,16 +67,33 @@ export interface TickChainRecord {
   readonly transitionHash: string;
   readonly stateHash: string;
   readonly hash: string;
+  /**
+   * The `TimeSource` reading the tick body ran under (reviewer correction 2).
+   *
+   * It is carried here rather than in the `tick` rows because the chain has exactly one entry per executed
+   * tick while `tick` rows exist only for entities that consumed something. It is deliberately **not** mixed
+   * into `hash`: the chain hashes state and decisions, and two runs that decided identically under different
+   * clock readings must still agree.
+   */
+  readonly atMs: number;
 }
 
 export interface ReplayObservation {
   readonly ordinal: number;
   readonly entityId: string;
   readonly kind: ObservationKind;
-  readonly control: ArrivalRecord['control'];
+  /**
+   * The lifecycle operation to replay, and nothing else can supply it: `null` unless the row says it came
+   * from the server. A client payload that carries a `control` field is fed back as a client message and is
+   * refused again for the same reason (reviewer correction 1).
+   */
+  readonly control: ControlKind | null;
+  readonly origin: ArrivalOrigin;
   readonly declaredEpoch: number | null;
   readonly declaredGeneration: number | null;
   readonly raw: ArrivalRecord['raw'];
+  /** The reading the original recorded this arrival at, restored before it is fed again. */
+  readonly atMs: number;
 }
 
 export interface ReplayInputs {
@@ -109,6 +150,10 @@ export const toReplayInputs = (
           epochBefore: row.epochBefore,
           epochAfter: row.epochAfter,
           eligibleTick: row.eligibleTick,
+          origin: row.origin,
+          atMs: row.atMs,
+          initialState: row.initialState,
+          initialStateHash: row.initialStateHash,
         });
         break;
       }
@@ -121,10 +166,14 @@ export const toReplayInputs = (
           ordinal: row.arrivalOrdinal,
           entityId: row.entityId,
           kind: row.kind,
-          control: controlFromRaw(row),
+          // Trusted provenance only. `raw` is a payload, and a payload never decides that a message is a
+          // lifecycle operation - not here, not on replay, not for a message the admission gate refused.
+          control: row.origin === 'server-lifecycle' ? row.control : null,
+          origin: row.origin,
           declaredEpoch: row.epoch,
           declaredGeneration: row.generation,
           raw: row.raw,
+          atMs: row.atMs,
         });
         break;
       }
@@ -132,20 +181,11 @@ export const toReplayInputs = (
         break;
     }
   }
-  for (const record of chain) ticks.push({ tick: record.tick, cutoffOrdinal: record.ordinal });
+  for (const record of chain) ticks.push({ tick: record.tick, cutoffOrdinal: record.ordinal, atMs: record.atMs });
   observations.sort((a, b) => a.ordinal - b.ordinal);
   events.sort((a, b) => a.arrivalOrdinal - b.arrivalOrdinal);
   ticks.sort((a, b) => a.tick - b.tick);
   return { events, observations, ticks };
-};
-
-const controlFromRaw = (row: ObservationRow): ArrivalRecord['control'] => {
-  const control = row.raw['control'];
-  if (control === undefined || control.kind !== 'value') return null;
-  const value = control.value;
-  return value === 'join' || value === 'leave' || value === 'expiry' || value === 'epochChange'
-    ? value
-    : null;
 };
 
 /**
@@ -165,6 +205,13 @@ export const journalCompletenessIssues = (rows: readonly JournalRow[]): readonly
   if (!hasActivity) return issues;
   for (const required of ['observation', 'intention', 'tick', 'state', 'meta'] as const) {
     if (!present.has(required)) issues.push(`P03-g row type "${required}" is missing from the journal`);
+  }
+  // Every join names the canonical state it started from. The prologue cannot do that for an entity that
+  // arrived later, and the core does not remember departed entities to try (reviewer correction 3).
+  for (const row of rows) {
+    if (row.type === 'event' && row.kind === 'join' && row.initialState === null) {
+      issues.push(`join event ${String(row.arrivalOrdinal)} does not carry the initial canonical state`);
+    }
   }
   return issues;
 };
@@ -201,11 +248,36 @@ export interface ObservationRowInput {
   readonly payloadHash: string | null;
 }
 
-/** The run's journal: rows, the tick hash chain and the hashing helpers. */
+/**
+ * Cross-check the provenance a journal claims (reviewer correction 1).
+ *
+ * The rule is one-directional on purpose: a lifecycle operation needs server provenance, and server
+ * provenance only ever accompanies a lifecycle observation kind. A row that claims to be a server event while
+ * carrying a client payload shape - the shape a forged or corrupted artefact would have - is reported, and
+ * `replayRun` refuses to run a journal that contains one.
+ */
+export const provenanceIssues = (rows: readonly JournalRow[]): readonly string[] => {
+  const issues: string[] = [];
+  for (const row of rows) {
+    if (row.type !== 'observation') continue;
+    if (row.origin === 'client-payload' && row.control !== null) {
+      issues.push(`observation ${String(row.arrivalOrdinal)} carries a control value without server provenance`);
+    }
+    if (row.origin === 'server-lifecycle' && row.kind !== 'control') {
+      issues.push(`observation ${String(row.arrivalOrdinal)} claims server provenance but is not a control observation`);
+    }
+  }
+  return issues;
+};
+
+/** The run's journal: rows and the tick hash chain, both handed straight to the injected sink. */
 export class Journal {
-  readonly rows: JournalRow[] = [];
-  readonly chain: TickChainRecord[] = [];
+  readonly #sink: JournalSink;
   #prevHash: string = GENESIS_HASH;
+
+  constructor(sink: JournalSink) {
+    this.#sink = sink;
+  }
 
   digest(value: unknown): string {
     return canonicalHash(value);
@@ -223,8 +295,9 @@ export class Journal {
     return regionHash(config);
   }
 
+  /** Hand a row to the sink. The journal retains nothing: the chain tip is the only running state. */
   push(row: JournalRow): JournalRow {
-    this.rows.push(row);
+    this.#sink.recordRow(row);
     return row;
   }
 
@@ -250,6 +323,10 @@ export class Journal {
       // There is no transport in Phase 1, so there is no SDK frame identity to record. The limitation
       // is stated rather than filled in with a counter (P03-f, D-7).
       sdkFrameIdentity: null,
+      // Provenance comes from how the arrival was created, never from what it contains.
+      origin: arrival.control === null ? 'client-payload' : 'server-lifecycle',
+      control: arrival.control,
+      atMs: arrival.receivedAtMs,
     };
   }
 
@@ -282,7 +359,7 @@ export class Journal {
   }
 
   /** `hash = canonical(prevHash ∥ transition ∥ state)` over the tick's rows (P03-g). */
-  chainTick(tick: ServerTick, ordinal: number, rows: readonly JournalRow[]): TickChainRecord {
+  chainTick(tick: ServerTick, ordinal: number, rows: readonly JournalRow[], atMs: number): TickChainRecord {
     const transition = rows.filter((row) => row.type !== 'state');
     const states = rows.filter((row) => row.type === 'state');
     const transitionHash = canonicalHash(transition);
@@ -296,8 +373,9 @@ export class Journal {
       transitionHash,
       stateHash,
       hash,
+      atMs,
     };
-    this.chain.push(record);
+    this.#sink.recordTickChain(record);
     this.#prevHash = hash;
     return record;
   }
@@ -307,6 +385,58 @@ export class Journal {
     return this.#prevHash;
   }
 }
+
+/**
+ * Compare two journals row by row, ignoring nothing: the suites assert equality, not similarity (AC-3d).
+ *
+ * These live with the journal rather than with the replay because they compare *outputs*. A replay never
+ * reads them; a reviewer does.
+ */
+export interface JournalDifference {
+  readonly index: number;
+  readonly original: JournalRow | null;
+  readonly replayed: JournalRow | null;
+}
+
+export const firstJournalDifference = (
+  original: readonly JournalRow[],
+  replayed: readonly JournalRow[],
+): JournalDifference | null => {
+  const length = Math.max(original.length, replayed.length);
+  for (let index = 0; index < length; index += 1) {
+    const a = original[index];
+    const b = replayed[index];
+    if (JSON.stringify(a ?? null) === JSON.stringify(b ?? null)) continue;
+    return { index, original: a ?? null, replayed: b ?? null };
+  }
+  return null;
+};
+
+/** Compare the recorded state digests against the replayed ones (AC-3d). */
+export const firstStateDigestDifference = (
+  original: readonly JournalRow[],
+  replayed: readonly JournalRow[],
+): { readonly tick: number; readonly entityId: string; readonly original: string; readonly replayed: string } | null => {
+  const key = (row: JournalRow): string | null =>
+    row.type === 'state' ? `${String(row.tick)}:${row.entityId}` : null;
+  const before = new Map<string, { tick: number; entityId: string; hash: string }>();
+  for (const row of original) {
+    const id = key(row);
+    if (id !== null && row.type === 'state') before.set(id, { tick: row.tick, entityId: row.entityId, hash: row.stateHash });
+  }
+  for (const row of replayed) {
+    const id = key(row);
+    if (id === null || row.type !== 'state') continue;
+    const expected = before.get(id);
+    if (expected === undefined) {
+      return { tick: row.tick, entityId: row.entityId, original: '<missing>', replayed: row.stateHash };
+    }
+    if (expected.hash !== row.stateHash) {
+      return { tick: row.tick, entityId: row.entityId, original: expected.hash, replayed: row.stateHash };
+    }
+  }
+  return null;
+};
 
 const directIntentOf = (arrival: ArrivalRecord): boolean | null => {
   const rendered = arrival.raw['directIntent'];

@@ -16,6 +16,7 @@ import { FixedStepClock } from '../../../apps/server/src/authority/clock.js';
 import { SPAWN, createHarness } from '../../support/authority/harness.js';
 import type { Harness } from '../../support/authority/harness.js';
 import { frame } from '../../support/authority/payloads.js';
+import { observationRows } from '../../support/authority/scenarios.js';
 import { VirtualScheduler, VirtualTime } from '../../support/authority/virtual-scheduler.js';
 
 let runCounter = 0;
@@ -200,9 +201,16 @@ describe('the movement step (AC-3, AC-2)', () => {
     const outcome = harness.step();
     expect(harness.stepper.calls.map((call) => call.entityId)).toEqual(['b']);
     const outcomes = new Map(outcome.entities.map((entry) => [entry.entityId, entry]));
-    expect(outcomes.get('a')?.stepped).toBe(false);
     expect(outcomes.get('b')?.stepped).toBe(true);
-    expect(outcomes.get('a')?.consumed).toBeNull();
+    // 'a' left on the previous tick, so its bookkeeping has been released and the tick reports no entity
+    // work for it at all - no step, no consumption, nothing queued (reviewer correction 3).
+    expect(outcomes.has('a')).toBe(false);
+    expect(harness.core.view('a')).toBeUndefined();
+    // And the message addressed to it is refused, not silently dropped on the floor.
+    const refused = observationRows(harness.rows()).filter(
+      (row) => row.entityId === 'a' && row.disposition === 'refused:epoch',
+    );
+    expect(refused.length).toBeGreaterThan(0);
   });
 
   it('reports the displacement it resolved, so AC-2 is measured and not assumed', () => {

@@ -1008,7 +1008,7 @@ const scheduler = {
   set: (callback, delayMs) => {
     handle += 1;
     tasks.set(handle, { at: nowMs + delayMs, callback });
-    return { scheduledBy: 'contract-suite', id: handle };
+    return { scheduledBy: 'udg-authority-clock', id: handle };
   },
   clear: (given) => {
     tasks.delete(given.id);
@@ -1028,13 +1028,27 @@ const advance = (ms) => {
   nowMs = target;
 };
 
+// The sink the caller injects. The emitted core keeps no journal of its own, so without this there would be
+// no evidence at all to compare (reviewer correction 3).
+const collector = (name) => {
+  const rows = [];
+  const chain = [];
+  return {
+    name,
+    rows,
+    chain,
+    recordRow: (row) => rows.push(row),
+    recordTickChain: (record) => chain.push(record),
+  };
+};
+
 const speed = config.movement.speed;
 let stepCalls = 0;
 const stepper = {
   step: (request) => {
     stepCalls += 1;
-    // The flat reference relation only: this script proves the emitted artefact runs and counts, not
-    // that any locomotion model exists (UDG-005 owns locomotion, UDG-006 owns collision).
+    // The flat reference relation only: this script proves the emitted artefact runs and counts, not that
+    // any locomotion model exists (UDG-005 owns locomotion, UDG-006 owns collision).
     const dx = request.input.moveX * speed * request.dtSeconds;
     const dz = request.input.moveZ * speed * request.dtSeconds;
     const position = request.state.kinematic.position;
@@ -1051,23 +1065,20 @@ const stepper = {
   },
 };
 
-const clock = clockModule.FixedStepClock.create({ network: config.network, scheduler, time, tickOrigin: 0 });
-const core = stepModule.AuthorityCore.build({
-  config,
-  stepper,
-  time,
-  clock,
-  runId: 'udg-003-emitted-run',
-  regionProvenance: 'test-only-synthetic',
-});
+const buildCore = (runId, sink) => {
+  const clock = clockModule.FixedStepClock.create({ network: config.network, scheduler, time, tickOrigin: 0 });
+  // Epoch 1: the core refuses to accept a lifecycle call at an epoch it has never issued, and an artefact
+  // that never joined anybody would demonstrate the refusal rather than the run.
+  return stepModule.AuthorityCore.build({ config, stepper, time, clock, runId, sink, sessionEpoch: 1 });
+};
 
-core.join('e1', 1, { x: 0, y: 0, z: 0 });
-clock.start(() => {
-  core.step();
-});
+const runSink = collector('original');
+const run = buildCore('udg-003-emitted-run', runSink);
+run.join('e1', 1, { x: 0, y: 0, z: 0 });
+// The compile-time absence of a journal getter is a runtime fact too: there is nothing to ask for.
+const exposesJournal = Object.prototype.hasOwnProperty.call(Object.getPrototypeOf(run), 'journalRows');
+const askedForJournal = run.journalRows;
 
-// The wire shape, exactly as the transport would deliver it: the core classifies on declared fields and
-// the adopted protocol validators decide validity.
 const frame = (sessionEpoch, generation, moveX, moveZ) => ({
   sessionEpoch,
   generation,
@@ -1085,16 +1096,27 @@ const keepalive = (sessionEpoch, generation) => ({
 
 const seen = [];
 const tick = (payloads) => {
-  for (const payload of payloads) core.ingest('e1', payload);
-  advance(config.network.tickRate === 0 ? 0 : 1000 / config.network.tickRate);
-  const entity = core.view('e1');
-  seen.push({ tick: core.tick, watermark: entity?.watermark ?? null, balanced: core.reconciliation('e1').balanced });
+  for (const payload of payloads) run.ingest('e1', payload);
+  // The core drives its own tick counter; the caller's clock is what the time basis is recorded from, so
+  // the virtual time moves by one tick period before the tick body runs.
+  advance(1000 / config.network.tickRate);
+  const outcome = run.step();
+  seen.push({ tick: outcome.tick, stopped: outcome.stopped === true });
 };
 
 // Generation 1 is a driven frame; 2 is a keepalive; 3 carries a discrete cancel that supersedes a queued
-// frame; a move request must be refused without ever becoming a candidate.
+// frame; a move request must be refused without ever becoming a candidate; and a client message carrying a
+// lifecycle-shaped field must be refused rather than obeyed (reviewer correction 1).
 tick([frame(1, 1, 1, 0)]);
 tick([frame(1, 2, 0, 1), keepalive(1, 2)]);
+const forged = run.ingest('e1', {
+  control: 'leave',
+  sessionEpoch: 1,
+  generation: 3,
+  directIntent: true,
+  moveX: 1,
+  moveZ: 0,
+});
 tick([
   frame(1, 3, 1, 1),
   { requestId: 'emit-cancel', sessionEpoch: 1, generation: 4 },
@@ -1102,27 +1124,18 @@ tick([
 ]);
 tick([]);
 
-// Counted before the replay shares the stepper: this is the original run's step count.
+// Counted before the replay shares the stepper and the time source.
 const originalSteps = stepCalls;
-const originalTip = core.chainTip;
-const originalRows = core.journalRows.length;
+const originalTip = run.chainTip;
 
-const rows = core.journalRows;
-const codes = rows
-  .filter((row) => row.type === 'observation' && row.requestId === 'emit-move')
-  .map((row) => row.reason ?? row.disposition);
-const moveCandidates = rows
-  .filter((row) => row.type === 'intention')
-  .flatMap((row) => row.candidates ?? [])
-  .filter((candidate) => candidate.kind === 'path');
-
+const replaySink = collector('replay');
 const replayed = replayModule.replayRun({
-  prologue: core.prologue(),
-  inputs: journalModule.toReplayInputs(rows, core.chain),
+  prologue: run.prologue(),
+  inputs: journalModule.toReplayInputs(runSink.rows, runSink.chain),
   config,
   stepper,
-  time,
-  clock: clockModule.FixedStepClock.create({ network: config.network, scheduler, time, tickOrigin: 0 }),
+  scheduler,
+  sink: replaySink,
   runId: 'udg-003-emitted-replay',
 });
 
@@ -1130,22 +1143,48 @@ process.stdout.write(
   JSON.stringify({
     ok: true,
     tickCount: seen.length,
-    watermark: core.view('e1')?.watermark ?? null,
-    latchedKind: core.view('e1')?.latchedKind ?? null,
-    held: core.view('e1')?.heldDirectGeneration ?? null,
+    ticksRan: seen.filter((entry) => !entry.stopped).length,
+    watermark: run.view('e1')?.watermark ?? null,
+    latchedKind: run.view('e1')?.latchedKind ?? null,
+    held: run.view('e1')?.heldDirectGeneration ?? null,
     stepCalls: originalSteps,
-    moveRefusal: codes,
-    moveCandidates: moveCandidates.length,
-    routeFieldIsNull: core.view('e1')?.state.locomotion.route === null,
-    dispositionsBalanced: core.reconciliation('e1').balanced,
+    moveRefusal: runSink.rows
+      .filter((row) => row.type === 'observation' && row.requestId === 'emit-move')
+      .map((row) => row.reason ?? row.disposition),
+    moveCandidates: runSink.rows
+      .filter((row) => row.type === 'intention')
+      .flatMap((row) => row.candidates ?? [])
+      .filter((candidate) => candidate.kind === 'path').length,
+    routeFieldIsNull: run.view('e1')?.state.locomotion.route === null,
+    dispositionsBalanced: run.reconciliation('e1').balanced,
+    forged: {
+      refused: forged.decision.ok === false,
+      code: forged.decision.ok === false ? forged.decision.code : null,
+      origin: runSink.rows
+        .filter((row) => row.type === 'observation' && row.arrivalOrdinal === forged.arrival.ordinal)
+        .map((row) => row.origin),
+      control: runSink.rows
+        .filter((row) => row.type === 'observation' && row.arrivalOrdinal === forged.arrival.ordinal)
+        .map((row) => row.control),
+      events: runSink.rows.filter((row) => row.type === 'event').map((row) => row.kind),
+      stillConnected: run.view('e1')?.state.connected ?? null,
+    },
+    retained: { ...run.retention(), exposesJournal, askedForJournal: askedForJournal === undefined },
     replayOk: replayed.ok === true,
     originalTip,
     replayTip: replayed.ok === true ? replayed.core.chainTip : null,
-    rows: originalRows,
-    journalRowTypes: [...new Set(rows.map((row) => row.type))].sort(),
-    routeStatusRows: rows.filter((row) => row.type === 'routeStatus').length,
-    replayRows: replayed.ok === true ? replayed.rows.length : 0,
-    terminalCacheRecords: core.stats().cacheDepth,
+    rows: runSink.rows.length,
+    // Distinct arrival ordinals: an arrival that is journalled twice is still fed to the replay once.
+    arrivals: [...new Set(runSink.rows.filter((row) => row.type === 'observation').map((row) => row.arrivalOrdinal))]
+      .length,
+    replayRows: replayed.ok === true ? replaySink.rows.length : 0,
+    replayRowsWritten: replayed.ok === true ? replayed.rowsWritten : 0,
+    replayTime: replayed.ok === true
+      ? { restored: replayed.time.restoredReadings, refused: replayed.time.refusedRestorations }
+      : null,
+    journalRowTypes: [...new Set(runSink.rows.map((row) => row.type))].sort(),
+    routeStatusRows: runSink.rows.filter((row) => row.type === 'routeStatus').length,
+    terminalCacheRecords: run.stats().cacheDepth,
   }),
 );
 `;
@@ -1226,6 +1265,7 @@ describe('UDG-003 Phase 1 — the authority core exists and stays off the packag
     expect(run.status, `emitted run failed: ${run.stderr}`).toBe(0);
     const result = JSON.parse(run.stdout) as {
       tickCount: number;
+      ticksRan: number;
       watermark: number;
       latchedKind: string;
       held: number | null;
@@ -1238,13 +1278,34 @@ describe('UDG-003 Phase 1 — the authority core exists and stays off the packag
       originalTip: string;
       replayTip: string | null;
       rows: number;
+      arrivals: number;
       journalRowTypes: string[];
       routeStatusRows: number;
       replayRows: number;
+      replayRowsWritten: number;
+      replayTime: { restored: number; refused: number };
       terminalCacheRecords: number;
+      forged: {
+        refused: boolean;
+        code: string | null;
+        origin: string[];
+        control: (string | null)[];
+        events: string[];
+        stillConnected: boolean | null;
+      };
+      retained: Record<string, unknown> & {
+        entities: number;
+        tickRowBuffer: number;
+        reachableArrivals: number;
+        streamedRows: number;
+        streamedChainRecords: number;
+        exposesJournal: boolean;
+        askedForJournal: boolean;
+      };
     };
     // Three ticks of work and one idle tick; the last driven frame is superseded, the cancel wins.
     expect(result.tickCount).toBe(4);
+    expect(result.ticksRan).toBe(4);
     expect(result.watermark).toBe(4);
     expect(result.latchedKind).toBe('cancel');
     expect(result.held).toBeNull();
@@ -1265,6 +1326,37 @@ describe('UDG-003 Phase 1 — the authority core exists and stays off the packag
     // One record per request with a terminal disposition: the accepted cancel and the refused move.
     expect(result.terminalCacheRecords).toBe(2);
     expect(result.originalTip).toMatch(/^[0-9a-f]{64}$/);
+
+    // Correction 1, demonstrated on the shipped artefact rather than in source text: a client message whose
+    // payload says `control: 'leave'` is refused on its shape, is journalled as a client payload with no
+    // typed control, produces no lifecycle event, and leaves the entity connected.
+    expect(result.forged).toEqual({
+      refused: true,
+      code: 'INVALID_PAYLOAD',
+      origin: ['client-payload'],
+      control: [null],
+      events: ['join'],
+      stillConnected: true,
+    });
+
+    // Correction 3: the emitted core holds a working set and a chain tip, and hands its evidence to the sink
+    // the caller injected. There is no journal to ask it for, and nothing reachable from it grows with time.
+    expect(result.retained.exposesJournal).toBe(false);
+    expect(result.retained.askedForJournal).toBe(true);
+    expect(result.retained.entities).toBe(1);
+    expect(result.retained.tickRowBuffer).toBe(0);
+    expect(result.retained.reachableArrivals).toBe(0);
+    expect(result.retained.streamedRows).toBe(result.rows);
+    expect(result.retained.streamedChainRecords).toBe(result.tickCount);
+
+    // Correction 2: the replay restored the recorded clock readings rather than inventing its own, and wrote
+    // every row it decided through its own injected sink.
+    // One restored reading per arrival and per tick boundary, and none refused as non-monotonic.
+    expect(result.replayTime).toEqual({
+      restored: result.arrivals + result.retained.streamedChainRecords,
+      refused: 0,
+    });
+    expect(result.replayRowsWritten).toBe(result.replayRows);
   });
 });
 
@@ -1387,5 +1479,133 @@ describe('UDG-003 Phase 1 — what the authority source may not contain', () => 
     for (const phrase of ['RegionRoom', 'MovementAuthorityAdapter', 'unassigned', 'D-7']) {
       expect(record, phrase).toContain(phrase);
     }
+  });
+});
+
+describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a sentence', () => {
+  const evidenceSource = readFileSync(join(ROOT, 'tools', 'checks', 'src', 'evidence.ts'), 'utf8');
+  const vectorsSource = readFileSync(join(ROOT, 'tests', 'unit', 'udg-003', 'vectors.test.ts'), 'utf8');
+  const workflow = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+
+  const literalList = (text: string, declaration: string): string[] => {
+    const start = text.indexOf(declaration);
+    expect(start, declaration).toBeGreaterThan(-1);
+    const body = text.slice(start, text.indexOf('];', start));
+    return [...body.matchAll(/'([^']+)'/g)].map((match) => match[1] ?? '').filter((value) => value.includes('.'));
+  };
+
+  it('keeps the gate and the suite agreeing on the required vectors', () => {
+    const gate = literalList(evidenceSource, 'PHASE_1_VECTOR_FILES: readonly string[] = [');
+    const suite = literalList(vectorsSource, 'PHASE_1_VECTOR_NAMES: readonly string[] = [');
+    // The gate owns the requirement and the suite owns the production; if either list shrinks on its own, the
+    // manifest stops matching and CI refuses the run. This assertion is what makes that drift visible early.
+    expect(gate.length).toBeGreaterThanOrEqual(11);
+    expect(suite).toEqual(gate);
+  });
+
+  it('gives the UDG-003 capture plan a phase label and a scope note that says what it is not', () => {
+    const planStart = evidenceSource.indexOf("  'UDG-003': {\n    taskId: 'UDG-003',");
+    expect(planStart, 'the UDG-003 capture plan').toBeGreaterThan(-1);
+    const plan = evidenceSource.slice(planStart, evidenceSource.indexOf('\n  },\n};', planStart));
+    expect(plan).toContain("phase: { label: PHASE_1_LABEL, note: PHASE_1_SCOPE_NOTE }");
+    expect(plan).toContain("manifestArtefacts: ['vectors/vectors-manifest.json']");
+    expect(plan).toContain('manifestRequiredFiles: [...PHASE_1_VECTOR_FILES]');
+    expect(plan).toContain('...PHASE_1_VECTOR_FILES.map((name) => `vectors/${name}`)');
+    // The plan must gate its own artefacts during capture, not only at review time.
+    expect(plan).toContain("'phase-1-vectors-verify'");
+    expect(evidenceSource).toContain("export const PHASE_1_LABEL = 'phase-1'");
+    for (const phrase of ['Phase 1', 'not a third-party stack compatibility claim', 'Gate A, B or C pass']) {
+      expect(evidenceSource, phrase).toContain(phrase);
+    }
+  });
+
+  it('labels the manifest with the phase it covers and the commit it came from', () => {
+    const writeStart = vectorsSource.indexOf('const writeManifest = (');
+    expect(writeStart, 'writeManifest').toBeGreaterThan(-1);
+    const body = vectorsSource.slice(writeStart, vectorsSource.indexOf('\n};', writeStart));
+    expect(body).toContain("taskId: 'UDG-003'");
+    expect(body).toContain("phase: 'phase-1'");
+    expect(body).toContain('scopeNote: PHASE_1_SCOPE_NOTE');
+    expect(body).toContain("git(['rev-parse', 'HEAD'])");
+    expect(body).toContain("git(['status', '--porcelain'])");
+    // The digests are taken from the bytes on disk, so the manifest describes rather than asserts.
+    expect(body).toContain("createHash('sha256')");
+  });
+
+  it('runs the phase gate on CI and publishes the bytes it gated', () => {
+    // The suite writes into the bundle directory the gate reads, then the gate runs, then the upload publishes.
+    expect(workflow).toContain('UDG_VECTORS_OUT: artifacts/udg-003-phase-1');
+    expect(workflow).toContain('node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-1');
+    expect(workflow).toContain('pnpm exec vitest run tests/unit/udg-003/vectors.test.ts');
+    expect(workflow).toContain('artifacts/udg-003-phase-1');
+    // The capture loop is driven by the plan list, so the UDG-003 bundle is captured and verified without a
+    // second source of truth naming the task.
+    expect(workflow).toContain('node tools/checks/dist/evidence.js plans');
+    // No step may swallow a failure, and the phase step is not an exception to that rule. The prohibition is
+    // also written as prose in the workflow, so the assertion is about the key, not the word.
+    expect(/^[ \t]*continue-on-error[ \t]*:/m.test(workflow)).toBe(false);
+    const phaseStep = workflow.slice(
+      workflow.indexOf('Record and gate the UDG-003 Phase 1 vectors'),
+      workflow.indexOf('- name: Verify the contract checksum manifest is in sync'),
+    );
+    expect(phaseStep).toContain('set -euo pipefail');
+    expect(phaseStep).toContain('!cancelled()');
+  });
+
+  it('refuses a manifest whose bytes do not match what it names, using the built gate', () => {
+    // Exercises the gate exactly as CI does. The vectors are produced into a scratch directory by this test
+    // rather than read from wherever a previous suite happened to leave them: the order vitest picks files
+    // in is not an ordering guarantee, and a gate test that depended on it would fail at random.
+    const scratch = join(ROOT, 'artifacts', '.local', 'udg-003-vector-gate');
+    const runVectors = (): void => {
+      const produced = spawnSync('pnpm', ['exec', 'vitest', 'run', 'tests/unit/udg-003/vectors.test.ts'], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, UDG_VECTORS_OUT: scratch },
+      });
+      expect(produced.status, `${produced.stdout}${produced.stderr}`).toBe(0);
+    };
+    spawnSync('rm', ['-rf', scratch], { cwd: ROOT });
+    mkdirSync(scratch, { recursive: true });
+    runVectors();
+
+    const built = spawnSync('pnpm', ['--filter', '@udg/checks', 'build'], { cwd: ROOT, encoding: 'utf8' });
+    expect(built.status, built.stderr).toBe(0);
+    const gate = ['tools/checks/dist/evidence.js', 'vectors', '--dir', scratch, '--allow-dirty'];
+
+    const manifest = JSON.parse(readFileSync(join(scratch, 'vectors-manifest.json'), 'utf8')) as {
+      taskId: string;
+      phase: string;
+      scopeNote: string;
+      implementationSha: string;
+      files: { name: string; bytes: number; sha256: string }[];
+    };
+    expect(manifest.taskId).toBe('UDG-003');
+    expect(manifest.phase).toBe('phase-1');
+    expect(manifest.scopeNote).toContain('Phase 1');
+    expect(manifest.implementationSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(manifest.files.length).toBeGreaterThanOrEqual(11);
+
+    const clean = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
+    expect(clean.stderr, clean.stdout).toBe('');
+    expect(clean.status).toBe(0);
+
+    // A vector that stopped being produced is a missing requirement, not an absent optional extra.
+    spawnSync('rm', [join(scratch, 'pa1-c1-provenance.json')], { cwd: ROOT });
+    const missing = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain('VECTORS-FILE-MISSING');
+
+    // Producing the byte again brings the gate back to zero, so the failure named the real cause.
+    runVectors();
+    expect(spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' }).status).toBe(0);
+
+    // And a vector whose bytes moved after the manifest was written cannot stand in for the same evidence.
+    const tampered = readFileSync(join(scratch, 'pa1-c2-time-basis.json'), 'utf8').replace('"ttlMs":', '"ttlZ":');
+    writeFileSync(join(scratch, 'pa1-c2-time-basis.json'), tampered, 'utf8');
+    const altered = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
+    expect(altered.status).toBe(1);
+    expect(altered.stderr).toContain('VECTORS-FILE-HASH');
+    spawnSync('rm', ['-rf', scratch], { cwd: ROOT });
   });
 });

@@ -43,8 +43,8 @@ import { BatchRegistry } from './bounded.js';
 import { planCommit, type CommitPlan } from './commit.js';
 import { EntityAuthority, initialState } from './entity.js';
 import type { EntityView } from './entity.js';
-import { Journal } from './journal.js';
-import type { TickChainRecord } from './journal.js';
+import { Journal, type JournalSink } from './journal.js';
+import { TIME_BASIS } from './types.js';
 import {
   arbitrate,
   screenContinuous,
@@ -78,6 +78,7 @@ import type {
   JournalRow,
   LifecycleStatus,
   PurgedObservation,
+  RenderedValue,
   Stage,
   TerminalResult,
 } from './types.js';
@@ -174,6 +175,32 @@ export interface Reconciliation {
   readonly stillQueued: number;
   /** AC-17, counting what is still queued as `queued`: every observed arrival is accounted once. */
   readonly balanced: boolean;
+  /**
+   * Whether the core still holds bookkeeping for this entity. `false` means it was released when the
+   * association ended, so the numbers above are the released remainder (zero) and the durable per-arrival
+   * record is in the journal the sink received (reviewer correction 3).
+   */
+  readonly known: boolean;
+}
+
+/** What the core is holding, measured from live structures (reviewer correction 3). */
+export interface RetainedState {
+  readonly entities: number;
+  readonly queuedArrivals: number;
+  readonly cacheRecords: number;
+  readonly controlQueue: number;
+  readonly pendingReleases: number;
+  /** Rows of the tick in flight. Bounded by entities x declared queue capacities; zero between ticks. */
+  readonly tickRowBuffer: number;
+  readonly aliasRecords: number;
+  readonly releasedEntities: number;
+  readonly releasedObservedArrivals: number;
+  readonly releasedCacheRecords: number;
+  /** Totals handed to the sink. These grow with the run; that growth belongs to the consumer, not the core. */
+  readonly streamedRows: number;
+  readonly streamedChainRecords: number;
+  /** The quantity a long run must keep flat: arrivals reachable from the core's own state. */
+  readonly reachableArrivals: number;
 }
 
 export interface AdmissionStats {
@@ -189,10 +216,22 @@ export interface AdmissionStats {
    */
   readonly routeCompletionsCommitted: number;
   readonly routeCompletionsDiscarded: number;
+  /** Totals for entities whose bookkeeping has been released (reviewer correction 3). */
+  readonly releasedEntities: number;
 }
 
 /** Control arrivals are server-generated; the same room-wide bound as discrete traffic is enough. */
 const CONTROL_QUEUE_CAPACITY = DISCRETE_QUEUE_CAPACITY_PER_ROOM;
+
+/**
+ * How many associations an alias stays remembered for after the entity is released (reviewer correction 3).
+ *
+ * Aliases label evidence, so a departed association keeps its label long enough for a late refusal addressed
+ * to it to be correlated with the rows it produced. The alias *counter* is monotonic, so no two associations
+ * ever share a label, and only the string mapping is bounded: oldest departed association first, live ones
+ * never evicted.
+ */
+const ALIAS_MEMORY = 64;
 
 export const CAPACITIES = {
   continuousPerClient: CONTINUOUS_QUEUE_CAPACITY,
@@ -211,6 +250,8 @@ export interface AuthorityCoreOptions {
   readonly clock: FixedStepClock;
   readonly runId: string;
   readonly regionProvenance: string;
+  /** Journal and chain destination. Required: the core retains no history of its own. */
+  readonly sink: JournalSink;
   /** Explicit `| undefined` so a caller may say "no completions" under `exactOptionalPropertyTypes`. */
   readonly routeCompletions?: RouteCompletionSource | undefined;
 }
@@ -239,15 +280,39 @@ export class AuthorityCore {
 
   readonly #entities = new Map<EntityId, EntityAuthority>();
   readonly #aliases = new Map<EntityId, string>();
+  /** Aliases are numbered from a monotonic counter, so releasing a departed entity never reuses a label. */
+  #aliasCounter = 0;
   readonly #initialStates = new Map<EntityId, PlayerSimulationState>();
   readonly #order = new ArrivalOrder();
   readonly #controls: ArrivalRecord[] = [];
-  readonly #journal = new Journal();
+  readonly #journal: Journal;
   readonly #counters = new Map<Disposition, number>();
   readonly #observed = new Map<EntityId, number>();
   readonly #dispositions = new Map<EntityId, Map<Disposition, number>>();
   readonly #overflowCauses = new Map<OverflowCause, number>();
   readonly #recentlyRemoved = new Map<ArrivalOrdinal, ArrivalRecord>();
+
+  /**
+   * Entities whose association ended this tick, released when the tick's rows exist (reviewer correction 3).
+   *
+   * Releasing inside stage L would empty the very bookkeeping the tick still has to write evidence about:
+   * the dropped backlog, the final canonical state and the lifecycle event are all journalled from the entity.
+   * So the end of the tick is the release point - after the rows, before the next cutoff.
+   */
+  readonly #pendingRelease = new Set<EntityId>();
+
+  /** Room-level totals for released entities, so releasing them does not lose the run's arithmetic. */
+  #released = { entities: 0, observed: 0, cacheRecords: 0 };
+
+  /**
+   * The rows of the tick now running. This is the only row storage in the core, it is required to hash the
+   * tick at its end, and it is emptied on every tick - which is what makes `retention()` a measurement.
+   */
+  #tickRows: JournalRow[] = [];
+
+  /** Rows and chain records handed to the sink: the consumer's totals, counted so streaming is provable. */
+  #handedRows = 0;
+  #handedChain = 0;
 
   /**
    * The arrivals stage L removed because the association ended, for this tick only.
@@ -265,6 +330,14 @@ export class AuthorityCore {
   readonly #gapWindow: number = MAX_GENERATION_FORWARD_GAP;
   #continuousHighWater = 0;
   #discreteHighWater = 0;
+  /** The reading the run started at, recorded in the prologue so a replay can tell restored time from zero. */
+  readonly #timeOriginMs: number;
+  /** The entities present at construction, captured once so the prologue does not depend on when it is read. */
+  readonly #prologueInitialEntities: readonly {
+    readonly entityId: EntityId;
+    readonly state: PlayerSimulationState;
+    readonly stateHash: string;
+  }[] = [];
 
   private constructor(options: AuthorityCoreOptions) {
     this.runId = options.runId;
@@ -273,8 +346,25 @@ export class AuthorityCore {
     this.#stepper = options.stepper;
     this.#clock = options.clock;
     this.#time = options.time;
+    this.#journal = new Journal({
+      recordRow: (row) => {
+        this.#handedRows += 1;
+        options.sink.recordRow(row);
+      },
+      recordTickChain: (record) => {
+        this.#handedChain += 1;
+        options.sink.recordTickChain(record);
+      },
+    });
     this.#regionProvenance = options.regionProvenance;
     this.#routeCompletions = options.routeCompletions ?? (() => []);
+    this.#timeOriginMs = options.time.nowMs();
+    // Nothing has joined yet: an entity arrives through a join input, and its initial state is journalled
+    // there. Reading this at construction is what makes the prologue independent of when it is asked for.
+    this.#prologueInitialEntities = this.entityIds.flatMap((entityId) => {
+      const state = this.#initialStates.get(entityId);
+      return state === undefined ? [] : [{ entityId, state, stateHash: this.#journal.digest(state) }];
+    });
   }
 
   /**
@@ -289,6 +379,7 @@ export class AuthorityCore {
     readonly time: TimeSource;
     readonly clock: FixedStepClock;
     readonly runId: string;
+    readonly sink: JournalSink;
     readonly regionProvenance?: string | undefined;
     readonly routeCompletions?: RouteCompletionSource | undefined;
   }): AuthorityCore | AuthorityCoreFailure {
@@ -307,6 +398,7 @@ export class AuthorityCore {
       time: options.time,
       clock: options.clock,
       runId: options.runId,
+      sink: options.sink,
       regionProvenance: options.regionProvenance ?? 'test-only-synthetic',
       ...(completions === undefined ? {} : { routeCompletions: completions }),
     };
@@ -317,17 +409,49 @@ export class AuthorityCore {
     return this.#clock.tick;
   }
 
-  get journalRows(): readonly JournalRow[] {
-    return this.#journal.rows;
-  }
-
+  /**
+   * The chain tip: the only running state the tick chain leaves behind (reviewer correction 3).
+   *
+   * There is no `journalRows` or `chain` getter any more, on purpose. A core that could answer "give me
+   * every row" would have to keep every row, and a run with repeated joins and expiries would grow with its
+   * own history. Rows and chain records go to the injected sink as they are produced.
+   */
   get chainTip(): string {
     return this.#journal.tip;
   }
 
-  /** The per-tick hash chain, one entry per executed tick (P03-g). */
-  get chain(): readonly TickChainRecord[] {
-    return this.#journal.chain;
+  /**
+   * What the core is holding right now, read from the live structures (reviewer correction 3).
+   *
+   * `reachableArrivals` is the number of arrival records reachable from the core's own state: entity queues,
+   * the control queue, the pending-release set and the current tick's row buffer. It is the quantity a long
+   * run must not grow, and the retention suite samples it across hundreds of ticks of join/expiry churn.
+   * The two `streamed*` counters are the consumer's totals: they *do* grow, because the evidence lives with
+   * whoever asked for it.
+   */
+  retention(): RetainedState {
+    let queued = 0;
+    let cacheRecords = 0;
+    for (const entity of this.#entities.values()) {
+      queued += entity.continuousQueue.size + entity.discreteQueue.size;
+      cacheRecords += entity.identities.size;
+    }
+    const tickRowBuffer = this.#tickRows.length;
+    return {
+      entities: this.#entities.size,
+      queuedArrivals: queued,
+      cacheRecords,
+      controlQueue: this.#controls.length,
+      pendingReleases: this.#pendingRelease.size,
+      tickRowBuffer,
+      aliasRecords: this.#aliases.size,
+      releasedEntities: this.#released.entities,
+      releasedObservedArrivals: this.#released.observed,
+      releasedCacheRecords: this.#released.cacheRecords,
+      streamedRows: this.#handedRows,
+      streamedChainRecords: this.#handedChain,
+      reachableArrivals: queued + this.#controls.length + this.#pendingRelease.size + tickRowBuffer,
+    };
   }
 
   /** Ascending `entityId` by plain `<` on printable-ASCII identifiers; `localeCompare` is not used. */
@@ -338,8 +462,18 @@ export class AuthorityCore {
   aliasFor(entityId: EntityId): string {
     const existing = this.#aliases.get(entityId);
     if (existing !== undefined) return existing;
-    const alias = `client-${String(this.#aliases.size + 1).padStart(2, '0')}`;
+    this.#aliasCounter += 1;
+    const alias = `client-${String(this.#aliasCounter).padStart(2, '0')}`;
     this.#aliases.set(entityId, alias);
+    // The counter never repeats a label, so the map may forget old ones. Live associations are never the
+    // ones dropped.
+    while (this.#aliases.size > ALIAS_MEMORY) {
+      const evictable = [...this.#aliases.keys()].find(
+        (candidate) => !this.#entities.has(candidate) && !this.#pendingRelease.has(candidate),
+      );
+      if (evictable === undefined) break;
+      this.#aliases.delete(evictable);
+    }
     return alias;
   }
 
@@ -349,9 +483,20 @@ export class AuthorityCore {
 
   // --- Ingest -------------------------------------------------------------------------------------
 
-  /** Enqueue one client message. Classify, gate, enqueue: consume nothing, mutate no watermark (P03-b). */
-  ingest(entityId: EntityId, raw: unknown, receivedAtMs = this.#time.nowMs()): AdmissionOutcome {
-    return this.#enqueue(entityId, raw, null, null, receivedAtMs);
+  /**
+   * Enqueue one client message. Classify, gate, enqueue: consume nothing, mutate no watermark (P03-b).
+   *
+   * `rendered` exists for the replay path only: it re-attaches the field-level rendering the original record
+   * carried, which JSON cannot restore through a reconstructed payload. A transport handler passes the payload
+   * and nothing else, so no client can choose how its own fields are described.
+   */
+  ingest(
+    entityId: EntityId,
+    raw: unknown,
+    receivedAtMs = this.#time.nowMs(),
+    rendered?: Readonly<Record<string, RenderedValue>>,
+  ): AdmissionOutcome {
+    return this.#enqueue(entityId, raw, null, null, receivedAtMs, rendered);
   }
 
   /** A server-issued join. The spawn position is server-assigned: a client never sets canonical position. */
@@ -393,6 +538,7 @@ export class AuthorityCore {
     control: ControlKind | null,
     sessionEpoch: SessionEpoch | null,
     receivedAtMs: number,
+    rendered?: Readonly<Record<string, RenderedValue>>,
   ): AdmissionOutcome {
     const reserved = this.#order.next();
     if (reserved === 'exhausted') {
@@ -417,7 +563,11 @@ export class AuthorityCore {
 
     const arrival =
       control === null
-        ? buildArrival({ ordinal: reserved, entityId, raw, receivedAtMs })
+        ? buildArrival(
+            rendered === undefined
+              ? { ordinal: reserved, entityId, raw, receivedAtMs }
+              : { ordinal: reserved, entityId, raw, receivedAtMs, rendered },
+          )
         : buildControlArrival({ ordinal: reserved, entityId, control, sessionEpoch, receivedAtMs });
 
     this.#observed.set(entityId, (this.#observed.get(entityId) ?? 0) + 1);
@@ -510,9 +660,14 @@ export class AuthorityCore {
 
     // --- F. The first statement of the tick is the cutoff (P03-b).
     const cutoff: Cutoff = { tick: this.#clock.tick, ordinal: this.#order.current };
+    // The time basis for everything this tick decides, captured once (reviewer correction 2): the terminal
+    // request cache expires on this reading, so the journal records it beside the decisions it produced and
+    // a replay restores it instead of inventing a clock.
+    const tickAtMs = this.#time.nowMs();
     this.#droppedThisTick.clear();
     const stages: Stage[] = ['F'];
-    const rows: JournalRow[] = [];
+    this.#tickRows = [];
+    const rows: JournalRow[] = this.#tickRows;
     const results: TerminalResult[] = [];
     const context: ScreeningContext = this.#contextFor(cutoff.tick);
 
@@ -570,11 +725,15 @@ export class AuthorityCore {
     // The counter advances after the body, so `cutoff.tick` is both the tick that ran and the tick the
     // journal names.
     this.#clock.advance();
-    const chain = this.#journal.chainTick(cutoff.tick, cutoff.ordinal, rows);
+    const chain = this.#journal.chainTick(cutoff.tick, cutoff.ordinal, rows, tickAtMs);
     for (const row of rows) this.#journal.push(row);
     // The lookup exists only to name an arrival inside this tick; keeping it across ticks would be an
     // array that grows with the run, which P03-g forbids.
     this.#recentlyRemoved.clear();
+    // The rows this tick needed now exist in the sink, so the entities whose association ended can be
+    // released (reviewer correction 3), and the tick's row buffer can be let go.
+    this.#releaseDeparted();
+    this.#tickRows = [];
 
     return {
       tick: cutoff.tick,
@@ -656,6 +815,9 @@ export class AuthorityCore {
           },
           cutoff.tick,
         );
+        // The final state and the drop evidence are journalled above; the bookkeeping itself goes at the
+        // end of this tick, not here, so this tick's evidence can still be written from the entity.
+        this.#pendingRelease.add(entity.entityId);
       }
     } else {
       if (entity !== undefined && epochAfter !== null) {
@@ -666,6 +828,8 @@ export class AuthorityCore {
       }
     }
 
+    // For a join, the canonical state the association started from travels with the event that created it.
+    const joined = control === 'join' ? this.#entities.get(arrival.entityId)?.view().state ?? null : null;
     rows.push({
       type: 'event',
       arrivalOrdinal: arrival.ordinal,
@@ -675,6 +839,12 @@ export class AuthorityCore {
       epochBefore,
       epochAfter,
       eligibleTick: cutoff.tick,
+      // An event row exists only because a server call created the arrival. Stage L reads `arrival.control`,
+      // which no payload can set, so this value cannot be spoken for by a client (reviewer correction 1).
+      origin: 'server-lifecycle',
+      atMs: arrival.receivedAtMs,
+      initialState: joined,
+      initialStateHash: joined === null ? null : this.#journal.digest(joined),
     });
     this.#count('consumed', arrival.entityId);
     rows.push(this.#observationRow(arrival, cutoff.tick, 'consumed', null, false));
@@ -689,6 +859,34 @@ export class AuthorityCore {
       this.#count('refused:epoch', entity.entityId);
       rows.push(this.#observationRow(arrival, cutoff.tick, 'refused:epoch', 'EPOCH_MISMATCH', false));
     }
+  }
+
+  /**
+   * Release the bookkeeping of entities that left during this tick (reviewer correction 3).
+   *
+   * Everything worth keeping is already in the sink: the dropped backlog, the final canonical state, the
+   * lifecycle event and the per-disposition counters that the `meta` row carried. What stays behind is a
+   * room-level total, so the run's arithmetic survives the entity, and an alias that is never reused.
+   *
+   * Rejoining is not a resurrection: `join` creates a fresh authority record from the server-supplied spawn,
+   * which is the only spawn a client ever had. Reconnect-with-retained-state is a transport question (AC-9,
+   * Phase 2) and Phase 1 does not pretend to implement it.
+   */
+  #releaseDeparted(): void {
+    for (const entityId of this.#pendingRelease) {
+      const entity = this.#entities.get(entityId);
+      if (entity !== undefined) {
+        this.#released.cacheRecords += entity.identities.size;
+      }
+      this.#entities.delete(entityId);
+      this.#initialStates.delete(entityId);
+      this.#dispositions.delete(entityId);
+      const observed = this.#observed.get(entityId) ?? 0;
+      this.#observed.delete(entityId);
+      this.#released.observed += observed;
+      this.#released.entities += 1;
+    }
+    this.#pendingRelease.clear();
   }
 
   // --- Stages Q, S, A, C for one entity -------------------------------------------------------------
@@ -1329,7 +1527,7 @@ export class AuthorityCore {
     let cacheDepth = 0;
     for (const entity of this.#entities.values()) cacheDepth += entity.identities.size;
     return {
-      observed: [...this.#observed.values()].reduce((total, value) => total + value, 0),
+      observed: [...this.#observed.values()].reduce((total, value) => total + value, 0) + this.#released.observed,
       counters,
       continuousHighWater: this.#continuousHighWater,
       discreteHighWater: this.#discreteHighWater,
@@ -1337,6 +1535,7 @@ export class AuthorityCore {
       overflowCauses: causes,
       routeCompletionsCommitted: this.#routeCommitted,
       routeCompletionsDiscarded: this.#routeDiscarded,
+      releasedEntities: this.#released.entities,
     };
   }
 
@@ -1367,6 +1566,7 @@ export class AuthorityCore {
       perDisposition,
       stillQueued,
       balanced: accounted === observed,
+      known: entity !== undefined,
     };
   }
 
@@ -1386,10 +1586,10 @@ export class AuthorityCore {
       bounds: this.bounds,
       // No random source exists in the authority core, so there is no seed to record (P03-a).
       seeds: null,
-      initialEntities: this.entityIds.map((entityId) => {
-        const state = this.#initialStates.get(entityId) as PlayerSimulationState;
-        return { entityId, state, stateHash: this.#journal.digest(state) };
-      }),
+      // How a replay is to reconstruct the clock these decisions were made under (reviewer correction 2).
+      timeBasis: TIME_BASIS,
+      timeOriginMs: this.#timeOriginMs,
+      initialEntities: this.#prologueInitialEntities,
     });
   }
 

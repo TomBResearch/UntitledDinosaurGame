@@ -344,6 +344,30 @@ export interface EntityStepper {
 
 // --- Journal (P03-g) ----------------------------------------------------------------------------
 
+/**
+ * Where an arrival came from, as decided by the server that recorded it.
+ *
+ * This is **trusted provenance**, and it exists because a payload field is not evidence of one. A client
+ * message that carries a `control` field is still a client message: it is refused by the admission gate and
+ * it stays a client message in the journal. Lifecycle replay is driven by `origin`, never by reading a
+ * payload field back - otherwise a refused message could become a `leave()` on the second run (reviewer
+ * correction 1, Phase 1).
+ */
+export type ArrivalOrigin = 'server-lifecycle' | 'client-payload';
+
+/**
+ * The time basis a journal was recorded on (reviewer correction 2, Phase 1).
+ *
+ * The terminal-request cache TTL is 30 s of the injected `TimeSource`, so a replay that invents its own time
+ * cannot reproduce a decision that sat near the boundary. `recorded-clock-readings` means each arrival row
+ * and each tick chain record carries the `TimeSource` reading that was actually in force when the decision
+ * was made, and the replay restores those readings instead of deriving a clock from tick indices.
+ */
+export type JournalTimeBasis = 'recorded-clock-readings';
+
+/** What a replay must restore before it feeds the arrival it is attached to. */
+export const TIME_BASIS: JournalTimeBasis = 'recorded-clock-readings';
+
 export interface PrologueRow {
   readonly type: 'prologue';
   readonly runId: string;
@@ -358,6 +382,17 @@ export interface PrologueRow {
   readonly movementSpeed: number;
   readonly bounds: unknown;
   readonly seeds: null;
+  /** How a replay is to reconstruct the clock that produced these decisions. */
+  readonly timeBasis: JournalTimeBasis;
+  /** The `TimeSource` reading at construction, so a replay can tell restored time from zero. */
+  readonly timeOriginMs: number;
+  /**
+   * The entities present when the prologue was created.
+   *
+   * In Phase 1 that is always none: every entity enters through a join *input*, and the canonical state a
+   * join started from is journalled on that join's event row. Recording it here instead would mean the core
+   * had to remember every entity it ever admitted, which is the growth correction 3 removes.
+   */
   readonly initialEntities: readonly {
     readonly entityId: EntityId;
     readonly state: PlayerSimulationState;
@@ -374,6 +409,19 @@ export interface EventRow {
   readonly epochBefore: SessionEpoch | null;
   readonly epochAfter: SessionEpoch | null;
   readonly eligibleTick: ServerTick;
+  /** Always `server-lifecycle`: an event row is only ever written by stage L from a server call. */
+  readonly origin: ArrivalOrigin;
+  /** The `TimeSource` reading this event was recorded at, for replay to restore (reviewer correction 2). */
+  readonly atMs: number;
+  /**
+   * The canonical state a join started from, and its digest; `null` on every other event.
+   *
+   * It lives here rather than in the prologue because an entity that arrives mid-run has no place in a
+   * prologue written at construction, and because the core must not retain "every entity this run ever saw"
+   * just so the prologue could name them later (reviewer correction 3).
+   */
+  readonly initialState: PlayerSimulationState | null;
+  readonly initialStateHash: string | null;
 }
 
 export interface ObservationRow {
@@ -397,6 +445,16 @@ export interface ObservationRow {
   readonly screened: boolean;
   /** `null` with the limitation recorded: there is no transport in Phase 1, so there is no SDK frame identity. */
   readonly sdkFrameIdentity: null;
+  /**
+   * Trusted provenance, assigned by the server that recorded the row. `control` is only ever meaningful
+   * when this says `server-lifecycle`, and the row builder takes both from the arrival's server-side
+   * classification - never from `raw`.
+   */
+  readonly origin: ArrivalOrigin;
+  /** The server-issued lifecycle operation, or `null` for any client message however it is shaped. */
+  readonly control: ControlKind | null;
+  /** The `TimeSource` reading in force when this arrival was recorded (reviewer correction 2). */
+  readonly atMs: number;
 }
 
 export interface IntentionRow {
@@ -519,4 +577,6 @@ export const JOURNAL_ROW_TYPES: readonly JournalRowType[] = [
 export interface ReplayTickBoundary {
   readonly tick: ServerTick;
   readonly cutoffOrdinal: ArrivalOrdinal;
+  /** The `TimeSource` reading the original tick body ran under; restored before the replay steps (correction 2). */
+  readonly atMs: number;
 }

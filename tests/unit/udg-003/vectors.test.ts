@@ -8,8 +8,10 @@
  * written from the adopted text before the run.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 import { describe, expect, it } from 'vitest';
 
@@ -18,13 +20,50 @@ import { MAX_GENERATION_FORWARD_GAP } from '../../../packages/protocol/dist/inde
 import { CAPACITIES } from '../../../apps/server/src/authority/step.js';
 import { sanitisationIssues, withDigestsBlanked } from '../../../apps/server/src/authority/journal.js';
 import { SPAWN, TEST_BOUNDS, createHarness } from '../../support/authority/harness.js';
+import { CAPACITIES as STEP_CAPACITIES } from '../../../apps/server/src/authority/step.js';
+import { toReplayInputs } from '../../../apps/server/src/authority/journal.js';
+import { replayFromInputs } from '../../support/authority/replay-helpers.js';
+import { roundTripChain, roundTripRows } from '../../support/authority/journal-collector.js';
+import { VirtualScheduler, VirtualTime } from '../../support/authority/virtual-scheduler.js';
+import type { ObservationRow, ResultRow, StateRow } from '../../../apps/server/src/authority/types.js';
 import type { Harness } from '../../support/authority/harness.js';
 import { cancel, frame, frameWithNonFiniteAxis, keepalive, moveTo } from '../../support/authority/payloads.js';
 import { advanceWatermark, metaRows, resultRows } from '../../support/authority/scenarios.js';
 import type { TickOutcome } from '../../../apps/server/src/authority/step.js';
 import type { JournalRow } from '../../../apps/server/src/authority/types.js';
 
-const OUTPUT_DIRECTORY = join(process.cwd(), 'artifacts', 'udg-003-phase-1');
+/// ** Every artefact the Phase 1 review needs. The gate keeps its own copy of this list
+/// (`PHASE_1_VECTOR_FILES` in tools/checks/src/evidence.ts) and cross-checks the manifest against it, so a
+/// suite cannot quietly shrink the body of evidence it claims to have produced; the contract suite refuses
+/// the two lists drifting.
+const PHASE_1_VECTOR_NAMES: readonly string[] = [
+  'pa1-1-pa1-2-cutoff-consumption.json',
+  'pa1-3-generation.json',
+  'pa1-4-traces-t1-t2-t3-t6.json',
+  'pa1-5-pa1-8-commit-keepalive-neutral-bound.json',
+  'pa1-9-pa1-11-bounds-identity-navigation.json',
+  'pa1-12-pa1-14-lifecycle-stepping-replay.json',
+  'pa1-c1-provenance.json',
+  'pa1-c2-time-basis.json',
+  'pa1-c3-retention.json',
+  'disposition-reconciliation.json',
+  'summary.json',
+];
+
+const PHASE_1_SCOPE_NOTE =
+  'These vectors cover UDG-003 Phase 1 only: the transport-independent movement authority core. They are not ' +
+  'evidence for Phase 2 or Phase 3, not a third-party stack compatibility claim, and not a Gate A, B or C pass.';
+
+/**
+ * Where the artefacts go.
+ *
+ * Evidence capture points this at the bundle (`UDG_VECTORS_OUT`), so the bytes the gate hashes are the bytes
+ * this run produced rather than a copy made afterwards by hand.
+ */
+const OUTPUT_DIRECTORY =
+  process.env['UDG_VECTORS_OUT'] === undefined
+    ? join(process.cwd(), 'artifacts', 'udg-003-phase-1')
+    : resolve(process.cwd(), process.env['UDG_VECTORS_OUT']);
 
 const write = (name: string, value: unknown): void => {
   mkdirSync(OUTPUT_DIRECTORY, { recursive: true });
@@ -33,6 +72,37 @@ const write = (name: string, value: unknown): void => {
   const absolute = /(^|[\s"/(])(\/home\/|\/Users\/|\/workspace\/|\/tmp\/|\/var\/|\/private\/)/.test(text);
   expect(absolute, `${name} would carry a machine path`).toBe(false);
   writeFileSync(join(OUTPUT_DIRECTORY, name), text, 'utf8');
+};
+
+const git = (args: readonly string[]): string =>
+  spawnSync('git', [...args], { cwd: process.cwd(), encoding: 'utf8' }).stdout.trim();
+
+/**
+ * Write the manifest that names the run's evidence.
+ *
+ * The digests are computed here from the bytes on disk, and the gate recomputes them again: agreement is not
+ * taken on trust. The commit is the point — a bundle is only evidence if it says which commit produced it,
+ * and verification refuses a manifest whose commit is not the commit the run executed.
+ */
+const writeManifest = (): void => {
+  const files = PHASE_1_VECTOR_NAMES.map((name) => {
+    const bytes = readFileSync(join(OUTPUT_DIRECTORY, name));
+    return { name, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+  });
+  const manifest = {
+    schemaVersion: 1,
+    taskId: 'UDG-003',
+    phase: 'phase-1',
+    scopeNote: PHASE_1_SCOPE_NOTE,
+    implementationSha: git(['rev-parse', 'HEAD']),
+    branch: git(['rev-parse', '--abbrev-ref', 'HEAD']),
+    workingTreeDirty: git(['status', '--porcelain']) !== '',
+    toolchain: { node: process.version, vitest: '5.1.0' },
+    files,
+  };
+  const text = `${JSON.stringify(manifest, null, 2)}\n`;
+  expect(/(^|[\s"'])\/(?:home|Users|workspace|tmp|var|private)\//.test(text), 'manifest machine path').toBe(false);
+  writeFileSync(join(OUTPUT_DIRECTORY, 'vectors-manifest.json'), text, 'utf8');
 };
 
 let runCounter = 0;
@@ -130,6 +200,8 @@ const compact = (observed: ObservedTick): Record<string, unknown> => ({
 });
 
 const vectors: Record<string, unknown> = {};
+/** The reviewer-correction vectors, recorded beside the acceptance-list vectors. */
+const corrections: Record<string, unknown> = {};
 const record = (id: string, value: unknown): void => {
   vectors[id] = value;
 };
@@ -645,6 +717,290 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
     });
   });
 
+  it('PA1-C1, PA1-C2, PA1-C3: reviewer corrections, as vectors', () => {
+    // --- C1. Trusted provenance: a lifecycle operation comes from how the core was called, never from a
+    // field a client controls. Recorded live, replayed, replayed from serialised evidence, and tampered with.
+    const c1 = build('c1');
+    c1.core.join('e1', 1, SPAWN);
+    c1.step();
+    const beforeC1 = c1.core.view('e1');
+    const forged = c1.core.ingest('e1', {
+      control: 'leave',
+      sessionEpoch: 1,
+      generation: 2,
+      directIntent: true,
+      moveX: 1,
+      moveZ: 0,
+    });
+    c1.step();
+    const afterC1 = c1.core.view('e1');
+    const forgedRows = () =>
+      c1.rows().filter(
+        (row): row is ObservationRow =>
+          row.type === 'observation' && row.arrivalOrdinal === forged.arrival.ordinal,
+      );
+    const stateOf = (rows: readonly JournalRow[]): string | null => {
+      const last = rows.filter((row): row is StateRow => row.type === 'state').at(-1);
+      return last === undefined ? null : last.stateHash.slice(0, 16);
+    };
+    const replayC1 = (rows: readonly JournalRow[], persist: boolean) =>
+      replayFromInputs({
+        prologue: c1.core.prologue(),
+        inputs: toReplayInputs(persist ? roundTripRows(rows) : rows, persist ? roundTripChain(c1.chain()) : c1.chain()),
+        config: c1.config,
+        stepper: c1.stepper,
+        scheduler: new VirtualScheduler(new VirtualTime(0)),
+        runId: 'udg-003-vector-c1-replay',
+      });
+    const replayedC1 = replayC1(c1.rows(), false);
+    const persistedC1 = replayC1(c1.rows(), true);
+    if (replayedC1.ok === false || persistedC1.ok === false) {
+      throw new Error('the provenance run refused to replay');
+    }
+    // Inputs rewritten to claim server provenance for a message the server never issued as a control.
+    const tamperedInputs = {
+      ...c1.replayInputs(),
+      observations: c1.replayInputs().observations.map((entry) =>
+        entry.ordinal === forged.arrival.ordinal ? { ...entry, control: 'leave' as const } : entry,
+      ),
+    };
+    const tampered = replayFromInputs({
+      prologue: c1.core.prologue(),
+      inputs: tamperedInputs,
+      config: c1.config,
+      stepper: c1.stepper,
+      scheduler: new VirtualScheduler(new VirtualTime(0)),
+      runId: 'udg-003-vector-c1-tampered',
+    });
+    const c1Vector = {
+      live: {
+        refused: forged.decision.ok === false,
+        code: forged.decision.ok === false ? forged.decision.code : null,
+        origin: [...new Set(forgedRows().map((row) => row.origin))],
+        typedControl: [...new Set(forgedRows().map((row) => row.control))],
+        payloadSaid: forgedRows()[0]?.raw['control']?.kind === 'value' ? 'leave' : null,
+        lifecycleEvents: c1.rows().filter((row) => row.type === 'event').map((row) => (row.type === 'event' ? row.kind : '')),
+        watermarkBefore: beforeC1?.watermark ?? null,
+        watermarkAfter: afterC1?.watermark ?? null,
+        connected: afterC1?.state.connected ?? null,
+      },
+      replay: {
+        refused: replayedC1.rows.filter((row) => row.type === 'observation' && row.reason === 'INVALID_PAYLOAD').length,
+        origin: [...new Set(replayedC1.rows.filter((row) => row.type === 'observation' && row.reason === 'INVALID_PAYLOAD').map((row) => (row.type === 'observation' ? row.origin : '')))],
+        stateHashMatchesLive: stateOf(replayedC1.rows) === stateOf(c1.rows()),
+        rowsEqualLive: replayedC1.rows.length === c1.rows().length,
+      },
+      persistedReplay: {
+        ok: persistedC1.ok === true,
+        stateHashMatchesLive: stateOf(persistedC1.rows) === stateOf(c1.rows()),
+      },
+      tamperedInputs: {
+        refused: tampered.ok === false,
+        reason: tampered.ok === false ? tampered.reason : null,
+      },
+    };
+    expect(c1Vector.live.refused).toBe(true);
+    expect(c1Vector.live.origin).toEqual(['client-payload']);
+    expect(c1Vector.live.typedControl).toEqual([null]);
+    expect(c1Vector.live.lifecycleEvents).toEqual(['join']);
+    expect(c1Vector.live.watermarkAfter).toBe(c1Vector.live.watermarkBefore);
+    expect(c1Vector.tamperedInputs.refused).toBe(true);
+    write('pa1-c1-provenance.json', c1Vector);
+
+    // --- C2. The approved cache-expiry time basis: three runs that differ only in the clock, each replayed
+    // from its own recorded readings. A replay that invented its own clock could only ever show one row.
+    const ttl = STEP_CAPACITIES.terminalCacheTtlMs;
+    const cacheRun = (label: string, delayMs: number, startMs: number) => {
+      const built = createHarness({
+        runId: `udg-003-vectors-${label}`,
+        startMs,
+      });
+      if ('failure' in built) throw new Error(`harness refused to build: ${built.failure}`);
+      const harness = built;
+      harness.core.join('e1', 1, SPAWN);
+      harness.step();
+      harness.time.set(startMs + 1_000);
+      harness.core.ingest('e1', cancel('r-ttl', 1, 1));
+      harness.step();
+      harness.time.set(startMs + 1_000 + delayMs);
+      harness.core.ingest('e1', cancel('r-ttl', 1, 1));
+      harness.step();
+      const observations = harness
+        .rows()
+        .filter((row): row is ObservationRow => row.type === 'observation' && row.requestId === 'r-ttl');
+      const results = harness
+        .rows()
+        .filter((row): row is ResultRow => row.type === 'result' && row.requestId === 'r-ttl');
+      const retry = observations.at(-1);
+      const retryResult = results.at(-1);
+      if (retry === undefined || retryResult === undefined) throw new Error('the retry produced no record');
+      const replayed = replayFromInputs({
+        prologue: harness.core.prologue(),
+        inputs: toReplayInputs(roundTripRows(harness.rows()), roundTripChain(harness.chain())),
+        config: harness.config,
+        stepper: harness.stepper,
+        scheduler: new VirtualScheduler(new VirtualTime(0)),
+        runId: `udg-003-vectors-${label}-replay`,
+      });
+      if (replayed.ok === false) throw new Error(`replay refused: ${replayed.reason}`);
+      const replayedRetry = replayed.rows
+        .filter((row): row is ObservationRow => row.type === 'observation' && row.requestId === 'r-ttl')
+        .at(-1);
+      const replayedResult = replayed.rows
+        .filter((row): row is ResultRow => row.type === 'result' && row.requestId === 'r-ttl')
+        .at(-1);
+      if (replayedRetry === undefined || replayedResult === undefined) throw new Error('replay lost the retry');
+      return {
+        recordedAtMs: retry.atMs,
+        disposition: retry.disposition,
+        reason: retry.reason ?? null,
+        dedupe: retryResult.dedupe,
+        accepted: retryResult.accepted,
+        prologueTimeOriginMs: harness.core.prologue().timeOriginMs,
+        replay: {
+          disposition: replayedRetry.disposition,
+          reason: replayedRetry.reason ?? null,
+          dedupe: replayedResult.dedupe,
+          atMs: replayedRetry.atMs,
+          stateHashMatchesLive: stateOf(replayed.rows) === stateOf(harness.rows()),
+          restoredReadings: replayed.time.restoredReadings,
+          refusedRestorations: replayed.time.refusedRestorations,
+        },
+      };
+    };
+    const inside = cacheRun('c2-inside', ttl - 1, 0);
+    const atBoundary = cacheRun('c2-at', ttl, 0);
+    const afterBoundary = cacheRun('c2-after', ttl + 1, 0);
+    const originRun = cacheRun('c2-origin', ttl - 1, 5_000_000);
+    const c2Vector = {
+      ttlMs: ttl,
+      firstRequestAtMs: 1_000,
+      insideWindow: inside,
+      exactlyAtWindow: atBoundary,
+      afterWindow: afterBoundary,
+      nonZeroClockOrigin: originRun,
+      boundaryIsReal: inside.dedupe !== afterBoundary.dedupe && atBoundary.disposition === afterBoundary.disposition,
+      malformedFieldRetention: (() => {
+        const harness = build('c2-malformed');
+        harness.core.join('e1', 1, SPAWN);
+        harness.step();
+        harness.time.set(222_222);
+        harness.core.ingest('e1', {
+          sessionEpoch: 1,
+          generation: 2,
+          directIntent: true,
+          moveX: Number.NaN,
+          moveZ: { nested: [1, 2] },
+          measuredAtMs: 'not-a-number',
+        });
+        harness.step();
+        const row = harness.rows().find(
+          (entry): entry is ObservationRow => entry.type === 'observation' && entry.malformed.length > 0,
+        );
+        if (row === undefined) throw new Error('the malformed arrival was not journalled');
+        const replayed = replayFromInputs({
+          prologue: harness.core.prologue(),
+          inputs: toReplayInputs(roundTripRows(harness.rows()), roundTripChain(harness.chain())),
+          config: harness.config,
+          stepper: harness.stepper,
+          scheduler: new VirtualScheduler(new VirtualTime(0)),
+          runId: 'udg-003-vectors-c2-malformed-replay',
+        });
+        if (replayed.ok === false) throw new Error('the malformed run refused to replay');
+        const replayedRow = replayed.rows.find(
+          (entry): entry is ObservationRow => entry.type === 'observation' && entry.malformed.length > 0,
+        );
+        return {
+          liveDisposition: row.disposition,
+          liveReason: row.reason ?? null,
+          liveMalformed: row.malformed,
+          liveAtMs: row.atMs,
+          replayDisposition: replayedRow?.disposition ?? null,
+          replayReason: replayedRow?.reason ?? null,
+          replayMalformed: replayedRow?.malformed ?? null,
+          replayAtMs: replayedRow?.atMs ?? null,
+        };
+      })(),
+    };
+    expect(c2Vector.boundaryIsReal).toBe(true);
+    expect(c2Vector.insideWindow.replay.disposition).toBe(c2Vector.insideWindow.disposition);
+    expect(c2Vector.afterWindow.replay.disposition).toBe(c2Vector.afterWindow.disposition);
+    expect(c2Vector.malformedFieldRetention.replayMalformed).toEqual(c2Vector.malformedFieldRetention.liveMalformed);
+    write('pa1-c2-time-basis.json', c2Vector);
+
+    // --- C3. Bounded retained state against a journal that keeps growing, in a run that also replays.
+    const c3 = build('c3');
+    c3.core.join('stay', 1, SPAWN);
+    c3.step();
+    let offered = 1;
+    const sinkTotals: { cycles: number[]; rows: number[]; chain: number[]; retained: number[] } = {
+      cycles: [],
+      rows: [],
+      chain: [],
+      retained: [],
+    };
+    for (let cycle = 1; cycle <= 60; cycle += 1) {
+      c3.core.ingest('stay', frame(1, cycle, cycle % 2, 0));
+      offered += 1;
+      const visitor = `visitor-${String(cycle)}`;
+      c3.core.join(visitor, 1, SPAWN);
+      c3.core.ingest(visitor, frame(1, 1, 1, 0));
+      c3.core.ingest(visitor, cancel(`c-${String(cycle)}`, 1, 2));
+      offered += 3;
+      c3.step();
+      c3.core.leave(visitor);
+      offered += 1;
+      c3.step();
+      if (cycle % 10 === 0) {
+        const retained = c3.core.retention();
+        sinkTotals.cycles.push(cycle);
+        sinkTotals.rows.push(retained.streamedRows);
+        sinkTotals.chain.push(retained.streamedChainRecords);
+        sinkTotals.retained.push(retained.reachableArrivals);
+      }
+    }
+    const c3Retained = c3.core.retention();
+    const c3Replay = c3.replay();
+    if (c3Replay.ok === false) throw new Error(`the churn run refused to replay: ${c3Replay.reason}`);
+    const c3Vector = {
+      cycles: 60,
+      arrivalsOffered: offered,
+      observedCounted: c3.core.stats().observed,
+      releasedEntities: c3Retained.releasedEntities,
+      retained: {
+        entities: c3Retained.entities,
+        queuedArrivals: c3Retained.queuedArrivals,
+        controlQueue: c3Retained.controlQueue,
+        tickRowBuffer: c3Retained.tickRowBuffer,
+        aliasRecords: c3Retained.aliasRecords,
+        reachableArrivals: c3Retained.reachableArrivals,
+      },
+      sampled: sinkTotals,
+      streamedRows: c3Retained.streamedRows,
+      rowsEqual: c3Replay.rows.length === c3.rows().length,
+      tipEqual: c3Replay.chain.at(-1)?.hash === c3.chain().at(-1)?.hash,
+      replayRetainedEntities: c3Replay.core.retention().entities,
+      releasedReconciliationKnown: c3.core.reconciliation('visitor-1').known,
+      residentReconciliationBalanced: c3.core.reconciliation('stay').balanced,
+    };
+    expect(c3Vector.observedCounted).toBe(c3Vector.arrivalsOffered);
+    expect(c3Vector.retained.entities).toBe(1);
+    expect(c3Vector.retained.tickRowBuffer).toBe(0);
+    expect(c3Vector.retained.aliasRecords).toBeLessThanOrEqual(64);
+    // The retained working set is flat while the streamed evidence grows monotonically.
+    const first = sinkTotals.retained[0] ?? -1;
+    const last = sinkTotals.retained.at(-1) ?? -1;
+    expect(last).toBeLessThanOrEqual(first + 4);
+    expect(sinkTotals.rows.at(-1) ?? 0).toBeGreaterThan(sinkTotals.rows[0] ?? 0);
+    expect(sinkTotals.rows).toEqual([...sinkTotals.rows].sort((a, b) => a - b));
+    expect(c3Vector.tipEqual).toBe(true);
+    write('pa1-c3-retention.json', c3Vector);
+
+    corrections['PA1-C1'] = c1Vector;
+    corrections['PA1-C2'] = c2Vector;
+    corrections['PA1-C3'] = c3Vector;
+  });
+
   it('writes the disposition reconciliation table and the manifest', () => {
     const scenarios: Record<string, unknown> = {};
     const scenario = (label: string, body: (harness: Harness) => void): void => {
@@ -700,9 +1056,17 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
           canonicalHash(DEFAULT_SERVER_CONFIG),
       },
       vectors: Object.keys(vectors).sort(),
+      corrections: Object.keys(corrections).sort(),
+      correctionArtefacts: ['pa1-c1-provenance.json', 'pa1-c2-time-basis.json', 'pa1-c3-retention.json'],
       scenarios: Object.keys(scenarios).sort(),
     };
     write('summary.json', summary);
     expect(Object.keys(vectors).length).toBeGreaterThanOrEqual(11);
+    // Every artefact the review needs must exist by the time the manifest is written; a missing file throws
+    // here rather than producing a manifest that quietly lists less than it should.
+    writeManifest();
+    for (const name of PHASE_1_VECTOR_NAMES) {
+      expect(readFileSync(join(OUTPUT_DIRECTORY, name), 'utf8').length, name).toBeGreaterThan(0);
+    }
   });
 });

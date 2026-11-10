@@ -20,13 +20,11 @@ import { cancel } from '../../support/authority/payloads.js';
 import { toReplayInputs, withDigestsBlanked } from '../../../apps/server/src/authority/journal.js';
 import {
   GENESIS_HASH,
+  firstJournalDifference,
+  firstStateDigestDifference,
   journalCompletenessIssues,
   sanitisationIssues,
 } from '../../../apps/server/src/authority/journal.js';
-import {
-  firstJournalDifference,
-  firstStateDigestDifference,
-} from '../../../apps/server/src/authority/replay.js';
 import type { JournalRow, ObservationRow } from '../../../apps/server/src/authority/types.js';
 import { stateRows } from '../../support/authority/scenarios.js';
 
@@ -244,11 +242,10 @@ describe('replay reproduces the run from inputs (AC-20, AC-3d)', () => {
     if ('failure' in other) throw new Error(`second harness refused to build: ${other.failure}`);
     const outcome = replayFromInputs({
       prologue: harness.core.prologue(),
-      inputs: toReplayInputs(harness.core.journalRows, harness.core.chain),
+      inputs: toReplayInputs(harness.rows(), harness.chain()),
       config: other.config,
       stepper: other.stepper,
-      time: other.time,
-      clock: other.clock,
+      scheduler: other.scheduler,
       runId: nextRun('udg-003-replay-config-replay'),
     });
     expect(outcome.ok).toBe(false);
@@ -267,7 +264,19 @@ describe('replay reproduces the run from inputs (AC-20, AC-3d)', () => {
     expect(prologue.configHash).toHaveLength(64);
     expect(prologue.movementHash).toHaveLength(64);
     expect(prologue.regionHash).toHaveLength(64);
-    expect(prologue.initialEntities.length).toBeGreaterThan(0);
+    // Every entity arrives through a join input in Phase 1, so the prologue names no initial entity and the
+    // canonical state each association started from travels on its own join event row (correction 3).
+    expect(prologue.initialEntities).toEqual([]);
+    expect(prologue.timeBasis).toBe('recorded-clock-readings');
+    const joins = harness.rows().filter((row) => row.type === 'event' && row.kind === 'join');
+    expect(joins.length).toBeGreaterThan(0);
+    for (const join of joins) {
+      if (join.type !== 'event') continue;
+      expect(join.origin).toBe('server-lifecycle');
+      expect(join.initialState).not.toBeNull();
+      expect(join.initialStateHash).toHaveLength(64);
+    }
+    expect(journalCompletenessIssues(harness.rows())).toEqual([]);
     expect(harness.rows()[0]?.type).not.toBe('prologue');
     expect(harness.replay().ok).toBe(true);
   });

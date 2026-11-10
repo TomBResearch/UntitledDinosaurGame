@@ -99,6 +99,22 @@ jobs:
           UDG_PROBE_OUT: artifacts/probes
         run: pnpm test:contract -- --task UDG-003
 
+      # Phase 1's own evidence, separate from the UDG-001 and UDG-002 bundles below: the vectors are the
+      # machine-readable form of the Phase 1 acceptance list and of the three reviewer corrections. The suite
+      # writes them, the tool then gates them, and a missing, empty, altered or unattributable artefact fails
+      # this step. A green UDG-001 or UDG-002 bundle is not evidence for Phase 1, and nothing here passes a
+      # gate: Gates A, B and C remain Not Run and stackCompatibility remains not-established.
+      - name: Record and gate the UDG-003 Phase 1 vectors
+        if: ${{ !cancelled() }}
+        env:
+          UDG_VECTORS_OUT: artifacts/udg-003-phase-1
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run tests/unit/udg-003/vectors.test.ts
+          pnpm --filter @udg/checks build
+          node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-1
+
       - name: Verify the contract checksum manifest is in sync
         run: pnpm contracts:checksums
 
@@ -241,5 +257,6 @@ jobs:
             artifacts/UDG-*-*
             artifacts/*-ci-summary.json
             artifacts/probes
+            artifacts/udg-003-phase-1
           if-no-files-found: error
           retention-days: 30

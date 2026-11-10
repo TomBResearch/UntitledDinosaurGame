@@ -32,3 +32,56 @@ export interface Scheduler {
 export interface TimeSource {
   nowMs(): number;
 }
+
+/**
+ * A `TimeSource` whose readings are **restored from the journal** rather than measured (reviewer
+ * correction 2, Phase 1).
+ *
+ * The terminal-request cache expires after 30 s of this source, so whether a retry lands inside the window is
+ * a function of the clock, not of the message. A replay that started a fresh clock at zero would silently
+ * move every retry back inside the window and could answer a request the original refused - or vice versa.
+ * `toReplayInputs` therefore carries the readings the original used, and a replay drives one of these.
+ *
+ * Restorations are monotonic by construction: a recorded value behind the current one is counted as refused
+ * rather than obeyed, so a journal with a garbled time basis fails a comparison instead of quietly replaying
+ * in a different order.
+ */
+export class RecordedTime implements TimeSource {
+  readonly #originMs: number;
+  #now: number;
+  #restored = 0;
+  #refused = 0;
+
+  constructor(originMs = 0) {
+    this.#originMs = originMs;
+    this.#now = originMs;
+  }
+
+  nowMs(): number {
+    return this.#now;
+  }
+
+  get originMs(): number {
+    return this.#originMs;
+  }
+
+  /** How many recorded readings have been restored, and how many were refused as non-monotonic. */
+  get restoredReadings(): number {
+    return this.#restored;
+  }
+
+  get refusedRestorations(): number {
+    return this.#refused;
+  }
+
+  /** Restore one recorded reading. Returns `false` when it would have moved time backwards. */
+  restore(atMs: number): boolean {
+    if (!Number.isFinite(atMs) || atMs < this.#now) {
+      this.#refused += 1;
+      return false;
+    }
+    this.#now = atMs;
+    this.#restored += 1;
+    return true;
+  }
+}
