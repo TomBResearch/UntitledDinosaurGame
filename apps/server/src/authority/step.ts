@@ -62,6 +62,7 @@ import {
   dispositionForCode,
 } from './types.js';
 import type {
+  ArbitrationDecision,
   ArbitrationLoser,
   ArrivalOrdinal,
   ArrivalRecord,
@@ -495,12 +496,7 @@ export class AuthorityCore {
     const stages: Stage[] = ['F'];
     const rows: JournalRow[] = [];
     const results: TerminalResult[] = [];
-    const context: ScreeningContext = {
-      bounds: this.bounds,
-      gapWindow: this.#gapWindow,
-      nowMs: this.#time.nowMs(),
-      tick: cutoff.tick,
-    };
+    const context: ScreeningContext = this.#contextFor(cutoff.tick);
 
     // --- L. Lifecycle inside the frozen set: join, leave, expiry, epoch change (P03-c L).
     const due = this.#controls.filter((arrival) => arrival.ordinal <= cutoff.ordinal);
@@ -761,6 +757,16 @@ export class AuthorityCore {
     const refused: EntityRefusal[] = [];
     const answered: EntityAnswer[] = [];
     this.#applyPlan(entity, plan, discrete, cutoff, results, refused, answered);
+    // A frame that stage Q consumed and stage S refused is recorded by its refusal: the consumption is
+    // already named by the intention row's `consumed` reference, and counting both would break AC-17.
+    if (screening !== null && screening.refusal !== null) {
+      refused.unshift({
+        arrival: screening.arrival,
+        code: screening.refusal,
+        disposition: dispositionForCode(screening.refusal),
+        screened: true,
+      });
+    }
     for (const row of this.#resultRows) rows.push(row);
     this.#resultRows = [];
 
@@ -913,7 +919,7 @@ export class AuthorityCore {
       });
     }
     for (const loser of plan.losers) {
-      const source = this.#arrivalFor(entity, loser.candidate);
+      const source = this.#arrivalForOrdinal(entity, loser.candidate.ordinal, plan.consumed);
       if (source === null) continue;
       refused.push({
         arrival: source,
@@ -957,9 +963,24 @@ export class AuthorityCore {
     return map;
   }
 
-  #arrivalFor(entity: EntityAuthority, candidate: IntentionCandidate): ArrivalRecord | null {
-    const found = entity.view().discrete.find((arrival) => arrival.ordinal === candidate.ordinal);
-    return found ?? null;
+  /**
+   * Resolve the arrival an intention refers to.
+   *
+   * A continuous loser is the frame stage Q consumed, which is no longer in any queue, so the consumed
+   * reference has to be part of the lookup: without it a frame that lost arbitration would be recorded
+   * as a plain consumption and its refusal code would vanish from the journal.
+   */
+  #arrivalForOrdinal(
+    entity: EntityAuthority,
+    ordinal: ArrivalOrdinal,
+    consumed: ArrivalRecord | null,
+  ): ArrivalRecord | null {
+    if (consumed !== null && consumed.ordinal === ordinal) return consumed;
+    const view = entity.view();
+    const discrete = view.discrete.find((arrival) => arrival.ordinal === ordinal);
+    if (discrete !== undefined) return discrete;
+    const continuous = view.continuous.find((arrival) => arrival.ordinal === ordinal);
+    return continuous ?? null;
   }
 
   /**
@@ -979,6 +1000,12 @@ export class AuthorityCore {
   ): JournalRow[] {
     const decided = new Map<ArrivalOrdinal, { disposition: Disposition; code: RejectionCode | null }>();
     if (plan.consumed !== null) decided.set(plan.consumed.ordinal, { disposition: 'consumed', code: null });
+    // A committed discrete intention is consumed by definition — the request became an intention rather
+    // than an answer. Stage Q's `consumed` only ever names a continuous observation, so without this the
+    // winning request would be observed and never disposed, and AC-17 would not reconcile.
+    if (plan.winner !== null && plan.winner.kind !== 'direct') {
+      decided.set(plan.winner.ordinal, { disposition: 'consumed', code: null });
+    }
     for (const item of refused) {
       decided.set(item.arrival.ordinal, { disposition: item.disposition, code: item.code });
     }
@@ -1182,6 +1209,47 @@ export class AuthorityCore {
 
   #noteOverflow(cause: OverflowCause): void {
     this.#overflowCauses.set(cause, (this.#overflowCauses.get(cause) ?? 0) + 1);
+  }
+
+  /**
+   * Stages Q, S and A over a snapshot, for the repeat-determinism probe (P03-b).
+   *
+   * P03-b requires that asking the pure stages the same question twice gives the same answer and produces
+   * no transition. In a tick, stage Q also *removes* the frame it selects; that removal is the whole
+   * difference, and it is what this seam deliberately does not do. It is not a production path: nothing
+   * outside a test calls it, and it returns decisions only.
+   */
+  askStagesQSA(entityId: EntityId, cutoff: Cutoff): {
+    readonly candidates: readonly IntentionCandidate[];
+    readonly arbitration: ArbitrationDecision;
+  } | null {
+    const entity = this.#entities.get(entityId);
+    if (entity === undefined) return null;
+    const view = entity.view();
+    const context = this.#contextFor(cutoff.tick);
+    const selected = view.continuous.find((arrival) => arrival.ordinal <= cutoff.ordinal) ?? null;
+    const screening = selected === null ? null : screenContinuous(view, selected, context);
+    const batch = new BatchRegistry<BatchEntry>();
+    const discrete = screenDiscrete(
+      view,
+      view.discrete.filter((arrival) => arrival.ordinal <= cutoff.ordinal),
+      batch,
+      context,
+    );
+    const candidates: IntentionCandidate[] = [];
+    const continuousCandidate = screening?.candidate;
+    if (continuousCandidate !== null && continuousCandidate !== undefined) candidates.push(continuousCandidate);
+    for (const candidate of discrete.candidates) candidates.push(candidate);
+    return { candidates, arbitration: arbitrate(candidates) };
+  }
+
+  #contextFor(tick: ServerTick): ScreeningContext {
+    return {
+      bounds: this.bounds,
+      gapWindow: this.#gapWindow,
+      nowMs: this.#time.nowMs(),
+      tick,
+    };
   }
 
   stats(): AdmissionStats {
