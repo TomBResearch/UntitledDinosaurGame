@@ -17,6 +17,7 @@
     "docs/adr/0002-server-declaration-checking-exception.md": "420b28fa8b11ca42bdbdaed7f89415f769b5d10a6b7e1c3cefd9343a6229c766",
     "docs/adr/README.md": "0913d237bd7314550755066dd92085d8f06e87be314a6767fb7c9b7ce16fb9e3",
     "docs/adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md": "2fe1fc31a3f0b273131de8acb98c873e0efdc0119c9d68b100e0dad5cd261ca0",
+    "docs/adr/proposals/UDG-003-input-consumption-rule.md": "57fb64bd8f8d7c412360dcfdb20b78d9bbc4b0693583d210542e7e5234c9a06a",
     "docs/contracts/README.md": "255e7b2cb8fd64c41e2e5beb2a56b03bb62b08e0ca11089299d81a2e540a5943",
     "docs/contracts/UDG-001.md": "4b5e8bbb0fd914bb72087dd91cb7ac24515f1bdddd92ec5ffcff32444841a9fc",
     "docs/contracts/UDG-002.md": "53a152fed391dc47e93c0c5d3013e787a84047ca45dbe52694214221b360d059",

@@ -605,3 +605,106 @@ undesignated.**
 4. **D-7** — unchanged and open; PR-13 supplies a posture in which the acknowledgement is never asked to make the
    distinction, which is not the same as making the acknowledgement truthful.
 5. **D4** — independent evidence backup destination, still undesignated.
+
+## 11. Revision 4 — Part A applied as ADR-0002, Part B returned with corrections
+
+The owner decided Part A of [ADR-P-0002](../../adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md)
+(**A4 accepted**, confined to `apps/server/tsconfig.json` and `apps/server/tsconfig.probes.json`), **refused Part B as
+the backlog solution** with five corrections, and left **Phase 1 unassigned**, **D-7 open**, **Gates A/B/C Not Run** and
+**D4 undesignated**. No release, tag, archive or storage location was created or altered, and nothing was published.
+Recorded in [adoption D-16/D-17](../adoption.md) and
+[ADR-0002](../../adr/0002-server-declaration-checking-exception.md).
+
+Commit order carries the owner's requirement that the accepted record precede the change: `cd9b7f5` records ADR-0002
+and the dispositions and touches no configuration; `cad8a42` applies the exception; `bfd0c55` returns Part B with the
+corrections and the replacement recommendation.
+
+### 11.1 Each owner condition, and the assertion that holds it
+
+| condition | implementation | asserted by |
+| --- | --- | --- |
+| strict first-party checking preserved | only `skipLibCheck` is set in the two files; `strict`, `noImplicitAny`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `esModuleInterop: false`, `verbatimModuleSyntax` still come from `tsconfig.base.json`, which keeps `skipLibCheck: false` | PR-0 `policy:*`, `probe-project-does-not-relax:*`; UDG-003 suite |
+| boundary rules unchanged | no boundary configuration touched; `pnpm lint` still runs the same rule table (`818c63d5b12f…`) | `pnpm lint`, boundary fixture suite |
+| no DOM globals | neither project's `lib` gains `DOM`/`DOM.Iterable`; PR-0 rejects DOM lib entries in any project carrying the flag | PR-0 `exception-projects-name-the-adr-and-load-no-dom-lib` |
+| no suppression comments, dependency patches or ambient shims | escape-hatch scan extended with `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `declare global`, `declare module` (patterns assembled at runtime so the probe cannot match its own scan; comments and literals stripped first so prose neither offends nor conceals) | PR-0 `no-escape-hatches`, `exception-projects-use-no-suppression-or-shims` |
+| the full-check declaration diagnostic retained, **new diagnostic changes visible to review** | `pnpm --filter @udg/server typecheck:probes:full` re-runs the same project with `--skipLibCheck false`; the runner normalises output to `package@version::declaration-file` × code × count (peer-hash suffix stripped, so an unrelated pin reshuffle is not mistaken for a new defect), writes `declaration-inventory.json`, and PR-0 compares it against the committed [colyseus-declaration-inventory.json](../../integration/colyseus-declaration-inventory.json) | PR-0 `vendor-declaration-inventory-matches-the-pinned-inventory`, `retained-full-declaration-check-ran`, `the-exception-hides-no-repository-diagnostics`; the suite pins the same inventory independently |
+| separate strict check of UDG-owned package declarations, without the problematic stack | new root `tsconfig.declarations.json` over `packages/protocol/dist` and `packages/config/dist` with `skipLibCheck: false`, `types: []`; `pnpm run declarations:strict`; a CI step of its own. `--listFiles` confirms 28 declaration files in the program and **zero** from `@colyseus/core`, `@colyseus/sdk` or `@colyseus/ws-transport` | PR-0 `udg-emitted-declarations-typecheck-with-skiplibcheck-false`, CI step, suite |
+| PR-0 restated | claim, scope, preserved properties and refusals are all in the probe's own result file (`claim`, `explicitlyNotClaimed`, `compilerPolicy`) | PR-0 result file; suite asserts the wording and that the superseded check names are gone |
+
+### 11.2 PR-0's posture changed, and the change is a narrowing
+
+| | revision 3 | revision 4 |
+| --- | --- | --- |
+| accepted gate | `tsc -p tsconfig.probes.json --noEmit`, exits 2 with 27 diagnostics | same command, exits **0** with **0** diagnostics |
+| PR-0 verdict | **blocked** (`ok: false`, failing `compatibility-blocked`) | **pass** on the restated claim, 49 checks, all ok |
+| what PR-0 claimed | "the pinned stack compiles under this repository's policy" — and blocked because it did not | "first-party code typechecks against the pinned declarations under the documented ADR-0002 exception", and explicitly not: vendor defects fixed, runtime compatibility, other projects, `build:probes` as a build path |
+| vendor defects | reported by the accepted gate | reported by the retained full check and pinned as a compared inventory |
+| `stackCompatibility` | `not-established`, **derived** from the gate failing | `not-established`, **no longer derived** from compilation |
+
+The derivation was removed rather than left in place. Written as `accepted gate clean ⇒ established`, the formula
+would have flipped the compatibility field on the strength of a compiler flag the moment the exception landed. Whether
+the stack is compatible is a question for Phase 1 behaviour plus the UDG-SPIKE-001 gate and an owner decision, and the
+artefact now says so independently of what the compiler prints.
+
+### 11.3 Measurements on the committed configuration
+
+Everything below was run against the committed files, and every mutation was reverted and hash-verified afterwards.
+
+| # | measurement | result |
+| --- | --- | --- |
+| M-1 | accepted gates clean | `pnpm --filter @udg/server typecheck` and `typecheck:probes` exit 0 with 0 diagnostics; `pnpm run declarations:strict` exits 0 |
+| M-2 | first-party errors still fail under the exception | a temporary probe module with five deliberate mistakes (wrong return type, wrong assignment type, undefined name, wrong arity, unknown property) → exit 1 with exactly `TS2322`, `TS2322`, `TS2304`, `TS2554`, `TS2339`; removed → exit 0 again |
+| M-3 | DOM globals remain unavailable | `window.innerWidth`, `document.body`, `HTMLElement` in a temporary probe module → `TS2304`, `TS2584` ("Do you need to change your target library?"), `TS2304`; removed → clean |
+| M-4 | the retained full check still sees the vendor defects | exit 2, 27 diagnostics in 7 groups, `inRepositoryCode: 0`, matching the pinned inventory exactly |
+| M-5 | **an inventory change is a review event** | the pinned document was edited to simulate three deltas at once (count 18→17, a new `@colyseus/other` group, and removal of a real group): PR-0 fails with exit 1 and reports `added [...] removed [...] changed [...] live 18 vs pinned 17`. Restored byte-identically (`sha256sum -c` OK) |
+| M-6 | **the exception cannot spread** | `"skipLibCheck": true` added to `packages/protocol/tsconfig.json`: PR-0 fails with exit 1, `outside approval: [packages/protocol/tsconfig.json]`. Restored, `git status` clean |
+| M-7 | the UDG-declaration check is not vacuous | `export declare const deliberateBreak: UdgMissingName;` appended to `packages/protocol/dist/index.d.ts` → `TS2304`, non-zero exit; restored → exit 0. (First attempt produced no error because the appended line landed after the file's trailing `//# sourceMappingURL` comment and became part of it — recorded because a demonstration that cannot fail proves nothing.) |
+
+### 11.4 Disclosed inaccuracy: C-6, the root tooling project
+
+Route 1's blast-radius table said the root test project "needs nothing". That is true of the Colyseus stack and
+misleading about repository policy: `tsconfig.json` has carried `skipLibCheck: true` since **UDG-001 decision D1**, for
+`playwright-core`'s DOM-referencing declarations and `vitest`'s default import of `node:path`. PR-0's first run caught
+this — its confinement check failed against the claim as written — and the claim was corrected rather than the check.
+
+Consequences recorded: repository policy is now three projects under **two** authorities, so "declaration checking is
+excepted" is not one repository-wide property with one owner. PR-0 pins the exact set **and** which authority each
+project cites, so the pre-existing relaxation must not borrow ADR-0002's name and a fourth project cannot arrive under
+its precedent. The correction is recorded as C-6 in the proposal, in ADR-0002 ("Correction to the Route 1
+measurement"), in [adoption D-16](../adoption.md), and in api map §0 — the original sentence stays visible.
+
+### 11.5 Part B, returned
+
+The five corrections are applied to the proposal in place, each superseded sentence keeping its wording under a
+`SUPERSEDED by C-n` marker (§0 lists them), and mirrored in [api map §9](../../integration/colyseus-0.18-api-map.md) so
+a reader of the measurements sees them beside the numbers. The replacement recommendation is
+[UDG-003-input-consumption-rule.md](../../adr/proposals/UDG-003-input-consumption-rule.md): **Proposed**, assigning no
+work. Its answer to the owner's question is that the simulation rule survives because one step per entity per tick is
+UDG's own decision, while the no-unrepresented-retirement property survives only if admitted arrival does not exceed
+the step rate — which nothing in the SDK enforces for a sender that does not comply — and that no public mechanism
+refuses an over-quota frame at admission. It names the eight baseline clauses a multi-input rule would have to amend,
+the five conservation requirements (tick clock, displacement, ordering, reconciliation against state and generation
+rather than frame counts, anti-cheat and determinism), the real-state probe and burst/adversarial set that must pass
+first, and what stays with UDG-SPIKE-001. Its recommendation is to keep the rule and treat the backlog as an admission
+and scope problem, stating the scope of the guarantee plainly: prevention for a compliant sender, detection and
+termination for one that is not, with a bounded unrepresented residue confined to the offending session.
+
+### 11.6 Local checks at revision 4
+
+| command | result |
+| --- | --- |
+| `pnpm typecheck` | exit 0 |
+| `pnpm lint` | exit 0 — `boundary check OK: 49 file(s), 0 violations`, rule table `818c63d5b12f…` |
+| `pnpm test` | exit 0 — `Tests 372 passed (372)` across 9 test files; UDG-001 49, UDG-002 31, UDG-003 56 |
+| `pnpm run declarations:strict` | exit 0 (UDG-owned declarations, `skipLibCheck: false`, no Colyseus server/SDK/transport in the program) |
+| `pnpm --filter @udg/server typecheck` / `typecheck:probes` | exit 0, 0 diagnostics (the accepted gates) |
+| `pnpm --filter @udg/server typecheck:probes:full` | exit 2, 27 third-party diagnostics, 0 in repository code (intended: the retained check must keep failing) |
+| `pnpm contracts:checksums` | in sync — 63 tracked planning files, 0 changes |
+| `pnpm dependencies:verify` | matches the committed register; no dependency changed by this revision |
+
+### 11.7 Evidence
+
+Probe artefacts for the revision-4 runs are retained in the durable host store (`/workspace/udg-evidence/ci-run-…`)
+with the runner logs, and the inventory chain is extended rather than rewritten; records cite the chain, never a tip
+hash asserted from a record. Raw bundles stay out of Git. No release, tag, archive or storage location was created or
+altered, and **D4 remains undesignated**: no retention provisioning was authorised by this decision.
