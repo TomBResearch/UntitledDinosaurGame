@@ -42,14 +42,14 @@ recommends; it authors no approval.
 Date: 2026-11-09
 
 Affected task IDs and contract clauses:
-[UDG-003](../contracts/UDG-003.md) (Phase 0 blocker PH0-B1, Phase 1 authorisation),
-[UDG-SPIKE-001](../contracts/UDG-003.md),
-[adoption D-8…D-13](../contracts/adoption.md),
-[movement-authority.md §5.1](../interfaces/movement-authority.md),
-[colyseus.md](colyseus.md),
-[api map](colyseus-0.18-api-map.md) §0, §4, §5, §9,
-[UDG-SPEC-M0-002 §7.2](../specifications/UDG-SPEC-M0-002.md) (frozen widths, unaffected),
-evidence record [UDG-003 Phase 0 completion](../contracts/assignments/UDG-003-phase-0-completion.md) §9–§10.
+[UDG-003](../../contracts/UDG-003.md) (Phase 0 blocker PH0-B1, Phase 1 authorisation),
+[UDG-SPIKE-001](../../contracts/UDG-003.md),
+[adoption D-8…D-13](../../contracts/adoption.md),
+[movement-authority.md §5.1](../../interfaces/movement-authority.md),
+[colyseus.md](../../integration/colyseus.md),
+[api map](../../integration/colyseus-0.18-api-map.md) §0, §4, §5, §9,
+[UDG-SPEC-M0-002 §7.2](../../specifications/UDG-SPEC-M0-002.md) (frozen widths, unaffected),
+evidence record [UDG-003 Phase 0 completion](../../contracts/assignments/UDG-003-phase-0-completion.md) §9–§10.
 
 ---
 
@@ -263,6 +263,12 @@ make a gate look better — for example when an upstream fix lands partially and
 
 ## 4. Part B — PR-13: can a supported mechanism prevent unrepresented retirement?
 
+> **Not approved as the backlog solution (owner, 2026-11-10).** The measurements in this part stand; four of the
+> conclusions drawn from them did not. `SUPERSEDED by C-n` markers are placed on the sentences concerned, and §0
+> carries the corrections. The replacement recommendation is
+> [UDG-003-input-consumption-rule.md](UDG-003-input-consumption-rule.md). Nothing in this part is adopted, and no
+> baseline clause has been amended.
+
 ### 4.1 The question, restated after PR-8
 
 PR-8 proved that overflow eviction counts as consumption, so an evicted frame is acknowledged exactly like an
@@ -276,6 +282,13 @@ same way in every scenario:
 
 - `ackedUnrepresented` — sent frames whose sequence the client's `lastProcessed` retires although their values
   never entered a solver step. Non-empty **is** the violation.
+
+> **SUPERSEDED by C-2 (vocabulary).** "Entered a step" and "simulated" in this part mean **read by the probe room
+> inside its fixed-step callback, and logged**. No locomotion step, integrator, collision query or authority code ran,
+> and no state field was advanced from an input value. The results therefore decide which mechanisms exist and what
+> they do to frame identities; they do not decide state correctness, and the phrase "solver step" overstates what was
+> observed. See [the recommendation's §1.3](UDG-003-input-consumption-rule.md) and its §4.1 for the real-state probe
+> that would be required.
 - `unackedUnrepresented` — frames that vanished without acknowledgement: the honest residue a reconnection has to
   resolve.
 
@@ -286,13 +299,13 @@ generations shift slightly with timing, the direction does not):
 | --- | --- | --- | --- | --- | --- | --- |
 | N1 | none, sender every 5 ms | 4 | 8 of 14 acknowledged | 0 | — | the failure, reproduced; the bound held |
 | N2 | `InputAccessor.clear()` at threshold 3 | 4 | 14 (`consumedCount` 10 → 14) | 0 | — | **not a remedy**: it moves the same watermark |
-| N3 | `Client.leave(4008)` at threshold 3 | 4 | 3 | 5 | yes, code 4008 | watermark froze at 3 of 8 sent, but the 20 Hz tick acted **too late** for a 5 ms sender |
+| N3 | `Client.leave(4008)` at threshold 3 | 4 | 3 | 5 | yes, code 4008 | watermark froze at 3 of 8 sent, but the 20 Hz tick acted **too late** for a 5 ms sender — **C-4**: this is the violation happening and then stopping, not protection |
 | N4 | `Room.maxMessagesPerSecond = 40` vs a ~200/s sender | 4 | 29 | — | yes, code 4002 | cuts the offender off; a ceiling above the consume rate still permits growth |
 | N5 | `defineInput(…, { seqField: 'generation' })` | 4 | 9 | 0 | — | acknowledgement is still a send-order watermark |
-| N6 | `Room.send(client, 'udg-backlog', …)` + sender stops on signal | **2** | **0** | **0** | none | **prevention**, with 0 frames sent inside the signal window at loopback |
+| N6 | `Room.send(client, 'udg-backlog', …)` + sender stops on signal | **2** | **0** | **0** | none | ~~**prevention**, with 0 frames sent inside the signal window at loopback~~ **SUPERSEDED by C-4**: an obedient loopback sender assumes the behaviour to be enforced, at zero round trip |
 | N7 | `drain()` then step the newest frame | 3 | 13 (3 drained without a step) | 0 | — | **rejected**: this is precisely the ack jump the pinned declarations warn about |
 | N8 budget 1 | `take(1)` per 20 Hz step vs a 40/s sender | 4 | 8 | 0 | none | under-sized budget makes eviction unavoidable |
-| N8 budget 3 | `take(3)` per 20 Hz step vs the same 40/s sender | **2** | **0** | **0** | none | **prevention**: every acknowledged frame entered a step, all 24 sent frames simulated |
+| N8 budget 3 | `take(3)` per 20 Hz step vs the same 40/s sender | **2** | **0** | **0** | none | ~~**prevention**: every acknowledged frame entered a step, all 24 sent frames simulated~~ **SUPERSEDED by C-1/C-2**: 0 unrepresented at this rate, achieved by consuming more than one frame per entity per tick, which amends the adopted one-input rule; and "simulated" means read-and-logged |
 | N9 | `defineInput(…, { sanitize })` | 4 | 9 | 0 | none | the only admission-time hook: `(input) => void` can rewrite, cannot refuse; the overflow path still dropped frames |
 
 ### 4.2 What the table says
@@ -306,16 +319,21 @@ generations shift slightly with timing, the direction does not):
 3. **A per-tick threshold is enforcement, not prevention.** Arrivals between two 20 Hz steps overran the whole
    buffer before the tick could sample it (N3, N4): the disconnect correctly freezes the watermark and leaves an
    explicitly unacknowledged residue, but frames were already acknowledged without a step.
-4. **Prevention comes from matching consumption to the admitted rate.** With `take(n)` and `n ≥
-   ceil(arrivalRate / stepRate)` nothing is retired and every acknowledgement matches a step (N8 budget 3 against
-   a minimum of 2). The library's own declaration comment says the same thing for a shared world: *"`next()`
+4. ~~**Prevention comes from matching consumption to the admitted rate.**~~ **SUPERSEDED by C-1.** With `take(n)`
+   and `n ≥ ceil(arrivalRate / stepRate)` nothing is retired — but `take(n)` with `n > 1` **changes the adopted
+   one-input-per-entity-per-tick rule** ([movement-authority §5.1](../../interfaces/movement-authority.md), v0.2 §7.1
+   anti-cheat constraint), so this is a price list for a baseline amendment and not a posture a room may adopt. The
+   baseline-preserving route is the other direction: match **admission** to consumption by admitting no more continuous
+   frames per entity than there are ticks, which makes the adopted rule self-draining. The library's own declaration comment says the same thing for a shared world: *"`next()`
    exactly one input per entity per tick (or `take` a bounded few and sub-step the solver per input). The ack then
    === inputs actually simulated; `drain()`-then-apply-latest would silently jump the ack past inputs the server
    never simulated."* N7 measures that warning rather than quoting it.
 5. **Buffering stayed bounded in every scenario** — the declared bound never overflowed — so the problem was never
    buffer growth; it is what becomes of what the bound drops.
 
-**Measured sizing rule** (from N8's two points, N4 and N3; not a rate sweep):
+**Capacity condition — necessary, not sufficient (C-3)** (from N8's two points, N4 and N3; not a rate sweep, and
+no claim about bursts inside a sampling interval, jitter, a step that overruns `dt`, or a deliberately over-rate
+sender):
 
 ```
 minimumBudget  n ≥ ceil(admittedArrivalRate / stepRate)
@@ -328,10 +346,14 @@ maxMessagesPerSecond ≤ n × stepRate        // so an offender is cut off, not 
 Four items, none of which requires a library change, an unbounded queue, private state, a fabricated
 acknowledgement or a custom transport:
 
-1. **An admitted input rate per session**, held server-side, with the per-step consume budget derived from it
-   (`take(n)`). This is the change that actually prevents the violation.
-2. **`bufferMaxSize` derived from that budget** plus jitter headroom, so a compliant sender cannot reach eviction.
-   Then an overflowing buffer *means* an offender, which is what makes item 3 legible.
+1. ~~**An admitted input rate per session**, held server-side, with the per-step consume budget derived from it
+   (`take(n)`). This is the change that actually prevents the violation.~~ **SUPERSEDED by C-1**: the admitted-rate half
+   stands; the derived `take(n)` budget does not, because it amends the one-input rule. The corrected item is: declare
+   an admitted arrival rate per entity **equal to the step rate**, and keep the budget at one.
+2. **`bufferMaxSize` derived** from the declared rate plus measured jitter and overrun headroom, so a compliant sender
+   cannot reach eviction. Then an overflowing buffer *means* an offender, which is what makes item 3 legible. **C-3**:
+   the headroom numbers are not measured yet, so this item is a formula without values until the jitter and
+   overrun tests exist.
 3. **One deterministic consequence for an offender** — either `Room.maxMessagesPerSecond` plus a reserved close
    code, or an explicit server backlog signal the client is required to obey (N6). The owner chooses. Whichever is
    chosen, the consequence must be recorded in the protocol as "frames were sent that the server will never
@@ -339,8 +361,9 @@ acknowledgement or a custom transport:
 4. **An explicit client state for that consequence**: resynchronise from authoritative state; never replay the
    unacknowledged frames as though they had been represented.
 
-Items 1–2 are configuration of declared options plus one consume primitive; items 3–4 are protocol and client-state
-additions and therefore belong to the Phase 1/2 design, not to a room-local hack.
+~~Items 1–2 are configuration of declared options plus one consume primitive~~ **SUPERSEDED by C-1**: with the
+budget fixed at one, items 1–2 are configuration only, and no consume-primitive change is involved. Items 3–4 are
+protocol and client-state additions and therefore belong to the Phase 1/2 design, not to a room-local hack.
 
 ### 4.4 What the SDK proves, and what UDG-SPIKE-001 must still prove
 
@@ -376,9 +399,12 @@ PR-13 as its evidence.
 - **Compatibility/migration.** No dependency change; no wire-format change in items 1–2; item 3 adds either a
   reserved close code or one server→client message, and item 4 adds one client state; both are additive to
   `PROTOCOL_VERSION` only if the owner chooses the signal variant. The frozen widths of ADR-0001 are untouched.
-- **Performance.** Consumption budget rises from 1 to `n` frames per step, so a step may sub-step up to `n` times;
-  with `n = 2…3` at 20 Hz this is bounded work per step and is exactly the work the current design already does
-  when it drains on catch-up. Buffer size stays small (single-digit slots per session).
+- **Performance.** Under the corrected recommendation the budget stays at one frame per step, so work per step is
+  unchanged and no sub-stepping is introduced. ~~with `n = 2…3` at 20 Hz this is bounded work per step and is exactly
+  the work the current design already does when it drains on catch-up~~ **removed by C-5**: the accepted contract
+  forbids draining a burst and simulating only its last frame, and forbids moving a character repeatedly to empty a
+  queue, so there is no catch-up draining in the design for a larger budget to be continuous with. A multi-input
+  posture would add work that the baseline does not currently do, and would have to price it.
 - **Security/abuse.** The rate ceiling and the backlog threshold become explicit, testable limits rather than an
   emergent eviction behaviour. No credential or token is involved; disconnect codes are not secrets.
 - **Determinism/server authority.** Unchanged: the server still owns transforms, and inputs are still consumed
@@ -388,17 +414,23 @@ PR-13 as its evidence.
 
 Owner decisions requested, in order:
 
-1. **Part A**: accept **A0** (keep PH0-B1 blocked, escalate upstream, keep `not-established`) — or accept **A4**
-   with the §3.5 mitigations and a restated PR-0. A3, A5, A6 are recommended for rejection.
-2. **Part B**: accept items 1–2 (admitted rate + derived `take(n)` budget + derived `bufferMaxSize`) as the UDG
-   posture, and choose between the two offender consequences in item 3.
+1. **Part A**: ~~accept **A0** (keep PH0-B1 blocked, escalate upstream, keep `not-established`) — or accept **A4**
+   with the §3.5 mitigations and a restated PR-0. A3, A5, A6 are recommended for rejection.~~ **Decided 2026-11-10: A4,
+   for `apps/server/tsconfig.json` and `apps/server/tsconfig.probes.json` only**, recorded as
+   [ADR-0002](../0002-server-declaration-checking-exception.md). `apps/client` was expressly excluded.
+2. **Part B**: ~~accept items 1–2 (admitted rate + derived `take(n)` budget + derived `bufferMaxSize`) as the UDG
+   posture, and choose between the two offender consequences in item 3.~~ **Not approved (owner, 2026-11-10)**, with
+   five corrections in §0. The focused replacement — whether the one-input rule survives, which clauses a multi-input
+   rule would amend, what it must conserve, and the real-state and adversarial evidence required first — is
+   [UDG-003-input-consumption-rule.md](UDG-003-input-consumption-rule.md), which is also unapproved and assigns no work.
 3. **Phase 1 authorisation** on that basis, still carrying `stackCompatibility: "not-established"` and the
    declaration-error inventory. No newer pins exist (api map §5.2), so "wait for upstream" and "authorise on the
-   provisional pins with the inventory diagnostic" are the only real alternatives.
+   provisional pins with the inventory diagnostic" are the only real alternatives. **Still requested: Phase 1 remains
+   unassigned**, and ADR-0002 did not authorise it — it changed a compiler policy, not the compatibility finding.
 4. **D-7** — unchanged, still open; and **D4** (backup destination), still undesignated.
 
 Required updates if accepted: restate PR-0 only if A4 is accepted (its claim surface changes); record the accepted
-posture in [movement-authority.md](../interfaces/movement-authority.md) and [colyseus.md](colyseus.md); a new
+posture in [movement-authority.md](../../interfaces/movement-authority.md) and [colyseus.md](../../integration/colyseus.md); a new
 pinned Phase 1 assignment record **before any code**; Gate A stays Not Run. Neither part affects the boundary rule
 table, the protocol widths, or Gates B and C.
 
@@ -406,8 +438,10 @@ Evidence links: PR-13 in the Phase 0 probe artefact (`probes/PR-13.json`, `probe
 `runner/probe-run-index.json`) and the UDG-003 contract suite (`PR-13` describe block); api map §9 (PR-13 findings)
 and §10 (compiler candidate); completion record §10.
 
-Supersedes or is superseded by: supersedes nothing. It superseded nothing at write time; if accepted it supersedes
-the api map §5.4 recommendation table by extending it with the measured `skipLibCheck` row.
+Supersedes or is superseded by: Part A is **Accepted** as [ADR-0002](../0002-server-declaration-checking-exception.md)
+for two named projects and Part B is **Not approved**; the Part B recommendation is superseded by
+[UDG-003-input-consumption-rule.md](UDG-003-input-consumption-rule.md). The measurements, appendix A and the unpublished
+upstream report drafts in appendix B are retained and are not rewritten.
 
 ---
 

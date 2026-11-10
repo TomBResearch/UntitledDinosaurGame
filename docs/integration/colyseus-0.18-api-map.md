@@ -401,6 +401,31 @@ Phase 0 assignment), and would need its own evidence.
 
 ## 9. PR-13 overflow postures: can a supported mechanism prevent unrepresented retirement?
 
+**Corrections applied on owner review, 2026-11-10** (the five corrections are recorded in
+[ADR-P-0002 §0](../adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md); the replacement
+recommendation is [UDG-003-input-consumption-rule.md](../adr/proposals/UDG-003-input-consumption-rule.md)). The
+measurements below stand; four readings drawn from them did not.
+
+- **C-1 — `take(n)` is not a remedy a room may choose.** Consuming more than one continuous frame per entity per tick
+  amends the adopted one-input rule ([movement-authority §5.1](../interfaces/movement-authority.md)) and the v0.2 §7.1
+  anti-cheat constraint. Where the table says a `take(n)` posture left 0 frames unrepresented, read it as: *this is
+  what a baseline amendment would buy*, not as available configuration.
+- **C-2 — "entered a step" means read by the room in a step and logged.** No locomotion step, integrator, collision
+  query or authority code ran and no state field was advanced from an input value. These are identity-accounting
+  results, not real-state correctness results; the real-state probe is still to be built
+  ([recommendation §4.1](../adr/proposals/UDG-003-input-consumption-rule.md)).
+- **C-3 — the sizing formula is a capacity condition, not a guarantee.** It bounds mean arrival against mean
+  consumption; it says nothing about bursts inside a sampling interval, jitter, a step that overruns `dt`, or a sender
+  that is deliberately over-rate.
+- **C-4 — an obedient sender and a post-eviction disconnect are not protection.** The signal scenario assumes the
+  behaviour that needs enforcing over a zero-round-trip loopback transport; the threshold and rate-limit scenarios show
+  the violation occurring and then stopping.
+- **C-5 — there is no continuity with "catch-up draining".** The accepted contract forbids draining a burst and
+  simulating only its last frame, so no such behaviour exists in the design for any posture to be continuous with.
+
+Numbers are from one retained CI run of a timing-sensitive probe; they are read as observed behaviour of the pinned
+stack, not as constants.
+
 [§4](#4-pr-8-which-frames-does-one-acknowledgement-retire-d-7-evidence) proved the acknowledgement retires an
 evicted frame as though it had been simulated. PR-13 asks the preventive question, with the same pins and public
 API only. Two identity sets decide every scenario:
@@ -414,27 +439,31 @@ API only. Two identity sets decide every scenario:
 | --- | --- | --- | --- | --- |
 | none (5 ms sender) | 4 | 8 of 14 acked | — | the failure, reproduced; the bound held |
 | `InputAccessor.clear()` at a threshold | 4 | 14 (`consumedCount` 10 → 14) | — | moves the same watermark: **not a remedy** |
-| `Client.leave(4008)` at a threshold | 4 | 3 | yes (4008) | watermark froze at 3 of 8 sent; the 20 Hz tick acted **too late** for a 5 ms sender |
+| `Client.leave(4008)` at a threshold | 4 | 3 | yes (4008) | watermark froze at 3 of 8 sent; the 20 Hz tick acted **too late** for a 5 ms sender — enforcement after growth, never prevention (C-4) |
 | `Room.maxMessagesPerSecond = 40` vs ~200/s | 4 | 29 | yes (4002) | cuts the offender off; a ceiling above the consume rate still permits growth |
 | `defineInput(…, { seqField: 'generation' })` | 4 | 9 | — | the ack is still a send-order watermark |
-| `Room.send(client, 'udg-backlog', …)` + obeying sender | **2** | **0** | none | **prevention**, 0 frames sent inside the signal window at loopback |
+| `Room.send(client, 'udg-backlog', …)` + obeying sender | **2** | **0** | none | 0 unrepresented **while the sender obeys**, at loopback round trip: shows the signal is expressible, not that it holds (C-4) |
 | `drain()` then step the newest | 3 | 13 (3 drained without a step) | — | **rejected**: the ack jump the declarations warn about, measured |
 | `take(1)` per 20 Hz step vs 40/s sender | 4 | 8 | none | an under-sized budget makes eviction unavoidable |
-| `take(3)` per 20 Hz step vs the same sender | **2** | **0** | none | **prevention**: all 24 sent frames entered a step |
+| `take(3)` per 20 Hz step vs the same sender | **2** | **0** | none | 0 unrepresented at this rate, **by consuming more than one frame per entity per tick — a baseline amendment, not a lever a room may pull** (C-1) |
 | `defineInput(…, { sanitize })` | 4 | 9 | none | the only admission-time hook: `(input) => void` rewrites, cannot refuse |
 
 **There is no rejection lever.** `sanitize` is the sole admission hook and returns `void`, so a room cannot refuse
 an over-quota frame; no `InputAccessor` or `InputHandle` member withholds or retracts an acknowledgement (§4).
-Prevention comes from matching consumption to the admitted rate, which is what the declarations themselves
-recommend for a shared world: `take` a bounded few and sub-step, "the ack then === inputs actually simulated;
-`drain()`-then-apply-latest would silently jump the ack past inputs the server never simulated" — N7 measures that
-warning instead of quoting it.
 
-**Measured sizing rule** (from the two `take` points plus the threshold and rate scenarios; not a rate sweep):
-`n ≥ ceil(admittedArrivalRate / stepRate)`; `bufferMaxSize ≥ n` plus jitter and signal round-trip headroom;
-`maxMessagesPerSecond ≤ n × stepRate` so an offender is cut off rather than accommodated. Buffering stayed at or
-below the declared bound in every scenario: the problem was never growth, it is what becomes of what the bound
-drops.
+The zero-unrepresented rows were reached two ways: raising consumption to meet arrival (`take(n)`, which amends the
+rule — C-1) and asking the sender to slow down (the signal, obeyed here at zero round trip). The third way is the one
+that leaves the baseline intact and is the recommendation's starting point: **lower admission to meet consumption**,
+i.e. admit no more continuous frames per entity than there are ticks, which makes the adopted one-frame-per-tick rule
+self-draining. That is arithmetic rather than a new mechanism, and it needs an enforcement consequence for a sender
+that does not comply — enforcement being detection and termination, not prevention.
+
+**Capacity condition (necessary, not sufficient)** — from two `take` sample points plus the threshold and rate
+scenarios, not a rate sweep, and never a protection claim (C-3): with a per-tick budget `n`, retention needs
+`n ≥ ceil(admittedArrivalRate / stepRate)`, with `bufferMaxSize ≥ n` plus headroom for jitter, tick overrun and signal
+round trip, and a declared ceiling low enough that an offender is cut off rather than accommodated. Under the adopted
+rule `n = 1`, so the condition collapses to **admitted arrival rate ≤ step rate**. Buffering stayed at or below the
+declared bound in every scenario: the problem was never growth, it is what becomes of what the bound drops.
 
 **SDK proof versus UDG-SPIKE-001 proof.** PR-13 proves server-side accounting only. It does not observe client
 reconciliation, and a room's own record of what it stepped is not evidence that a client stops predicting from a
@@ -442,8 +471,11 @@ retired frame: convergence after a cut-off, behaviour under loss and reconnect, 
 of a real network stay with UDG-SPIKE-001. D-7 is unchanged: the remedy measured here is a posture in which the
 acknowledgement is never asked to distinguish applied from refused from drained, not a better acknowledgement.
 
-The recommendation built on this table, and the four-item architectural decision it implies, are in
-[ADR proposal ADR-P-0002](../adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md) Part B.
+The recommendation built on this table is
+[ADR proposal UDG-003-input-consumption-rule.md](../adr/proposals/UDG-003-input-consumption-rule.md), which keeps the
+one-input rule, names the clauses a multi-input alternative would have to amend, and fixes the real-state and
+adversarial evidence required before any such change. The earlier recommendation —
+[ADR-P-0002](../adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md) Part B — was **not approved**.
 
 ## 10. Compiler-policy candidate: `skipLibCheck` confined to the network-facing projects
 

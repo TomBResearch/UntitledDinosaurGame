@@ -22,4 +22,14 @@ The escalation record is docs/adr/proposals/TASK_ID-short-topic.md. Include trig
 
 Copy [the ADR template](0000-template.md) into `docs/adr/proposals/` and link it from the affected assignment. Accepted decisions use a stable numbered filename under `docs/adr/`; retain the proposal and its disposition in history. An agent must not author an approval on the owner's behalf. Preserve prior accepted decisions; supersede them explicitly.
 
-No architecture decisions have been accepted by this repository-population step. In particular, future `0001-physics-prediction.md` and `0002-hybrid-prediction-handoff.md` are task outputs, not documents that already prove an integration choice.
+No architecture decision was accepted by the repository-population step itself, and the future `physics-prediction`
+and `hybrid-prediction-handoff` records named in the source specification remain task outputs, not existing documents.
+Decisions accepted **since**, by the integration owner, are indexed here; each retains its proposal and disposition in
+history, and no approval in this repository was authored by the agent that produced the record.
+
+| Record | Status | What it decides |
+| --- | --- | --- |
+| [ADR 0001 — replica precision policy](0001-replica-precision-policy.md) | **Accepted** | float64 canonical / float32 replica widths, provisional until the Gate A width freeze |
+| [ADR 0002 — server declaration-checking exception](0002-server-declaration-checking-exception.md) | **Accepted** | `skipLibCheck: true` confined to `apps/server/tsconfig.json` and `apps/server/tsconfig.probes.json`, with the retained full check, the pinned declaration inventory, a strict check of UDG-owned emitted declarations, and a restated PR-0. `apps/client` and every other project are excluded |
+| [ADR-P-0002 — compiler exception and input backlog posture](proposals/UDG-003-compiler-exception-and-input-backlog-posture.md) | Part A **Accepted** as ADR-0002; Part B **Not approved** | the measured candidate that became ADR-0002, and the input-backlog recommendation returned with five corrections (§0 of that document) |
+| [ADR-P — UDG-003 input-consumption rule](proposals/UDG-003-input-consumption-rule.md) | **Proposed** | whether the one-input-per-entity-per-tick rule survives the pinned SDK, the clauses a multi-input rule would amend, and the real-state and adversarial evidence required before adoption |
