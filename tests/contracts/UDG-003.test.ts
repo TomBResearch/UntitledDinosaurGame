@@ -33,6 +33,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -1550,7 +1551,9 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     spawnSync('rm', ['-rf', directory], { cwd: ROOT });
     mkdirSync(join(directory, 'nested'), { recursive: true });
     const runnerPath = '/home/runner/work/UntitledDinosaurGame/UntitledDinosaurGame/node_modules/.pnpm/typescript';
-    const homeCache = '/home/runner/.cache/node/corepack/v1/pnpm/12.18.0/bin/pnpm';
+    // A real path under this host's home directory, so the alias it must acquire is the same on a hosted
+    // runner and on a developer machine.
+    const homeCache = join(homedir(), '.cache', 'node', 'corepack', 'v1', 'pnpm', '12.18.0', 'bin', 'pnpm');
     writeFileSync(
       join(directory, 'probe-results.json'),
       `${JSON.stringify({ schemaVersion: 1, taskId: TASK, detail: `${runnerPath} -p tsconfig.probes.json` }, null, 2)}\n`,
@@ -1577,13 +1580,19 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
 
     const rewrittenProbe = readFileSync(join(directory, 'probe-results.json'), 'utf8');
     const rewrittenLog = readFileSync(join(directory, 'nested', 'commands.log'), 'utf8');
-    expect(rewrittenProbe).not.toContain('/home/');
-    expect(rewrittenLog).not.toContain('/home/');
-    expect(rewrittenProbe).toContain('<HOME>');
-    // And the scan that failed the hosted run finds nothing in the rewritten bytes.
+    // Which alias a given host produces is not the property. On a hosted runner the checkout *is* under the
+    // home directory, so the runner-shaped path becomes REPO_ROOT; here it becomes <HOME>. What must hold on
+    // every host is that no home-shaped path survives, and that the scan which failed the hosted run finds
+    // nothing in the rewritten bytes.
     const homePattern = /\/(?:home|Users)\/[A-Za-z0-9._-]{2,}\//;
-    expect(homePattern.test(rewrittenProbe)).toBe(false);
-    expect(homePattern.test(rewrittenLog)).toBe(false);
+    for (const [label, text] of [
+      ['probe-results.json', rewrittenProbe],
+      ['commands.log', rewrittenLog],
+    ] as const) {
+      expect(text, `${label} still carries a home path`).not.toContain('/home/');
+      expect(homePattern.test(text), `${label} still matches the secret pattern`).toBe(false);
+      expect(text.includes('REPO_ROOT') || text.includes('<HOME>'), `${label} lost its alias`).toBe(true);
+    }
     spawnSync('rm', ['-rf', directory], { cwd: ROOT });
   });
 
