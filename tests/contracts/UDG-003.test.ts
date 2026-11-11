@@ -125,6 +125,12 @@ beforeAll(() => {
   });
   keepArtefact('compatibility-verdict.json', run.compatibility);
   keepArtefact('dependency-graph.json', byId.get('PR-1')?.result?.observations ?? {});
+  // Written as soon as the probes have produced them, not only at the end of the file. `afterAll` runs after
+  // every test in this file, so an assertion that asks whether an owned evidence run received these files
+  // would otherwise be asking too early — a latent ordering assumption that only became visible once
+  // UDG-003 had a capture plan of its own and this task therefore owned a run. Writing twice (here and in
+  // `afterAll`) is deliberate: the later write carries any artefact a later test registers.
+  writeArtefacts();
 }, 900_000);
 
 afterAll(() => {
@@ -1248,7 +1254,9 @@ describe('UDG-003 Phase 1 — the authority core exists and stays off the packag
     ).trim();
     expect(declarations).toBe('export {};');
 
-    const directory = join(ROOT, 'artifacts', 'udg-003-phase-1');
+    // A scratch location, not the artefact directory: an evidence run points the vectors suite at a bundle,
+    // and a child-process script is not evidence to publish alongside the vectors it has nothing to do with.
+    const directory = join(ROOT, 'artifacts', '.local', 'udg-003-phase-1');
     mkdirSync(directory, { recursive: true });
     const script = join(directory, 'emitted-run.mjs');
     writeFileSync(script, EMITTED_RUN_SCRIPT, 'utf8');
