@@ -452,10 +452,12 @@ export function runColyseusProbes(root: string, outDir: string, options: ProbeRu
   mkdirSync(outDir, { recursive: true });
 
   const startedAt = new Date().toISOString();
-  const purpose = options.purpose ?? 'unspecified';
   const requestedInvocation = options.invocationId
     ?? process.env['UDG_PROBE_INVOCATION']
     ?? `inv-${startedAt.replace(/[:.]/g, '-')}-${String(process.pid)}`;
+  // A caller that says nothing is still identifiable: the invocation identifier names the step that
+  // asked, and an artefact whose only description is "unspecified" is one more thing a reader guesses at.
+  const purpose = options.purpose ?? requestedInvocation;
   const ledgerBefore = readProbeLedger(outDir);
   const invocationId = nextInvocationId(ledgerBefore.invocations, requestedInvocation);
   // The invocation's own bytes live here and are never overwritten by a later invocation. The top level

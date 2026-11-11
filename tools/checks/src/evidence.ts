@@ -503,7 +503,13 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       {
         label: 'test',
         argv: ['pnpm', 'test'],
-        env: { UDG_EVIDENCE_JUNIT: 'BUNDLE/junit.xml', UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-001.json' },
+        env: {
+          UDG_EVIDENCE_JUNIT: 'BUNDLE/junit.xml',
+          UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-001.json',
+          // This `pnpm test` runs the UDG-003 contract suite too, which runs the probes. It is a
+          // different invocation from UDG-003's own capture and must be named as one.
+          UDG_PROBE_INVOCATION: 'evidence-capture-udg-001',
+        },
         junit: true,
         measurements: true,
       },
@@ -582,7 +588,13 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       {
         label: 'test',
         argv: ['pnpm', 'test'],
-        env: { UDG_EVIDENCE_JUNIT: 'BUNDLE/junit.xml', UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-002.json' },
+        env: {
+          UDG_EVIDENCE_JUNIT: 'BUNDLE/junit.xml',
+          UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-002.json',
+          // This `pnpm test` runs the UDG-003 contract suite too, which runs the probes. It is a
+          // different invocation from UDG-003's own capture and must be named as one.
+          UDG_PROBE_INVOCATION: 'evidence-capture-udg-002',
+        },
         junit: true,
         measurements: true,
       },
@@ -694,7 +706,11 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       { label: 'test-unit', argv: ['pnpm', 'test:unit'] },
       { label: 'test-boundaries', argv: ['pnpm', 'test:boundaries'] },
       { label: 'test-fixtures', argv: ['pnpm', 'test:fixtures'] },
-      { label: 'test-contract-UDG-003', argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-003'] },
+      {
+        label: 'test-contract-UDG-003',
+        argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-003'],
+        env: { UDG_PROBE_INVOCATION: 'evidence-capture-contract' },
+      },
       { label: 'test-contract-UDG-001', argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-001'] },
     ],
   },

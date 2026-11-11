@@ -252,9 +252,12 @@ and bundle verification runs it whenever a bundle carries probe bytes — a UDG-
 invocation first (PR-14 is reserved and unbuilt, so running it really fails and the runner records that), then a
 real passing invocation into the same directory, and asserts the failed invocation's own bytes survive the
 overwrite and still name themselves. The misattribution, deletion, non-disclosure, unledgered and
-unattributed cases are then driven against the same gate on that tree. On a persistent developer working tree
-the ledger accumulates earlier invocations and a bundle therefore carries them too; on a CI runner the
-checkout is fresh, so the bundle holds exactly `ci-test-step` and `evidence-capture`.
+unattributed cases are then driven against the same gate on that tree. On a persistent developer working tree the ledger
+accumulates earlier invocations and a bundle carries them too. The same happens inside one CI job: the probe
+directory survives between steps, so the UDG-003 bundle of the baseline run holds **six** invocations — the
+full-suite step, the probe-suite step, the `pnpm test` of each of the three capture plans and the Phase 2
+predecessor's contract re-run — each with its own directory and each named. What the bundle must never do is
+present one invocation's bytes as another's, and the ledger is what makes that checkable.
 
 ### 9.3 R-8 — the defect the new gate caught on its first run
 

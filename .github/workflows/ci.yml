@@ -63,6 +63,11 @@ jobs:
         run: pnpm lint
 
       - name: Run the unit and Node integration suites
+        env:
+          # The full suite includes the UDG-003 contract suite, which builds and runs the probes. This is
+          # the job's first probe invocation, and it is named so that the later ones cannot be mistaken
+          # for it - or, worse, be mistaken for it by a reader of the retained artefacts.
+          UDG_PROBE_INVOCATION: ci-full-test
         run: pnpm test
 
       - name: Build shared libraries, tools and apps
