@@ -910,7 +910,7 @@ publishes `supersededBy: "PA1-C8"` plus the sweep invariant (`queuedBeyondCutoff
 `dispositionOnce: 1`) measured on all four lifecycles. Measured values for this revision:
 
 ```text
-authority.cutoffLifecycle  = { sweepBoundToCutoff: true, queuedBeyondCutoff: true, eachDispositionOnce: true }
+authority.cutoffLifecycle  = { sweepBoundToCutoff: true, queuedBeyondCutoffTotal: 0, eachDispositionOnce: true }
 authority.deferredIntake   = { limit: 64, decidedAtNextBoundary: true, receiptOrderPreserved: true,
                                overflowAccepted: 64, overflowRejected: 3, overflowJournalled: 0,
                                leaveReplayable: true, expiryReplayable: true, epochChangeReplayable: true,
@@ -920,6 +920,13 @@ authority.deferredIntake   = { limit: 64, decidedAtNextBoundary: true, receiptOr
 The `false` that revision 3 published inside `authority.cutoffLifecycle` is gone because the property it
 described is gone; the gate now refuses a bundle in which any of the four cases is unproven, so the same
 regression cannot silently return.
+
+The first attempt wrote that first measurement as `queuedBeyondCutoff: true`, meaning "no queue holds work
+past its cutoff". A reader holding only the bundle could read the same key as a breach, and the `true` in a
+bundle whose headline property is a bound is exactly the kind of name that gets misread under review, so it is
+published as the count instead (`queuedBeyondCutoffTotal: 0`) with the per-case counts in
+`pa1-c7-cutoff-lifecycle.json`. The rename moves no vector digest — measurements are a separate artefact — and
+`pa1-c8-deferred-intake.json` hashes identically before and after (`292c2856…`).
 
 Vector digests after this revision (14 artefacts; `vectors-manifest.json` excluded because it names the commit):
 

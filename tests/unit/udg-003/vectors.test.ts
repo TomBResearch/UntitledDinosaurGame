@@ -1398,11 +1398,15 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
     expect(c8Vector.overflow.everyAcceptedJournalledOnce).toBe(true);
     expect(c8Vector.replayEquivalence.allEqual).toBe(true);
 
+    const beyondCutoffByCase: number[] = Object.values(c7Cases).map(
+      (entry) => (entry as { queuedBeyondCutoff: number }).queuedBeyondCutoff,
+    );
     recordMeasure('authority.cutoffLifecycle', {
       sweepBoundToCutoff: true,
-      queuedBeyondCutoff: Object.values(c7Cases).every(
-        (entry) => (entry as { queuedBeyondCutoff: number }).queuedBeyondCutoff === 0,
-      ),
+      // Written as the count, not as a boolean named after the violation: a reader of the bundle alone must
+      // not have to work out whether `true` meant "bounded" or "breached". The per-case counts are in
+      // pa1-c7-cutoff-lifecycle.json.
+      queuedBeyondCutoffTotal: beyondCutoffByCase.reduce((total, count) => total + count, 0),
       eachDispositionOnce: Object.values(c7Cases).every(
         (entry) => (entry as { dispositionOnce: number }).dispositionOnce === 1,
       ),
