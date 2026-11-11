@@ -33,7 +33,7 @@
 
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -41,15 +41,18 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CONTRACT_TASK_IDS } from '@udg/checks';
 
 import {
+  PROBE_LEDGER_FILE,
   PROBE_FILES,
   PROBE_IDS,
   probeSources,
+  recordProbeInvocation,
   runColyseusProbes,
   stripNonCode,
   type ProbeId,
   type ProbeRecord,
   type ProbeRun,
 } from '../probes/colyseus-server.probe.js';
+import { probeInvocationIssues } from '@udg/checks';
 
 const TASK = 'UDG-003';
 const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '../..');
@@ -859,33 +862,46 @@ describe('UDG-003 Phase 0 — PR-15 input identity and ack/state pairing (the D-
     foundWhilePending: boolean;
     bodyless: { first: number; second: number; sentCount: number };
   }
-  interface GapTable {
-    sent: number;
+  /** One atomic capture from `IdentityRoom.snapshot`, copied by value out of the room. */
+  interface RoomSnapshot {
+    capturedOnce: true;
+    ticks: number;
+    suspendedSkips: number;
+    bufferMaxSize: number;
     consumedSeqs: number[];
     gaps: { from: number; to: number; skipped: number; tick: number }[];
     skipped: number;
-    lastProcessed: number;
-    sentCount: number;
-    pendingCount: number;
     sizeSamples: number[];
+    peakSize: number;
+    accessorConsumedCount: number;
+    accessorSize: number;
+    accessorLatestSeq: number;
+    retiredUnrepresented: number;
+    firstConsumedSeq: number;
+    unnamedLeading: number;
+  }
+  interface GapTable {
+    sentTotal: number;
+    settledBeforeGate: boolean;
+    drainedAfterResume: boolean;
+    before: RoomSnapshot | null;
+    after: RoomSnapshot | null;
     evictedSeq: number;
     evictedFindable: boolean;
   }
-  interface Unnamed {
-    firstConsumedSeq: number;
-    unnamedLeading: number;
-    namedSkipsSoFar: number;
-    stepped: number;
-    accessorConsumedCount: number;
-    countFromAccessor: number;
-    countFromClientSide: number;
+  interface UnnamedSection {
+    sent: number;
+    drainedAfterResume: boolean;
+    snapshot: RoomSnapshot | null;
   }
   interface Replayed {
     replayedStamp: number;
     replayedWire: number;
     sendsBefore: number;
     sendsAfter: number;
-    consumedSeqs: number[];
+    drainedAfterResume: boolean;
+    before: RoomSnapshot | null;
+    after: RoomSnapshot | null;
     lastProcessed: number;
     pendingCount: number;
   }
@@ -926,8 +942,8 @@ describe('UDG-003 Phase 0 — PR-15 input identity and ack/state pairing (the D-
   }
 
   const identity = () => observation<IdentityTable>('PR-15', 'S1_identity');
-  const gap = () => observation<GapTable>('PR-15', 'S2_gap');
-  const unnamed = () => observation<Unnamed>('PR-15', 'S2b_unnamedRetirement');
+  const gap = () => observation<GapTable>('PR-15', 'S2a_interiorGap');
+  const unnamed = () => observation<UnnamedSection>('PR-15', 'S2b_leadingOnly');
   const replayed = () => observation<Replayed>('PR-15', 'S3_replayedSequence');
   const domain = () => observation<Domain>('PR-15', 'S4_reconnect');
   const client = () => observation<Observability>('PR-15', 'S5_clientObservability');
@@ -958,23 +974,43 @@ describe('UDG-003 Phase 0 — PR-15 input identity and ack/state pairing (the D-
   it('shows the gap is visible between consumed frames and unnameable before the first one', () => {
     const observed = gap();
     const leading = unnamed();
-    expect(observed.gaps.length).toBeGreaterThan(0);
-    expect(observed.skipped).toBeGreaterThan(0);
-    expect(observed.consumedSeqs.length + observed.skipped).toBeLessThanOrEqual(observed.sent);
+    expect(observed.settledBeforeGate).toBe(true);
+    expect(observed.drainedAfterResume).toBe(true);
+    const captured = observed.after;
+    expect(captured, 'the controlled interior gap was never captured').not.toBeNull();
+    if (captured === null) return;
+    expect(captured.capturedOnce).toBe(true);
+    expect(captured.gaps.length).toBeGreaterThan(0);
+    expect(captured.skipped).toBeGreaterThan(0);
+    // Everything sent is accounted for exactly once: stepped, named-skipped, or leading-unnameable.
+    expect(captured.consumedSeqs.length + captured.skipped + captured.unnamedLeading).toBe(observed.sentTotal);
     expect(observed.evictedFindable).toBe(false);
     // Overflow is counted as consumed, so the acknowledgement covers frames that never reached state.
-    expect(observed.lastProcessed).toBe(observed.sent);
-    expect(observed.consumedSeqs.length).toBeLessThan(observed.sent);
+    expect(captured.retiredUnrepresented).toBeGreaterThan(0);
+    expect(captured.consumedSeqs.length).toBeLessThan(observed.sentTotal);
+
+    const leadingSnapshot = leading.snapshot;
+    expect(leadingSnapshot, 'the leading-only run was never captured').not.toBeNull();
+    if (leadingSnapshot === null) return;
     // The leading hole has no earlier endpoint: the room can count it but cannot name it.
-    expect(leading.unnamedLeading).toBeGreaterThan(0);
-    expect(leading.firstConsumedSeq).toBeGreaterThan(1);
-    expect(leading.countFromAccessor).toBe(leading.countFromClientSide);
-    expect(leading.countFromAccessor).toBeGreaterThan(leading.namedSkipsSoFar);
+    expect(leadingSnapshot.unnamedLeading).toBeGreaterThan(0);
+    expect(leadingSnapshot.firstConsumedSeq).toBeGreaterThan(1);
+    expect(leadingSnapshot.gaps).toEqual([]);
+    // And the count agrees with the accessor's own total, with no gap evidence involved.
+    expect(leadingSnapshot.retiredUnrepresented).toBe(leading.sent - leadingSnapshot.consumedSeqs.length);
+    expect(leadingSnapshot.accessorConsumedCount).toBe(leading.sent);
   });
 
   it('shows a replayed sequence is dropped before the buffer and strands the ack below sentCount', () => {
     const replay = replayed();
-    expect(replay.consumedSeqs).not.toContain(replay.replayedStamp);
+    expect(replay.drainedAfterResume).toBe(true);
+    expect(replay.after, 'the replay run was never captured').not.toBeNull();
+    if (replay.after === null) return;
+    // The replayed stamp had already been consumed on its first arrival, so the claim is not "absent"
+    // but "consumed exactly once": the duplicate never entered the buffer, and never will.
+    const replays = replay.after.consumedSeqs.filter((seq) => seq === replay.replayedStamp).length;
+    expect(replays, `replayed sequence ${String(replay.replayedStamp)} was stepped ${String(replays)} times, not once`).toBe(1);
+    expect(new Set(replay.after.consumedSeqs).size).toBe(replay.after.consumedSeqs.length);
     expect(replay.lastProcessed).toBeLessThan(replay.sendsAfter);
     expect(replay.pendingCount).toBeGreaterThan(0);
     // So a client rule of "pendingCount reached zero, therefore everything is resolved" is unsafe, and
@@ -1978,5 +2014,273 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     rewrite(orderName, order);
     expect(spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' }).status).toBe(0);
     spawnSync('rm', ['-rf', scratch], { cwd: ROOT });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retained CI runs 43053089415 and 43055416863 failed for reasons that had nothing to do with the
+// stack: the probe suite published **contradictory bytes**, and then **published over them**.
+//
+//  - a PR-15 result whose `gaps` array was a live reference into a still-running room, captured beside
+//    point-in-time scalars, so one artefact said `skipped: 0` beside `gaps: [{ skipped: 1 }]`;
+//  - a job that ran the probe suite twice into one directory, so a passing invocation overwrote a
+//    failing one and the retained evidence said `PR-15 pass` for a run whose test step had failed.
+//
+// The first group below asserts the capture invariants that make the contradiction impossible to
+// produce. The second drives the real runner and the real gate over a temporary probe directory,
+// including a genuinely failing invocation that a later passing one must not hide.
+// ---------------------------------------------------------------------------
+
+describe('UDG-003 — probe capture is one consistent snapshot (CI incident, R-2)', () => {
+  /** Every object anywhere in the observations that carries a captured gap list. */
+  const capturedObjects = (value: unknown, path: string): { path: string; object: Record<string, unknown> }[] => {
+    if (Array.isArray(value)) return value.flatMap((entry, index) => capturedObjects(entry, `${path}[${String(index)}]`));
+    if (value === null || typeof value !== 'object') return [];
+    const object = value as Record<string, unknown>;
+    const here = Array.isArray(object['gaps']) && typeof object['skipped'] === 'number'
+      ? [{ path, object }]
+      : [];
+    return [...here, ...Object.entries(object).flatMap(([key, entry]) => capturedObjects(entry, `${path}.${key}`))];
+  };
+
+  const captured = () => capturedObjects(run.probes.find((record) => record.id === 'PR-15')?.result?.observations ?? {}, 'observations');
+
+  const section = (name: string): Record<string, unknown> => {
+    const observations = run.probes.find((record) => record.id === 'PR-15')?.result?.observations as Record<string, unknown> | undefined;
+    const found = observations?.[name];
+    expect(found, `${name} is missing from the PR-15 result`).toBeDefined();
+    return found as Record<string, unknown>;
+  };
+  const snapshotOf = (name: string): Record<string, unknown> => {
+    const parent = section(name);
+    const snapshot = parent['snapshot'] ?? parent['after'];
+    expect(snapshot, `${name} carries no captured snapshot`).toBeDefined();
+    return snapshot as Record<string, unknown>;
+  };
+
+  it('captures every observed gap list from one atomic read', () => {
+    const found = captured();
+    expect(found.length > 0).toBe(true);
+    for (const { path, object } of found) {
+      expect(object['capturedOnce'], `${path} was not captured from one snapshot`).toBe(true);
+    }
+  });
+
+  it('never publishes a gap array that disagrees with its own scalar (the 43055416863 contradiction)', () => {
+    for (const { path, object } of captured()) {
+      const gaps = object['gaps'] as { skipped: number }[];
+      const fromArray = gaps.reduce((total, gap) => total + gap.skipped, 0);
+      expect(fromArray, `${path} published skipped ${String(object['skipped'])} beside a gap array summing ${String(fromArray)}`).toBe(object['skipped']);
+    }
+  });
+
+  it('holds the reconciliation identity in every captured section', () => {
+    for (const name of ['S2a_interiorGap', 'S2b_leadingOnly', 'S2c_overRateObservation']) {
+      const parent = section(name);
+      const sent = (parent['sent'] ?? parent['sentTotal']) as number;
+      expect(sent, `${name} records no frames-sent total`).toBeGreaterThan(0);
+      const snapshot = snapshotOf(name);
+      const total
+ = (snapshot['consumedSeqs'] as readonly number[]).length
+        + (snapshot['skipped'] as number)
+        + (snapshot['unnamedLeading'] as number);
+      expect(total, `${name}: consumed + skipped + unnamed must equal the frames sent`).toBe(sent);
+    }
+  });
+
+  it('names the controlled interior gap exactly and passes a leading-only retirement on its count', () => {
+    const gap = snapshotOf('S2a_interiorGap');
+    // Controlled: steps withheld while four frames arrive, so the eviction is deterministic and exact.
+    expect(gap['consumedSeqs']).toEqual([1, 4, 5, 6, 7]);
+    expect(gap['gaps']).toEqual([{ from: 1, to: 4, skipped: 2, tick: expect.any(Number) }]);
+    expect(gap['retiredUnrepresented']).toBe(2);
+
+    // Leading-only: retirements known by count, impossible to name. This must pass on the count —
+    // the shape the pre-incident assertion could not express without a false failure.
+    const leading = snapshotOf('S2b_leadingOnly');
+    expect((leading['unnamedLeading'] as number) > 0).toBe(true);
+    expect(leading['gaps']).toEqual([]);
+    expect(leading['skipped']).toBe(0);
+  });
+});
+
+describe('UDG-003 — probe evidence is attributable to one invocation (CI incident, R-7)', () => {
+  // (a) the real run this suite just performed, gated as published; (b) a fixture directory that
+  // replays the incident sequence — a failing invocation, then a passing one that copies over the
+  // top level — against the same gate. The fixture's bytes are rewritten copies of real results and
+  // exist to exercise the rules, not to stand as evidence about the stack.
+  const scratchRoot = join(PROBE_OUT, '..', 'udg-003-probe-attribution');
+
+  const readJson = (path: string): Record<string, unknown> => JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  const writeJson = (path: string, value: unknown): void => {
+    writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  };
+  const resultNames = (): readonly string[] => PROBE_IDS.map((id) => `${id.replace('/', '-')}.probe-result.json`);
+
+  it('attributes the real run it just performed, and the gate accepts it', () => {
+    const index = readJson(join(PROBE_OUT, 'probe-run-index.json'));
+    const invocation = (index['invocation'] as { invocationId: string } | undefined)?.invocationId;
+    expect(invocation, 'the index names no invocation').toBeTruthy();
+    expect((index['invocation'] as { purpose: string }).purpose).toBeTruthy();
+
+    const ledger = readJson(join(PROBE_OUT, PROBE_LEDGER_FILE))['invocations'] as { invocationId: string }[];
+    expect(ledger.map((entry) => entry.invocationId)).toContain(invocation);
+
+    for (const name of readdirSync(PROBE_OUT).filter((file) => file.endsWith('.probe-result.json'))) {
+      expect(readJson(join(PROBE_OUT, name))['invocationId'], `${name} carries no attribution`).toBe(invocation);
+    }
+    expect(probeInvocationIssues(PROBE_OUT)).toEqual([]);
+  });
+
+  describe('a failing invocation followed by a passing one, in one directory', () => {
+    const dir = join(scratchRoot, 'probes');
+    const failedDir = join(dir, 'invocations', 'invoker-1-failing');
+    const passedDir = join(dir, 'invocations', 'invoker-2-passing');
+
+    /** A result file attributed to `id`, built from a real one so the shapes stay honest. */
+    const attributedResult = (name: string, id: string, verdict: 'pass' | 'fail'): Record<string, unknown> => {
+      const bytes = readJson(join(PROBE_OUT, name));
+      bytes['invocationId'] = id;
+      bytes['verdict'] = verdict;
+      bytes['ok'] = verdict === 'pass';
+      return bytes;
+    };
+
+    /** Publish one invocation: its own directory, then the top-level copies the workflow reads. */
+    const publishInvocation = (id: string, verdict: 'pass' | 'fail', allPass: boolean): void => {
+      const own = verdict === 'pass' ? passedDir : failedDir;
+      mkdirSync(own, { recursive: true });
+      for (const name of resultNames()) {
+        writeJson(join(own, name), attributedResult(name, id, verdict));
+      }
+      const ledger = recordProbeInvocation(dir, {
+        invocationId: id,
+        requestedId: id,
+        purpose: `fixture-${id}`,
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        allPass,
+        failedProbes: allPass ? [] : ['PR-15:fail'],
+        directory: relative(ROOT, own),
+        indexFile: relative(ROOT, join(own, 'probe-run-index.json')),
+      });
+      // Exactly what the real runner does: the index is written from the ledger after the record, so a
+      // passing invocation discloses every earlier failure instead of presenting a clean green.
+      const index = {
+        invocation: { invocationId: id, purpose: `fixture-${id}`, directory: relative(ROOT, own) },
+        failedInvocations: ledger.invocations.filter((entry) => !entry.allPass).map((entry) => entry.invocationId),
+        probes: PROBE_IDS.map((probeId) => ({ probeId, verdict, invocationId: id })),
+      };
+      writeJson(join(own, 'probe-run-index.json'), index);
+      // The overwrite the incident turned on: the same top-level paths, every time.
+      for (const name of [...resultNames(), 'probe-run-index.json']) {
+        writeFileSync(join(dir, name), readFileSync(join(own, name), 'utf8'), 'utf8');
+      }
+    };
+
+    beforeAll(() => {
+      rmSync(scratchRoot, { recursive: true, force: true });
+      mkdirSync(dir, { recursive: true });
+      publishInvocation('invoker-1-failing', 'fail', false);
+      publishInvocation('invoker-2-passing', 'pass', true);
+    });
+
+    afterAll(() => {
+      rmSync(scratchRoot, { recursive: true, force: true });
+    });
+
+    it('retains the failed invocation after the passing one overwrote the top level', () => {
+      // The top level now shows the passing invocation...
+      expect((readJson(join(dir, 'probe-run-index.json'))['invocation'] as { invocationId: string }).invocationId)
+        .toBe('invoker-2-passing');
+      // ...and the failing invocation's own bytes are untouched, naming themselves.
+      const retained = readJson(join(failedDir, 'PR-15.probe-result.json'));
+      expect(retained['invocationId']).toBe('invoker-1-failing');
+      expect(retained['verdict']).toBe('fail');
+      expect(existsSync(join(failedDir, 'probe-run-index.json'))).toBe(true);
+    });
+
+    it('refuses the directory while any invocation failed, even though the latest passed', () => {
+      const issues = probeInvocationIssues(dir);
+      expect(issues.map((issue) => issue.code)).toContain('PROBE-INVOCATION-FAILED');
+      expect(issues.some((issue) => issue.detail.includes('invoker-1-failing'))).toBe(true);
+      // The passing index disclosed the earlier failure rather than presenting a clean green.
+      expect(readJson(join(dir, 'probe-run-index.json'))['failedInvocations']).toContain('invoker-1-failing');
+    });
+
+    it('refuses evidence attributed to the wrong invocation', () => {
+      expect(probeInvocationIssues(dir).some((issue) => issue.code === 'PROBE-INVOCATION-MISMATCH')).toBe(false);
+      const target = join(dir, 'PR-15.probe-result.json');
+      const original = readFileSync(target, 'utf8');
+      try {
+        // Same path, same name, different author: exactly what the workflow used to do silently.
+        writeFileSync(target, readFileSync(join(failedDir, 'PR-15.probe-result.json'), 'utf8'), 'utf8');
+        const codes = probeInvocationIssues(dir).map((issue) => issue.code);
+        expect(codes).toContain('PROBE-INVOCATION-MISMATCH');
+        expect(codes).toContain('PROBE-INVOCATION-FAILED');
+      } finally {
+        writeFileSync(target, original, 'utf8');
+      }
+      expect(probeInvocationIssues(dir).some((issue) => issue.code === 'PROBE-INVOCATION-MISMATCH')).toBe(false);
+    });
+
+    it('refuses a result file whose attribution has been removed', () => {
+      const file = join(dir, 'PR-15.probe-result.json');
+      const original = readFileSync(file, 'utf8');
+      try {
+        const bytes = readJson(file);
+        delete bytes['invocationId'];
+        writeJson(file, bytes);
+        const issues = probeInvocationIssues(dir).filter((issue) => issue.code === 'PROBE-INVOCATION-MISMATCH');
+        expect(issues.length).toBeGreaterThan(0);
+        expect(issues[0]?.detail).toContain('PR-15.probe-result.json');
+      } finally {
+        writeFileSync(file, original, 'utf8');
+      }
+    });
+
+    it('refuses a failed invocation whose bytes have been deleted', () => {
+      const victim = join(failedDir, 'probe-run-index.json');
+      const saved = join(scratchRoot, 'saved-index.json');
+      try {
+        writeFileSync(saved, readFileSync(victim, 'utf8'), 'utf8');
+        rmSync(victim, { force: true });
+        rmSync(join(failedDir, 'PR-15.probe-result.json'), { force: true });
+        expect(probeInvocationIssues(dir).map((issue) => issue.code)).toContain('PROBE-INVOCATION-EVIDENCE-LOST');
+      } finally {
+        writeFileSync(victim, readFileSync(saved, 'utf8'), 'utf8');
+        rmSync(saved, { force: true });
+      }
+    });
+
+    it('refuses an index that stops disclosing an earlier failure', () => {
+      const target = join(dir, 'probe-run-index.json');
+      const original = readFileSync(target, 'utf8');
+      try {
+        const index = readJson(target);
+        index['failedInvocations'] = [];
+        writeJson(target, index);
+        expect(probeInvocationIssues(dir).map((issue) => issue.code)).toContain('PROBE-INVOCATION-UNDISCLOSED-FAILURE');
+      } finally {
+        writeFileSync(target, original, 'utf8');
+      }
+    });
+
+    it('refuses a directory with no index, no ledger, or an unattributed index', () => {
+      expect(probeInvocationIssues(join(scratchRoot, 'nowhere')).map((issue) => issue.code))
+        .toEqual(['PROBE-INVOCATION-INDEX-MISSING']);
+
+      const noLedger = join(scratchRoot, 'no-ledger');
+      mkdirSync(noLedger, { recursive: true });
+      writeFileSync(join(noLedger, 'probe-run-index.json'), readFileSync(join(dir, 'probe-run-index.json'), 'utf8'), 'utf8');
+      expect(probeInvocationIssues(noLedger).map((issue) => issue.code)).toContain('PROBE-INVOCATION-UNLEDGERED');
+
+      const unattributed = join(scratchRoot, 'unattributed');
+      mkdirSync(unattributed, { recursive: true });
+      const index = readJson(join(dir, 'probe-run-index.json'));
+      index['invocation'] = {};
+      writeJson(join(unattributed, 'probe-run-index.json'), index);
+      expect(probeInvocationIssues(unattributed).map((issue) => issue.code)).toContain('PROBE-INVOCATION-UNATTRIBUTED');
+    });
   });
 });

@@ -21,7 +21,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
@@ -94,6 +94,8 @@ export interface ProbeResultFile {
   readonly subject: string;
   readonly startedAt: string;
   readonly finishedAt: string;
+  /** Which invocation wrote this file. Absent only on bytes produced before attribution existed. */
+  readonly invocationId?: string;
   readonly ok: boolean;
   readonly verdict?: 'pass' | 'fail' | 'blocked';
   readonly blockedReason?: string;
@@ -109,6 +111,8 @@ export interface ProbeRecord {
   readonly exitCode: number;
   readonly timedOut: boolean;
   readonly resultPath: string;
+  /** The invocation this record's bytes came from, read back from the file the probe wrote. */
+  readonly invocationId: string | undefined;
   readonly result: ProbeResultFile | undefined;
   readonly failureDetail: string | undefined;
 }
@@ -301,7 +305,85 @@ export function buildDeclarationInventory(diagnostics: readonly ProbeDiagnostic[
   );
 }
 
+/**
+ * One probe run inside one process, identified so its bytes can never be confused with another's.
+ *
+ * The workflow runs the probe suite more than once per job — the contract suite runs it, and evidence
+ * capture runs `pnpm test` again — and until now both wrote the same files, so a passing invocation could
+ * overwrite a failing one. CI run 43053089415 published `PR-15 pass` for a run whose test step had failed.
+ * Every invocation now gets its own directory and identifier, the top level keeps a copy of the latest
+ * view for readers, and `probe-invocations.json` is an append-only ledger that retains every invocation
+ * in the run, including the failures.
+ */
+export interface ProbeInvocationRecord {
+  readonly invocationId: string;
+  readonly requestedId: string;
+  readonly purpose: string;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  readonly allPass: boolean;
+  readonly failedProbes: readonly string[];
+  /** Directory holding this invocation's own bytes, relative to the repository root. */
+  readonly directory: string;
+  readonly indexFile: string;
+}
+
+export interface ProbeInvocationLedger {
+  readonly schemaVersion: 1;
+  readonly invocations: readonly ProbeInvocationRecord[];
+}
+
+export const PROBE_LEDGER_FILE = 'probe-invocations.json';
+
 const resultPathFor = (outDir: string, id: ProbeId): string => join(outDir, `${id.replace('/', '-')}.probe-result.json`);
+
+/** The ledger for a probe output directory, or an empty one. A malformed ledger is treated as absent. */
+export function readProbeLedger(outDir: string): ProbeInvocationLedger {
+  const raw = readOptional(join(outDir, PROBE_LEDGER_FILE));
+  if (raw === undefined) return { schemaVersion: 1, invocations: [] };
+  try {
+    const parsed = JSON.parse(raw) as Partial<ProbeInvocationLedger>;
+    const invocations = Array.isArray(parsed.invocations) ? parsed.invocations.filter(isInvocationRecord) : [];
+    return { schemaVersion: 1, invocations };
+  } catch {
+    return { schemaVersion: 1, invocations: [] };
+  }
+}
+
+function isInvocationRecord(value: unknown): value is ProbeInvocationRecord {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record['invocationId'] === 'string'
+    && typeof record['directory'] === 'string'
+    && typeof record['allPass'] === 'boolean';
+}
+
+/**
+ * Append one invocation to the ledger, replacing only an entry with the identical identifier.
+ *
+ * Earlier invocations are never removed: a later passing run must not be able to delete the evidence that
+ * an earlier one failed.
+ */
+export function recordProbeInvocation(outDir: string, record: ProbeInvocationRecord): ProbeInvocationLedger {
+  const ledger = readProbeLedger(outDir);
+  const invocations = ledger.invocations.filter((entry) => entry.invocationId !== record.invocationId);
+  invocations.push(record);
+  const next: ProbeInvocationLedger = { schemaVersion: 1, invocations };
+  writeJson(join(outDir, PROBE_LEDGER_FILE), next);
+  return next;
+}
+
+/** A unique identifier for this invocation, derived from the requested one. */
+export function nextInvocationId(existing: readonly ProbeInvocationRecord[], requested: string): string {
+  const taken = new Set(existing.map((entry) => entry.invocationId));
+  if (!taken.has(requested)) return requested;
+  let suffix = 2;
+  while (taken.has(`${requested}-${String(suffix)}`)) suffix += 1;
+  return `${requested}-${String(suffix)}`;
+}
+
+const readOptional = (path: string): string | undefined =>
+  existsSync(path) ? readFileSync(path, 'utf8') : undefined;
 
 /** Reports a probe may be handed, because no probe can see the exit status of the command that built it. */
 export interface ProbeReports {
@@ -310,7 +392,7 @@ export interface ProbeReports {
 }
 
 /** Run one emitted probe in its own process and read back the result file it wrote. */
-export function runProbe(root: string, outDir: string, id: ProbeId, reports?: ProbeReports): ProbeRecord {
+export function runProbe(root: string, outDir: string, id: ProbeId, reports?: ProbeReports, invocationId?: string): ProbeRecord {
   const emitted = join(serverDirectory(root), 'probes', 'dist', 'probes', PROBE_FILES[id]);
   const out = resultPathFor(outDir, id);
   mkdirSync(outDir, { recursive: true });
@@ -319,6 +401,7 @@ export function runProbe(root: string, outDir: string, id: ProbeId, reports?: Pr
   const argv = [process.execPath, emitted, '--out', out];
   if (reports?.typecheck !== undefined) argv.push('--typecheck-report', reports.typecheck);
   if (reports?.declaration !== undefined) argv.push('--declaration-report', reports.declaration);
+  if (invocationId !== undefined) argv.push('--invocation', invocationId);
   const executed = run(argv, serverDirectory(root), PROBE_TIMEOUT_MS);
   let result: ProbeResultFile | undefined;
   let failureDetail: string | undefined;
@@ -347,24 +430,45 @@ export function runProbe(root: string, outDir: string, id: ProbeId, reports?: Pr
     exitCode: executed.exitCode,
     timedOut: executed.timedOut,
     resultPath: out,
+    invocationId: result?.invocationId,
     result,
     failureDetail,
   };
 }
 
+/** Options for one probe run. Both fields exist so the caller can say who is asking. */
+export interface ProbeRunOptions {
+  /** Identifier for this invocation. Defaults to `UDG_PROBE_INVOCATION`, then to a process-stamped id. */
+  readonly invocationId?: string;
+  /** Who ran it — `contract-suite`, `ci-test-step`, `evidence-capture`. Recorded, never inferred. */
+  readonly purpose?: string;
+}
+
 /** Emit, typecheck and run every assigned probe. Nothing here judges the outcome. */
-export function runColyseusProbes(root: string, outDir: string): ProbeRun {
+export function runColyseusProbes(root: string, outDir: string, options: ProbeRunOptions = {}): ProbeRun {
   // Each probe runs with apps/server as its working directory, so a relative output directory would
   // mean two different places depending on who asked. Anchor it once, here.
   outDir = resolve(root, outDir);
   mkdirSync(outDir, { recursive: true });
+
+  const startedAt = new Date().toISOString();
+  const purpose = options.purpose ?? 'unspecified';
+  const requestedInvocation = options.invocationId
+    ?? process.env['UDG_PROBE_INVOCATION']
+    ?? `inv-${startedAt.replace(/[:.]/g, '-')}-${String(process.pid)}`;
+  const ledgerBefore = readProbeLedger(outDir);
+  const invocationId = nextInvocationId(ledgerBefore.invocations, requestedInvocation);
+  // The invocation's own bytes live here and are never overwritten by a later invocation. The top level
+  // of outDir holds a copy of the most recent view, because that is the path every existing reader names.
+  const invocationDir = join(outDir, 'invocations', invocationId);
+  mkdirSync(invocationDir, { recursive: true });
 
   const emit = emitProbes(root);
 
   // The accepted compiler gate (ADR-0002): first-party code checked against the pinned declarations.
   const typecheck = typecheckProbes(root);
   const diagnostics = parseDiagnostics(`${typecheck.stdout}\n${typecheck.stderr}`, serverDirectory(root), root);
-  writeJson(join(outDir, 'probe-project-typecheck.json'), {
+  writeJson(join(invocationDir, 'probe-project-typecheck.json'), {
     command: typecheck.command,
     cwd: relative(root, typecheck.cwd),
     exitCode: typecheck.exitCode,
@@ -379,7 +483,7 @@ export function runColyseusProbes(root: string, outDir: string): ProbeRun {
   const fullDiagnostics = parseDiagnostics(`${fullCheck.stdout}\n${fullCheck.stderr}`, serverDirectory(root), root);
   const declarationInventory = buildDeclarationInventory(fullDiagnostics);
   const inRepositoryCode = fullDiagnostics.filter((diagnostic) => diagnostic.insideRepository).length;
-  writeJson(join(outDir, 'declaration-inventory.json'), {
+  writeJson(join(invocationDir, 'declaration-inventory.json'), {
     schemaVersion: 1,
     command: fullCheck.command,
     exitCode: fullCheck.exitCode,
@@ -395,7 +499,7 @@ export function runColyseusProbes(root: string, outDir: string): ProbeRun {
   // UDG's own emitted declarations, checked strictly and without the server/SDK stack.
   const declarations = checkFirstPartyDeclarations(root);
   const declarationDiagnostics = parseDiagnostics(`${declarations.stdout}\n${declarations.stderr}`, root, root);
-  writeJson(join(outDir, 'first-party-declarations.json'), {
+  writeJson(join(invocationDir, 'first-party-declarations.json'), {
     schemaVersion: 1,
     command: declarations.command,
     exitCode: declarations.exitCode,
@@ -406,11 +510,39 @@ export function runColyseusProbes(root: string, outDir: string): ProbeRun {
   });
 
   const probes = PROBE_IDS.map((id) =>
-    runProbe(root, outDir, id, {
-      typecheck: join(outDir, 'probe-project-typecheck.json'),
-      declaration: join(outDir, 'declaration-inventory.json'),
-    }),
+    runProbe(root, invocationDir, id, {
+      typecheck: join(invocationDir, 'probe-project-typecheck.json'),
+      declaration: join(invocationDir, 'declaration-inventory.json'),
+    }, invocationId),
   );
+
+  const invocationFailed = probes.some((record) => (record.result?.verdict ?? 'error') !== 'pass');
+  const ledger = recordProbeInvocation(outDir, {
+    invocationId,
+    requestedId: requestedInvocation,
+    purpose,
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    allPass: !invocationFailed,
+    failedProbes: probes
+      .filter((record) => (record.result?.verdict ?? 'error') !== 'pass')
+      .map((record) => `${record.id}:${record.result?.verdict ?? 'error'}`),
+    directory: relative(root, invocationDir),
+    indexFile: relative(root, join(invocationDir, 'probe-run-index.json')),
+  });
+  const invocation = {
+    invocationId,
+    requestedId: requestedInvocation,
+    purpose,
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    directory: relative(root, invocationDir),
+    ledgerFile: relative(root, join(outDir, PROBE_LEDGER_FILE)),
+    sequence: ledger.invocations.length,
+  };
+  // Every invocation that ever failed, this one included. An index that hides one is refused by
+  // `evidence.js probes`, so a later green cannot launder an earlier red.
+  const failedInvocations = ledger.invocations.filter((entry) => !entry.allPass).map((entry) => entry.invocationId);
 
   const pr0 = probes.find((record) => record.id === 'PR-0');
   const compatibility: CompatibilityVerdict = {
@@ -468,8 +600,10 @@ export function runColyseusProbes(root: string, outDir: string): ProbeRun {
       'The vendor declaration diagnostics remain, runtime behaviour is unproven, and stackCompatibility stays ' +
       'not-established regardless of what the compiler reports.',
   };
-  writeJson(join(outDir, 'compatibility-verdict.json'), { schemaVersion: 1, taskId: 'UDG-003', ...compatibility });
-  writeJson(join(outDir, 'probe-run-index.json'), {
+  const indexBody = {
+    invocation,
+    failedInvocations,
+    invocationCount: ledger.invocations.length,
     emit: { command: emit.command, exitCode: emit.exitCode, timedOut: emit.timedOut, purpose: 'diagnostic emission only (--noCheck)' },
     typecheck: {
       command: typecheck.command,
@@ -508,9 +642,28 @@ export function runColyseusProbes(root: string, outDir: string): ProbeRun {
       checks: record.result?.checks.length ?? 0,
       failures: (record.result?.checks ?? []).filter((check) => !check.ok).map((check) => `${check.name} :: ${check.detail}`),
       resultFile: relative(root, record.resultPath),
+      invocationId: record.invocationId,
       failureDetail: record.failureDetail,
     })),
-  });
+  };
+  writeJson(join(invocationDir, 'compatibility-verdict.json'), { schemaVersion: 1, taskId: 'UDG-003', ...compatibility });
+  writeJson(join(invocationDir, 'probe-run-index.json'), indexBody);
+
+  // The latest view, at the paths every existing reader already names. These are copies of one named
+  // invocation, and the attribution inside each file says which — so a partial overwrite is detectable.
+  writeJson(join(outDir, 'compatibility-verdict.json'), { schemaVersion: 1, taskId: 'UDG-003', ...compatibility });
+  writeJson(join(outDir, 'probe-run-index.json'), indexBody);
+  for (const name of [
+    'probe-project-typecheck.json',
+    'declaration-inventory.json',
+    'first-party-declarations.json',
+    'compatibility-verdict.json',
+    'probe-run-index.json',
+    ...PROBE_IDS.map((id) => `${id.replace('/', '-')}.probe-result.json`),
+  ]) {
+    const source = join(invocationDir, name);
+    if (existsSync(source)) copyFileSync(source, join(outDir, name));
+  }
 
   return {
     emit,

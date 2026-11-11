@@ -55,6 +55,16 @@ export interface ProbeResult {
   readonly limitations: readonly string[];
   readonly startedAt: string;
   readonly finishedAt: string;
+  /**
+   * Which probe invocation produced these bytes.
+   *
+   * Added after CI run 43053089415, where the workflow ran the probe suite twice into one directory and a
+   * later passing invocation overwrote a failing one, so the published evidence showed `PR-15 pass` for a
+   * run whose test step had failed. Every result file now names its invocation, which makes misattribution
+   * detectable instead of invisible: the `evidence.js probes` gate refuses a directory whose result files
+   * and index disagree.
+   */
+  readonly invocationId: string;
 }
 
 export class CheckList {
@@ -89,7 +99,7 @@ export class CheckList {
     return this.#checks.some((entry) => !entry.ok);
   }
 
-  build(probeId: string, subject: string, startedAt: string): ProbeResult {
+  build(probeId: string, subject: string, startedAt: string, invocationId: string): ProbeResult {
     const failed = this.failed;
     return {
       schemaVersion: 1,
@@ -103,6 +113,7 @@ export class CheckList {
       limitations: this.#limitations,
       startedAt,
       finishedAt: new Date().toISOString(),
+      invocationId,
     };
   }
 }
@@ -174,6 +185,19 @@ export function stripNonCode(text: string): string {
   return output;
 }
 
+/**
+ * The invocation this probe process belongs to.
+ *
+ * The runner passes `--invocation`. A probe started by hand gets an `adhoc-*` identifier, which is
+ * deliberate: it is attributable to a process and a moment, and it will not match an index the runner
+ * wrote, so hand-run bytes cannot be filed as if they came from the gated run.
+ */
+export function invocationIdFrom(argv: readonly string[]): string {
+  const given = flagValue(argv, '--invocation');
+  if (given !== undefined) return given;
+  return `adhoc-${new Date().toISOString().replace(/[:.]/g, '-')}-${String(process.pid)}`;
+}
+
 /** Read `--flag value` from a probe's argv, or undefined when the flag was not passed. */
 export function flagValue(argv: readonly string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
@@ -197,13 +221,14 @@ export async function runProbe(
   body: (checks: CheckList) => Promise<void>,
 ): Promise<ProbeResult> {
   const startedAt = new Date().toISOString();
+  const invocationId = invocationIdFrom(process.argv.slice(2));
   const checks = new CheckList();
   try {
     await body(checks);
   } catch (error) {
     checks.check('probe-completed', false, `probe threw: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
   }
-  const result = checks.build(probeId, subject, startedAt);
+  const result = checks.build(probeId, subject, startedAt, invocationId);
   writeResult(out, result);
   // A transport keeps sockets and timers alive, and a probe that never exits makes CI meaningless.
   // The result file is already on disk, so leaving by exit is honest rather than a swallow.

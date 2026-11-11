@@ -58,6 +58,36 @@ interface SentFrame {
   readonly wire: number;
 }
 
+/**
+ * Bounded settle for the client's acknowledgement: wait until it **stops moving**.
+ *
+ * The room-side settle answers "has the server finished consuming"; it cannot answer "has the client
+ * heard", because the ack rides a later patch. Waiting for `pendingCount === 0` would be wrong here: the
+ * strand this probe measures leaves the acknowledgement permanently below `sentCount`, so the honest
+ * condition is that the counter has stopped changing. Three consecutive unchanged samples at 50 ms,
+ * capped at 60 samples — bounded in both directions, and reported rather than assumed.
+ */
+async function ackSettled(handle: InputHandle<SequencedInputFrame>): Promise<{ lastProcessed: number; stableSamples: number; timedOut: boolean }> {
+  let previous = handle.lastProcessed;
+  let stable = 0;
+  let samples = 0;
+  for (; samples < 60; samples += 1) {
+    await sleep(50);
+    const now = handle.lastProcessed;
+    stable = now === previous ? stable + 1 : 0;
+    previous = now;
+    if (stable >= 3) return { lastProcessed: now, stableSamples: stable, timedOut: false };
+  }
+  return { lastProcessed: handle.lastProcessed, stableSamples: stable, timedOut: true };
+}
+
+/** The client-side surface the step gate needs: send a message type, read the field it echoes. */
+interface GateableRoom {
+  readonly sessionId: string;
+  readonly state: InputTraceState;
+  send(type: string, payload?: unknown): void;
+}
+
 /** A session S5 and S6 can legitimately measure: a live room plus the handle that drives it. */
 interface LiveSession {
   readonly room: { sessionId: string; state: InputTraceState; input: <T>() => InputHandle<T>; onStateChange: (cb: () => void) => unknown };
@@ -86,10 +116,6 @@ function snapshot(handle: InputHandle<SequencedInputFrame>, room: { sessionId: s
     sessionId: room.sessionId,
     replayBufferSize: handle.replayBufferSize,
   };
-}
-
-function skippedTotal(room: IdentityRoom): number {
-  return room.gaps.reduce((total, gap) => total + gap.skipped, 0);
 }
 
 /**
@@ -176,130 +202,239 @@ async function main(): Promise<void> {
         `accessor.at(${String(pendingSeq)}) resolved while the frame was pending; buffer depth at that moment ${String(depthDuringBurst)}`,
       );
 
-      // ── S2 — gaps: what does the server see when the buffer retires a frame it never stepped? ─────
-      const overRoom = await client.create<InputTraceState>('udg-pr15-identity', { bufferMaxSize: 4, tickRate: TICK_RATE }, InputTraceStateSchema);
-      const over = lastOf(identityRooms);
-      const overHandle: InputHandle<SequencedInputFrame> = overRoom.input<SequencedInputFrame>();
-      const overSent = await send(overHandle, 12, 5);
-      // Wait for the client to hear the ack for everything it sent, then take the room's own accounting.
-      // The condition is deliberately about the ack and not about a count the room could never reach: an
-      // evicted frame is never consumed, so the room's consumed list can never equal the frames sent.
-      await until(() => overHandle.pendingCount === 0, 4000);
-      const tailBefore = over === undefined ? 0 : overSent.length - over.consumedSeqs.length - skippedTotal(over);
-      const overGap = over?.gaps[0];
-      const evictedSeq = overGap === undefined ? 0 : overGap.from + 1;
-      const evictedFindable = over !== undefined && evictedSeq > 0 ? over.lookup(overRoom.sessionId, evictedSeq) : false;
-      const sizeBound = over === undefined ? 0 : Math.max(...over.sizeSamples);
-      const ackAtRest = overHandle.lastProcessed;
-      const steppedCount = over?.consumedSeqs.length ?? 0;
+      // ── S2 — retirement visibility, measured on settled, by-value snapshots ──────────────────────
+      //
+      // Three scenarios, because one scenario cannot show both shapes and the previous single scenario
+      // produced an artefact that contradicted itself (CI run 43053089415: `gaps` non-empty beside
+      // `skipped: 0`). Every scenario now (a) stops the sender, (b) waits on a **bounded server-side**
+      // settle condition — `accessor.size === 0`, not the client ack, which eviction can satisfy while the
+      // room is still stepping — and (c) reads one `IdentityRoom.snapshot(sessionId)`, whose collections
+      // are copies and whose totals are derived inside the copy.
+      //
+      //   S2a  controlled interior gap   — steps withheld at the probe's request, so the burst lands
+      //                                    inside one step window and the gap is arithmetic, not luck.
+      //   S2b  leading-only retirement   — retirement before the first consumed frame: counted, not
+      //                                    nameable, and the test must pass with no interior gap at all.
+      //   S2c  over-rate observation     — the original unsynchronised 2×-rate sender, asserted only on
+      //                                    invariants, because its interleaving genuinely varies.
 
-      checks.observe('S2_gap', {
-        sent: overSent.length,
-        consumedSeqs: over?.consumedSeqs ?? [],
-        gaps: over?.gaps ?? [],
-        skipped: over === undefined ? 0 : skippedTotal(over),
-        lastProcessed: ackAtRest,
-        sentCount: overHandle.sentCount,
-        pendingCount: overHandle.pendingCount,
-        sizeSamples: over?.sizeSamples ?? [],
-        firstGap: overGap ?? null,
+      // Handshake helpers. `suspend`/`resume` are ordinary room messages; the room gates its own step
+      // callback, and the state field lets the probe wait for confirmation instead of assuming it.
+      const gate = async (target: GateableRoom, value: 0 | 1): Promise<void> => {
+        await target.send(value === 1 ? 'suspend' : 'resume');
+        const seen = await until(() => target.state.suspended === value, 3000);
+        if (!seen) throw new Error(`the identity room never acknowledged suspended=${String(value)}`);
+      };
+
+      // ── S2a — a controlled interior gap: exact values, no timing dependence ──────────────────────
+      const gapRoom = await client.create<InputTraceState>('udg-pr15-identity', { bufferMaxSize: 4, tickRate: TICK_RATE }, InputTraceStateSchema);
+      const gap = lastOf(identityRooms);
+      const gapHandle: InputHandle<SequencedInputFrame> = gapRoom.input<SequencedInputFrame>();
+      const gapSentFirst = await send(gapHandle, 1, 0);
+      const gapSettled = gap !== undefined && await until(() => gap.drained(gapRoom.sessionId) && gap.consumedSeqs.length >= 1, 4000);
+      const beforeInterior = gap === undefined ? undefined : gap.snapshot(gapRoom.sessionId);
+
+      await gate(gapRoom, 1);
+      // One synchronous burst: no `await` between sends, so nothing else on the client can interleave,
+      // and the room's own gate means no step can consume while the buffer is filling.
+      const gapBurst = await send(gapHandle, 6, 0);
+      await gate(gapRoom, 0);
+      const gapDrained = gap !== undefined && await until(() => gap.drained(gapRoom.sessionId), 4000);
+      const interior = gap === undefined ? undefined : gap.snapshot(gapRoom.sessionId);
+      const interiorGap = interior?.gaps[0];
+      const evictedSeq = interiorGap === undefined ? 0 : interiorGap.from + 1;
+      const evictedFindable = gap !== undefined && evictedSeq > 0 ? gap.lookup(gapRoom.sessionId, evictedSeq) : false;
+      const interiorGapTotal = gapSentFirst.length + gapBurst.length;
+
+      checks.observe('S2a_interiorGap', {
+        sentTotal: interiorGapTotal,
+        settledBeforeGate: gapSettled,
+        drainedAfterResume: gapDrained,
+        before: beforeInterior ?? null,
+        after: interior ?? null,
         evictedSeq,
         evictedFindable,
       });
       checks.check(
-        'I2-a-retired-frame-leaves-a-gap-in-the-stamped-sequence',
-        overGap !== undefined,
-        overGap === undefined
-          ? 'no gap observed — the buffer retired nothing in this scenario'
-          : `first gap at tick ${String(overGap.tick)}: consumed ${String(overGap.from)} then ${String(overGap.to)}, ${String(overGap.skipped)} sequence(s) never stepped`,
+        'I2a-the-step-gate-held-a-window-without-counting-it-as-a-tick',
+        (interior?.suspendedSkips ?? 0) >= 1 && (interior?.ticks ?? 0) > 0,
+        `the room withheld ${String(interior?.suspendedSkips ?? -1)} step(s) during the gate and still counted ${String(interior?.ticks ?? -1)} real ticks — a withheld window is not a tick that consumed nothing`,
       );
       checks.check(
-        'I2-inner-gaps-are-named-exactly-by-the-consumed-sequence',
-        over !== undefined && skippedTotal(over) > 0 && steppedCount + skippedTotal(over) <= overSent.length,
-        `stepped ${String(steppedCount)} plus ${String(over === undefined ? -1 : skippedTotal(over))} named skipped sequences against ${String(overSent.length)} sent`,
+        'I2a-the-controlled-gap-is-named-exactly',
+        interiorGap !== undefined
+          && interiorGap.from === 1
+          && interiorGap.to === 4
+          && interiorGap.skipped === 2
+          && (interior?.gaps.length ?? 0) === 1,
+        interiorGap === undefined
+          ? 'no gap recorded — the controlled construction failed, which is a real finding, not a flake'
+          : `consumed ${String(interiorGap.from)} then ${String(interiorGap.to)} at tick ${String(interiorGap.tick)}: exactly ${String(interiorGap.skipped)} sequences never stepped, and it is the only gap`,
       );
-      // The tail case is the one a resolution record must not depend on: everything the room consumed is
-      // adjacent, so nothing in the room's own view says "three more were retired after that".
       checks.check(
-        'I2-retirement-after-the-last-consumed-frame-is-invisible-to-the-room',
-        tailBefore > 0,
-        `${String(tailBefore)} frame(s) retired beyond the last consumed sequence produce no gap record while the sender is silent — only the client's own sentCount sees them`,
+        'I2a-consumption-order-is-exactly-what-the-construction-predicts',
+        (interior?.consumedSeqs.join(',') ?? '') === '1,4,5,6,7',
+        `expected 1,4,5,6,7 from a bound of 4 and a 1+6 burst; observed ${interior?.consumedSeqs.join(',') ?? 'nothing'}`,
       );
       checks.check(
-        'I2-evicted-frames-are-not-retrievable-through-the-accessor',
-        !evictedFindable,
+        'I2a-the-snapshot-derives-its-own-total',
+        (interior?.skipped ?? -1) === (interior?.gaps.reduce((total, entry) => total + entry.skipped, 0) ?? -1)
+          && (interior?.skipped ?? 0) === 2,
+        `skipped ${String(interior?.skipped ?? -1)} derived inside the snapshot from the copied array, so no caller can pair a grown array with a stale total`,
+      );
+      checks.check(
+        'I2a-evicted-frames-are-not-retrievable-through-the-accessor',
+        !evictedFindable && evictedSeq === 2,
         `accessor.at(${String(evictedSeq)}) for a skipped sequence returned ${evictedFindable ? 'a frame' : 'nothing'} — the server cannot re-read what overflow dropped`,
       );
       checks.check(
-        'I2-the-acknowledgement-counts-frames-that-were-never-stepped',
-        ackAtRest === overSent.length && steppedCount < overSent.length,
-        `lastProcessed ${String(ackAtRest)} equals frames sent (${String(overSent.length)}) while only ${String(steppedCount)} entered state; ${String(overSent.length - steppedCount)} retired unrepresented`,
+        'I2a-buffer-depth-never-exceeded-its-bound',
+        (interior?.peakSize ?? 99) <= 4 && (interior?.bufferMaxSize ?? 0) === 4,
+        `peak observed depth ${String(interior?.peakSize ?? -1)} against bufferMaxSize 4; depth is observable, but PR-13 measured that observing it is not prevention`,
       );
       checks.check(
-        'I2-buffer-depth-reaches-its-bound-before-the-first-gap',
-        over !== undefined && over.gaps.length > 0 && sizeBound >= 4,
-        `size samples reached ${String(sizeBound)} against bufferMaxSize 4; first gap at tick ${String(overGap === undefined ? -1 : overGap.tick)} — depth is observable, but PR-13 already measured that observing it is not prevention against an over-rate sender`,
+        'I2a-the-acknowledgement-counts-frames-that-were-never-stepped',
+        (interior?.retiredUnrepresented ?? -1) === 2 && (interior?.consumedSeqs.length ?? 0) === 5,
+        `${String(interior?.consumedSeqs.length ?? -1)} frames entered state while accessor.consumedCount reached ${String(interior?.accessorConsumedCount ?? -1)}: ${String(interior?.retiredUnrepresented ?? -1)} retired unrepresented, and the ack treats them as consumed`,
       );
 
-      // A gap needs two endpoints. Everything retired before the room's first consumed frame has no
-      // earlier endpoint, so the room cannot name those sequences at all — it can only count them, from
-      // `consumedCount`, which overflow also advances. This is the case a resolution record must not be
-      // allowed to paper over: resolving sequence 5 must not imply 1 to 4 were resolved.
-      const firstConsumed = over?.consumedSeqs[0] ?? 0;
-      const unnamedLeading = firstConsumed > 0 ? firstConsumed - 1 : 0;
-      const consumedCountAtS2 = over?.consumedCountAfter[over.consumedCountAfter.length - 1] ?? 0;
-      checks.observe('S2b_unnamedRetirement', {
-        firstConsumedSeq: firstConsumed,
-        unnamedLeading,
-        namedSkipsSoFar: over === undefined ? 0 : skippedTotal(over),
-        stepped: steppedCount,
-        accessorConsumedCount: consumedCountAtS2,
-        countFromAccessor: consumedCountAtS2 - steppedCount,
-        countFromClientSide: overSent.length - steppedCount,
+      // ── S2b — leading-only retirement: known count, no observable interior gap ──────────────────
+      // A gap needs two endpoints. Retirements before the room's first consumed frame have no earlier
+      // endpoint, so the room cannot name them; it can only count them. This scenario exists so the suite
+      // proves the count is trustworthy *without* an interior gap, which is the shape the previous
+      // scenario conflated: it sometimes produced a leading-only run and then failed an exact-gap
+      // assertion that should never have applied to it.
+      const leadRoom = await client.create<InputTraceState>('udg-pr15-identity', { bufferMaxSize: 4, tickRate: TICK_RATE }, InputTraceStateSchema);
+      const lead = lastOf(identityRooms);
+      const leadHandle: InputHandle<SequencedInputFrame> = leadRoom.input<SequencedInputFrame>();
+      await gate(leadRoom, 1);
+      const leadSent = await send(leadHandle, 8, 0);
+      await gate(leadRoom, 0);
+      const leadDrained = lead !== undefined && await until(() => lead.drained(leadRoom.sessionId), 4000);
+      const leading = lead === undefined ? undefined : lead.snapshot(leadRoom.sessionId);
+
+      checks.observe('S2b_leadingOnly', {
+        sent: leadSent.length,
+        drainedAfterResume: leadDrained,
+        snapshot: leading ?? null,
       });
       checks.check(
-        'I2-retirement-before-the-first-consumed-frame-cannot-be-named-by-the-room',
-        unnamedLeading > 0,
-        `first consumed sequence was ${String(firstConsumed)}, so ${String(unnamedLeading)} retired sequence(s) have no earlier endpoint to hang a gap on — the room cannot name them`,
+        'I2b-leading-retirement-is-counted-and-not-nameable',
+        (leading?.unnamedLeading ?? 0) === 4 && (leading?.gaps.length ?? 1) === 0 && (leading?.firstConsumedSeq ?? 0) === 5,
+        leading === undefined
+          ? 'no snapshot'
+          : `first consumed sequence ${String(leading.firstConsumedSeq)}, so ${String(leading.unnamedLeading)} retirements have no earlier endpoint; interior gaps recorded: ${String(leading.gaps.length)} — the count is exact while the identities are unnameable`,
       );
       checks.check(
-        'I2-consumedCount-counts-every-unrepresented-retirement-though-not-by-identity',
-        consumedCountAtS2 - steppedCount === overSent.length - steppedCount,
-        `accessor.consumedCount ${String(consumedCountAtS2)} minus frames stepped ${String(steppedCount)} = ${String(consumedCountAtS2 - steppedCount)}, matching the client-side count ${String(overSent.length - steppedCount)}: the total is observable, the identities are not`,
+        'I2b-the-count-agrees-from-both-sides-without-any-gap-evidence',
+        (leading?.retiredUnrepresented ?? -1) === leadSent.length - (leading?.consumedSeqs.length ?? 0)
+          && (leading?.retiredUnrepresented ?? 0) > 0,
+        `accessor.consumedCount ${String(leading?.accessorConsumedCount ?? -1)} minus ${String(leading?.consumedSeqs.length ?? -1)} stepped = ${String(leading?.retiredUnrepresented ?? -1)}, matching the client's own ${String(leadSent.length - (leading?.consumedSeqs.length ?? 0))} with zero nameable gaps`,
+      );
+      checks.check(
+        'I2b-a-drained-room-accounts-for-every-retirement-exactly-once',
+        leadDrained
+          && (leading?.accessorConsumedCount ?? -1) === (leading?.consumedSeqs.length ?? -1) + (leading?.skipped ?? -1) + (leading?.unnamedLeading ?? -1),
+        `consumedCount ${String(leading?.accessorConsumedCount ?? -1)} = stepped ${String(leading?.consumedSeqs.length ?? -1)} + named skips ${String(leading?.skipped ?? -1)} + unnameable leading ${String(leading?.unnamedLeading ?? -1)} — once the accessor has drained, every retirement is accounted exactly once`,
+      );
+
+      // ── S2c — the unsynchronised over-rate sender, asserted on invariants only ───────────────────
+      const overRoom = await client.create<InputTraceState>('udg-pr15-identity', { bufferMaxSize: 4, tickRate: TICK_RATE }, InputTraceStateSchema);
+      const over = lastOf(identityRooms);
+      const overHandle: InputHandle<SequencedInputFrame> = overRoom.input<SequencedInputFrame>();
+      const overSent = await send(overHandle, 12, 5);
+      const overDrained = over !== undefined && await until(() => over.drained(overRoom.sessionId), 6000);
+      const overAck = await ackSettled(overHandle);
+      const overSnap = over === undefined ? undefined : over.snapshot(overRoom.sessionId);
+      const overStepped = overSnap?.consumedSeqs.length ?? 0;
+      const overMonotonic = (overSnap?.consumedSeqs ?? []).every((seq, index) => index === 0 || seq > (overSnap?.consumedSeqs[index - 1] ?? -1));
+
+      checks.observe('S2c_overRateObservation', {
+        sent: overSent.length,
+        drained: overDrained,
+        snapshot: overSnap ?? null,
+        lastProcessed: overHandle.lastProcessed,
+        sentCount: overHandle.sentCount,
+        pendingCount: overHandle.pendingCount,
+        ackSettle: overAck,
+      });
+      checks.check(
+        'I2c-the-over-rate-run-stays-inside-its-bound-and-accounts-exactly',
+        overDrained
+          && (overSnap?.peakSize ?? 99) <= 4
+          && overMonotonic
+          && (overSnap?.accessorConsumedCount ?? -1) === overStepped + (overSnap?.skipped ?? -1) + (overSnap?.unnamedLeading ?? -1),
+        `peak depth ${String(overSnap?.peakSize ?? -1)} of 4, consumption strictly increasing, and consumedCount ${String(overSnap?.accessorConsumedCount ?? -1)} = stepped ${String(overStepped)} + named ${String(overSnap?.skipped ?? -1)} + leading ${String(overSnap?.unnamedLeading ?? -1)}. Exact positions are not asserted: which frames survive to the first step genuinely depends on arrival interleaving`,
+      );
+      checks.check(
+        'I2c-the-acknowledgement-reached-everything-sent-though-little-was-stepped',
+        overAck.timedOut === false
+          && overAck.lastProcessed === overSent.length
+          && overStepped < overSent.length,
+        `lastProcessed ${String(overHandle.lastProcessed)} equals frames sent (${String(overSent.length)}) while ${String(overStepped)} entered state; ${String(overSent.length - overStepped)} retired unrepresented and the ack counts them as consumed`,
       );
 
       // ── S3 — the second drop path: seqField dedupe discards a replayed sequence before the buffer ──
-      const dedupeStart = overHandle.sentCount;
-      const replayedStamp = overSent[0]?.returned ?? 1;
-      Object.assign(overHandle.data, frame(950, replayedStamp));
-      const replayedWire = overHandle.send();
-      Object.assign(overHandle.data, frame(951, overHandle.sentCount + 1));
-      overHandle.send();
-      if (over !== undefined) await sleep(400);
-      const gapsAcrossDedupe = over === undefined ? 0 : skippedTotal(over);
+      // Controlled the same way, on the S2a room, so the revealing frame is exactly one ahead of the
+      // replayed stamp and the named gap it produces is exact.
+      const beforeDedupe = gap === undefined ? undefined : gap.snapshot(gapRoom.sessionId);
+      const dedupeStart = gapHandle.sentCount;
+      const replayedStamp = beforeDedupe?.consumedSeqs[1] ?? 4;
+      await gate(gapRoom, 1);
+      Object.assign(gapHandle.data, frame(950, replayedStamp));
+      const replayedWire = gapHandle.send();
+      Object.assign(gapHandle.data, frame(951, gapHandle.sentCount + 1));
+      const freshWire = gapHandle.send();
+      await gate(gapRoom, 0);
+      const dedupeDrained = gap !== undefined && await until(() => gap.drained(gapRoom.sessionId), 4000);
+      const dedupeAck = await ackSettled(gapHandle);
+      const afterDedupe = gap === undefined ? undefined : gap.snapshot(gapRoom.sessionId);
+      const dedupeGap = afterDedupe?.gaps[afterDedupe.gaps.length - 1];
+      const replayedFindable = gap !== undefined ? gap.lookup(gapRoom.sessionId, freshWire - 1) : false;
+
       checks.observe('S3_replayedSequence', {
         replayedStamp,
         replayedWire,
+        freshWire,
         sendsBefore: dedupeStart,
-        sendsAfter: overHandle.sentCount,
-        consumedSeqs: over?.consumedSeqs ?? [],
-        lastProcessed: overHandle.lastProcessed,
-        pendingCount: overHandle.pendingCount,
+        sendsAfter: gapHandle.sentCount,
+        drainedAfterResume: dedupeDrained,
+        ackSettle: dedupeAck,
+        before: beforeDedupe ?? null,
+        after: afterDedupe ?? null,
+        lastProcessed: gapHandle.lastProcessed,
+        pendingCount: gapHandle.pendingCount,
       });
       checks.check(
         'I3-a-replayed-sequence-is-dropped-before-the-buffer',
-        over !== undefined && !over.consumedSeqs.slice(steppedCount).includes(replayedStamp),
-        `stamped ${String(replayedStamp)} again at wire ${String(replayedWire)}; the accessor consumed no such frame — dedupe runs before buffering, so the room never sees it`,
+        (afterDedupe?.consumedSeqs.includes(freshWire - 1) ?? true) === false
+          && replayedFindable === false
+          && dedupeDrained,
+        `stamped ${String(replayedStamp)} again at wire ${String(replayedWire)}, then a fresh stamp at ${String(freshWire)}: the accessor consumed no frame for ${String(freshWire - 1)} and cannot retrieve it — dedupe runs before buffering, so the room never sees it`,
       );
       checks.check(
-        'I3-a-dropped-replay-surfaces-as-a-gap-only-when-a-later-frame-arrives',
-        gapsAcrossDedupe > (over === undefined ? 0 : skippedTotal(over) - 1),
-        `named skips after the replayed stamp and one further frame: ${String(gapsAcrossDedupe)}; consumed ${String(over?.consumedSeqs.join(',') ?? '')}`,
+        'I3-a-dropped-replay-surfaces-as-a-named-gap-only-when-a-later-frame-arrives',
+        dedupeGap !== undefined
+          && dedupeGap.from === (beforeDedupe?.consumedSeqs[beforeDedupe.consumedSeqs.length - 1] ?? -1)
+          && dedupeGap.to === freshWire
+          && dedupeGap.skipped === 1,
+        dedupeGap === undefined
+          ? 'no gap recorded after the replayed stamp'
+          : `consumed ${String(dedupeGap.from)} then ${String(dedupeGap.to)}: exactly ${String(dedupeGap.skipped)} sequence skipped, which is the hole the dedupe left`,
+      );
+      checks.check(
+        'I3-pre-buffer-discard-is-invisible-to-the-retirement-count',
+        (afterDedupe?.retiredUnrepresented ?? -1) === (beforeDedupe?.retiredUnrepresented ?? -2),
+        `retiredUnrepresented stayed ${String(afterDedupe?.retiredUnrepresented ?? -1)} (was ${String(beforeDedupe?.retiredUnrepresented ?? -1)}) across a real discard: consumedCount never saw the frame, so only the named gap records it`,
       );
       checks.check(
         'I3-dedupe-desynchronises-the-ack-from-the-client-sequence',
-        overHandle.lastProcessed < overHandle.sentCount,
-        `after one pre-buffer drop: lastProcessed ${String(overHandle.lastProcessed)} < sentCount ${String(overHandle.sentCount)} (pendingCount ${String(overHandle.pendingCount)}) — pruning on "seq <= lastProcessed" would strand an input the server already discarded`,
+        dedupeAck.timedOut === false
+          && dedupeAck.lastProcessed === gapHandle.sentCount - 1
+          && gapHandle.pendingCount === 1,
+        dedupeAck.timedOut
+          ? 'the acknowledgement was still moving when the bound expired — the strand claim cannot be made from a unsettled counter'
+          : `after one pre-buffer drop: lastProcessed ${String(dedupeAck.lastProcessed)} sits permanently one below sentCount ${String(gapHandle.sentCount)} with pendingCount ${String(gapHandle.pendingCount)} — pruning on "seq <= lastProcessed" would strand an input the server already discarded`,
       );
 
       // ── S4 — the reconnect domain: what carries across, and what silently does not? ──────────────
@@ -542,7 +677,11 @@ async function main(): Promise<void> {
         ackAndStateAreOneDelivery: ackChangesWithoutPatch === 0 && slowAckMovesWithoutPatch === 0,
         unsettledWindowAtDefaultCadence: maxDelta,
         unsettledWindowAtSlowCadence: slowMaxDelta,
-        preBufferDedupeBreaksSeqEqualsAck: overHandle.lastProcessed < overHandle.sentCount,
+        // Measured where the claim is about: the pre-buffer drop in S3 leaves the acknowledgement
+        // permanently one below the client's own count. The over-rate case is not evidence here — its
+        // acknowledgement does catch up, because it is a send-order watermark, not a disposition.
+        preBufferDedupeBreaksSeqEqualsAck: dedupeAck.timedOut === false
+          && dedupeAck.lastProcessed < gapHandle.sentCount,
       });
       checks.observe('supportedPrerequisite', {
         needed: 'one uint32 per-frame sequence field on DirectInputSchema, declared as the room seqField and stamped sentCount + 1 by the client',

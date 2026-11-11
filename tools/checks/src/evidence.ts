@@ -198,6 +198,9 @@ export interface CapturePlan {
  * producing a vector would still exit zero, and a manifest written by the same suite would happily describe
  * the smaller set. Here the expectation is fixed, and both the manifest and the bytes are checked against it.
  */
+/** The ledger file name. Mirrored by `tests/probes/colyseus-server.probe.ts`, which writes it. */
+export const PROBE_LEDGER_FILE = 'probe-invocations.json';
+
 export const PHASE_1_VECTOR_FILES: readonly string[] = [
   'pa1-1-pa1-2-cutoff-consumption.json',
   'pa1-3-generation.json',
@@ -606,10 +609,17 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       'measurements/UDG-003.json',
       'vectors/vectors-manifest.json',
       ...PHASE_1_VECTOR_FILES.map((name) => `vectors/${name}`),
+      // The probe bytes and their attribution ledger, hashed alongside everything else. A bundle that
+      // cannot say which invocation wrote its probe results is not evidence about the stack.
+      'probes/probe-run-index.json',
+      `probes/${PROBE_LEDGER_FILE}`,
       'report.json',
     ],
     requiresMeasurements: true,
-    artefactsIntoBundle: [{ source: 'artifacts/udg-003-phase-1', target: 'vectors/' }],
+    artefactsIntoBundle: [
+      { source: 'artifacts/udg-003-phase-1', target: 'vectors/' },
+      { source: 'artifacts/probes', target: 'probes/' },
+    ],
     manifestArtefacts: ['vectors/vectors-manifest.json'],
     manifestRequiredFiles: [...PHASE_1_VECTOR_FILES],
     measurementsIntoBundle: true,
@@ -662,6 +672,11 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
           UDG_EVIDENCE_JUNIT: 'BUNDLE/junit.xml',
           UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-003.json',
           UDG_VECTORS_OUT: 'BUNDLE/vectors',
+          // This is the second probe invocation in the job, after the workflow's own `ci-test-step`.
+          // It writes its own attributed directory instead of overwriting that one, so a probe failure
+          // discovered during capture cannot be hidden behind a passing earlier invocation - the defect
+          // that let CI run 43053089415 publish `PR-15 pass` beside a failed test step.
+          UDG_PROBE_INVOCATION: 'evidence-capture',
         },
         junit: true,
         measurements: true,
@@ -1253,6 +1268,7 @@ export type VerifyCode =
   | 'EVIDENCE-ARTEFACT-TASK-MISMATCH'
   | 'EVIDENCE-PHASE-MISMATCH'
   | `EVIDENCE-${VectorIssueCode}`
+  | ProbeInvocationCode
   | 'EVIDENCE-PATH-ESCAPE';
 
 export interface VerifyIssue {
@@ -1295,6 +1311,173 @@ const HEX64 = /^[0-9a-f]{64}$/;
 const HEX40 = /^[0-9a-f]{40}$/;
 
 /** Verify a bundle against the contract rules. Never trusts the recorded status alone. */
+/** Codes the probe-invocation gate can raise. Shared by the `probes` command and `verify`. */
+export type ProbeInvocationCode =
+  | 'PROBE-INVOCATION-INDEX-MISSING'
+  | 'PROBE-INVOCATION-UNATTRIBUTED'
+  | 'PROBE-INVOCATION-MISMATCH'
+  | 'PROBE-INVOCATION-UNLEDGERED'
+  | 'PROBE-INVOCATION-UNDISCLOSED-FAILURE'
+  | 'PROBE-INVOCATION-EVIDENCE-LOST'
+  | 'PROBE-INVOCATION-FAILED';
+
+export interface ProbeInvocationIssue {
+  readonly code: ProbeInvocationCode;
+  readonly detail: string;
+}
+
+export interface ProbeInvocationLedgerEntry {
+  readonly invocationId: string;
+  readonly requestedId?: string;
+  readonly purpose?: string;
+  readonly allPass: boolean;
+  readonly failedProbes?: readonly string[];
+  readonly directory: string;
+  readonly indexFile: string;
+}
+
+const readProbeIndex = (directory: string): Record<string, unknown> | undefined => {
+  const raw = readOptional(join(directory, 'probe-run-index.json'));
+  if (raw === undefined) return undefined;
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+};
+
+const ledgerEntries = (ledgerPath: string): readonly ProbeInvocationLedgerEntry[] | undefined => {
+  const raw = readOptional(ledgerPath);
+  if (raw === undefined) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as { invocations?: unknown };
+    if (!Array.isArray(parsed.invocations)) return [];
+    return parsed.invocations.filter(
+      (entry): entry is ProbeInvocationLedgerEntry =>
+        typeof entry === 'object' && entry !== null
+        && typeof (entry as Record<string, unknown>)['invocationId'] === 'string'
+        && typeof (entry as Record<string, unknown>)['directory'] === 'string'
+        && typeof (entry as Record<string, unknown>)['allPass'] === 'boolean',
+    );
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * Does this probe directory say, truthfully, which invocation produced every file in it?
+ *
+ * The workflow runs the probe suite more than once per job — the contract suite, then evidence capture
+ * running `pnpm test` again. While both wrote the same paths, a passing invocation could overwrite a
+ * failing one: CI run 43053089415 published `PR-15 pass` for a run whose test step had failed, and the
+ * failing bytes were unrecoverable. This gate is the rule that makes that impossible to file:
+ *
+ *  - every result file names the invocation that wrote it, and it must match the index;
+ *  - the index must appear in the append-only ledger;
+ *  - every invocation in the ledger must still have its own directory and index on disk, so a retained
+ *    failure cannot be quietly deleted;
+ *  - any invocation that failed is reported, whether or not a later one passed, and the index must have
+ *    disclosed it.
+ *
+ * A directory with no probes at all is not this gate's business, so it stays silent only when the index
+ * is absent *and* the directory itself does not exist.
+ */
+export function probeInvocationIssues(probesDir: string): readonly ProbeInvocationIssue[] {
+  const issues: ProbeInvocationIssue[] = [];
+  const indexPath = join(probesDir, 'probe-run-index.json');
+  if (!existsSync(probesDir) || !existsSync(indexPath)) {
+    return [{ code: 'PROBE-INVOCATION-INDEX-MISSING', detail: `${probesDir} holds no probe-run-index.json, so no probe evidence can be attributed` }];
+  }
+
+  const index = readProbeIndex(probesDir);
+  if (index === undefined) {
+    return [{ code: 'PROBE-INVOCATION-INDEX-MISSING', detail: 'probe-run-index.json is not readable JSON' }];
+  }
+  const invocation = index['invocation'] as Record<string, unknown> | undefined;
+  const invocationId = typeof invocation?.['invocationId'] === 'string' ? invocation['invocationId'] : undefined;
+  if (invocationId === undefined || invocationId === '') {
+    issues.push({
+      code: 'PROBE-INVOCATION-UNATTRIBUTED',
+      detail: 'probe-run-index.json names no invocation, so nothing in this directory can be traced to a run',
+    });
+  }
+
+  // Every top-level result file must carry the same attribution as the index that publishes it.
+  const resultFiles = readdirSync(probesDir).filter((name) => name.endsWith('.probe-result.json')).sort();
+  for (const name of resultFiles) {
+    let fileInvocation: string | undefined;
+    try {
+      const parsed = JSON.parse(readFileSync(join(probesDir, name), 'utf8')) as { invocationId?: unknown };
+      fileInvocation = typeof parsed.invocationId === 'string' ? parsed.invocationId : undefined;
+    } catch {
+      issues.push({ code: 'PROBE-INVOCATION-MISMATCH', detail: `${name} is not readable JSON, so its invocation cannot be checked` });
+      continue;
+    }
+    if (invocationId === undefined) continue;
+    if (fileInvocation === undefined) {
+      issues.push({
+        code: 'PROBE-INVOCATION-MISMATCH',
+        detail: `${name} carries no invocationId, so it cannot be shown to belong to invocation ${invocationId}`,
+      });
+      continue;
+    }
+    if (fileInvocation !== invocationId) {
+      issues.push({
+        code: 'PROBE-INVOCATION-MISMATCH',
+        detail: `${name} was written by invocation ${fileInvocation} but the index attributes it to ${invocationId} — evidence attributed to the wrong invocation`,
+      });
+    }
+  }
+
+  // The ledger: append-only, one entry per invocation, and every entry's bytes still present.
+  const ledgerPath = join(probesDir, PROBE_LEDGER_FILE);
+  const entries = ledgerEntries(ledgerPath);
+  if (entries === undefined) {
+    issues.push({
+      code: 'PROBE-INVOCATION-UNLEDGERED',
+      detail: `${PROBE_LEDGER_FILE} is absent, so the run cannot show which invocations happened or whether any of them failed`,
+    });
+    return issues;
+  }
+  if (invocationId !== undefined && !entries.some((entry) => entry.invocationId === invocationId)) {
+    issues.push({
+      code: 'PROBE-INVOCATION-UNLEDGERED',
+      detail: `the ledger does not name invocation ${invocationId}, which its own index claims to be`,
+    });
+  }
+
+  const disclosed = Array.isArray(index['failedInvocations']) ? (index['failedInvocations'] as readonly unknown[]) : [];
+  for (const entry of entries) {
+    // A ledger entry is written with paths relative to the repository, but the same ledger is verified
+    // from inside a bundle where those paths are one level deeper. Both layouts end in
+    // `invocations/<invocationId>`, so the retained bytes are looked for by that shape too.
+    const candidates = [
+      join(probesDir, 'invocations', basename(entry.directory), 'probe-run-index.json'),
+      resolve(probesDir, entry.directory, 'probe-run-index.json'),
+      resolve(entry.indexFile),
+    ];
+    if (!candidates.some((candidate) => existsSync(candidate))) {
+      issues.push({
+        code: 'PROBE-INVOCATION-EVIDENCE-LOST',
+        detail: `invocation ${entry.invocationId} has no retained directory or index, so its evidence cannot be reviewed${entry.allPass ? '' : ' — including its failure'}`,
+      });
+    }
+    if (!entry.allPass) {
+      issues.push({
+        code: 'PROBE-INVOCATION-FAILED',
+        detail: `invocation ${entry.invocationId}${entry.purpose === undefined ? '' : ` (${entry.purpose})`} recorded a failing probe: ${(entry.failedProbes ?? ['unknown']).join(', ')}. A later passing invocation does not retire it`,
+      });
+      if (!disclosed.includes(entry.invocationId)) {
+        issues.push({
+          code: 'PROBE-INVOCATION-UNDISCLOSED-FAILURE',
+          detail: `invocation ${entry.invocationId} failed but the latest index does not list it in failedInvocations — a green latest view cannot hide an earlier red`,
+        });
+      }
+    }
+  }
+  return issues;
+}
+
 export const verify = (root: string, runRelative: string): VerifyResult => {
   const issues: VerifyIssue[] = [];
   const absoluteRunDir = resolve(root, runRelative);
@@ -1540,6 +1723,14 @@ export const verify = (root: string, runRelative: string): VerifyResult => {
           issues.push({ code: 'EVIDENCE-COMMAND-MISSING', detail: `${step.label} was never run` });
         }
       }
+    }
+  }
+
+  // A bundle that carries probe evidence must be able to say which invocation wrote it. Silent when the
+  // bundle holds no probes, because most tasks publish none.
+  if (existsSync(join(absoluteRunDir, 'probes'))) {
+    for (const issue of probeInvocationIssues(join(absoluteRunDir, 'probes'))) {
+      issues.push({ code: issue.code, detail: issue.detail });
     }
   }
 
@@ -2276,6 +2467,18 @@ const main = (): number => {
     );
     return 0;
   }
+  if (mode === 'probes') {
+    // The CI gate for probe attribution, independent of any bundle: unattributed bytes, a result file
+    // belonging to another invocation, a vanished invocation directory, or an undisclosed failing
+    // invocation all exit non-zero. This is the rule that stops a passing invocation laundering a
+    // failing one inside the same job.
+    const directory = requireFlag(flags, 'dir', 'usage: evidence.js probes --dir <probesDirectory>');
+    const issues = probeInvocationIssues(resolve(process.cwd(), directory));
+    for (const issue of issues) process.stderr.write(`::error::${issue.code}: ${issue.detail}\n`);
+    if (issues.length > 0) return 1;
+    process.stdout.write('PASS probe invocations: every artefact attributed, every failure disclosed\n');
+    return 0;
+  }
   if (mode === 'plans') {
     // CI iterates this list, so a task that gains a capture plan is exercised without editing the
     // workflow, and a workflow that names a task with no plan is visible as a gap.
@@ -2300,6 +2503,8 @@ const main = (): number => {
       '  evidence.js summary   --run <bundle> [--out <file>] [--storage <location>] [--ci-status <s>] [--ci-url <u>]\n' +
       '  evidence.js vectors   --dir artifacts/udg-003-phase-1 [--expect-task UDG-003] [--expect-phase phase-1] [--allow-dirty]\n' +
       '                      (validate the Phase 1 vector manifest and the bytes it names)\n' +
+      '  evidence.js probes     --dir <probesDirectory>\n' +
+      '                      (refuse probe evidence that is unattributed, misattributed, or hides a failed invocation)\n' +
       '  evidence.js plans      (list the task ids that have a capture plan)\n' +
       '  evidence.js checksums [--write]\n',
   );

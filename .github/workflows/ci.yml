@@ -97,6 +97,10 @@ jobs:
       - name: Run the UDG-003 Phase 0 probe suite
         env:
           UDG_PROBE_OUT: artifacts/probes
+          # Named, because evidence capture runs the probe suite a second time in this job. Each
+          # invocation now writes its own attributed directory, so a later passing run can no longer
+          # overwrite a failing one - which is what CI run 43053089415 published without saying.
+          UDG_PROBE_INVOCATION: ci-test-step
         run: pnpm test:contract -- --task UDG-003
 
       # Phase 1's own evidence, separate from the UDG-001 and UDG-002 bundles below: the vectors are the
@@ -114,6 +118,15 @@ jobs:
           pnpm exec vitest run tests/unit/udg-003/vectors.test.ts
           pnpm --filter @udg/checks build
           node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-1
+
+      # Probe evidence is only evidence if it can say which invocation wrote it. This step checks every
+      # invocation the job produced - including a failing one - and fails on unattributed bytes, on a
+      # result file attributed to the wrong invocation, and on any failed invocation that the latest index
+      # does not disclose. It runs even after an earlier failure, so the attribution check is never the
+      # thing that got skipped.
+      - name: Verify probe invocation attribution
+        if: ${{ !cancelled() }}
+        run: pnpm evidence:probes -- --dir artifacts/probes
 
       - name: Verify the contract checksum manifest is in sync
         run: pnpm contracts:checksums

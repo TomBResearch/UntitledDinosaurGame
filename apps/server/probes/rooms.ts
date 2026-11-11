@@ -503,6 +503,16 @@ export const InputTraceStateSchema = schema(
     position: t.float64().default(0),
     /** Count of gaps the room detected in the stamped sequence, so the client can see them at all. */
     gapCount: t.uint32().default(0),
+    /**
+     * `1` while the room is withholding steps at the probe's request.
+     *
+     * The field exists so the suspend handshake is *observable* rather than assumed: the probe waits for
+     * the patch that confirms the room stopped stepping before it sends a burst that must land inside one
+     * step window. `Room.setFixedTimestep` returns `void`, so there is no timer to clear; the gate is the
+     * room's own decision inside its own step callback, and it is what turns the interior-gap case from a
+     * race into arithmetic.
+     */
+    suspended: t.uint32().default(0),
   },
   'InputTraceStateSchema',
 );
@@ -539,6 +549,8 @@ export class IdentityRoom extends Room<{ state: InputTraceState; input: Sequence
   /** Lookups by stamped seq, recording whether the accessor could still find the frame. */
   readonly lookups: { seq: number; found: boolean }[] = [];
   readonly sessions: string[] = [];
+  /** Steps withheld at the probe's request, counted so the artefact says how many were skipped. */
+  suspendedSkips = 0;
   ticks = 0;
   private session: string | undefined;
   private useSeqField = true;
@@ -556,6 +568,17 @@ export class IdentityRoom extends Room<{ state: InputTraceState; input: Sequence
       ? this.defineInput(SequencedInputSchema, { bufferMaxSize: this.bufferMaxSize, seqField: 'seq' })
       : this.defineInput(SequencedInputSchema, { bufferMaxSize: this.bufferMaxSize });
 
+    // Step gate over the message channel: public API in both directions. The client sends a message
+    // type, the room gates its own step callback. No private field of the library is touched.
+    this.onMessage('suspend', (): void => {
+      this.suspendSteps = true;
+      this.state.suspended = 1;
+    });
+    this.onMessage('resume', (): void => {
+      this.suspendSteps = false;
+      this.state.suspended = 0;
+    });
+
     this.setFixedTimestep((): void => {
       this.step();
     }, options.tickRate ?? 20);
@@ -565,6 +588,9 @@ export class IdentityRoom extends Room<{ state: InputTraceState; input: Sequence
 
   /** The bound the library enforces for this accessor, recorded for the result file. */
   bufferMaxSize = 32;
+
+  /** Set while the probe needs a window in which no step can consume. */
+  private suspendSteps = false;
 
   override onJoin(client: ServerClient): void {
     this.session = client.sessionId;
@@ -605,7 +631,69 @@ export class IdentityRoom extends Room<{ state: InputTraceState; input: Sequence
     return this.inputs?.get(sessionId)?.size ?? -1;
   }
 
+  /** Whether this seat's accessor has drained — the bounded server-side settle condition. */
+  drained(sessionId: string): boolean {
+    const accessor = this.inputs?.get(sessionId);
+    return accessor !== undefined && accessor.size === 0;
+  }
+
+  /**
+   * One consistent, by-value capture of everything this room has observed.
+   *
+   * Every collection is copied and every total is derived inside the copy, so a published observation
+   * cannot mix two instants. The previous shape handed out a **live array reference** beside a `skipped`
+   * number computed at the moment of the call, and the artefact then contradicted itself: the retained
+   * bytes from CI run 43053089415 show `gaps: [{from:12,to:14,skipped:1}]` next to `skipped: 0`, because
+   * the array grew after the snapshot while the scalar could not. A snapshot is taken once, after the
+   * accessor has drained, and every reader downstream sees that one value.
+   */
+  snapshot(sessionId: string): IdentityRoomSnapshot {
+    const accessor = this.inputs?.get(sessionId);
+    const consumedSeqs = [...this.consumedSeqs];
+    const gaps = this.gaps.map((gap) => ({ ...gap }));
+    const sizeSamples = [...this.sizeSamples];
+    const resolutions = this.resolutions.map((entry) => ({ ...entry }));
+    const lookups = this.lookups.map((entry) => ({ ...entry }));
+    const consumedCount = accessor?.consumedCount ?? -1;
+    const stepped = consumedSeqs.length;
+    const firstConsumed = consumedSeqs[0];
+    return {
+      /**
+       * Every field of this object was read at the same instant, from one call. It is recorded in the
+       * artefact so a reader can tell an atomic capture from references assembled after the fact — the
+       * distinction CI run 43053089415 could not make, and the reason its bytes contradicted themselves.
+       */
+      capturedOnce: true,
+      ticks: this.ticks,
+      suspendedSkips: this.suspendedSkips,
+      bufferMaxSize: this.bufferMaxSize,
+      consumedSeqs,
+      gaps,
+      /** Derived here from the copied array — a caller cannot obtain a total from a different instant. */
+      skipped: gaps.reduce((total, gap) => total + gap.skipped, 0),
+      sizeSamples,
+      /** Highest buffer depth the room saw, derived from the copied samples. */
+      peakSize: sizeSamples.length === 0 ? 0 : Math.max(...sizeSamples),
+      resolutions,
+      lookups,
+      accessorConsumedCount: consumedCount,
+      accessorSize: accessor?.size ?? -1,
+      accessorLatestSeq: accessor?.latest?.seq ?? -1,
+      /** Sequences the accessor consumed that never entered state: eviction and clearing, never dedupe. */
+      retiredUnrepresented: consumedCount < 0 ? -1 : consumedCount - stepped,
+      firstConsumedSeq: firstConsumed ?? -1,
+      /** Retirements with no earlier consumed frame to name them — counted, never nameable. */
+      unnamedLeading: firstConsumed === undefined ? 0 : firstConsumed - 1,
+    };
+  }
+
   private step(): void {
+    if (this.suspendSteps) {
+      // No tick is counted. A withheld window must not look like a tick that consumed nothing, because
+      // the probe reads "consumed nothing" as evidence about the input buffer, not about this gate.
+      this.suspendedSkips += 1;
+      return;
+    }
     this.ticks += 1;
     const accessor = this.session === undefined ? undefined : this.inputs?.get(this.session);
     if (accessor === undefined) return;
@@ -630,6 +718,28 @@ export class IdentityRoom extends Room<{ state: InputTraceState; input: Sequence
     this.state.resolvedTick = this.ticks;
     this.state.position = this.state.position + 1;
   }
+}
+
+/** A by-value observation of one `IdentityRoom` at one instant. See `IdentityRoom.snapshot`. */
+export interface IdentityRoomSnapshot {
+  /** Always `true`: the object is one atomic read. See `IdentityRoom.snapshot`. */
+  readonly capturedOnce: true;
+  readonly ticks: number;
+  readonly suspendedSkips: number;
+  readonly bufferMaxSize: number;
+  readonly consumedSeqs: readonly number[];
+  readonly gaps: readonly { from: number; to: number; skipped: number; tick: number }[];
+  readonly skipped: number;
+  readonly sizeSamples: readonly number[];
+  readonly peakSize: number;
+  readonly resolutions: readonly { seq: number; tick: number; consumedCount: number }[];
+  readonly lookups: readonly { seq: number; found: boolean }[];
+  readonly accessorConsumedCount: number;
+  readonly accessorSize: number;
+  readonly accessorLatestSeq: number;
+  readonly retiredUnrepresented: number;
+  readonly firstConsumedSeq: number;
+  readonly unnamedLeading: number;
 }
 
 /** Rooms are created by the matchmaker, so a probe finds its instance through these registries. */
