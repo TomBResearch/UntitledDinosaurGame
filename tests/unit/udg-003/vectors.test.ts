@@ -10,7 +10,7 @@
 
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { describe, expect, it } from 'vitest';
@@ -202,6 +202,37 @@ const compact = (observed: ObservedTick): Record<string, unknown> => ({
 const vectors: Record<string, unknown> = {};
 /** The reviewer-correction vectors, recorded beside the acceptance-list vectors. */
 const corrections: Record<string, unknown> = {};
+
+/**
+ * The measured values behind the capture plan's thresholds.
+ *
+ * `report.json` states a threshold and its measured counterpart, and verification refuses a threshold with
+ * no measurement under it. So a plan cannot advertise a property the run never checked, and a reviewer reads
+ * the numbers rather than the adjectives. Written only when this task owns the evidence run, for the same
+ * reason the artefacts are: a child suite must not file its numbers under another task's name.
+ */
+const MEASUREMENTS_TARGET = process.env['UDG_EVIDENCE_MEASUREMENTS'];
+const OWNS_EVIDENCE_RUN = process.env['UDG_EVIDENCE_TASK'] === 'UDG-003' && MEASUREMENTS_TARGET !== undefined;
+const measured: Record<string, unknown> = { taskId: 'UDG-003', schemaVersion: 1 };
+
+const recordMeasure = (path: string, value: unknown): void => {
+  const [head, ...rest] = path.split('.');
+  if (head === undefined) return;
+  if (rest.length === 0) {
+    measured[head] = value;
+    return;
+  }
+  let cursor = (measured[head] ??= {}) as Record<string, unknown>;
+  for (const key of rest.slice(0, -1)) cursor = (cursor[key] ??= {}) as Record<string, unknown>;
+  cursor[rest[rest.length - 1] as string] = value;
+};
+
+const writeMeasurements = (): void => {
+  if (!OWNS_EVIDENCE_RUN || MEASUREMENTS_TARGET === undefined) return;
+  const target = resolve(process.cwd(), MEASUREMENTS_TARGET);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, `${JSON.stringify(measured, null, 2)}\n`, 'utf8');
+};
 const record = (id: string, value: unknown): void => {
   vectors[id] = value;
 };
@@ -999,6 +1030,37 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
     corrections['PA1-C1'] = c1Vector;
     corrections['PA1-C2'] = c2Vector;
     corrections['PA1-C3'] = c3Vector;
+
+    // The same numbers, in the shape the capture plan's thresholds are written against.
+    recordMeasure('authority.provenance', {
+      refusedLive: c1Vector.live.refused,
+      originIsServerIndependent: c1Vector.live.origin.join() === 'client-payload',
+      typedControlIsNull: c1Vector.live.typedControl.length === 1 && c1Vector.live.typedControl[0] === null,
+      refusedOnReplay: c1Vector.replay.refused === 1,
+      replayStateMatchesLive: c1Vector.replay.stateHashMatchesLive,
+      tamperedProvenanceRefused: c1Vector.tamperedInputs.refused,
+    });
+    recordMeasure('authority.timeBasis', {
+      ttlMs: c2Vector.ttlMs,
+      insideWindow: c2Vector.insideWindow.dedupe,
+      exactlyAtWindow: c2Vector.exactlyAtWindow.dedupe,
+      afterWindow: c2Vector.afterWindow.dedupe,
+      eachReplayReproducedItsOwnSide:
+        c2Vector.insideWindow.replay.dedupe === c2Vector.insideWindow.dedupe &&
+        c2Vector.afterWindow.replay.disposition === c2Vector.afterWindow.disposition,
+      malformedFieldsRetained:
+        JSON.stringify(c2Vector.malformedFieldRetention.replayMalformed) ===
+        JSON.stringify(c2Vector.malformedFieldRetention.liveMalformed),
+    });
+    recordMeasure('authority.boundedRetention', {
+      entities: c3Vector.retained.entities,
+      reachableArrivals: c3Vector.retained.reachableArrivals,
+      tickRowBuffer: c3Vector.retained.tickRowBuffer,
+      aliasRecordsBounded: c3Vector.retained.aliasRecords <= 64,
+      streamedRowsGrew: (sinkTotals.rows.at(-1) ?? 0) > (sinkTotals.rows[0] ?? 0),
+      streamedRowsMonotone: sinkTotals.rows.every((value, index) => index === 0 || value >= (sinkTotals.rows[index - 1] ?? 0)),
+      replayTipEqual: c3Vector.tipEqual,
+    });
   });
 
   it('writes the disposition reconciliation table and the manifest', () => {
@@ -1064,7 +1126,83 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
     expect(Object.keys(vectors).length).toBeGreaterThanOrEqual(11);
     // Every artefact the review needs must exist by the time the manifest is written; a missing file throws
     // here rather than producing a manifest that quietly lists less than it should.
+    // The manifest first: the measurements below verify the bytes it declares, so they cannot be taken
+    // before it exists.
     writeManifest();
+
+    // Values the capture plan's thresholds are stated against, measured here rather than asserted in prose.
+    const stageTick = joined('udg-003-measure-stages');
+    stageTick.core.ingest('e1', frame(1, 1, 1, 0));
+    const stageOutcome = stageTick.step();
+    const burst = joined('udg-003-measure-burst');
+    for (const generation of [1, 2, 3]) burst.core.ingest('e1', frame(1, generation, 1, 0));
+    const burstTick = burst.step();
+    const continuousConsumed = burstTick.journalRows.filter(
+      (row) =>
+        row.type === 'observation' && row.disposition === 'consumed' && (row.kind === 'direct' || row.kind === 'keepalive'),
+    ).length;
+    const navigation = joined('udg-003-measure-navigation');
+    // The request is admitted at the gate — it is structurally valid — and refused in screening. Measuring
+    // only the ingest call would read the wrong stage, so both halves are recorded.
+    const admitted = navigation.core.ingest('e1', moveTo('r-nav', 1, 1, { x: 1, y: 1, z: 1 }));
+    navigation.step();
+    const navigationReason = navigation
+      .rows()
+      .filter((row) => row.type === 'observation' && row.requestId === 'r-nav')
+      .map((row) => (row.type === 'observation' ? row.reason ?? '' : ''))
+      .at(-1);
+    // No route-status row type exists in UDG-003, so the honest measurement is that no path intention is
+    // ever constructed.
+    const pathCandidates = navigation
+      .rows()
+      .filter((row) => row.type === 'intention')
+      .flatMap((row) => (row.type === 'intention' ? row.candidates ?? [] : []))
+      .filter((candidate) => candidate.kind === 'path').length;
+    const equivalence = joined('udg-003-measure-equivalence');
+    equivalence.core.ingest('e1', frame(1, 1, 1, 0));
+    equivalence.step();
+    equivalence.core.ingest('e1', cancel('c-eq', 1, 2));
+    equivalence.step();
+    const equivalenceReplay = equivalence.replay();
+    const blankedReplay = equivalence.replayWithoutDigests();
+    const manifestForCheck = JSON.parse(
+      readFileSync(join(OUTPUT_DIRECTORY, 'vectors-manifest.json'), 'utf8'),
+    ) as { files: { name: string; sha256: string }[] };
+    const digestsMatchBytes = PHASE_1_VECTOR_NAMES.every((name) => {
+      const bytes = readFileSync(join(OUTPUT_DIRECTORY, name));
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      return manifestForCheck.files.some((file) => file.name === name && file.sha256 === digest);
+    });
+    recordMeasure('toolchain.node', process.version);
+    recordMeasure('phase.scope', 'phase-1');
+    recordMeasure('authority.stageOrder', stageOutcome ? [...stageOutcome.stages] : []);
+    recordMeasure('authority.oneInputPerTick', continuousConsumed);
+    recordMeasure('authority.navigationRefusal', {
+      admittedAtTheGate: admitted.decision.ok === true,
+      refusedInScreening: navigationReason === 'NAVIGATION_BUSY',
+      journaledReason: navigationReason ?? null,
+      pathCandidates,
+    });
+    recordMeasure('authority.replayEquivalence', {
+      ok: equivalenceReplay.ok === true && blankedReplay.ok === true,
+      rowsEqual:
+        equivalenceReplay.ok === true && equivalenceReplay.rows.length === equivalence.rows().length,
+      tipEqual:
+        equivalenceReplay.ok === true &&
+        equivalenceReplay.chain.at(-1)?.hash === equivalence.chain().at(-1)?.hash,
+      digestBlankedReplayEqual:
+        blankedReplay.ok === true &&
+        blankedReplay.chain.at(-1)?.hash === equivalence.chain().at(-1)?.hash,
+    });
+    recordMeasure('vectors.artefacts', {
+      listed: manifestForCheck.files.length,
+      required: PHASE_1_VECTOR_NAMES.length,
+      everyRequiredPresent: PHASE_1_VECTOR_NAMES.every((name) =>
+        manifestForCheck.files.some((entry) => entry.name === name),
+      ),
+    });
+    recordMeasure('vectors.digestsMatchBytes', digestsMatchBytes);
+    writeMeasurements();
     for (const name of PHASE_1_VECTOR_NAMES) {
       expect(readFileSync(join(OUTPUT_DIRECTORY, name), 'utf8').length, name).toBeGreaterThan(0);
     }
