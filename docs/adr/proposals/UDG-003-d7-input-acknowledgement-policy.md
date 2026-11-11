@@ -328,8 +328,16 @@ claimed live/replay equivalence that the artefacts do not prove fails the run.
 Two independent local PR-15 runs recorded **identical** figures for every scenario (consumed `5,9,10,11,12,14`; first
 consumed sequence 5 with 4 unnamed leading retirements; `consumedCount` 12 against 5 stepped; `lastProcessed` 13 against
 `sentCount` 14 after the replay; counters `10 → 3` across the rejoin; 0 mismatch samples at both cadences), so the
-numbers quoted in §9 to §11 are reproducible rather than a lucky run. The suite runs the probe on every commit and
-asserts these observations, so a future pin change fails loudly instead of quietly altering the decision's basis.
+numbers quoted in §9 to §11 are reproducible rather than a lucky run.
+
+**Which of those numbers are evidence and which are timing.** The hosted CI run of the same commit also passed all 27
+checks and reproduced the structural results exactly — 7 frames retired unrepresented, the strand at `13 < 14`, the
+per-connection restart `10 → 3` with `epoch` unmoved, and 0 mismatch samples at both cadences — but its first consumed
+sequence was **6** with **5** unnamed leading retirements rather than 5 with 4, because which frames survive to the first
+step depends on how arrival interleaves with the tick. The claim this decision rests on is therefore the *property*: a
+nonzero unnameable leading retirement, an exact count where identity is impossible, and a domain that restarts. The exact
+positions are quoted so a reader can check the artefact, not as if they were invariants. The suite asserts the properties,
+so a future pin change fails loudly instead of quietly altering the decision's basis.
 
 ## 9. Point 1 — the input identity mapping, proven
 

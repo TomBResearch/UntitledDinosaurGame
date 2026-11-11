@@ -17,7 +17,7 @@
     "docs/adr/0002-server-declaration-checking-exception.md": "420b28fa8b11ca42bdbdaed7f89415f769b5d10a6b7e1c3cefd9343a6229c766",
     "docs/adr/README.md": "125dc43271950aef668e3b55c78d72548ff9b36f38a5df37437b3b9478e3c483",
     "docs/adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md": "2fe1fc31a3f0b273131de8acb98c873e0efdc0119c9d68b100e0dad5cd261ca0",
-    "docs/adr/proposals/UDG-003-d7-input-acknowledgement-policy.md": "560fb4eebad65b0e8cb3ef2ee8dcf934ebc1ed76da771adcd879d1d5665d84e8",
+    "docs/adr/proposals/UDG-003-d7-input-acknowledgement-policy.md": "c72022c05b84f91a956ae2df368acabf8a862287585ae0bb945c34ad92ce04fb",
     "docs/adr/proposals/UDG-003-input-consumption-rule.md": "9e23d82f8e23a146482586ff0b66721f2fb4ef00fbdb74de391adcdc6a280271",
     "docs/contracts/README.md": "255e7b2cb8fd64c41e2e5beb2a56b03bb62b08e0ca11089299d81a2e540a5943",
     "docs/contracts/UDG-001.md": "4b5e8bbb0fd914bb72087dd91cb7ac24515f1bdddd92ec5ffcff32444841a9fc",
