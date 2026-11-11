@@ -1,9 +1,14 @@
-# UDG-003 Phase 2 assignment — **DRAFT revision 2, not assigned**
+# UDG-003 Phase 2 assignment — **DRAFT revision 2 — SUPERSEDED, retained**
 
-Status: **Draft for owner review. This record assigns nothing, authorises nothing and starts no work.** Every
-field below is a *proposal* awaiting the owner's decision. Nothing in this file may be read as permission to
-touch a single source file: Phase 2 remains **unassigned**, Phase 3 remains **unassigned**, Gates A, B and C
-remain **Not Run**, and `stackCompatibility` remains **not-established**.
+Status: **Superseded on 2026-11-11** by the approved
+[UDG-003-phase-2.md](UDG-003-phase-2.md), which carries the live scope, the granted paths and the recorded owner
+decisions. This draft assigns nothing and authorises nothing, and is kept for two reasons: §2.1 was where the
+recovery-budget conflict was resolved before ADR-0003 §3.2 was amended to match it, and §9 is the incident record for
+R-2, R-7 and R-8 with their retained evidence. Where this file and the approved assignment differ, **the approved
+assignment governs**; where this file describes an incident, it remains the detailed record.
+
+Live position as at 2026-11-11: Phase 2 **assigned, Ready and unstarted**; Phase 3 **unassigned**; Gates A, B and C
+**Not Run**; `stackCompatibility` **not-established**.
 
 Revision 2 records the owner's decisions on D-P2-1 and D-P2-5, resolves the recovery-budget conflict in
 ADR-0003 §3.2 (§2.1), re-pins to the hardened probe and evidence baseline, and closes R-2 and R-7 — the two
