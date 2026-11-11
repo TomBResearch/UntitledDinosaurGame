@@ -190,6 +190,7 @@ export interface RetainedState {
   readonly cacheRecords: number;
   readonly controlQueue: number;
   readonly pendingReleases: number;
+  readonly retiring: number;
   /** Rows of the tick in flight. Bounded by entities x declared queue capacities; zero between ticks. */
   readonly tickRowBuffer: number;
   readonly aliasRecords: number;
@@ -321,6 +322,14 @@ export class AuthorityCore {
    * reviewer reading one tick cannot tell that the backlog was dropped rather than never queued (AC-3a).
    */
   readonly #droppedThisTick = new Map<EntityId, ArrivalRecord[]>();
+  /**
+   * Entities whose association ended but whose bookkeeping this tick may not release (reviewer correction PA1-C7):
+   * an arrival that landed after the frozen cutoff is still queued, and disposing of it here would be stage L
+   * reaching outside the frozen set. The value is the ordinal of the departure control itself, which marks the
+   * last arrival that belonged to the association that ended. Bounded by the entity count, and emptied at the
+   * next tick.
+   */
+  readonly #retiring = new Map<EntityId, ArrivalOrdinal>();
   #resultRows: JournalRow[] = [];
   readonly #stepper: EntityStepper;
   readonly #clock: FixedStepClock;
@@ -443,6 +452,8 @@ export class AuthorityCore {
       cacheRecords,
       controlQueue: this.#controls.length,
       pendingReleases: this.#pendingRelease.size,
+      /** Departed entities whose residue this tick may not release yet (reviewer correction PA1-C7). */
+      retiring: this.#retiring.size,
       tickRowBuffer,
       aliasRecords: this.#aliases.size,
       releasedEntities: this.#released.entities,
@@ -663,13 +674,16 @@ export class AuthorityCore {
     // The time basis for everything this tick decides, captured once (reviewer correction 2): the terminal
     // request cache expires on this reading, so the journal records it beside the decisions it produced and
     // a replay restores it instead of inventing a clock.
+    // Reviewer correction PA1-C6: this is the *only* reading taken for the tick's decisions. Screening, the cache
+    // lookup, the cache write and the commit all take this value, and the journal records it, so a replay
+    // restores the instant the decision was made instead of re-deriving it from a clock that has moved on.
     const tickAtMs = this.#time.nowMs();
     this.#droppedThisTick.clear();
     const stages: Stage[] = ['F'];
     this.#tickRows = [];
     const rows: JournalRow[] = this.#tickRows;
     const results: TerminalResult[] = [];
-    const context: ScreeningContext = this.#contextFor(cutoff.tick);
+    const context: ScreeningContext = this.#contextFor(cutoff.tick, tickAtMs);
 
     // --- L. Lifecycle inside the frozen set: join, leave, expiry, epoch change (P03-c L).
     const due = this.#controls.filter((arrival) => arrival.ordinal <= cutoff.ordinal);
@@ -677,6 +691,9 @@ export class AuthorityCore {
     this.#controls.length = 0;
     for (const arrival of deferred) this.#controls.push(arrival);
     const eventsByEntity = new Map<EntityId, ControlKind[]>();
+    // A previous tick's departure is settled before this tick's controls are read, so residue is accounted
+    // for exactly once and never under two causes.
+    this.#settleRetiring(cutoff, rows);
     for (const arrival of due) {
       const control = arrival.control;
       if (control === null) continue;
@@ -783,7 +800,6 @@ export class AuthorityCore {
             sessionEpoch: epoch,
             position: spawn,
             tickOrigin: this.#clock.tickOrigin,
-            time: this.#time,
             cacheCapacity: TERMINAL_REQUEST_CACHE_SIZE,
             cacheTtlMs: TERMINAL_REQUEST_TTL_SECONDS * 1000,
           }),
@@ -799,12 +815,9 @@ export class AuthorityCore {
       }
     } else if (control === 'leave' || control === 'expiry') {
       if (entity !== undefined) {
-        const dropped = [...entity.continuousQueue.clear(), ...entity.discreteQueue.clear()];
-        this.#droppedThisTick.set(entity.entityId, dropped);
-        for (const item of dropped) {
-          this.#count('dropped:lifecycle', entity.entityId);
-          rows.push(this.#observationRow(item, cutoff.tick, 'dropped:lifecycle', null, false));
-        }
+        // The cutoff bounds the sweep (reviewer correction PA1-C7): whatever was queued when the tick froze goes
+        // now, and anything that landed after the cutoff keeps its place.
+        this.#disposeEligible(entity, cutoff, 'departure', rows, cutoff.ordinal);
         entity.writeLifecycle(control === 'leave' ? 'idle' : 'departed');
         const state = entity.view().state;
         entity.writeState(
@@ -816,15 +829,20 @@ export class AuthorityCore {
           cutoff.tick,
         );
         // The final state and the drop evidence are journalled above; the bookkeeping itself goes at the
-        // end of this tick, not here, so this tick's evidence can still be written from the entity.
-        this.#pendingRelease.add(entity.entityId);
+        // end of this tick, not here, so this tick's evidence can still be written from the entity — unless
+        // the queue still holds a post-cutoff arrival, in which case release waits for the next tick.
+        if (entity.continuousQueue.size + entity.discreteQueue.size > 0) {
+          this.#retiring.set(entity.entityId, arrival.ordinal);
+        } else {
+          this.#pendingRelease.add(entity.entityId);
+        }
       }
     } else {
       if (entity !== undefined && epochAfter !== null) {
         entity.writeEpoch(epochAfter);
         entity.resetForNewEpoch();
-        // Old-epoch queued observations are refused and never stepped (P03-c L).
-        this.#refuseEpochMismatched(entity, cutoff, rows);
+        // Old-epoch queued observations are refused and never stepped (P03-c L), within the cutoff.
+        this.#disposeEligible(entity, cutoff, 'epoch', rows, cutoff.ordinal);
       }
     }
 
@@ -850,14 +868,76 @@ export class AuthorityCore {
     rows.push(this.#observationRow(arrival, cutoff.tick, 'consumed', null, false));
   }
 
-  #refuseEpochMismatched(entity: EntityAuthority, cutoff: Cutoff, rows: JournalRow[]): void {
+  /**
+   * Dispose of the queued observations this tick is permitted to touch (reviewer correction PA1-C7).
+   *
+   * Stage L runs inside the frozen set, so an arrival that landed after the cutoff — including one that
+   * landed while lifecycle work was already in progress — is not this tick's to dispose of. It keeps its
+   * place and is accounted for on its own next eligible tick, under whichever cause applies then. Each
+   * removal writes exactly one observation row and is counted once, so an arrival can never be dropped
+   * twice or vanish without a disposition.
+   *
+   * `ceiling` is the greatest ordinal the sweep may touch: the cutoff for an ordinary pass, or the last
+   * arrival of an association that has ended when a departure is settled after a rejoin.
+   */
+  #disposeEligible(
+    entity: EntityAuthority,
+    cutoff: Cutoff,
+    cause: 'departure' | 'epoch',
+    rows: JournalRow[],
+    ceiling: ArrivalOrdinal,
+  ): number {
     const epoch = entity.view().epoch;
-    const mismatched = (arrival: ArrivalRecord): boolean =>
-      arrival.declaredEpoch !== null && arrival.declaredEpoch !== epoch;
-    const removed = [...entity.continuousQueue.removeWhere(mismatched), ...entity.discreteQueue.removeWhere(mismatched)];
+    const within = (arrival: ArrivalRecord): boolean =>
+      arrival.ordinal <= cutoff.ordinal && arrival.ordinal <= ceiling;
+    const matches =
+      cause === 'epoch'
+        ? (arrival: ArrivalRecord): boolean =>
+            within(arrival) && arrival.declaredEpoch !== null && arrival.declaredEpoch !== epoch
+        : within;
+    const removed = [...entity.continuousQueue.removeWhere(matches), ...entity.discreteQueue.removeWhere(matches)];
+    if (removed.length === 0) return 0;
+    const disposition: Disposition = cause === 'epoch' ? 'refused:epoch' : 'dropped:lifecycle';
+    const reason: RejectionCode | null = cause === 'epoch' ? 'EPOCH_MISMATCH' : null;
+    if (cause === 'departure') {
+      const previous = this.#droppedThisTick.get(entity.entityId) ?? [];
+      this.#droppedThisTick.set(entity.entityId, [...previous, ...removed]);
+    }
     for (const arrival of removed) {
-      this.#count('refused:epoch', entity.entityId);
-      rows.push(this.#observationRow(arrival, cutoff.tick, 'refused:epoch', 'EPOCH_MISMATCH', false));
+      this.#count(disposition, entity.entityId);
+      rows.push(this.#observationRow(arrival, cutoff.tick, disposition, reason, false));
+    }
+    return removed.length;
+  }
+
+  /**
+   * Settle the departures a previous tick deferred, before this tick reads its own controls.
+   *
+   * Two outcomes, and no third: if the entity was joined again in the meantime, only the arrivals that
+   * belonged to the ended association are disposed of, because the later ones belong to the live association
+   * and the bookkeeping stays where it is; otherwise every remaining arrival is now eligible, is disposed of
+   * under the departure cause, and the bookkeeping is released at the end of this tick.
+   */
+  #settleRetiring(cutoff: Cutoff, rows: JournalRow[]): void {
+    for (const [entityId, departureOrdinal] of [...this.#retiring.entries()].sort(([left], [right]) =>
+      left < right ? -1 : 1,
+    )) {
+      const entity = this.#entities.get(entityId);
+      if (entity === undefined) {
+        this.#retiring.delete(entityId);
+        continue;
+      }
+      if (entity.view().lifecycle === 'active') {
+        // Only what belonged to the ended association goes; anything queued from the departure onwards
+        // belongs to the association that is live now.
+        this.#disposeEligible(entity, cutoff, 'departure', rows, departureOrdinal - 1);
+        this.#retiring.delete(entityId);
+        continue;
+      }
+      this.#disposeEligible(entity, cutoff, 'departure', rows, cutoff.ordinal);
+      if (entity.continuousQueue.size + entity.discreteQueue.size > 0) continue;
+      this.#retiring.delete(entityId);
+      this.#pendingRelease.add(entityId);
     }
   }
 
@@ -900,8 +980,8 @@ export class AuthorityCore {
   ): PendingEntity {
     const rows: JournalRow[] = [];
 
-    // Old-epoch backlog is refused before anything is selected, whatever the lifecycle.
-    this.#refuseEpochMismatched(entity, cutoff, rows);
+    // Old-epoch backlog is refused before anything is selected, whatever the lifecycle — within the cutoff.
+    this.#disposeEligible(entity, cutoff, 'epoch', rows, cutoff.ordinal);
     const view = entity.view();
 
     if (view.lifecycle !== 'active') {
@@ -973,7 +1053,7 @@ export class AuthorityCore {
 
     const refused: EntityRefusal[] = [];
     const answered: EntityAnswer[] = [];
-    this.#applyPlan(entity, plan, discrete, cutoff, results, refused, answered);
+    this.#applyPlan(entity, plan, discrete, cutoff, context.nowMs, results, refused, answered);
     // A frame that stage Q consumed and stage S refused is recorded by its refusal: the consumption is
     // already named by the intention row's `consumed` reference, and counting both would break AC-17.
     if (screening !== null && screening.refusal !== null) {
@@ -1068,6 +1148,8 @@ export class AuthorityCore {
     plan: CommitPlan,
     discrete: DiscreteScreening,
     cutoff: Cutoff,
+    /** The tick's captured reading, used for every cache write this plan makes (reviewer correction PA1-C6). */
+    atMs: number,
     results: TerminalResult[],
     refused: EntityRefusal[],
     answered: EntityAnswer[],
@@ -1091,7 +1173,7 @@ export class AuthorityCore {
         requestId: publication.requestId,
         payloadHash: publication.payloadHash,
         terminal: publication,
-        storedAtMs: this.#time.nowMs(),
+        storedAtMs: atMs,
       });
       results.push(publication);
       this.#resultRows.push(this.#resultRow(cutoff.tick, entity.entityId, publication, 'none'));
@@ -1481,14 +1563,16 @@ export class AuthorityCore {
    * difference, and it is what this seam deliberately does not do. It is not a production path: nothing
    * outside a test calls it, and it returns decisions only.
    */
-  askStagesQSA(entityId: EntityId, cutoff: Cutoff): {
+  askStagesQSA(entityId: EntityId, cutoff: Cutoff, atMs: number): {
     readonly candidates: readonly IntentionCandidate[];
     readonly arbitration: ArbitrationDecision;
   } | null {
     const entity = this.#entities.get(entityId);
     if (entity === undefined) return null;
     const view = entity.view();
-    const context = this.#contextFor(cutoff.tick);
+    // The caller states the instant. Taking a fresh reading here would let a "pure" question disagree with
+    // the tick it claims to describe.
+    const context = this.#contextFor(cutoff.tick, atMs);
     const selected = view.continuous.find((arrival) => arrival.ordinal <= cutoff.ordinal) ?? null;
     const screening = selected === null ? null : screenContinuous(view, selected, context);
     const batch = new BatchRegistry<BatchEntry>();
@@ -1505,11 +1589,11 @@ export class AuthorityCore {
     return { candidates, arbitration: arbitrate(candidates) };
   }
 
-  #contextFor(tick: ServerTick): ScreeningContext {
+  #contextFor(tick: ServerTick, nowMs: number): ScreeningContext {
     return {
       bounds: this.bounds,
       gapWindow: this.#gapWindow,
-      nowMs: this.#time.nowMs(),
+      nowMs,
       tick,
     };
   }

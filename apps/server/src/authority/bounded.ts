@@ -7,7 +7,6 @@
  * (readiness proposal §7).
  */
 
-import type { TimeSource } from './determinism.js';
 import type { CachedIdentity, ArrivalOrdinal } from './types.js';
 
 /** A first-in-first-out queue with a fixed capacity and counted, deterministic overflow. */
@@ -101,14 +100,18 @@ export class IdentityCache {
   readonly ttlMs: number;
 
   readonly #entries: IdentityEntry[] = [];
-  readonly #time: TimeSource;
   #evictionCount = 0;
   #expiredReadCount = 0;
 
-  constructor(capacity: number, ttlMs: number, time: TimeSource) {
+  /**
+   * The cache holds no clock of its own (reviewer correction PA1-C6). A record's fate is decided against the
+   * time the caller was given, so a lookup, the write that follows it and the journal row that records the
+   * decision cannot disagree by taking separate readings. The TTL itself is unchanged: 30 s, measured from
+   * the `storedAtMs` of the record.
+   */
+  constructor(capacity: number, ttlMs: number) {
     this.capacity = capacity;
     this.ttlMs = ttlMs;
-    this.#time = time;
   }
 
   get size(): number {
@@ -124,9 +127,18 @@ export class IdentityCache {
     return this.#expiredReadCount;
   }
 
-  /** Non-mutating lookup: an expired record reads as absent and stays where it is. */
-  lookup(entityId: string, sessionEpoch: number, requestId: string): IdentityEntry | undefined {
-    const nowMs = this.#time.nowMs();
+  /**
+   * Non-mutating lookup: an expired record reads as absent and stays where it is.
+   *
+   * `nowMs` is the tick's captured reading, not a fresh one: expiry must be answered on the same instant
+   * the tick recorded, or a replay could not reproduce which side of the boundary the request fell on.
+   */
+  lookup(
+    entityId: string,
+    sessionEpoch: number,
+    requestId: string,
+    nowMs: number,
+  ): IdentityEntry | undefined {
     for (let index = this.#entries.length - 1; index >= 0; index -= 1) {
       const entry = this.#entries[index];
       if (entry === undefined) continue;
@@ -169,9 +181,8 @@ export class IdentityCache {
     return 'stored';
   }
 
-  /** Drop records whose TTL has passed. Called from the tick, not from a read. */
-  compact(): number {
-    const nowMs = this.#time.nowMs();
+  /** Drop records whose TTL has passed at the time given. Called from the tick, never from a read. */
+  compact(nowMs: number): number {
     const before = this.#entries.length;
     const kept = this.#entries.filter((entry) => entry.expiresAtMs > nowMs);
     this.#entries.length = 0;

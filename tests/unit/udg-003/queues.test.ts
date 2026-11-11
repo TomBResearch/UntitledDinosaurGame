@@ -143,9 +143,9 @@ describe('terminal-request cache bounds (protocol.md 4.3, AC-19)', () => {
     expect(harness.core.stats().cacheDepth).toBe(CAPACITIES.terminalCacheRecords);
     const view = harness.core.view('e1');
     // The first two records are gone and the newest survive: eviction is oldest-first.
-    expect(view?.identities.lookup('e1', 1, 'fill-0')).toBeUndefined();
-    expect(view?.identities.lookup('e1', 1, 'fill-2')).toBeDefined();
-    expect(view?.identities.lookup('e1', 1, 'fill-129')).toBeDefined();
+    expect(view?.identities.lookup('e1', 1, 'fill-0', harness.time.nowMs())).toBeUndefined();
+    expect(view?.identities.lookup('e1', 1, 'fill-2', harness.time.nowMs())).toBeDefined();
+    expect(view?.identities.lookup('e1', 1, 'fill-129', harness.time.nowMs())).toBeDefined();
   });
 
   it('T-4: an evicted identity cannot replay, because stale generation admission still refuses it', () => {
@@ -164,7 +164,7 @@ describe('terminal-request cache bounds (protocol.md 4.3, AC-19)', () => {
     // The watermark moves on, and the record is pushed out of the cache.
     advanceWatermark(harness, 'e1', 1, 10);
     cacheWith(harness, CAPACITIES.terminalCacheRecords, 11);
-    expect(harness.core.view('e1')?.identities.lookup('e1', 1, 'r7')).toBeUndefined();
+    expect(harness.core.view('e1')?.identities.lookup('e1', 1, 'r7', harness.time.nowMs())).toBeUndefined();
 
     // The retry now has no record to answer it. It is refused by the generation window, and it moves
     // nothing: eviction removes a reply, never a protection.

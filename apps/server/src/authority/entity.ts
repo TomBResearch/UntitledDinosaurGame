@@ -31,7 +31,6 @@ import type {
 
 import { IdentityCache } from './bounded.js';
 import type { IdentityEntry } from './bounded.js';
-import type { TimeSource } from './determinism.js';
 import type { ArrivalRecord, LifecycleStatus, LatchedKind } from './types.js';
 import {
   CONTINUOUS_QUEUE_CAPACITY,
@@ -42,7 +41,8 @@ import { BoundedFifo } from './bounded.js';
 /** The read-only surface screening and arbitration are allowed to see. */
 export interface IdentityReader {
   readonly size: number;
-  lookup(entityId: string, sessionEpoch: number, requestId: string): IdentityEntry | undefined;
+  /** Expiry is answered against the `nowMs` supplied by the caller — the tick's captured reading. */
+  lookup(entityId: string, sessionEpoch: number, requestId: string, nowMs: number): IdentityEntry | undefined;
 }
 
 export interface EntityView {
@@ -94,7 +94,6 @@ export interface EntityAuthorityOptions {
   readonly sessionEpoch: SessionEpoch;
   readonly position: Vec3;
   readonly tickOrigin: ServerTick;
-  readonly time: TimeSource;
   readonly cacheCapacity: number;
   readonly cacheTtlMs: number;
 }
@@ -119,7 +118,7 @@ export class EntityAuthority {
     this.#state = initialState(options.entityId, options.sessionEpoch, options.position);
     this.continuousQueue = new BoundedFifo<ArrivalRecord>(CONTINUOUS_QUEUE_CAPACITY);
     this.discreteQueue = new BoundedFifo<ArrivalRecord>(DISCRETE_QUEUE_CAPACITY_PER_ENTITY);
-    this.identities = new IdentityCache(options.cacheCapacity, options.cacheTtlMs, options.time);
+    this.identities = new IdentityCache(options.cacheCapacity, options.cacheTtlMs);
   }
 
   /** The projection every pure stage receives. Snapshots, so a stage cannot write through it. */

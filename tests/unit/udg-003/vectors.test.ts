@@ -28,7 +28,7 @@ import { VirtualScheduler, VirtualTime } from '../../support/authority/virtual-s
 import type { ObservationRow, ResultRow, StateRow } from '../../../apps/server/src/authority/types.js';
 import type { Harness } from '../../support/authority/harness.js';
 import { cancel, frame, frameWithNonFiniteAxis, keepalive, moveTo } from '../../support/authority/payloads.js';
-import { advanceWatermark, metaRows, resultRows } from '../../support/authority/scenarios.js';
+import { advanceWatermark, metaRows, observationRows, resultRows, stepOne } from '../../support/authority/scenarios.js';
 import type { TickOutcome } from '../../../apps/server/src/authority/step.js';
 import type { JournalRow } from '../../../apps/server/src/authority/types.js';
 
@@ -46,6 +46,8 @@ const PHASE_1_VECTOR_NAMES: readonly string[] = [
   'pa1-c1-provenance.json',
   'pa1-c2-time-basis.json',
   'pa1-c3-retention.json',
+  'pa1-c6-tick-time.json',
+  'pa1-c7-cutoff-lifecycle.json',
   'disposition-reconciliation.json',
   'summary.json',
 ];
@@ -550,7 +552,7 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
       const batch = observe(harness, harness.step());
       harness.core.ingest('e1', moveTo('r9', 1, 4, { x: 0, y: 0, z: 0 }));
       const conflict = observe(harness, harness.step());
-      const identityAfterConflict = harness.core.view('e1')?.identities.lookup('e1', 1, 'r9');
+      const identityAfterConflict = harness.core.view('e1')?.identities.lookup('e1', 1, 'r9', harness.time.nowMs());
       harness.core.ingest('e1', moveTo('r9', 1, 4, { x: 12, y: 0.9, z: -3 }));
       const replay = observe(harness, harness.step());
       const unparsableDepthBefore = harness.core.stats().cacheDepth;
@@ -1063,6 +1065,260 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
     });
   });
 
+  it('writes the tick-time and cutoff-lifecycle vectors (PA1-C6, PA1-C7)', () => {
+    const ttlMs = CAPACITIES.terminalCacheTtlMs;
+    const recorded = (harness: Harness): number => {
+      const last = harness.chain().at(-1);
+      if (last === undefined) throw new Error('no tick chain record');
+      return last.atMs;
+    };
+    const rowsFor = (harness: Harness, ordinal: number): readonly string[] =>
+      observationRows(harness.rows())
+        .filter((row) => row.arrivalOrdinal === ordinal)
+        .map((row) => row.disposition);
+
+    // --- PA1-C6: the tick takes one reading, and every cache question uses it.
+    const cache = joined('udg-003-vector-tick-time');
+    const storedAtMs = 20_000;
+    cache.time.set(storedAtMs);
+    cache.core.ingest('e1', cancel('r-boundary', 1, 1), storedAtMs);
+    cache.step();
+    const expiresAtMs = storedAtMs + ttlMs;
+    expect(cache.core.view('e1')?.identities.lookup('e1', 1, 'r-boundary', storedAtMs)?.identity.storedAtMs).toBe(
+      storedAtMs,
+    );
+    cache.time.advancingPerRead(10_000);
+    cache.time.set(expiresAtMs - 5_000);
+    cache.core.ingest('e1', cancel('r-boundary', 1, 1), expiresAtMs - 5_000);
+    const straddle = stepOne(cache, 'e1');
+    const recordedMs = recorded(cache);
+    const insideWindow = expiresAtMs > recordedMs;
+    const nextReadingMs = recordedMs + 10_000;
+    const pastWindowAtNextReading = expiresAtMs <= nextReadingMs;
+    const lookupAtRecorded = cache.core.view('e1')?.identities.lookup('e1', 1, 'r-boundary', recordedMs) !== undefined;
+    const lookupAtNextReading =
+      cache.core.view('e1')?.identities.lookup('e1', 1, 'r-boundary', nextReadingMs) !== undefined;
+    expect(straddle.answered.map((entry) => entry.dedupe)).toEqual(['cache']);
+    expect(insideWindow && pastWindowAtNextReading).toBe(true);
+    expect(lookupAtRecorded && !lookupAtNextReading).toBe(true);
+
+    // The write side: a new record is stamped with the same reading the tick named.
+    const writeCase = joined('udg-003-vector-tick-write');
+    writeCase.time.advancingPerRead(7_000);
+    writeCase.time.set(100_000);
+    writeCase.core.ingest('e1', cancel('r-write', 1, 1), 99_000);
+    writeCase.step();
+    const writeRecorded = recorded(writeCase);
+    const writeRecord = writeCase.core.view('e1')?.identities.lookup('e1', 1, 'r-write', writeRecorded);
+    expect(writeRecord?.identity.storedAtMs).toBe(writeRecorded);
+
+    // Both sides of the boundary, replayed from the recorded readings.
+    const sides = joined('udg-003-vector-tick-sides');
+    sides.core.ingest('e1', cancel('r-side', 1, 1), 30_000);
+    sides.time.set(30_000);
+    sides.step();
+    sides.time.advancingPerRead(ttlMs);
+    sides.time.set(45_000);
+    sides.core.ingest('e1', cancel('r-side', 1, 1), 45_000);
+    const liveInside = stepOne(sides, 'e1').answered.at(-1)?.dedupe ?? 'none';
+    sides.core.ingest('e1', cancel('r-side', 1, 1), 75_000);
+    const liveOutside = stepOne(sides, 'e1').answered.length === 0 ? 'refused' : 'answered';
+    const sidesReplay = sides.replay(`${sides.core.runId}-replay`);
+    expect(sidesReplay.ok).toBe(true);
+    const sidesTipEqual = sidesReplay.ok === true && sidesReplay.core.chainTip === sides.core.chainTip;
+    const replaySides =
+      sidesReplay.ok === true
+        ? observationRows(sidesReplay.rows)
+            .filter((row) => row.requestId === 'r-side')
+            .slice(-2)
+            .map((row) => row.disposition)
+        : [];
+    const liveSides = observationRows(sides.rows())
+      .filter((row) => row.requestId === 'r-side')
+      .slice(-2)
+      .map((row) => row.disposition);
+    expect(replaySides).toEqual(liveSides);
+
+    const c6Vector = {
+      correction: 'PA1-C6',
+      ttlMs,
+      clock: { advancesPerReadMs: 10_000, readingsPerTick: 1 },
+      cacheQuestion: {
+        storedAtMs,
+        expiresAtMs,
+        recordedTickMs: recordedMs,
+        nextReadingMs,
+        recordedInsideWindow: insideWindow,
+        nextReadingPastWindow: pastWindowAtNextReading,
+        disposition: straddle.answered.at(-1)?.dedupe ?? 'none',
+        watermarkUnmoved: straddle.watermark === 1,
+        lookupAtRecorded,
+        lookupAtNextReading,
+      },
+      write: {
+        recordedTickMs: writeRecorded,
+        storedAtMs: writeRecord?.identity.storedAtMs ?? null,
+        expiresAtMs: writeRecord?.expiresAtMs ?? null,
+        oneReadingForBoth: (writeRecord?.identity.storedAtMs ?? null) === writeRecorded,
+      },
+      replay: {
+        insideWindow: liveInside,
+        afterWindow: liveOutside,
+        liveSides,
+        replaySides,
+        sidesAgree: JSON.stringify(liveSides) === JSON.stringify(replaySides),
+        tipEqual: sidesTipEqual,
+        timeBasis: sides.core.prologue().timeBasis,
+      },
+    };
+    write('pa1-c6-tick-time.json', c6Vector);
+    corrections['PA1-C6'] = c6Vector;
+    recordMeasure('authority.tickTime', {
+      ttlMs,
+      oneReadingPerTick: c6Vector.write.oneReadingForBoth,
+      recordedInsideWindow: insideWindow,
+      nextReadingPastWindow: pastWindowAtNextReading,
+      cacheAnswerFollowsRecordedTime: c6Vector.cacheQuestion.disposition === 'cache',
+      replayReproducedBothSides: c6Vector.replay.sidesAgree && sidesTipEqual,
+    });
+
+    // --- PA1-C7: the frozen cutoff bounds what a departure may dispose of.
+    const inject = (harness: Harness, sessionEpoch: number, generation: number): () => number => {
+      let ordinal = -1;
+      harness.time.onRead(() => {
+        ordinal = harness.core.ingest('e1', frame(sessionEpoch, generation, 1, 0), harness.time.nowMs()).arrival
+          .ordinal;
+      });
+      return () => ordinal;
+    };
+    const leaveCase = joined('udg-003-vector-cutoff-leave');
+    const leaveQueued = leaveCase.core.ingest('e1', frame(1, 1, 1, 0), leaveCase.time.nowMs()).arrival.ordinal;
+    leaveCase.core.leave('e1', leaveCase.time.nowMs());
+    const leaveInjected = inject(leaveCase, 1, 2);
+    const leaveTick = leaveCase.step();
+    const leaveOrdinal = leaveInjected();
+    const heldRetiring = leaveCase.core.retention().retiring;
+    const heldQueued = leaveCase.core.retention().queuedArrivals;
+    const heldRows = rowsFor(leaveCase, leaveOrdinal);
+    leaveCase.step();
+    const c7Leave = {
+      cutoffOrdinal: leaveTick.cutoff.ordinal,
+      eligibleOrdinal: leaveQueued,
+      injectedOrdinal: leaveOrdinal,
+      injectedAfterCutoff: leaveOrdinal > leaveTick.cutoff.ordinal,
+      eligibleDispositionTick: leaveTick.tick,
+      residueRowsAtCutoffTick: heldRows.length,
+      retiringAtCutoffTick: heldRetiring,
+      queuedAtCutoffTick: heldQueued,
+      residueDispositions: rowsFor(leaveCase, leaveOrdinal),
+      retiringAfterSettle: leaveCase.core.retention().retiring,
+      queuedAfterSettle: leaveCase.core.retention().queuedArrivals,
+      droppedCounter: leaveCase.core.stats().counters['dropped:lifecycle'] ?? 0,
+    };
+    expect(c7Leave.residueDispositions).toEqual(['dropped:lifecycle']);
+    expect(c7Leave.droppedCounter).toBe(2);
+
+    const expiryCase = joined('udg-003-vector-cutoff-expiry');
+    expiryCase.core.ingest('e1', frame(1, 1, 1, 0), expiryCase.time.nowMs());
+    expiryCase.core.expire('e1', expiryCase.time.nowMs());
+    const expiryInjected = inject(expiryCase, 1, 2);
+    expiryCase.step();
+    const expiryOrdinal = expiryInjected();
+    expiryCase.step();
+    const c7Expiry = {
+      residueDispositions: rowsFor(expiryCase, expiryOrdinal),
+      retiringAfterSettle: expiryCase.core.retention().retiring,
+      queuedAfterSettle: expiryCase.core.retention().queuedArrivals,
+    };
+    expect(c7Expiry.residueDispositions).toEqual(['dropped:lifecycle']);
+
+    const epochCase = build('udg-003-vector-cutoff-epoch');
+    epochCase.core.join('e1', 7, SPAWN, 0);
+    epochCase.step();
+    epochCase.core.ingest('e1', frame(6, 4, 1, 0), epochCase.time.nowMs());
+    epochCase.core.epochChange('e1', 8, epochCase.time.nowMs());
+    const epochInjected = inject(epochCase, 6, 5);
+    epochCase.step();
+    const epochOrdinal = epochInjected();
+    const epochHeld = rowsFor(epochCase, epochOrdinal);
+    epochCase.step();
+    const c7Epoch = {
+      heldAtCutoffTick: epochHeld,
+      residueDispositions: rowsFor(epochCase, epochOrdinal),
+      epochRefusals: observationRows(epochCase.rows()).filter((row) => row.disposition === 'refused:epoch').length,
+      watermark: epochCase.core.view('e1')?.watermark ?? null,
+    };
+    expect(c7Epoch.heldAtCutoffTick).toEqual(['queued']);
+    expect(c7Epoch.residueDispositions).toEqual(['queued', 'refused:epoch']);
+    expect(c7Epoch.watermark).toBe(0);
+
+    const rejoinCase = joined('udg-003-vector-cutoff-rejoin');
+    rejoinCase.core.ingest('e1', frame(1, 1, 1, 0), rejoinCase.time.nowMs());
+    rejoinCase.core.leave('e1', rejoinCase.time.nowMs());
+    rejoinCase.core.join('e1', 1, SPAWN, rejoinCase.time.nowMs());
+    const rejoinInjected = inject(rejoinCase, 1, 2);
+    rejoinCase.step();
+    const rejoinOrdinal = rejoinInjected();
+    rejoinCase.step();
+    const c7Rejoin = {
+      residueDispositions: rowsFor(rejoinCase, rejoinOrdinal),
+      droppedCounter: rejoinCase.core.stats().counters['dropped:lifecycle'] ?? 0,
+      watermark: rejoinCase.core.view('e1')?.watermark ?? null,
+      connected: rejoinCase.core.view('e1')?.connected ?? false,
+    };
+    // The arrival belongs to the association that is live when the residue settles: consumed, never dropped.
+    expect(c7Rejoin.residueDispositions).toEqual(['queued', 'consumed']);
+    expect(c7Rejoin.droppedCounter).toBe(1);
+
+    // The disclosed limit: an arrival injected *inside* a tick is ordered after the departure control by its
+    // ordinal, and the journal cannot express the moment inside the tick. Live and replay therefore differ, and
+    // the vector records the difference rather than rounding it away.
+    const divergence = joined('udg-003-vector-cutoff-divergence');
+    divergence.core.ingest('e1', frame(1, 1, 1, 0), divergence.time.nowMs());
+    divergence.core.leave('e1', divergence.time.nowMs());
+    const divergenceInjected = inject(divergence, 1, 2);
+    divergence.step();
+    const divergenceOrdinal = divergenceInjected();
+    divergence.step();
+    const divergenceReplay = divergence.replay(`${divergence.core.runId}-replay`);
+    const c7Replay = {
+      ran: divergenceReplay.ok,
+      liveResidue: rowsFor(divergence, divergenceOrdinal),
+      replayResidue:
+        divergenceReplay.ok === true
+          ? observationRows(divergenceReplay.rows)
+              .filter((row) => row.disposition === 'refused:epoch' || row.disposition === 'dropped:lifecycle')
+              .map((row) => `${String(row.arrivalOrdinal)}:${row.disposition}`)
+          : [],
+      tipEqual: divergenceReplay.ok === true && divergenceReplay.core.chainTip === divergence.core.chainTip,
+      reason:
+        'an arrival ingested while a tick is running is ordered after the departure control by its ordinal, ' +
+        'so replay re-derives queue membership from the ordinal and refuses it at admission; a host must not ' +
+        'ingest re-entrantly (Phase 2 transport obligation)',
+    };
+    expect(c7Replay.tipEqual).toBe(false);
+
+    const c7Vector = {
+      correction: 'PA1-C7',
+      leave: c7Leave,
+      expiry: c7Expiry,
+      epoch: c7Epoch,
+      rejoin: c7Rejoin,
+      replay: c7Replay,
+    };
+    write('pa1-c7-cutoff-lifecycle.json', c7Vector);
+    corrections['PA1-C7'] = c7Vector;
+    recordMeasure('authority.cutoffLifecycle', {
+      injectedAfterCutoff: c7Leave.injectedAfterCutoff,
+      residueHeldForNextTick: c7Leave.residueRowsAtCutoffTick === 0 && c7Leave.retiringAtCutoffTick === 1,
+      residueAccountedOnce: c7Leave.residueDispositions.length === 1,
+      epochResidueRefusedOnce: c7Epoch.residueDispositions.at(-1) === 'refused:epoch',
+      rejoinResidueConsumed: c7Rejoin.residueDispositions.at(-1) === 'consumed',
+      noDoubleCount: c7Leave.droppedCounter === 2,
+      intraTickArrivalReplayable: c7Replay.tipEqual,
+    });
+  });
+
   it('writes the disposition reconciliation table and the manifest', () => {
     const scenarios: Record<string, unknown> = {};
     const scenario = (label: string, body: (harness: Harness) => void): void => {
@@ -1119,7 +1375,13 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
       },
       vectors: Object.keys(vectors).sort(),
       corrections: Object.keys(corrections).sort(),
-      correctionArtefacts: ['pa1-c1-provenance.json', 'pa1-c2-time-basis.json', 'pa1-c3-retention.json'],
+      correctionArtefacts: [
+        'pa1-c1-provenance.json',
+        'pa1-c2-time-basis.json',
+        'pa1-c3-retention.json',
+        'pa1-c6-tick-time.json',
+        'pa1-c7-cutoff-lifecycle.json',
+      ],
       scenarios: Object.keys(scenarios).sort(),
     };
     write('summary.json', summary);

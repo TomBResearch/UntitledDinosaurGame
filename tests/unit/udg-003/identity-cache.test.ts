@@ -73,7 +73,7 @@ describe('same identity, different payload (T-4, T-8)', () => {
     ]);
 
     const view = harness.core.view('e1');
-    const stored = view?.identities.lookup('e1', 1, 'r5');
+    const stored = view?.identities.lookup('e1', 1, 'r5', harness.time.nowMs());
     const storedHash = stored?.identity.payloadHash ?? null;
     expect(storedHash).not.toBeNull();
 
@@ -82,7 +82,7 @@ describe('same identity, different payload (T-4, T-8)', () => {
     harness.core.ingest('e1', moveTo('r5', 1, 4, DEST));
     const replay = stepOne(harness, 'e1');
     expect(replay.answered.map((entry) => entry.dedupe)).toEqual(['cache']);
-    expect(harness.core.view('e1')?.identities.lookup('e1', 1, 'r5')?.identity.payloadHash).toBe(storedHash);
+    expect(harness.core.view('e1')?.identities.lookup('e1', 1, 'r5', harness.time.nowMs())?.identity.payloadHash).toBe(storedHash);
 
     // And a conflict is counted as an answer, never as a refusal (P03-d `dispositionForCode`).
     const conflicts = observationRows(harness.rows()).filter((row) => row.reason === 'REQUEST_ID_CONFLICT');
@@ -135,7 +135,7 @@ describe('identity is scoped to the epoch (protocol.md 4.3)', () => {
     const harness = build();
     harness.core.ingest('e1', cancel('c-shared', 1, 4));
     stepOne(harness, 'e1');
-    expect(harness.core.view('e1')?.identities.lookup('e1', 1, 'c-shared')).toBeDefined();
+    expect(harness.core.view('e1')?.identities.lookup('e1', 1, 'c-shared', harness.time.nowMs())).toBeDefined();
 
     harness.core.epochChange('e1', 8);
     stepOne(harness, 'e1');
@@ -149,6 +149,6 @@ describe('identity is scoped to the epoch (protocol.md 4.3)', () => {
     expect(outcome.watermark).toBe(1);
     expect(outcome.latchedKind).toBe('cancel');
     // The old record is still there as an inert diagnostic, never as a reply.
-    expect(harness.core.view('e1')?.identities.lookup('e1', 1, 'c-shared')).toBeDefined();
+    expect(harness.core.view('e1')?.identities.lookup('e1', 1, 'c-shared', harness.time.nowMs())).toBeDefined();
   });
 });

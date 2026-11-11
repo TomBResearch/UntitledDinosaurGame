@@ -12,13 +12,42 @@ import type { ScheduledHandle, Scheduler, TimeSource } from '../../../apps/serve
 /** A clock the test moves. */
 export class VirtualTime implements TimeSource {
   #nowMs: number;
+  #perReadMs = 0;
+  #onRead: (() => void) | null = null;
 
   constructor(startMs = 0) {
     this.#nowMs = startMs;
   }
 
   nowMs(): number {
-    return this.#nowMs;
+    const job = this.#onRead;
+    if (job !== null) {
+      // Cleared before it runs, so work the job does may read the clock without recursing.
+      this.#onRead = null;
+      job();
+    }
+    const value = this.#nowMs;
+    this.#nowMs += this.#perReadMs;
+    return value;
+  }
+
+  /**
+   * Make every reading move the clock on by `ms` (reviewer correction PA1-C6). A test that must place one
+   * reading inside a deadline and the next reading beyond it cannot do that with a clock that only moves
+   * when told to; this is how the "clock advanced inside the tick" scenario is produced deliberately rather
+   * than by accident.
+   */
+  advancingPerRead(ms: number): void {
+    this.#perReadMs = ms;
+  }
+
+  /**
+   * Run `job` on the next reading, then forget it (reviewer correction PA1-C7). This is how a test lands an
+   * arrival *while a tick is already running*: the tick has taken its cutoff, and the arrival therefore
+   * falls outside it.
+   */
+  onRead(job: () => void): void {
+    this.#onRead = job;
   }
 
   advance(ms: number): void {

@@ -332,7 +332,7 @@ export const screenDiscrete = (
     payloadHash: string,
     onFresh: () => void,
   ): void => {
-    const hit: IdentityEntry | undefined = view.identities.lookup(view.entityId, view.epoch, requestId);
+    const hit: IdentityEntry | undefined = view.identities.lookup(view.entityId, view.epoch, requestId, context.nowMs);
     if (hit !== undefined) {
       const comparison = compareRequestIdentity(
         { requestId: hit.identity.requestId, payloadHash: hit.identity.payloadHash },

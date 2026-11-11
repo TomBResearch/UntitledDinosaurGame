@@ -208,6 +208,8 @@ export const PHASE_1_VECTOR_FILES: readonly string[] = [
   'pa1-c1-provenance.json',
   'pa1-c2-time-basis.json',
   'pa1-c3-retention.json',
+  'pa1-c6-tick-time.json',
+  'pa1-c7-cutoff-lifecycle.json',
   'disposition-reconciliation.json',
   'summary.json',
 ];
@@ -559,6 +561,8 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       'authority.timeBasis': 'cache answered inside the 30 s window and refused at and after it, each run replaying its own side of the boundary',
       'authority.boundedRetention': 'retained entities 1 and reachable arrivals 0 across churn while streamed rows grow monotonically',
       'authority.replayEquivalence': 'row count, chain tip and digest-blanked replay all equal the original run',
+      'authority.tickTime': 'one captured reading per tick: the cache answer, the cache write and the recorded tick time are the same instant, and replay reproduces both sides of the 30 s window (PA1-C6)',
+      'authority.cutoffLifecycle': 'a departure disposes only of arrivals the cutoff covers, residue is held one tick and accounted exactly once, and the intra-tick replay limit is recorded rather than rounded away (PA1-C7)',
       'vectors.artefacts': `=== ${String(PHASE_1_VECTOR_FILES.length)} artefacts listed, each present with a matching digest`,
       'vectors.digestsMatchBytes': '=== true (every artefact re-read from disk hashes to the digest the manifest declares)',
       'capture.commandsRun': '>= 8 commands, capture.failingCommands === []',

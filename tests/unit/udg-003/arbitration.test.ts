@@ -193,9 +193,9 @@ describe('arbitration order (P03 §3 A, AC-10)', () => {
     const lastOrdinal = harness.rows().length; // the cutoff only has to cover what is queued
     const cutoff = { tick: 99, ordinal: Number.MAX_SAFE_INTEGER };
     expect(lastOrdinal).toBeGreaterThan(0);
-    const first = harness.core.askStagesQSA('e1', cutoff);
+    const first = harness.core.askStagesQSA('e1', cutoff, harness.time.nowMs());
     const afterFirst = snapshot(harness);
-    const second = harness.core.askStagesQSA('e1', cutoff);
+    const second = harness.core.askStagesQSA('e1', cutoff, harness.time.nowMs());
     const afterSecond = snapshot(harness);
 
     expect(first).not.toBeNull();
