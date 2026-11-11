@@ -813,3 +813,178 @@ no residual /workspace/ or /home/ path anywhere in the bundle
 
 CI for the submitted head is named in the evidence inventory chain rather than transcribed into a further
 record, under the convention adopted in §10.5b.
+
+
+## 14. Revision 4 — the mid-tick arrival is admitted at the boundary it can be decided at (PA1-C8)
+
+Revision 3 (`9598bd7737e5b2971d90063ed68d794e43fb90a7`, CI `42992946900`) was accepted as addressing PA1-C6 and
+PA1-C7 and returned **In Review** because of the mismatch §13.3 disclosed. The owner asked for that mismatch to
+be closed rather than carried: hold arrivals received during a running tick in a **bounded deferred intake**,
+decide admission at the next tick boundary with the same association state and the same order in live execution
+and in replay, preserve arrival order, account for overflow explicitly, stay inside the Phase 1 core, use the
+divergent case as the regression for leave / expiry / epoch change / leave-rejoin, require the equivalence in
+the Phase 1 evidence check, and preserve the bundle that documents the mismatch.
+
+### 14.1 What the core does now
+
+* `step()` is now two methods. `step()` freezes the cutoff, raises `#tickRunning`, drains the intake, takes
+  `tickAtMs` and calls `#tickBody(cutoff, tickAtMs)` inside a `try`/`finally` that always clears the flag. The
+  ordering is the whole correction and it is deliberate in both directions:
+  * the flag is raised **before** the tick's clock reading, so an arrival that reaches the core on that reading
+    — or from a journal sink, or from a host callback — waits for the boundary instead of being admitted into
+    the tick that is already past its cutoff;
+  * the drain runs **before** that reading, so nothing the boundary admitted can be mistaken for an arrival the
+    boundary should have deferred. The drain uses the internal admission path, so the flag cannot postpone the
+    arrivals the boundary exists to admit.
+* `#enqueue` routes by `#tickRunning`: `#admit` (reserve an ordinal, describe the message, admit) between
+  ticks, `#deferIntake` during one. `#admitBuilt` is the shared half — classify, gate, enqueue — so a deferred
+  arrival and a between-ticks arrival are the same question asked the same way. `#drainIntake` calls
+  `#admitBuilt` on each held arrival in receipt order; the ordinal was reserved on receipt, so it is not
+  reserved twice and the row names the ordinal the caller was told.
+* The intake is one array in receipt order, bounded at `CAPACITIES.deferredIntake` = 64. A full intake answers
+  `RATE_LIMITED` / `refused:overflow` with `overflowCause: 'deferred-intake'`, counts the rejection in
+  `stats().overflowCauses` and `retention().deferredIntakeRejections`, and writes **no** journal row and no
+  disposition counter. That asymmetry is not an accounting hole: a replay offers arrivals between ticks, where
+  there is no intake to overflow, so a journalled intake refusal would be a decision one run could reach and
+  the other could not — the exact shape of the defect being fixed. The bound itself is a core bound, not
+  configuration: it changes no gameplay decision, so it does not move `configHash`.
+* Because ordinals are reserved on receipt, every drained arrival satisfies `ordinal <= cutoff.ordinal` at the
+  boundary that admits it. No queue can hold work outside the cutoff of the tick that holds it, which is now
+  asserted rather than assumed.
+
+### 14.2 What revision 4 removed
+
+`#retiring`, `#settleRetiring` and the `ceiling` argument PA1-C7 added are gone, and `retention()` reports
+`deferredIntake` / `deferredIntakeRejections` in place of `retiring`. The retirement existed only to hold a
+departed entity alive while post-cutoff residue sat in its queue; with the intake, that residue cannot exist.
+`#disposeEligible` stays, cutoff bound and all: it is still what disposes an eligible backlog when a departure
+or an epoch change runs inside the frozen set, and it remains the enforcement point — were admission ever to
+move back inside a tick, the sweep would refuse to reach outside the frozen set and the invariant assertion in
+`deferred-intake.test.ts` would fail rather than quietly drop rows.
+
+### 14.3 Defects this revision found, in revision 4's own code
+
+| # | Defect | How it was proved |
+|---|---|---|
+| 14-1 | `#drainIntake` called `#admit`, which reserves a **second** ordinal. The admitted arrival got a new ordinal, the row named that one instead of the ordinal the caller had been told, and the queue-order assertions went blank because nothing matched. | Splitting `#admit` into reserve-and-build plus `#admitBuilt` fixed it; mutating `#admitBuilt` back fails 8 of 8 tests in the new suite. |
+| 14-2 | The drain ran after the tick's clock reading. The injection fires on that reading, so the arrival was admitted in the very tick it arrived in — the deferral existed and did nothing. | Moving the drain above the reading. With the original order the "no disposition names it inside the tick" assertion fails. |
+| 14-3 | The running flag was raised after the drain, so the read/drain/flag order had to be settled as one decision rather than three edits. Flag → drain → read → body is the only ordering that satisfies both PA1-C8 (defer mid-tick) and PA1-C6 (one reading per tick). | Both properties are asserted in the same suite; either ordering breaks one of them. |
+| 14-4 | An intake-full rejection was counted only in a core-local counter, so the overflow-by-cause table (AC-3e) hid a refusal the caller had been told about. | `#noteOverflow('deferred-intake')` now names it. The suite asserts `overflowCauses['deferred-intake'] === 3` alongside zero journalled rows. |
+| 14-5 | `retention()` still reported `retiring`, and `reachableArrivals` omitted the intake, so the report understated what the core holds between a tick and its boundary. | Replaced and added; the churn assertions in `retention.test.ts` still hold because the intake is empty between ticks. |
+| 14-6 | **A `join` in the same tick as a `leave` did not cancel the release that `leave` asked for**, so end-of-tick release deleted a running entity together with its queues, counters and canonical state. Revision 3 masked this: the residue case routed the departure through `#retiring` instead of `#pendingRelease`, so the list never contained a rejoined entity. | `#pendingRelease.delete(entityId)` in the join branch. Removing that line fails exactly one test out of 121 — the leave/rejoin replay equivalence case — which is why this is recorded as a masked defect rather than a new requirement. |
+| 14-7 | The vector comparison compared two **arrays** with `===`, which is never true for distinct arrays; the equivalence assertion could not have passed however correct the core was. The unit suite's projection-based comparison hid the same class of mistake. | Compare per-row JSON joined into one string. Before the fix `leave` reported `rowsEqual: false` for every run. |
+| 14-8 | `queues.test.ts` asserts the capacity table with `toEqual`, so adding `deferredIntake` failed it. Working as intended: the bound is now a decision visible in an assertion rather than an edit buried in a helper. | The assertion was updated with a comment saying which numbers are P03-adopted and which are not. |
+
+Mutation checks run against this revision: never deferring fails 8/8; reversing the drain fails the order test;
+removing the bound fails the overflow test; re-reserving the ordinal at the boundary fails 8/8; and not
+cancelling the release on rejoin fails the leave/rejoin case alone.
+
+### 14.4 Evidence for this revision
+
+`tests/unit/udg-003/deferred-intake.test.ts` replaces `cutoff-lifecycle.test.ts` (5 tests removed, 8 added). It
+lands an arrival on the tick's own clock reading, after the lifecycle control is enqueued, and then:
+
+* asserts no disposition of any kind names it inside the running tick, that the intake holds it, and that no
+  queue holds an ordinal the running tick has frozen past;
+* asserts it is consumed at the following boundary with `eligibleTick` equal to that tick;
+* lands three arrivals in one tick and asserts receipt order equals sorted order equals admitted order;
+* lands 67 arrivals in one tick and asserts 64 accepted into the intake, three refused
+  `RATE_LIMITED/refused:overflow`, `deferredIntake === 64`, `deferredIntakeRejections === 3`,
+  `overflowCauses['deferred-intake'] === 3`, zero journalled `refused:overflow` rows and zero
+  `refused:overflow` counter movement at that moment; then that every accepted arrival is journalled exactly
+  once at the boundary;
+* for **leave, expiry, epoch change and leave/rejoin**: round-trips every journal row and every chain record
+  through JSON, replays through the production replay path with a fresh zero-origin clock, and requires equal
+  row-for-row journal, equal canonical state (position, mode, connected) and an equal chain tip.
+
+The phase gate now requires the same thing. `validateVectorManifest` calls `replayEquivalenceIssues`
+(`tools/checks/src/evidence.ts`), which reads `pa1-c8-deferred-intake.json` and emits
+`VECTORS-REPLAY-EQUIVALENCE` if any of `leave`, `expiry`, `epoch`, `rejoin` does not report
+`replayable: true`, if `allEqual` is absent, if the file is missing, or if it does not parse. The new contract
+test re-signs the manifest for each tampered vector so the failure it observes can only be the rule under test,
+and asserts each of the four cases individually, then that restoring the honest vector is the only thing that
+clears the gate.
+
+Required artefacts move from 13 to 14. `pa1-c7-cutoff-lifecycle.json` is rewritten rather than dropped: it now
+publishes `supersededBy: "PA1-C8"` plus the sweep invariant (`queuedBeyondCutoff: 0`,
+`dispositionOnce: 1`) measured on all four lifecycles. Measured values for this revision:
+
+```text
+authority.cutoffLifecycle  = { sweepBoundToCutoff: true, queuedBeyondCutoff: true, eachDispositionOnce: true }
+authority.deferredIntake   = { limit: 64, decidedAtNextBoundary: true, receiptOrderPreserved: true,
+                               overflowAccepted: 64, overflowRejected: 3, overflowJournalled: 0,
+                               leaveReplayable: true, expiryReplayable: true, epochChangeReplayable: true,
+                               leaveRejoinReplayable: true, allSupportedCasesReplayable: true }
+```
+
+The `false` that revision 3 published inside `authority.cutoffLifecycle` is gone because the property it
+described is gone; the gate now refuses a bundle in which any of the four cases is unproven, so the same
+regression cannot silently return.
+
+Vector digests after this revision (14 artefacts; `vectors-manifest.json` excluded because it names the commit):
+
+```text
+1b981db7194e3cf3910bf4f402445829944d977b67d27bf584177667ca3d0a06  disposition-reconciliation.json
+6794cb4e48cd7480de85e74fbad16743a49702150277ef719e60715c54f23fda  pa1-1-pa1-2-cutoff-consumption.json
+d48239dbaba3a580a7651b0d4a8f158ff1c7a0309e6b94114f007849f4cc7314  pa1-12-pa1-14-lifecycle-stepping-replay.json
+57228ba0790c23a9e040b860469f021e8062911b794012e80bdbf6fb2c6d09f3  pa1-3-generation.json
+7af0c5d7337be445e12a3a5abf7bd8750a2ef91de9c32b503c52e2f937e0bdcc  pa1-4-traces-t1-t2-t3-t6.json
+1e9df37cd65b85912302d0119600083b8385f5e3fbf704110e646a6740127d8e  pa1-5-pa1-8-commit-keepalive-neutral-bound.json
+25c24ee867674133e2d3834baed8f2d1974c9cd07c172b775dbd28805878b7c2  pa1-9-pa1-11-bounds-identity-navigation.json
+a2b2f58aedba8fb23cfbba3129fe671c797f421321ecde502013f6810b20b626  pa1-c1-provenance.json
+ca115d09ec27242d97aa30412350d02283ce35b5fa51d58fb13e1d77a1e6a464  pa1-c2-time-basis.json
+67cfccd058f97b4b635fd83394a23030e67b23cce37ffddfef574c60f3f246a0  pa1-c3-retention.json
+76921771a31dec0ecd9ff260b427418f6b1b67d09427fceb5b17767ad1753c7d  pa1-c6-tick-time.json
+e72214e8a2ea6adbd08d40f8214ba07d68e79fb34e71f40ef19ea15671a1fbca  pa1-c7-cutoff-lifecycle.json
+292c285685642393b96fccbd8bedfe6b95d3c21f1dbca2a2374444b4dace7d5b  pa1-c8-deferred-intake.json
+c5c977a275797846bcc667bdc6f39d7d83fce7eb47b5b60ff0448505bc607605  summary.json
+```
+
+Which digests moved, and why:
+
+| Artefact | Moved | Reason |
+|---|---|---|
+| `pa1-c8-deferred-intake.json` | new | this correction's evidence |
+| `pa1-c7-cutoff-lifecycle.json` | yes | rewritten to the sweep invariant plus `supersededBy`, because the residue state it measured can no longer arise |
+| `pa1-9-pa1-11-bounds-identity-navigation.json` | yes | it records the capacity table, and the table gained the intake bound |
+| `summary.json` | yes | it counts artefacts and lists the correction artefacts |
+| the other nine | no | unchanged bytes: revision 4 moves no cutoff rule, no one-input rule, no screening, arbitration, commit, identity, clock or reconciliation behaviour |
+
+Two independent runs produced identical digests for all fourteen.
+
+### 14.5 Commands as run
+
+| Command | Result |
+|---|---|
+| `pnpm typecheck` | exit 0 |
+| `pnpm lint` | exit 0, `boundary check OK: 61 file(s), 0 violations, rule table 818c63d5b12f` |
+| `pnpm build` | exit 0 |
+| `pnpm dependencies:verify` | exit 0, `docs/integration/dependencies.json matches the installed dependency graph` |
+| `pnpm test:boundaries` | exit 0 |
+| `pnpm test:fixtures` | exit 0, `fixture validation OK: 24 fixture(s)` |
+| `pnpm run declarations:strict` | exit 0 |
+| `pnpm test` | exit 0, `Test Files 25 passed (25)`, `Tests 508 passed (508)` |
+| `npx vitest run tests/unit/udg-003` | exit 0, `16 files`, `121 tests` |
+| `npx vitest run tests/contracts/UDG-003.test.ts` | exit 0, `71 tests` |
+| `UDG_VECTORS_OUT=artifacts/udg-003-phase-1 npx vitest run tests/unit/udg-003/vectors.test.ts` | exit 0, `9 tests` |
+| `node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-1 --allow-dirty` | exit 0, `PASS phase-1 vectors: 14 artefact(s) listed, hashed and attributable` |
+| `pnpm contracts:checksums` | in sync after `-- --write` |
+
+### 14.6 What revision 4 does not claim
+
+* It is not Phase 2 or Phase 3. There is still no SDK transport, no `RegionRoom`, no lifecycle transport
+  wiring, no physics, no navigation and no client prediction; `apps/server/src/index.ts` is still `export {}`
+  and `@udg/server` still has no entry-map row.
+* It is not a compatibility claim. `stackCompatibility` remains `not-established`; the Phase 0 probe verdicts
+  are unchanged because this revision touched no third-party surface.
+* It does not close D-7, Part B, D4, or any gate: Gates A, B and C remain **Not Run**.
+* It does not change the one-input-per-entity-per-tick rule, the 30-second TTL, the four P03 capacities, or the
+  stage order `F L Q S A C R X`.
+* It does not make Phase 1 Verified. It is submitted **In Review** for the owner to accept.
+
+### 14.7 The revision 3 bundle stays where it is
+
+`/workspace/udg-evidence/ci-run-42992946900/UDG-003-2026-11-11T09-16-10-905Z-9598bd77` is the bundle that
+published `authority.cutoffLifecycle.intraTickArrivalReplayable: false`. It is preserved unmodified, its digest
+history is untouched, and the inventory record `UDG-003-PHASE-1R3-2026-11-13` still names it. Revision 4 does
+not withdraw it and does not rewrite what it said: the disclosure was accurate about the code at that commit.

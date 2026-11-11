@@ -294,6 +294,29 @@ exception is not a compatibility result.
 | Evidence store | The damaged `inventory-v19.json` and `INTEGRITY-2026-11-10.md` are preserved exactly; no historical inventory or downstream link is rebuilt to manufacture continuity; new snapshots are create-only and fail before overwriting; the known `v19 → v20` discontinuity is carried forward and stated. `D4` (independent backup destination) remains open, and no external storage, release, tag or archive is authorised. |
 | Not repeated | No broad input-backlog survey and no upstream publication during this assignment. |
 
+## UDG-003 Phase 1 review instruction recorded 2026-11-14 (revision 4)
+
+The owner accepted that revision 3's single-tick time and cutoff-bounded cleanup addressed PA1-C6 and PA1-C7,
+kept Phase 1 **In Review** because of the replay mismatch that correction disclosed, and asked for it to be
+closed at the root rather than carried forward:
+
+1. **PA1-C8 — deterministic admission for post-cutoff arrivals.** Hold arrivals received during a running tick
+   in a **bounded deferred intake** and decide admission at the next tick boundary, using the same association
+   state and the same order in live execution and in replay. Preserve arrival order. Account for overflow
+   explicitly. Keep the change inside the Phase 1 core.
+2. **Use the divergent case as the regression.** Verify matching dispositions, canonical state and chain tip
+   from persisted evidence for leave, expiry, epoch change and leave/rejoin.
+3. **Require it in the evidence check.** The Phase 1 evidence check must fail if replay equivalence for those
+   supported cases is not proven.
+4. **Preserve the earlier bundle.** The bundle that documents the mismatch stays as the record of what was
+   disclosed; it is not rewritten or withdrawn.
+
+The instruction again asked for the corrected submission SHA, a passing CI link and the verified Phase 1
+bundle, and restated that **Phases 2–3 require separate authorisation and that D-7 remains open**. Gates A/B/C
+remain **Not Run**, `stackCompatibility` remains **not-established**, Part B remains unadopted, and no backup
+storage destination is designated (D4 open). No new controlled-path grant was needed: the change sits in the
+Phase 1 core paths and in the Phase 1 evidence tooling already granted as A9–A12.
+
 ## UDG-003 Phase 1 review instruction recorded 2026-11-13 (revision 3)
 
 The owner accepted that revision 2's provenance fix, journal sink, departed-entity cleanup and Phase 1 evidence

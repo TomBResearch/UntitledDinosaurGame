@@ -3,7 +3,7 @@
 Task ID: `UDG-003` — phase `1` of `3`
 Title: Authority core: frozen cutoff, lifecycle ordering, FIFO selection, screening, arbitration, commit, neutral rule, bounded queues, request identity cache, input-sufficient journal and deterministic replay
 Depends on: UDG-001 (Verified), UDG-002 (Verified), UDG-003 Phase 0 (owner-accepted at the ADR-0002 scoped compiler policy), ADR-0002, P03
-Status: **In Review** — revision 3, made against the owner's two further corrections (§0.3)
+Status: **In Review** — revision 4, made against the owner's third correction (§0.4)
 Owner/reviewer: integration owner / Codex (implementation only; acceptance recorded by the owner alone)
 Base commit: `8987139f18653b05e57e64d0b14cdd1c753b6612` (retained CI for that head: `42794023731`, conclusion `success`)
 
@@ -71,6 +71,34 @@ Two things this revision did **not** do, so that the correction stays the size t
   too, but it shifts release timing for every departure and rewrote twelve accepted assertions in the lifecycle
   and retention suites. It is recorded in completion §13.5 as an option for the owner rather than taken here.
 * it did not touch the one-input rule, D-7, Part B, Gates A/B/C, or anything outside Phase 1.
+
+
+## 0.4 Reviewer correction requested after the third submission
+
+Revision 3 (`9598bd7`, CI `42992946900`) was accepted as addressing PA1-C6 and PA1-C7 and returned **In
+Review** because of the replay mismatch that correction disclosed. The reviewer asked to make admission for
+post-cutoff arrivals deterministic by holding arrivals received during a running tick in a **bounded deferred
+intake**, then deciding admission at the next tick boundary using the same association state and the same
+order in both live execution and replay; to preserve arrival order; to account for overflow explicitly; to
+keep the change inside the Phase 1 core; to use the existing divergent case as a regression and verify
+matching dispositions, canonical state and chain tip from persisted evidence for leave, expiry, epoch change
+and leave/rejoin; to make the Phase 1 evidence check require replay equivalence for those supported cases;
+and to preserve the earlier bundle that documents the mismatch. The corrected submission SHA, a passing CI
+link and the verified Phase 1 bundle were requested. Phases 2–3 still require separate authorisation and
+**D-7 remains open**.
+
+| # | Requirement as given | What it obliged in the code |
+|---|---|---|
+| **PA1-C8** | **Make admission for post-cutoff arrivals deterministic** with a bounded deferred intake decided at the next tick boundary, in the same order live and replay; preserve arrival order; account for overflow; stay inside the Phase 1 core; prove the four lifecycles replay equally from persisted evidence; require that equivalence in the evidence check. | `step()` raises `#tickRunning` for the whole tick, so `#enqueue` routes anything received mid-tick to `#deferIntake` instead of admitting it. The intake is one array in receipt order, bounded at `CAPACITIES.deferredIntake` = 64; the ordinal is reserved **on receipt**, so a deferred arrival and a between-ticks arrival are the same record. At the next boundary, still under the flag, `#drainIntake` calls `#admitBuilt` on each held arrival in order — the same call a replay makes — and only then is `tickAtMs` taken, so nothing the boundary admitted can be mistaken for something the boundary should have deferred. A full intake refuses with `RATE_LIMITED`/`refused:overflow`, counts the rejection in `stats().overflowCauses['deferred-intake']` and `retention().deferredIntakeRejections`, and writes **no** journal row: a decision a replay cannot reach must not enter the journal's arithmetic. `#disposeEligible` keeps its cutoff bound as the enforcement point, and the `#retiring`/`#settleRetiring` mechanism PA1-C7 introduced is gone, because the state it existed for can no longer arise. `tests/unit/udg-003/deferred-intake.test.ts` replaces `cutoff-lifecycle.test.ts` and replays all four lifecycles from rows and chain round-tripped through JSON. The gate now refuses a phase in which any of the four is unproven (`VECTORS-REPLAY-EQUIVALENCE`, new required artefact `pa1-c8-deferred-intake.json`). |
+
+One defect found on the way is worth naming here rather than only in the completion record: a `join` in the
+same tick as a `leave` did not cancel the release that `leave` had asked for, so end-of-tick release deleted a
+running entity with its queues and counters. Revision 3 masked it, because the residue case routed departures
+through `#retiring` instead of `#pendingRelease`. It is fixed in the join branch and completion §14.3 records
+the mutation that proves the new test catches it.
+
+This revision did not touch the one-input rule, D-7, Part B, Gates A/B/C, Phases 2–3, or anything outside the
+Phase 1 core and the phase evidence tooling already granted (A9–A12).
 
 
 ## 1. Authorisation, and what this assignment is *not*
