@@ -3,7 +3,10 @@
 Task ID: `UDG-003` — phase `1` of `3`
 Title: Authority core: frozen cutoff, lifecycle ordering, FIFO selection, screening, arbitration, commit, neutral rule, bounded queues, request identity cache, input-sufficient journal and deterministic replay
 Depends on: UDG-001 (Verified), UDG-002 (Verified), UDG-003 Phase 0 (owner-accepted at the ADR-0002 scoped compiler policy), ADR-0002, P03
-Status: **In Review** — revision 5, made against the owner's fourth correction (§0.5)
+Status: **Accepted at phase level** — revision 5, accepted by the project owner on 2026-11-16 at
+`5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c` (§0.6). The acceptance covers this phase only: UDG-003 as a whole stays
+**In Progress**, Phases 2–3 require separate authorisation, **D-7 remains open**, and Gates A, B and C remain
+**Not Run**.
 Owner/reviewer: integration owner / Codex (implementation only; acceptance recorded by the owner alone)
 Base commit: `8987139f18653b05e57e64d0b14cdd1c753b6612` (retained CI for that head: `42794023731`, conclusion `success`)
 
@@ -124,6 +127,43 @@ replay refused the newer (`4846b43b…`). After the fix both scenarios reproduce
 
 This revision did not touch the one-input rule, D-7, Part B, Gates A/B/C, Phases 2–3, or anything outside the
 Phase 1 core and the Phase 1 evidence tooling already granted (A9–A12).
+
+## 0.6 Owner acceptance of Phase 1, recorded 2026-11-16
+
+The project owner (`TomBResearch`), acting as reviewer and integration owner, accepted Phase 1 on 2026-11-16. The
+implementer recorded no acceptance of its own work: revisions 1–5 were each submitted **In Review** and the earlier
+revision records were left as they were written.
+
+```text
+Accepted implementation / reviewed submission  5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c  (records head; the
+                                           one-line ordering fix it carries is 0b9b099)
+Passing submission CI                        https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43010353106
+                                           (success, all steps green; 514 tests, 0 failures, 0 errors, 0 skipped)
+Retained Phase 1 bundle                       /workspace/udg-evidence/ci-run-43010353106/UDG-003-2026-11-11T11-20-26-111Z-5d77c612
+                                           phase phase-1, status PASS, workingTreeDirty false, 15 vector artefacts,
+                                           `PASS evidence verify … (0 issue(s))`
+Review history                               revision 1 73d48c9 (3 technical + 1 evidence finding) → revision 2
+                                           358f9ef (PA1-C6, PA1-C7) → revision 3 9598bd7 (PA1-C8) → revision 4
+                                           0c054f1 (PA1-C9) → revision 5 5d77c61 accepted. Two intermediate
+                                           revision-4 heads (428aa61) and two failed revision-2 runs are retained
+                                           with their causes; no bundle byte or recorded digest was rewritten.
+Acceptance covers                            the transport-independent Phase 1 movement authority core: stages
+                                           F → L → Q → S → A → C → R → X, the frozen arrival cutoff, one continuous
+                                           observation per entity per tick, screening and arbitration, the bounded
+                                           queues and terminal-request cache, the bounded deferred intake and
+                                           receipt order across both admission paths, the journal and deterministic
+                                           replay, and the Phase 1 evidence gate that publishes and refuses them
+Explicitly not covered                        Phase 2 (stages M and P, `RegionRoom`, SDK transport, lifecycle wiring,
+                                           physics, navigation, client prediction), Phase 3, any acknowledgement or
+                                           compatibility claim, and no gate pass
+Still open                                   D-7 (acknowledgement semantics, blocking transport acceptance), Part B
+                                           (input-consumption rule, unadopted), D4 (evidence backup destination),
+                                           Gates A/B/C **Not Run**, `stackCompatibility` **not-established**
+```
+
+`docs/contracts/UDG-003.md` keeps the **task** at **In Progress**: a phase-level acceptance is not a task-level
+`Verified`, because Phase 1 is not the whole of UDG-003 and the task's own acceptance criteria are not all
+satisfied by it.
 
 ## 1. Authorisation, and what this assignment is *not*
 

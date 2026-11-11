@@ -372,6 +372,52 @@ restated the boundaries; nothing in the instruction widens the phase.
 | Still prohibited | Starting Phase 2 or Phase 3, changing the one-input-per-entity-per-tick rule, resolving `D-7` by assumption, and provisioning backup storage. Gates A, B and C remain **Not Run**, `stackCompatibility` remains **not-established**, and `D4` remains open. |
 | History | Existing evidence and the disclosed `v19 → v20` inventory discontinuity are preserved; nothing historical is rewritten to make a chain look continuous. |
 
+## UDG-003 Phase 1 acceptance recorded 2026-11-16
+
+The project owner (`TomBResearch`), acting as reviewer and integration owner, accepted **UDG-003 Phase 1** — the
+transport-independent movement authority core — on 2026-11-16. Five revisions were reviewed: each was submitted
+**In Review** by the implementer, and no acceptance was recorded by the implementer at any point.
+
+```text
+Accepted implementation / reviewed submission  5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c
+Passing submission CI                          https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43010353106
+                                               (success, all steps green; 514 tests, 0 failures, 0 errors,
+                                               0 skipped)
+Retained Phase 1 bundle                         /workspace/udg-evidence/ci-run-43010353106/UDG-003-2026-11-11T11-20-26-111Z-5d77c612
+                                               phase phase-1, status PASS, workingTreeDirty false, 15 vector
+                                               artefacts, `PASS evidence verify … (0 issue(s))`
+Review history                                 revision 1 73d48c9 → revision 2 358f9ef → revision 3 9598bd7 →
+                                               revision 4 0c054f1 → revision 5 5d77c61, accepted. Findings
+                                               resolved along the way: PA1-C1…C4 (provenance, recorded time
+                                               basis, bounded retained state, gated phase evidence), PA1-C6
+                                               (one recorded tick time), PA1-C7 (cutoff-bounded lifecycle
+                                               cleanup), PA1-C8 (deterministic admission for arrivals received
+                                               during a tick), PA1-C9 (receipt order across both admission
+                                               paths). Two failed revision-2 runs and the intermediate
+                                               revision-4 head are retained with their causes.
+Acceptance covers                              the Phase 1 authority core only: stages F → L → Q → S → A → C →
+                                               R → X, the frozen cutoff, one continuous observation per entity
+                                               per tick, screening and arbitration, bounded queues and the
+                                               terminal-request cache, the bounded deferred intake and receipt
+                                               order, cutoff-bounded lifecycle disposition, journal and
+                                               deterministic replay, and the phase evidence gate
+Not covered                                    Phase 2 and Phase 3 (unassigned, separate authorisation required):
+                                               stages M and P, RegionRoom, SDK transport and lifecycle wiring,
+                                               physics, navigation, client prediction; any acknowledgement or
+                                               compatibility claim; any gate pass
+Still open                                     D-7 (open, blocking transport acceptance), Part B (unadopted),
+                                               D4 (no backup destination designated), Gates A/B/C **Not Run**,
+                                               `stackCompatibility` **not-established**
+Task status                                    UDG-003 stays **In Progress**. A phase-level acceptance is not a
+                                               task-level `Verified`; see
+                                               [UDG-003.md](UDG-003.md) and
+                                               [assignments/UDG-003-phase-1-completion.md](assignments/UDG-003-phase-1-completion.md) §16
+Evidence preserved                             every bundle from every revision and every failed run remains retained and
+                                               verifiable, including the revision-3 bundle that published the
+                                               intra-tick replay limit; no bundle byte, digest or historical
+                                               inventory version was rewritten
+```
+
 ## Reviewed edition and pins for the P01 approval
 
 ```text

@@ -1132,3 +1132,58 @@ It is not a compatibility claim: `stackCompatibility` remains `not-established` 
 third-party surface. It closes no gate — Gates A, B and C remain **Not Run** — and resolves neither D-7, Part B
 nor D4. It does not change the one-input rule, the 30-second TTL, the four P03 capacities, the intake bound or
 the stage order. Phase 1 is submitted **In Review** and is not Verified.
+
+
+## 16. Owner acceptance of Phase 1, recorded 2026-11-16
+
+The project owner (`TomBResearch`), acting as reviewer and integration owner, accepted UDG-003 **Phase 1** on
+2026-11-16 at revision 5. This section records the decision on the owner's instruction. The implementer recorded
+no acceptance of its own work at any point: revisions 1, 2, 3, 4 and 5 were each submitted **In Review**, and
+§11–§15 are left as they were written, including the disclosure each revision published about its own state.
+
+```text
+Implementer recommendation                       In Review (every revision; never more)
+Reviewer decision and date                       **Accepted 2026-11-16** by the project owner (TomBResearch),
+                                                 acting as reviewer and integration owner
+Accepted implementation / reviewed submission    5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c
+Passing submission CI                            https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43010353106
+                                                 (success; all steps green; 514 tests, 0 failures, 0 errors,
+                                                 0 skipped; UDG-001 49 / UDG-002 31 / UDG-003 71 task tests)
+Retained Phase 1 bundle                           /workspace/udg-evidence/ci-run-43010353106/UDG-003-2026-11-11T11-20-26-111Z-5d77c612
+                                                 phase phase-1, status PASS, implementationSha 5d77c612…,
+                                                 workingTreeDirty false, tests 514/0/0/0, 15 vector artefacts,
+                                                 PASS evidence verify … (0 issue(s)), no machine path in any file
+Retained companions from the same run             UDG-001-2026-11-11T11-17-25-477Z-5d77c612 and
+                                                 UDG-002-2026-11-11T11-18-46-321Z-5d77c612, both verifying;
+                                                 probes/ with PR-0…PR-13 verdicts unchanged from Phase 0;
+                                                 inventory chain record UDG-003-PHASE-1R5-2026-11-15
+```
+
+**What acceptance covers.** The transport-independent Phase 1 movement authority core: stage order
+`F → L → Q → S → A → C → R → X`; the arrival cutoff frozen as the first statement of a tick; exactly one continuous
+observation consumed per entity per tick at stage Q; screening and arbitration with the adopted precedence; the
+bounded queues, terminal-request cache and one-tick time basis; the bounded deferred intake and receipt order
+across both admission paths; lifecycle disposition bounded by the cutoff; the journal, its bounded retained state
+and deterministic replay from persisted inputs; and the Phase 1 evidence gate that publishes those vectors and
+refuses a bundle in which a claimed live/replay equivalence is unproven.
+
+**What acceptance does not cover.** Phases 2 and 3, which remain unassigned and require separate authorisation:
+stages `M` and `P`, `RegionRoom`, SDK input attachment and lifecycle transport wiring, physics, navigation and
+client-side prediction. No acknowledgement claim of any kind. No third-party stack compatibility claim —
+`stackCompatibility` remains `not-established`. No gate: **Gates A, B and C remain Not Run**, and Part B of
+ADR-P-0002 remains unadopted. D-7 remains open and continues to block transport acceptance. D4 remains open: no
+independent evidence backup destination is designated, and nothing in this acceptance authorises a release, tag,
+archive or storage location.
+
+**Task status.** `docs/contracts/UDG-003.md` keeps UDG-003 at **In Progress**. A phase-level acceptance is not a
+task-level `Verified`: Phase 1 is one of three phases, and the task's own acceptance criteria are not all
+satisfied by it. `docs/contracts/assignments/UDG-003-phase-1.md` carries the phase status
+**Accepted at phase level**, and `docs/contracts/adoption.md` records the decision as
+*UDG-003 Phase 1 acceptance recorded 2026-11-16*.
+
+**Evidence provenance.** The accepted submission's CI run is the one whose bundle is named above; its 15 vector
+digests equal the two local runs quoted in §15.4. Every earlier bundle remains retained and unmodified —
+including the revision-3 bundle that published `intraTickArrivalReplayable: false`, which records a property the
+code had at that commit and does not have now. The evidence inventory chain gained
+`UDG-003-PHASE-1R5-2026-11-15` at v31 and the acceptance as a new chain version; no historical inventory,
+bundle byte or recorded digest was rewritten to make the story read cleanly.
