@@ -1134,16 +1134,16 @@ nor D4. It does not change the one-input rule, the 30-second TTL, the four P03 c
 the stage order. Phase 1 is submitted **In Review** and is not Verified.
 
 
-## 16. Owner acceptance of Phase 1, recorded 2026-11-16
+## 16. Owner acceptance of Phase 1, recorded 2026-11-11
 
 The project owner (`TomBResearch`), acting as reviewer and integration owner, accepted UDG-003 **Phase 1** on
-2026-11-16 at revision 5. This section records the decision on the owner's instruction. The implementer recorded
+2026-11-11 at revision 5. This section records the decision on the owner's instruction. The implementer recorded
 no acceptance of its own work at any point: revisions 1, 2, 3, 4 and 5 were each submitted **In Review**, and
 §11–§15 are left as they were written, including the disclosure each revision published about its own state.
 
 ```text
 Implementer recommendation                       In Review (every revision; never more)
-Reviewer decision and date                       **Accepted 2026-11-16** by the project owner (TomBResearch),
+Reviewer decision and date                       **Accepted 2026-11-11** by the project owner (TomBResearch),
                                                  acting as reviewer and integration owner
 Accepted implementation / reviewed submission    5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c
 Passing submission CI                            https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43010353106
@@ -1175,11 +1175,22 @@ ADR-P-0002 remains unadopted. D-7 remains open and continues to block transport 
 independent evidence backup destination is designated, and nothing in this acceptance authorises a release, tag,
 archive or storage location.
 
+**Date basis and correction.** The acceptance is recorded as **2026-11-11**: commit
+`c10bfb5468dd10a286eba95c74118d3291395326` carries commit date `2026-11-11T11:33:09Z`, and its CI run
+`43012892204` was created `2026-11-11T11:33:16Z` and completed `2026-11-11T11:41:11Z`. The records originally read
+`2026-11-16`, a date no retained artefact supports; they were corrected on the owner's instruction, and the
+correction commit itself is part of this record rather than an edit that pretends the earlier date was never
+written. The owner's approval message has no independently verifiable timestamp, so the decision date is the date
+the acceptance reached `main`. Every Phase 1 bundle in the evidence store — revisions 1 to 5 and the acceptance run
+— is named with a `2026-11-11` capture timestamp, which is consistent with the corrected date and inconsistent with
+the earlier review-instruction dates in §11–§15; those sections are left unamended because their dates cannot be
+verified, and the discrepancy is disclosed instead.
+
 **Task status.** `docs/contracts/UDG-003.md` keeps UDG-003 at **In Progress**. A phase-level acceptance is not a
 task-level `Verified`: Phase 1 is one of three phases, and the task's own acceptance criteria are not all
 satisfied by it. `docs/contracts/assignments/UDG-003-phase-1.md` carries the phase status
 **Accepted at phase level**, and `docs/contracts/adoption.md` records the decision as
-*UDG-003 Phase 1 acceptance recorded 2026-11-16*.
+*UDG-003 Phase 1 acceptance recorded 2026-11-11*.
 
 **Evidence provenance.** The accepted submission's CI run is the one whose bundle is named above; its 15 vector
 digests equal the two local runs quoted in §15.4. Every earlier bundle remains retained and unmodified —

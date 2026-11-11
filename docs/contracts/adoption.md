@@ -372,10 +372,15 @@ restated the boundaries; nothing in the instruction widens the phase.
 | Still prohibited | Starting Phase 2 or Phase 3, changing the one-input-per-entity-per-tick rule, resolving `D-7` by assumption, and provisioning backup storage. Gates A, B and C remain **Not Run**, `stackCompatibility` remains **not-established**, and `D4` remains open. |
 | History | Existing evidence and the disclosed `v19 → v20` inventory discontinuity are preserved; nothing historical is rewritten to make a chain look continuous. |
 
-## UDG-003 Phase 1 acceptance recorded 2026-11-16
+## UDG-003 Phase 1 acceptance recorded 2026-11-11
 
 The project owner (`TomBResearch`), acting as reviewer and integration owner, accepted **UDG-003 Phase 1** — the
-transport-independent movement authority core — on 2026-11-16. Five revisions were reviewed: each was submitted
+transport-independent movement authority core — on 2026-11-11, the date the acceptance reached `main` (commit
+`c10bfb5468dd10a286eba95c74118d3291395326`, commit date `2026-11-11T11:33:09Z`; CI `43012892204` created
+`2026-11-11T11:33:16Z`, completed `2026-11-11T11:41:11Z`). The owner's approval message carries no independently
+verifiable timestamp, so the decision is dated by that commit; an earlier revision of this entry read
+`2026-11-16` and was corrected on the owner's instruction, leaving the unverifiable 2026-11-12 to 2026-11-15
+review-instruction dates above it as originally written. Five revisions were reviewed: each was submitted
 **In Review** by the implementer, and no acceptance was recorded by the implementer at any point.
 
 ```text

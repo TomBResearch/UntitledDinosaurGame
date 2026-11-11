@@ -3,7 +3,7 @@
 Task ID: `UDG-003` — phase `1` of `3`
 Title: Authority core: frozen cutoff, lifecycle ordering, FIFO selection, screening, arbitration, commit, neutral rule, bounded queues, request identity cache, input-sufficient journal and deterministic replay
 Depends on: UDG-001 (Verified), UDG-002 (Verified), UDG-003 Phase 0 (owner-accepted at the ADR-0002 scoped compiler policy), ADR-0002, P03
-Status: **Accepted at phase level** — revision 5, accepted by the project owner on 2026-11-16 at
+Status: **Accepted at phase level** — revision 5, accepted by the project owner on 2026-11-11 at
 `5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c` (§0.6). The acceptance covers this phase only: UDG-003 as a whole stays
 **In Progress**, Phases 2–3 require separate authorisation, **D-7 remains open**, and Gates A, B and C remain
 **Not Run**.
@@ -128,9 +128,9 @@ replay refused the newer (`4846b43b…`). After the fix both scenarios reproduce
 This revision did not touch the one-input rule, D-7, Part B, Gates A/B/C, Phases 2–3, or anything outside the
 Phase 1 core and the Phase 1 evidence tooling already granted (A9–A12).
 
-## 0.6 Owner acceptance of Phase 1, recorded 2026-11-16
+## 0.6 Owner acceptance of Phase 1, recorded 2026-11-11
 
-The project owner (`TomBResearch`), acting as reviewer and integration owner, accepted Phase 1 on 2026-11-16. The
+The project owner (`TomBResearch`), acting as reviewer and integration owner, accepted Phase 1 on 2026-11-11. The
 implementer recorded no acceptance of its own work: revisions 1–5 were each submitted **In Review** and the earlier
 revision records were left as they were written.
 
@@ -160,6 +160,21 @@ Still open                                   D-7 (acknowledgement semantics, blo
                                            (input-consumption rule, unadopted), D4 (evidence backup destination),
                                            Gates A/B/C **Not Run**, `stackCompatibility` **not-established**
 ```
+
+**Date basis.** The acceptance is dated **2026-11-11**, the date it reached `main`: commit
+`c10bfb5468dd10a286eba95c74118d3291395326` carries commit date `2026-11-11T11:33:09Z` and its CI run
+`43012892204` was created `2026-11-11T11:33:16Z` and completed `2026-11-11T11:41:11Z`. An earlier revision of these
+records read `2026-11-16`; that date was not verifiable from any artefact and has been corrected. The owner's
+approval message carries no independently verifiable timestamp, so the decision is dated by the moment the
+acceptance was written to `main`, which is the only clock here that a reviewer can check. The submission this
+acceptance closes (`5d77c61`) carries commit date `2026-11-11T11:13:27Z`, with CI `43010353106` created
+`2026-11-11T11:14:55Z` and completed `2026-11-11T11:22:36Z`.
+
+Earlier review-instruction dates in this file and in [adoption](adoption.md) (2026-11-12 through 2026-11-15) are
+**left exactly as originally recorded**: they cannot be verified from any retained artefact, and every Phase 1
+evidence bundle — revisions 1 through 5 and the acceptance — was captured on the evidence store's single day,
+2026-11-11. That mismatch is disclosed rather than quietly harmonised, because rewriting a series of historical
+dates to match a clock nobody can audit would replace one unverifiable claim with another.
 
 `docs/contracts/UDG-003.md` keeps the **task** at **In Progress**: a phase-level acceptance is not a task-level
 `Verified`, because Phase 1 is not the whole of UDG-003 and the task's own acceptance criteria are not all
