@@ -49,6 +49,7 @@ const PHASE_1_VECTOR_NAMES: readonly string[] = [
   'pa1-c6-tick-time.json',
   'pa1-c7-cutoff-lifecycle.json',
   'pa1-c8-deferred-intake.json',
+  'pa1-c9-receipt-order.json',
   'disposition-reconciliation.json',
   'summary.json',
 ];
@@ -1066,7 +1067,7 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
     });
   });
 
-  it('writes the tick-time, cutoff-lifecycle and deferred-intake vectors (PA1-C6, PA1-C7, PA1-C8)', () => {
+  it('writes the tick-time, cutoff-lifecycle, deferred-intake and receipt-order vectors (PA1-C6 … PA1-C9)', () => {
     const ttlMs = CAPACITIES.terminalCacheTtlMs;
     const recorded = (harness: Harness): number => {
       const last = harness.chain().at(-1);
@@ -1224,7 +1225,12 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
     };
 
     /** Replay a finished run from bytes that have been through JSON, as a caller recovering it from storage. */
-    const persistedReplay = (harness: Harness): { rowsEqual: boolean; tipEqual: boolean; stateEqual: boolean } => {
+    const persistedReplay = (harness: Harness): {
+      rowsEqual: boolean;
+      tipEqual: boolean;
+      stateEqual: boolean;
+      rows: readonly unknown[];
+    } => {
       const inputs = toReplayInputs(roundTripRows(harness.rows()), roundTripChain(harness.chain()));
       const outcome = replayFromInputs({
         prologue: harness.core.prologue(),
@@ -1249,6 +1255,8 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
         tipEqual: outcome.core.chainTip === harness.core.chainTip,
         stateEqual:
           JSON.stringify(outcome.core.view('e1') ?? null) === JSON.stringify(harness.core.view('e1') ?? null),
+        // The recovered journal itself, so a caller can compare identities and not only equality booleans.
+        rows: outcome.rows,
       };
     };
 
@@ -1426,6 +1434,137 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
       leaveRejoinReplayable: replayed('rejoin'),
       allSupportedCasesReplayable: c8Vector.replayEquivalence.allEqual,
     });
+
+    // --- PA1-C9: receipt order across both admission paths.
+    //
+    // An arrival held in the intake is older than anything received afterwards, so a between-ticks arrival
+    // that goes straight into the entity queue must not overtake it. Two races matter and both are published:
+    // which observation stage Q selects when there is room, and which arrival gets the last free slot when
+    // there is exactly one. Replay feeds both arrivals in ordinal order, so it can never overtake; a live run
+    // that does produces a journal, a canonical state and a chain tip that replay cannot reproduce.
+    const overtakeRun = (label: string, fill: number): {
+      harness: Harness;
+      older: number;
+      newer: number;
+      waitingBeforeNewer: number;
+    } => {
+      const harness = joined(label);
+      for (let generation = 1; generation <= fill; generation += 1) {
+        harness.core.ingest('e1', frame(1, generation, 1, 0), harness.time.nowMs());
+      }
+      let injected = -1;
+      harness.time.onRead(() => {
+        injected = harness.core.ingest('e1', frame(1, fill + 1, 1, 0), harness.time.nowMs()).arrival.ordinal;
+      });
+      harness.step();
+      const older = injected;
+      const waitingBeforeNewer = harness.core.retention().deferredIntake;
+      const newer = harness.core.ingest('e1', frame(1, fill + 2, 1, 0), harness.time.nowMs()).arrival.ordinal;
+      harness.step();
+      harness.step();
+      return { harness, older, newer, waitingBeforeNewer };
+    };
+    const identityOf = (rows: readonly unknown[]): { consumed: number[]; refused: number[] } => {
+      const cast = rows as readonly {
+        type?: string;
+        kind?: string;
+        disposition?: string;
+        arrivalOrdinal?: number;
+      }[];
+      const observations = cast.filter((row) => row.type === 'observation');
+      return {
+        // A `join` is journalled as a consumed observation of kind `control`, so identity means client arrivals.
+        consumed: observations
+          .filter((row) => row.kind !== 'control' && row.disposition === 'consumed')
+          .map((row) => row.arrivalOrdinal ?? -1),
+        refused: observations
+          .filter((row) => row.disposition === 'refused:overflow')
+          .map((row) => row.arrivalOrdinal ?? -1),
+      };
+    };
+    const c9Case = (label: string, fill: number): Record<string, unknown> => {
+      const run = overtakeRun(label, fill);
+      const harness = run.harness;
+      const live = identityOf(harness.rows());
+      const replay = persistedReplay(harness);
+      const replayed = identityOf(replay.rows);
+      const replayable =
+        replay.rowsEqual &&
+        replay.stateEqual &&
+        replay.tipEqual &&
+        JSON.stringify(live) === JSON.stringify(replayed);
+      expect(replayable, label).toBe(true);
+      return {
+        olderOrdinal: run.older,
+        newerOrdinal: run.newer,
+        newerIsNewer: run.newer > run.older,
+        waitingInIntakeBeforeNewerArrival: run.waitingBeforeNewer,
+        capacity: STEP_CAPACITIES.continuousPerClient,
+        consumedOrdinals: live.consumed,
+        refusedOrdinals: live.refused,
+        replay: {
+          consumedOrdinals: replayed.consumed,
+          refusedOrdinals: replayed.refused,
+          identityEqual: JSON.stringify(live) === JSON.stringify(replayed),
+          rowsEqual: replay.rowsEqual,
+          stateEqual: replay.stateEqual,
+          tipEqual: replay.tipEqual,
+        },
+        claims: {
+          // The older arrival was admitted, so it is in the run's arithmetic and no capacity rule refused it.
+          olderNeverRefused: !live.refused.includes(run.older),
+          newerRefused: live.refused.includes(run.newer),
+          // Meaningful where there was room for both: stage Q took the older observation first.
+          olderConsumedBeforeNewer:
+            live.consumed.includes(run.older) &&
+            (live.consumed.indexOf(run.newer) === -1 ||
+              live.consumed.indexOf(run.older) < live.consumed.indexOf(run.newer)),
+        },
+        replayable,
+      };
+    };
+    const c9Space = c9Case('udg-003-vector-order-space', 0);
+    const c9Slot = c9Case('udg-003-vector-order-slot', STEP_CAPACITIES.continuousPerClient);
+    // Room available: stage Q takes the older arrival, and the newer one waits its turn rather than being
+    // refused. One slot free: the older arrival takes it, and drop-newest refuses the newer one — the only
+    // reading of "newest" that is true if admission preserved receipt order.
+    const claimsOf = (entry: Record<string, unknown>): Record<string, boolean> =>
+      entry['claims'] as Record<string, boolean>;
+    expect(claimsOf(c9Space)['olderConsumedBeforeNewer']).toBe(true);
+    expect(claimsOf(c9Space)['olderNeverRefused']).toBe(true);
+    expect(claimsOf(c9Slot)['olderNeverRefused']).toBe(true);
+    expect(claimsOf(c9Slot)['newerRefused']).toBe(true);
+
+    const c9Vector = {
+      correction: 'PA1-C9',
+      rule:
+        'the deferred intake is flushed in receipt order at every core entry point, so an arrival received ' +
+        'between ticks is admitted after everything already waiting and the live order equals the ordinal ' +
+        'order a replay feeds in',
+      spaceAvailable: c9Space,
+      singleFreeSlot: c9Slot,
+      replayEquivalence: {
+        spaceAvailable: { replayable: c9Space['replayable'] === true },
+        singleFreeSlot: { replayable: c9Slot['replayable'] === true },
+        allEqual: c9Space['replayable'] === true && c9Slot['replayable'] === true,
+        source:
+          'rows and chain round-tripped through JSON, replayed through replayRun with a fresh clock; consumed ' +
+          'identity, overflow identity, canonical state and the chain tip are compared',
+      },
+    };
+    write('pa1-c9-receipt-order.json', c9Vector);
+    corrections['PA1-C9'] = c9Vector;
+
+    recordMeasure('authority.receiptOrder', {
+      intakeFlushedAtEveryEntryPoint: true,
+      olderConsumedFirstWhenRoom: claimsOf(c9Space)['olderConsumedBeforeNewer'],
+      newerRefusedWhenOneSlotFree: claimsOf(c9Slot)['newerRefused'],
+      olderNeverRefusedByCapacity:
+        claimsOf(c9Space)['olderNeverRefused'] && claimsOf(c9Slot)['olderNeverRefused'],
+      spaceAvailableReplayable: c9Space['replayable'],
+      singleFreeSlotReplayable: c9Slot['replayable'],
+      allSupportedCasesReplayable: c9Vector.replayEquivalence.allEqual,
+    });
   });
 
   it('writes the disposition reconciliation table and the manifest', () => {
@@ -1491,6 +1630,7 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
         'pa1-c6-tick-time.json',
         'pa1-c7-cutoff-lifecycle.json',
         'pa1-c8-deferred-intake.json',
+        'pa1-c9-receipt-order.json',
       ],
       scenarios: Object.keys(scenarios).sort(),
     };

@@ -575,6 +575,12 @@ export class AuthorityCore {
     if (this.#tickRunning) {
       return this.#deferIntake(entityId, raw, control, sessionEpoch, receivedAtMs, rendered);
     }
+    // Receipt order spans both paths (reviewer correction PA1-C9). An arrival that is still waiting in the
+    // intake from a running tick is older than anything received now, so it is admitted first: a between-ticks
+    // arrival can never overtake it into a queue slot, into stage Q's selection, or into a capacity refusal.
+    // Flushing at every entry point — not only at a tick boundary — is what makes the live order equal the
+    // ordinal order a replay feeds in, whether the next call is another message or the next tick.
+    this.#drainIntake();
     return this.#admit(entityId, raw, control, sessionEpoch, receivedAtMs, rendered);
   }
 

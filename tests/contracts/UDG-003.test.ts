@@ -1674,7 +1674,7 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     spawnSync('rm', ['-rf', scratch], { cwd: ROOT });
   });
 
-  it('refuses the phase unless every supported mid-tick case is proven to replay equally', () => {
+  it('refuses the phase unless every supported live/replay case is proven to replay equally', () => {
     // Reviewer instruction of 2026-11-14: the mismatch revision 3 published for a message received during a
     // tick is fixed by admitting such a message at the next boundary, and the phase evidence check must now
     // require replay equivalence for leave, expiry, epoch change and leave/rejoin. A vector that reports one
@@ -1694,16 +1694,16 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
 
     const vectorName = 'pa1-c8-deferred-intake.json';
     const manifestPath = join(scratch, 'vectors-manifest.json');
-    const rewrite = (value: unknown): void => {
+    const rewrite = (name: string, value: unknown): void => {
       // Re-sign the manifest for the bytes being asserted, so a failure below can only come from the rule
       // under test and not from a digest mismatch the tampering itself would cause.
-      writeFileSync(join(scratch, vectorName), JSON.stringify(value), 'utf8');
-      const bytes = readFileSync(join(scratch, vectorName));
+      writeFileSync(join(scratch, name), JSON.stringify(value), 'utf8');
+      const bytes = readFileSync(join(scratch, name));
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
         files: { name: string; bytes: number; sha256: string }[];
       };
-      const entry = manifest.files.find((file) => file.name === vectorName);
-      if (entry === undefined) throw new Error(`${vectorName} is not in the manifest`);
+      const entry = manifest.files.find((file) => file.name === name);
+      if (entry === undefined) throw new Error(`${name} is not in the manifest`);
       entry.bytes = bytes.length;
       entry.sha256 = createHash('sha256').update(bytes).digest('hex');
       writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
@@ -1729,7 +1729,7 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
       const recorded = regressed.replayEquivalence[lifecycle];
       if (recorded === undefined) throw new Error(`the vector omits the ${lifecycle} case entirely`);
       recorded.replayable = false;
-      rewrite(regressed);
+      rewrite(vectorName, regressed);
       const refused = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
       expect(refused.status, lifecycle).toBe(1);
       expect(refused.stderr, lifecycle).toContain('VECTORS-REPLAY-EQUIVALENCE');
@@ -1739,7 +1739,7 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     // A vector that dropped `allEqual` while naming every case is still not a claim of equivalence.
     const withoutClaim = JSON.parse(JSON.stringify(published)) as { replayEquivalence: Record<string, unknown> };
     delete withoutClaim.replayEquivalence['allEqual'];
-    rewrite(withoutClaim);
+    rewrite(vectorName, withoutClaim);
     const incomplete = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
     expect(incomplete.status).toBe(1);
     expect(incomplete.stderr).toContain('VECTORS-REPLAY-EQUIVALENCE');
@@ -1749,13 +1749,42 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     const absent = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
     expect(absent.status).toBe(1);
     expect(absent.stderr).toContain('VECTORS-REPLAY-EQUIVALENCE');
-    rewrite('not json');
+    rewrite(vectorName, 'not json');
     const unparseable = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
     expect(unparseable.status).toBe(1);
     expect(unparseable.stderr).toContain('VECTORS-REPLAY-EQUIVALENCE');
 
-    // Restoring the honest vector is the only thing that clears it.
-    rewrite(published);
+    // Receipt order across the two admission paths (PA1-C9) is held to the same standard: the race where
+    // there was room for both arrivals, and the race where exactly one slot was free.
+    const orderName = 'pa1-c9-receipt-order.json';
+    const order = JSON.parse(readFileSync(join(scratch, orderName), 'utf8')) as {
+      correction: string;
+      replayEquivalence: Record<string, { replayable: boolean }> & { allEqual: boolean };
+    };
+    expect(order.correction).toBe('PA1-C9');
+    expect(order.replayEquivalence.allEqual).toBe(true);
+    for (const scenario of ['spaceAvailable', 'singleFreeSlot']) {
+      expect(order.replayEquivalence[scenario]?.replayable, scenario).toBe(true);
+      const regressedOrder = JSON.parse(JSON.stringify(order)) as typeof order;
+      const claim = regressedOrder.replayEquivalence[scenario];
+      if (claim === undefined) throw new Error(`the vector omits the ${scenario} case entirely`);
+      claim.replayable = false;
+      rewrite(orderName, regressedOrder);
+      const refused = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
+      expect(refused.status, scenario).toBe(1);
+      expect(refused.stderr, scenario).toContain('VECTORS-REPLAY-EQUIVALENCE');
+      expect(refused.stderr, scenario).toContain(scenario);
+    }
+    // An absent receipt-order vector is unproven ordering, not an optional extra.
+    spawnSync('rm', [join(scratch, orderName)], { cwd: ROOT });
+    const orderAbsent = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
+    expect(orderAbsent.status).toBe(1);
+    expect(orderAbsent.stderr).toContain('VECTORS-REPLAY-EQUIVALENCE');
+    expect(orderAbsent.stderr).toContain(orderName);
+
+    // Restoring the honest vectors is the only thing that clears it.
+    rewrite(vectorName, published);
+    rewrite(orderName, order);
     expect(spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' }).status).toBe(0);
     spawnSync('rm', ['-rf', scratch], { cwd: ROOT });
   });

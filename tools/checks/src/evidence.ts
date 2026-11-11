@@ -211,6 +211,7 @@ export const PHASE_1_VECTOR_FILES: readonly string[] = [
   'pa1-c6-tick-time.json',
   'pa1-c7-cutoff-lifecycle.json',
   'pa1-c8-deferred-intake.json',
+  'pa1-c9-receipt-order.json',
   'disposition-reconciliation.json',
   'summary.json',
 ];
@@ -372,17 +373,28 @@ export const validateVectorManifest = (directory: string, expectation: ManifestE
  * of them is unproven: a vector that reports the mismatch as still open, omits a case, or fails to parse is
  * a gate failure, not a footnote.
  */
-export const PHASE_1_REPLAY_EQUIVALENCE_CASES: readonly string[] = ['leave', 'expiry', 'epoch', 'rejoin'];
 export const PHASE_1_REPLAY_EQUIVALENCE_FILE = 'pa1-c8-deferred-intake.json';
+export const PHASE_1_REPLAY_EQUIVALENCE_CASES: readonly string[] = ['leave', 'expiry', 'epoch', 'rejoin'];
+export const PHASE_1_RECEIPT_ORDER_FILE = 'pa1-c9-receipt-order.json';
+export const PHASE_1_RECEIPT_ORDER_CASES: readonly string[] = ['spaceAvailable', 'singleFreeSlot'];
 
-export const replayEquivalenceIssues = (directory: string): ManifestIssue[] => {
-  const path = join(directory, PHASE_1_REPLAY_EQUIVALENCE_FILE);
+/**
+ * One file, one set of cases: a case that is absent, false, or unparseable is a phase that has not proven the
+ * property it claims, which the gate refuses rather than publishing.
+ */
+const equivalenceIssuesFor = (
+  directory: string,
+  file: string,
+  cases: readonly string[],
+  why: string,
+): ManifestIssue[] => {
+  const path = join(directory, file);
   const bytes = readOptional(path);
   if (bytes === undefined) {
     return [
       {
         code: 'VECTORS-REPLAY-EQUIVALENCE',
-        detail: `${PHASE_1_REPLAY_EQUIVALENCE_FILE} is absent, so replay equivalence for a mid-tick arrival is unproven`,
+        detail: `${file} is absent, so replay equivalence ${why} is unproven`,
       },
     ];
   }
@@ -391,31 +403,45 @@ export const replayEquivalenceIssues = (directory: string): ManifestIssue[] => {
     return [
       {
         code: 'VECTORS-REPLAY-EQUIVALENCE',
-        detail: `${PHASE_1_REPLAY_EQUIVALENCE_FILE} is not parseable, so replay equivalence cannot be read`,
+        detail: `${file} is not parseable, so replay equivalence ${why} cannot be read`,
       },
     ];
   }
   const equivalence = asRecord(asRecord(parsed)['replayEquivalence']);
   const issues: ManifestIssue[] = [];
-  for (const lifecycle of PHASE_1_REPLAY_EQUIVALENCE_CASES) {
-    const entry = asRecord(equivalence[lifecycle]);
+  for (const name of cases) {
+    const entry = asRecord(equivalence[name]);
     if (entry['replayable'] !== true) {
       issues.push({
         code: 'VECTORS-REPLAY-EQUIVALENCE',
-        detail:
-          `${PHASE_1_REPLAY_EQUIVALENCE_FILE}: replay equivalence for "${lifecycle}" is not proven — a message ` +
-          'received during a tick must reach the same dispositions, canonical state and chain tip in replay',
+        detail: `${file}: replay equivalence for "${name}" is not proven — ${why}`,
       });
     }
   }
   if (equivalence['allEqual'] !== true) {
     issues.push({
       code: 'VECTORS-REPLAY-EQUIVALENCE',
-      detail: `${PHASE_1_REPLAY_EQUIVALENCE_FILE}: the vector does not claim every supported case replays equally`,
+      detail: `${file}: the vector does not claim every supported case replays equally`,
     });
   }
   return issues;
 };
+
+export const replayEquivalenceIssues = (directory: string): ManifestIssue[] => [
+  ...equivalenceIssuesFor(
+    directory,
+    PHASE_1_REPLAY_EQUIVALENCE_FILE,
+    PHASE_1_REPLAY_EQUIVALENCE_CASES,
+    'for a message received during a tick: it must reach the same dispositions, canonical state and chain tip in replay',
+  ),
+  ...equivalenceIssuesFor(
+    directory,
+    PHASE_1_RECEIPT_ORDER_FILE,
+    PHASE_1_RECEIPT_ORDER_CASES,
+    'for an arrival received between ticks while an older one waits in the intake: live admission and replay must ' +
+      'agree on which arrival stage Q selects and which arrival the capacity policy refuses',
+  ),
+];
 
 /** What a foundation run has to prove, in the order the repository contract lists it. */
 export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
@@ -620,6 +646,7 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       'authority.tickTime': 'one captured reading per tick: the cache answer, the cache write and the recorded tick time are the same instant, and replay reproduces both sides of the 30 s window (PA1-C6)',
       'authority.cutoffLifecycle': 'a departure disposes only of arrivals the cutoff covers; no queue holds an arrival the tick that holds it has frozen past, and each mid-tick arrival is dispositioned exactly once (PA1-C7, overtaken for the mid-tick case by PA1-C8)',
       'authority.deferredIntake': 'an arrival received while a tick runs is decided at the next boundary in receipt order; the intake is bounded at 64 with every rejection counted and journalled nowhere; leave, expiry, epoch change and leave/rejoin each replay from persisted evidence to the same dispositions, canonical state and chain tip (PA1-C8)',
+      'authority.receiptOrder': 'a between-ticks arrival is admitted after everything already waiting in the intake, so stage Q selects the older observation and drop-newest refuses the newer one; live and replay agree on both identities, on canonical state and on the chain tip, with room available and with exactly one slot free (PA1-C9)',
       'vectors.artefacts': `=== ${String(PHASE_1_VECTOR_FILES.length)} artefacts listed, each present with a matching digest`,
       'vectors.digestsMatchBytes': '=== true (every artefact re-read from disk hashes to the digest the manifest declares)',
       'capture.commandsRun': '>= 8 commands, capture.failingCommands === []',
