@@ -3,7 +3,7 @@
 Task ID: `UDG-003` — phase `1` of `3`
 Title: Authority core: frozen cutoff, lifecycle ordering, FIFO selection, screening, arbitration, commit, neutral rule, bounded queues, request identity cache, input-sufficient journal and deterministic replay
 Depends on: UDG-001 (Verified), UDG-002 (Verified), UDG-003 Phase 0 (owner-accepted at the ADR-0002 scoped compiler policy), ADR-0002, P03
-Status: **In Review** — revision 4, made against the owner's third correction (§0.4)
+Status: **In Review** — revision 5, made against the owner's fourth correction (§0.5)
 Owner/reviewer: integration owner / Codex (implementation only; acceptance recorded by the owner alone)
 Base commit: `8987139f18653b05e57e64d0b14cdd1c753b6612` (retained CI for that head: `42794023731`, conclusion `success`)
 
@@ -100,6 +100,30 @@ the mutation that proves the new test catches it.
 This revision did not touch the one-input rule, D-7, Part B, Gates A/B/C, Phases 2–3, or anything outside the
 Phase 1 core and the phase evidence tooling already granted (A9–A12).
 
+
+## 0.5 Reviewer correction requested after the fourth submission
+
+Revision 4 (`0c054f1`, CI `43004614712`) closed the intra-tick mismatch and was returned **In Review** for one
+remaining finding: *an older arrival waiting in deferred intake can be overtaken by a newer between-tick
+arrival that goes directly into the entity queue. Replay feeds them in ordinal order, so live and replay can
+differ in FIFO selection and in which arrival gets the last available slot.* The reviewer asked to make live
+admission preserve receipt order across both paths; to add a persisted replay regression with an older arrival
+during tick T and a newer arrival between T and T+1, covering both available queue space and exactly one free
+slot; to assert the same consumed identity, overflow disposition, canonical state and chain tip; to preserve
+the existing bounds and lifecycle regressions; and to return the corrected SHA, a passing CI link and the
+verified Phase 1 bundle. Phases 2–3 still require separate authorisation and **D-7 remains open**.
+
+| # | Requirement as given | What it obliged in the code |
+|---|---|---|
+| **PA1-C9** | **Live admission must preserve receipt order across both paths.** | `#enqueue` now flushes the intake before admitting anything while no tick is running: `#drainIntake()` → `#admit(...)`. The intake is therefore drained at *every* core entry point — a tick boundary, another message, or a lifecycle control — not only at a boundary, so a between-ticks arrival is admitted after everything already waiting and the live order equals the ordinal order a replay feeds in. The flush uses the internal admission path, so it is not itself deferred, and it is skipped while a tick runs, which is what keeps `#deferIntake` authoritative mid-tick. Nothing else changed: no capacity, no TTL, no stage order, no cutoff rule, no lifecycle release. |
+
+The divergence was measured on the unfixed code before it was fixed, so the regression is known to bite: with
+room available the live run consumed the **newer** arrival (tip `ae00e33b…`) while replay consumed the older
+(`589bce6a…`); with exactly one slot free the live run refused the **older** arrival (tip `1679b46b…`) while
+replay refused the newer (`4846b43b…`). After the fix both scenarios reproduce replay's answer exactly.
+
+This revision did not touch the one-input rule, D-7, Part B, Gates A/B/C, Phases 2–3, or anything outside the
+Phase 1 core and the Phase 1 evidence tooling already granted (A9–A12).
 
 ## 1. Authorisation, and what this assignment is *not*
 

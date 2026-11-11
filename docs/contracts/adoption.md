@@ -294,6 +294,25 @@ exception is not a compatibility result.
 | Evidence store | The damaged `inventory-v19.json` and `INTEGRITY-2026-11-10.md` are preserved exactly; no historical inventory or downstream link is rebuilt to manufacture continuity; new snapshots are create-only and fail before overwriting; the known `v19 → v20` discontinuity is carried forward and stated. `D4` (independent backup destination) remains open, and no external storage, release, tag or archive is authorised. |
 | Not repeated | No broad input-backlog survey and no upstream publication during this assignment. |
 
+## UDG-003 Phase 1 review instruction recorded 2026-11-15 (revision 5)
+
+The owner accepted that revision 4's deferred intake closed the intra-tick mismatch, kept Phase 1 **In Review**
+for one remaining finding, and asked for it to be closed:
+
+1. **PA1-C9 — receipt order across both admission paths.** An older arrival waiting in the deferred intake must
+   not be overtaken by a newer between-tick arrival going directly into the entity queue; live admission must
+   preserve receipt order across both paths, because replay feeds arrivals in ordinal order and can therefore
+   never overtake.
+2. **A persisted replay regression** with an older arrival during tick T and a newer arrival between T and T+1,
+   covering **both available queue space and exactly one free slot**, asserting the same consumed identity,
+   overflow disposition, canonical state and chain tip.
+3. **Preserve the existing bounds and lifecycle regressions.**
+
+The instruction again asked for the corrected submission SHA, a passing CI link and the verified Phase 1
+bundle, and restated that **Phases 2–3 require separate authorisation and that D-7 remains open**. Gates A/B/C
+remain **Not Run**, `stackCompatibility` remains **not-established**, Part B remains unadopted, and no backup
+storage destination is designated (D4 open). No new controlled-path grant was needed.
+
 ## UDG-003 Phase 1 review instruction recorded 2026-11-14 (revision 4)
 
 The owner accepted that revision 3's single-tick time and cutoff-bounded cleanup addressed PA1-C6 and PA1-C7,

@@ -995,3 +995,140 @@ Two independent runs produced identical digests for all fourteen.
 published `authority.cutoffLifecycle.intraTickArrivalReplayable: false`. It is preserved unmodified, its digest
 history is untouched, and the inventory record `UDG-003-PHASE-1R3-2026-11-13` still names it. Revision 4 does
 not withdraw it and does not rewrite what it said: the disclosure was accurate about the code at that commit.
+
+
+## 15. Revision 5 — receipt order across both admission paths (PA1-C9)
+
+Revision 4 (`0c054f1887f0e5631c171c8dc8704ba5614fa532`, CI `43004614712`) closed the intra-tick mismatch and was
+returned **In Review** for one remaining finding: an older arrival waiting in the deferred intake could be
+overtaken by a newer arrival received between two ticks, which went straight into the entity queue. Replay feeds
+both arrivals in ordinal order, so it can never overtake — which meant live execution and replay could disagree
+about which observation stage Q selects, and about which arrival gets the last free slot.
+
+### 15.1 The rule, and why the fix is one line wide
+
+`#enqueue` now drains the intake before admitting anything while no tick is running:
+
+```ts
+if (this.#tickRunning) return this.#deferIntake(/* … */);
+this.#drainIntake();          // receipt order spans both paths
+return this.#admit(/* … */);
+```
+
+The intake is therefore flushed at **every** core entry point — a tick boundary, another message, or a lifecycle
+control — rather than only at a boundary. That is the whole behavioural change. Two properties make it
+sufficient rather than merely plausible: ordinals are reserved on receipt (so a flushed arrival is always older
+than the one whose arrival caused the flush, and always within the cutoff of the tick that follows), and both
+paths converge on `#admitBuilt` (so admission decisions do not depend on which path delivered the message).
+Nothing else moved: no capacity, no TTL, no stage order, no cutoff rule, no lifecycle release timing.
+
+### 15.2 The divergence, measured before the fix
+
+The scenario was run against revision 4's code first, so the regression is known to bite rather than asserted
+after the fact. Each row is the live run's answer, replay's answer, and the two chain tips.
+
+| Scenario | Live consumed | Replay consumed | Live refused | Replay refused | Live tip | Replay tip |
+|---|---|---|---|---|---|---|
+| room available | `3` (the newer) | `2` (the older) | — | — | `ae00e33b324a4df8…` | `589bce6aede7652d…` |
+| exactly one slot free | `2,3,4` | `2,3,4` | `34` (**the older**) | `35` (the newer) | `1679b46b8cde4d89…` | `4846b43be88ea319…` |
+
+The second row is the more serious of the two: drop-newest is the declared capacity policy, and a run that
+admitted the newer arrival first refuses the **older** one while remaining internally consistent — the policy
+reads as correct in its own run even though it was applied to the wrong arrival. After the fix both scenarios
+reproduce replay's answer exactly (`35` refused, tips equal, rows equal), and the published
+`pa1-c9-receipt-order.json` carries both comparisons.
+
+### 15.3 What the new suite asserts
+
+`tests/unit/udg-003/receipt-order.test.ts` (6 tests) lands an older arrival on the running tick's own clock
+reading, then a newer one between T and T+1, and then:
+
+* **room available** — stage Q consumes the older arrival; the newer one is journalled `queued` on that tick and
+  `consumed` on the next, never refused; persisted replay gives an identical journal, consumed identity,
+  canonical state and chain tip;
+* **exactly one free slot** — the older arrival takes the slot, the newer carries the single
+  `refused:overflow` row with `RATE_LIMITED` and `overflowCauses['continuous-capacity'] === 1`, the older is
+  never refused; persisted replay agrees on the refusal identity, the journal, canonical state and the tip;
+* **lifecycle control between ticks** — a `leave` also waits behind the intake, so the older observation belongs
+  to the association that is ending and is disposed exactly once as `dropped:lifecycle` rather than admitted to
+  an entity that has gone;
+* **mixed paths** — two arrivals during a tick plus three between ticks leave the queue reading as one ordinal-
+  ascending sequence, and the next consumption is the minimum ordinal.
+
+`overtake()` asserts `retention().deferredIntake === 0` after the newer arrival, which is the guard that fires
+first when the flush is removed. Mutation check: deleting the `#drainIntake()` call fails all 6 tests; with the
+guard bypassed, the dispositions and tips above are what changes.
+
+Existing bounds and lifecycle regressions were preserved rather than edited: `deferred-intake.test.ts`,
+`retention.test.ts`, `lifecycle.test.ts`, `queues.test.ts`, `cutoff*.test.ts`, `time-basis.test.ts` and
+`tick-time.test.ts` all pass unmodified, and the repository suite moved only by the six new tests (508 → 514).
+
+### 15.4 Evidence
+
+`pa1-c9-receipt-order.json` joins the required list (14 → 15 artefacts) and the gate holds it to the same
+standard as the revision-4 file: `replayEquivalenceIssues` refuses a bundle where `spaceAvailable` or
+`singleFreeSlot` is absent or not `replayable: true`, or where `allEqual` is missing, unparseable or the file is
+absent — reported as `VECTORS-REPLAY-EQUIVALENCE`. The rule is now one function over (file, cases), so a third
+scenario cannot quietly be checked less strictly than the first two. The contract suite re-signs the manifest for
+each tampered vector — otherwise the observed failure is only the digest check — and asserts each scenario by
+name, then that an absent receipt-order vector is refused, and that restoring the honest vectors is the only
+thing that clears the gate.
+
+New measured threshold:
+
+```text
+authority.receiptOrder = { intakeFlushedAtEveryEntryPoint: true, olderConsumedFirstWhenRoom: true,
+                           newerRefusedWhenOneSlotFree: true, olderNeverRefusedByCapacity: true,
+                           spaceAvailableReplayable: true, singleFreeSlotReplayable: true,
+                           allSupportedCasesReplayable: true }
+```
+
+Vector digests after this revision (15 artefacts; `vectors-manifest.json` excluded because it names the commit):
+
+```text
+1b981db7194e3cf3910bf4f402445829944d977b67d27bf584177667ca3d0a06  disposition-reconciliation.json
+6794cb4e48cd7480de85e74fbad16743a49702150277ef719e60715c54f23fda  pa1-1-pa1-2-cutoff-consumption.json
+d48239dbaba3a580a7651b0d4a8f158ff1c7a0309e6b94114f007849f4cc7314  pa1-12-pa1-14-lifecycle-stepping-replay.json
+57228ba0790c23a9e040b860469f021e8062911b794012e80bdbf6fb2c6d09f3  pa1-3-generation.json
+7af0c5d7337be445e12a3a5abf7bd8750a2ef91de9c32b503c52e2f937e0bdcc  pa1-4-traces-t1-t2-t3-t6.json
+1e9df37cd65b85912302d0119600083b8385f5e3fbf704110e646a6740127d8e  pa1-5-pa1-8-commit-keepalive-neutral-bound.json
+25c24ee867674133e2d3834baed8f2d1974c9cd07c172b775dbd28805878b7c2  pa1-9-pa1-11-bounds-identity-navigation.json
+a2b2f58aedba8fb23cfbba3129fe671c797f421321ecde502013f6810b20b626  pa1-c1-provenance.json
+ca115d09ec27242d97aa30412350d02283ce35b5fa51d58fb13e1d77a1e6a464  pa1-c2-time-basis.json
+67cfccd058f97b4b635fd83394a23030e67b23cce37ffddfef574c60f3f246a0  pa1-c3-retention.json
+76921771a31dec0ecd9ff260b427418f6b1b67d09427fceb5b17767ad1753c7d  pa1-c6-tick-time.json
+e72214e8a2ea6adbd08d40f8214ba07d68e79fb34e71f40ef19ea15671a1fbca  pa1-c7-cutoff-lifecycle.json
+292c285685642393b96fccbd8bedfe6b95d3c21f1dbca2a2374444b4dace7d5b  pa1-c8-deferred-intake.json
+f9963f4292bf0bbc4cc1a4f86df442196c6b63edb8780422b13e6daf09a7f2dc  pa1-c9-receipt-order.json
+66debab979cc400b5467d2542a6fb384d05d3e7285cc8f4bf80dcd4c8e7ce2fd  summary.json
+```
+
+Exactly two digests moved against revision 4: `pa1-c9-receipt-order.json` is new and `summary.json` counts and
+lists the artefacts. The other thirteen are byte-identical to revision 4, which is the check that a
+one-line ordering fix did not disturb any other decision. Two independent local runs produced the digests above.
+
+### 15.5 Commands as run
+
+| Command | Result |
+|---|---|
+| `pnpm typecheck` | exit 0 |
+| `pnpm lint` | exit 0, `boundary check OK: 61 file(s), 0 violations, rule table 818c63d5b12f` |
+| `pnpm build` | exit 0 |
+| `pnpm dependencies:verify` | exit 0, `docs/integration/dependencies.json matches the installed dependency graph` |
+| `pnpm test:boundaries` | exit 0 |
+| `pnpm test:fixtures` | exit 0, `fixture validation OK: 24 fixture(s)` |
+| `pnpm run declarations:strict` | exit 0 |
+| `pnpm test` | exit 0, `Test Files 26 passed (26)`, `Tests 514 passed (514)` |
+| `npx vitest run tests/unit/udg-003` | exit 0, `17 files`, `127 tests` |
+| `npx vitest run tests/contracts/UDG-003.test.ts` | exit 0, `71 tests` |
+| `UDG_VECTORS_OUT=artifacts/udg-003-phase-1 npx vitest run tests/unit/udg-003/vectors.test.ts` | exit 0, `9 tests` |
+| `node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-1 --allow-dirty` | exit 0, `PASS phase-1 vectors: 15 artefact(s) listed, hashed and attributable` |
+
+### 15.6 What revision 5 does not claim
+
+It is still Phase 1: no transport, no `RegionRoom`, no lifecycle transport wiring, no physics, no navigation, no
+client prediction; `apps/server/src/index.ts` is still `export {}` and `@udg/server` still has no entry-map row.
+It is not a compatibility claim: `stackCompatibility` remains `not-established` and this revision touches no
+third-party surface. It closes no gate — Gates A, B and C remain **Not Run** — and resolves neither D-7, Part B
+nor D4. It does not change the one-input rule, the 30-second TTL, the four P03 capacities, the intake bound or
+the stage order. Phase 1 is submitted **In Review** and is not Verified.
