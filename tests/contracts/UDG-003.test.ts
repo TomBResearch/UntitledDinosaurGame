@@ -1540,6 +1540,53 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     expect(body).toContain("createHash('sha256')");
   });
 
+  it('sanitises every artefact a bundle hashes, including the ones a suite wrote itself', () => {
+    // A suite told where to put its artefacts writes them itself, and it cannot know the machine's roots.
+    // The probe records quote the command line they ran, which on a hosted runner is a path under /home, and
+    // the Phase 0 artefacts had never passed through a bundle before this phase had a capture plan of its
+    // own. The gate therefore has to apply to every hashed file, and this test points it at a directory that
+    // contains the shape the hosted runner produced.
+    const directory = join(ROOT, 'artifacts', '.local', 'bundle-sanitisation');
+    spawnSync('rm', ['-rf', directory], { cwd: ROOT });
+    mkdirSync(join(directory, 'nested'), { recursive: true });
+    const runnerPath = '/home/runner/work/UntitledDinosaurGame/UntitledDinosaurGame/node_modules/.pnpm/typescript';
+    const homeCache = '/home/runner/.cache/node/corepack/v1/pnpm/12.18.0/bin/pnpm';
+    writeFileSync(
+      join(directory, 'probe-results.json'),
+      `${JSON.stringify({ schemaVersion: 1, taskId: TASK, detail: `${runnerPath} -p tsconfig.probes.json` }, null, 2)}\n`,
+      'utf8',
+    );
+    writeFileSync(join(directory, 'nested', 'commands.log'), `store: ${homeCache}\n`, 'utf8');
+    const source = readFileSync(join(ROOT, 'tools', 'checks', 'src', 'evidence.ts'), 'utf8');
+    expect(source).toContain('export const sanitiseBundleDirectory');
+    expect(source).toContain('sanitiseBundleDirectory(absoluteRunDir, clean)');
+
+    // Run the same aliasing the tool runs, through the tool itself.
+    const script = [
+      `import { sanitiseBundleDirectory } from ${JSON.stringify(join(ROOT, 'tools/checks/dist/evidence.js'))};`,
+      `import { sanitiseMachineText } from ${JSON.stringify(join(ROOT, 'tools/checks/dist/support.js'))};`,
+      `const rewritten = sanitiseBundleDirectory(${JSON.stringify(directory)}, (_label, text) => sanitiseMachineText(text, []));`,
+      `process.stdout.write(JSON.stringify(rewritten));`,
+    ].join('\n');
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    });
+    expect(run.status, `${run.stdout}${run.stderr}`).toBe(0);
+    expect((JSON.parse(run.stdout) as string[]).sort()).toEqual(['nested/commands.log', 'probe-results.json']);
+
+    const rewrittenProbe = readFileSync(join(directory, 'probe-results.json'), 'utf8');
+    const rewrittenLog = readFileSync(join(directory, 'nested', 'commands.log'), 'utf8');
+    expect(rewrittenProbe).not.toContain('/home/');
+    expect(rewrittenLog).not.toContain('/home/');
+    expect(rewrittenProbe).toContain('<HOME>');
+    // And the scan that failed the hosted run finds nothing in the rewritten bytes.
+    const homePattern = /\/(?:home|Users)\/[A-Za-z0-9._-]{2,}\//;
+    expect(homePattern.test(rewrittenProbe)).toBe(false);
+    expect(homePattern.test(rewrittenLog)).toBe(false);
+    spawnSync('rm', ['-rf', directory], { cwd: ROOT });
+  });
+
   it('runs the phase gate on CI and publishes the bytes it gated', () => {
     // The suite writes into the bundle directory the gate reads, then the gate runs, then the upload publishes.
     expect(workflow).toContain('UDG_VECTORS_OUT: artifacts/udg-003-phase-1');

@@ -800,6 +800,34 @@ const readMeasurements = (root: string, taskId: string): Record<string, unknown>
   }
 };
 
+/**
+ * Sanitise every file a bundle directory holds, in place, and report which ones changed.
+ *
+ * Separated from `capture` so the rule is testable without running a whole evidence run: a suite writes its
+ * own artefacts and cannot know this machine's roots, so the gate that makes a bundle portable has to be a
+ * function someone can point at a directory containing `/home/…` and watch it work.
+ *
+ * `clean` is injected because the caller owns the leak accounting: a path that survives sanitisation is a
+ * capture failure there, not a warning here.
+ */
+export const sanitiseBundleDirectory = (
+  absoluteRunDir: string,
+  clean: (label: string, text: string) => string,
+): RepoPath[] => {
+  const rewritten: RepoPath[] = [];
+  for (const relative of listFiles(absoluteRunDir)) {
+    if (relative === 'report.json' || relative === 'checksums.sha256' || basename(relative) === '.keep') continue;
+    const absolute = join(absoluteRunDir, relative);
+    const text = readFileSync(absolute, 'utf8');
+    const sanitised = clean(relative, text);
+    if (sanitised !== text) {
+      writeFileSyncEnsuring(absolute, sanitised);
+      rewritten.push(relative);
+    }
+  }
+  return rewritten;
+};
+
 export interface CaptureResult {
   readonly runDir: RepoPath;
   readonly status: EvidenceStatus;
@@ -895,10 +923,13 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
   const runEnd = new Date().toISOString();
 
   // Reporters can print absolute paths; sanitise before hashing so the bundle stays portable.
-  const junitAbsolute = join(absoluteRunDir, 'junit.xml');
-  if (existsSync(junitAbsolute)) {
-    writeFileSyncEnsuring(junitAbsolute, clean('junit.xml', readFileSync(junitAbsolute, 'utf8')));
-  }
+  //
+  // This covers every file the report will hash, not only the ones capture wrote. A suite that was told
+  // where to put its artefacts writes them itself, and it does not know this machine's roots — so an
+  // artefact that quotes the command line it ran, as the probe records do, arrives here with the checkout
+  // path in it. Sanitising only the files capture produced is what let a Phase 0 probe artefact reach a
+  // hosted runner's home directory and fail the secret scan in verification rather than here.
+  sanitiseBundleDirectory(absoluteRunDir, clean);
 
   writeJson(join(absoluteRunDir, 'environment.json'), environmentRecord(root, runAlias));
   const measurements = readMeasurements(root, taskId);
