@@ -31,8 +31,12 @@ Owner instructions behind this record:
 Pinning:
 
 ```text
-Probe and evidence baseline (this revision is pinned to it):  f2b31ad6eca33c620dd54b1f6c079817f179115f
-Baseline CI run:                                              https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43074409506
+Probe and evidence baseline (this revision is pinned to it):  a4b018561d5304630b1a4d9afee09ca24a619c9e
+Baseline CI run (success):                                     https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43077105336
+Hardening commits behind that baseline:                        98cd592… R-2 capture + R-7 attribution · f2b31ad… R-8 sanitiser · a4b0185… invocation labelling
+Red run on the first hardening commit:                         https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43070703836 — bundle verification failure disclosed in §9.3, not re-run away
+Revision 1 of this draft:                                      0b139ea…, CI 43051206820 (success)
+Revision 2 draft commit:                                       7fc03e5…, CI 43076308269 **cancelled** by the workflow's own `cancel-in-progress` rule when the labelling commit landed — not a failure, and its content is covered by 43077105336
 Decision commit (ADR-0003, the policy this draft implements):  376469b171832adba8363642eaf2723d6528cdbc
 Accepted Phase 1 implementation commit:                        5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c
 Accepted Phase 1 CI:                                           https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43010353106
@@ -41,8 +45,9 @@ UDG-002 acceptance commit:                                     d364d2dafbc88f469
 ```
 
 If the owner accepts this draft, the assignment must be **re-pinned to the then-current `main`** and the base
-commit recorded at that moment; a draft pin is not an implementation base. The red run
-`43070703836` on `98cd592…` is part of this baseline's history and is disclosed in §9.3 rather than re-run away.
+commit recorded at that moment; a draft pin is not an implementation base. The red run `43070703836` is part
+of this baseline's history and is disclosed in §9.3 rather than re-run away, and the cancelled run
+`43076308269` is recorded as cancelled rather than quietly dropped from the list.
 
 ## 1. Assignment record (template B1, proposed values)
 
