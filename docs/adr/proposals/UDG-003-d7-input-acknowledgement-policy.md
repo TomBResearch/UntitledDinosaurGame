@@ -1,9 +1,24 @@
 # ADR-P-0003 proposal — D-7: input acknowledgement, overflow and resynchronisation policy
 
-Status: **Proposed. This document assigns no work, amends no contract clause, adopts nothing and opens no phase.**
-It is a decision paper for owner review of **D-7**, which remains **open**. Phase 2 and Phase 3 remain **unassigned**;
-Gates A, B and C remain **Not Run**; `stackCompatibility` remains **not-established**. UDG-003 remains **In Progress**,
-with Phase 1 accepted at phase level on 2026-11-11 at `5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c`.
+Status: **Accepted as [ADR-0003](../0003-input-acknowledgement-overflow-and-resynchronisation-policy.md) on the owner's
+instruction of 2026-11-11, with two corrections.** **D-7 is decided.** Disposition of this document:
+
+| part | owner disposition | what that means now |
+| --- | --- | --- |
+| D7-P1 policy, the authoritative per-entity record, throttle-on-pressure, bounded closure on confirmed retirement | **Accepted** | normative in [ADR-0003 §2–§4](../0003-input-acknowledgement-overflow-and-resynchronisation-policy.md) |
+| `B = 8`, `closureWindowMs = 250 ms`, `closureMaxMs = 1000 ms` | **Accepted as provisional test settings** | production values require the GA-11 measurement |
+| §11.2 X3 closing the seat on a suspected strand, and §13's equivalent sentence | **Corrected, not accepted as written** | a suspected strand is **diagnostic only** until positively validated (PE-1…PE-5, ADR-0003 §3.4); GA-5 is split into GA-5a/GA-5b |
+| §10.5 / §11.2.1 client recovery with no state delivery | **Corrected, extended** | a **client-local deadline** that expires without any delivery, with stop-sending, discard-prediction, bounded rejoin and snapshot recovery (ADR-0003 §3.2); test deadlines and retry budget are declared there |
+| the acknowledgement clause in `movement-authority.md` | **Accepted in substance; application outstanding** | ADR-0003 §4 holds the adopted text; §6 lists applying it, and the protocol edits, as actions requiring owner instruction |
+
+Everything else in this document stands as the evidence and reasoning behind that decision: §5 and §8 remain the provenance
+record, §9 and §12 remain the measurement-backed answers to the owner's questions, and §12.1 remains the Gate A harness
+specification that ADR-0003 §5 cites. Where this document and ADR-0003 differ on the two corrected points, **ADR-0003
+governs.**
+
+Phase 2 and Phase 3 remain **unassigned**; Gates A, B and C remain **Not Run**; `stackCompatibility` remains
+**not-established**. UDG-003 remains **In Progress**, with Phase 1 accepted at phase level on 2026-11-11 at
+`5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c`. This document still assigns no work.
 
 Two probes carry its evidence: **PR-8** (15 checks) and **PR-13** (20 checks) from Phase 0, and **PR-15** (27 checks,
 `pass`) added for this decision — input identity, gap visibility, client observability and acknowledgement/state pairing,
@@ -405,7 +420,7 @@ explicit retirement count plus an optional named range**:
 | --- | --- | --- |
 | `inputResolvedThrough` | highest sequence such that **every** sequence ≤ it has an explicit disposition | advances one step at a time, or past an explicitly closed gap — never past a sequence with no disposition |
 | `inputGapStart` / `inputGapEnd` | the named range the server observed, `start = previous + 1`, `end = current − 1` | written only from an observed hole; absent when the server cannot name one |
-| `inputRetiredUnrepresented` | count of sequences retired without a step, computed by the arithmetic of §9.3.1 | monotonic **within one connection domain**; the only field that can report the leading and trailing holes the room cannot name |
+| `inputRetiredUnrepresented` | count of sequences retired without a step, computed by the arithmetic of §9.3.1 | monotonic **within one connection domain**; the only field that can report the **leading** hole — retirements before the room's first consumed frame, which have no earlier endpoint to name |
 
 **The gap rule, stated as the owner asked:** resolving sequence *n* MUST NOT imply anything about any sequence below
 `inputResolvedThrough` that lacks a disposition. Advancement is by one, or by an explicit gap closure that names the
@@ -611,7 +626,7 @@ Two consequences, kept strictly apart: **queue pressure throttles; a confirmed u
 | --- | --- | --- | --- |
 | **X1 `INPUT_QUEUE_PRESSURE`** | `accessor.size ≥ bufferMaxSize − B` | **throttle signal only** — never closure | pressure is a prediction, not a loss. PR-13 measured that acting on a threshold does not stop an over-rate sender, so X1 is not prevention either; closing a seat on a depth heuristic would punish a session that has lost nothing |
 | **X2 `INPUT_RETIRED_UNREPRESENTED`** | `consumedDelta − dequeuedCount` increments (§9.3.1) | **bounded seat closure** of §11.2.1 | the loss already happened and cannot be undone by any later action; the residue belongs to this session and the acknowledgement it received was untrue |
-| **X3 `INPUT_STRAND_CONFIRMED`** | `accessor.size === 0` **and** `accessor.latest.seq > inputResolvedThrough`, unmoved for one patch interval | **bounded seat closure** of §11.2.1 | the pre-buffer dedupe path: the server will never dequeue the frame the client still counts as outstanding, so no waiting resolves it (§10.5) |
+| ~~**X3 `INPUT_STRAND_CONFIRMED`**~~ **`INPUT_STRAND_SUSPECTED`** | `accessor.size === 0` **and** `accessor.latest.seq > inputResolvedThrough`, unmoved for one patch interval | **corrected by the owner: diagnostic only** — record, attribute, may throttle, **never close** until PE-1…PE-5 pass ([ADR-0003 §3.4](../0003-input-acknowledgement-overflow-and-resynchronisation-policy.md)) | the pre-buffer dedupe path is *one* cause of this shape, not a proven sole cause: a client that stopped sending, an idle entity, in-flight frames, patch delay and a reconnect restart all look the same. Closing on the shape would terminate compliant sessions |
 | **X4 `INPUT_RATE_CEILING`** | arrival rate above `Room.maxMessagesPerSecond` | close with the reserved code, no closure window required beyond §11.2.1's cap | a per-second average can only terminate, never prevent; the ceiling is the outer bound when X1's signal is ignored |
 
 X1 may repeat without escalating on its own. X2 and X3 are confirmations and act. X4 is independent of both. A throttle
@@ -661,6 +676,21 @@ different questions and they legitimately disagree: the client can hold frames t
 that turned out to be unrepresented. Collapsing them would erase exactly the distinction this policy exists to draw —
 "the server discarded work" versus "the client was still waiting" — and only the first is a breach of the acknowledgement
 clause.
+
+> **Corrected after owner review (2026-11-11).** Two changes to this section and §12.4, normative in
+> [ADR-0003](../0003-input-acknowledgement-overflow-and-resynchronisation-policy.md):
+>
+> 1. **X3 does not close a seat.** It is a diagnostic hypothesis until positively validated (PE-1…PE-5). Terminal dedupe —
+>    no later stamp — can never satisfy PE-3, so it can never be a closure cause at all; client-side recovery is its only
+>    remedy.
+> 2. **Client recovery has a local deadline.** `clientSnapshotDeadlineMs` (500 ms provisional) runs from the last accepted
+>    state delivery and **expires even if no delivery ever arrives**: stop sending, discard pending prediction, bounded
+>    rejoin (3 attempts, 250/500/1000 ms, within 4000 ms, ≤ 2 per 60 s), snapshot recovery — and if no fresh snapshot
+>    exists, stay stopped and surface a connection error on budget exhaustion rather than resume.
+>
+> §12.4's GA-5 is therefore split into **GA-5a** (dedupe followed by a later stamp: a gap can be named) and **GA-5b**
+> (terminal dedupe: bounded recovery must succeed although the server cannot identify the missing input), GA-6/GA-7 test
+> the deadline, and **GA-12** is the positive-evidence gate. GA-1…GA-13 as adopted live in ADR-0003 §5.
 
 ### 11.4 Zero unrepresented retirements is a pass
 

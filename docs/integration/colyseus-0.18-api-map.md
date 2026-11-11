@@ -7,6 +7,14 @@ come only from the probes in this table. [colyseus.md](colyseus.md) 6.1 sets the
 [UDG-003-readiness-proposal.md](../contracts/assignments/UDG-003-readiness-proposal.md) 2.4 sets the
 probe ids.
 
+> **Decision update, 2026-11-11:** D-7 is decided. The owner adopted **D7-P1** in
+> [ADR-0003](../adr/0003-input-acknowledgement-overflow-and-resynchronisation-policy.md), which accepts the per-entity
+> authoritative disposition record, throttle-on-pressure and bounded closure on confirmed unrepresented retirement, with
+> provisional test values and Gate A criteria GA-1…GA-13. Statements below that "D-7 stays the owner's decision" are the
+> dated conclusions of the probe records that preceded it and are left as written; where the accepted record differs on the
+> suspected-strand closure condition, ADR-0003 governs. `stackCompatibility` remains **not-established** and no gate has
+> been run.
+
 ## 0. Compiler status, stated separately
 
 **Status: the accepted compiler gate passes, under [ADR-0002](../adr/0002-server-declaration-checking-exception.md).

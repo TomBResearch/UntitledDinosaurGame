@@ -5,7 +5,9 @@ Part B recommendation of [ADR-P-0002](UDG-003-compiler-exception-and-input-backl
 **did not approve** as the backlog solution and returned with five corrections (C-1…C-5, recorded in that document's
 §0). Phase 1 was subsequently assigned and is **Accepted at phase level** (2026-11-11, `5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c`);
 that status line was refreshed when this document was linked to its successor, and no argument below depends on it.
-**D-7 remains open.** Gates A/B/C remain **Not Run**.
+**D-7 is decided** by [ADR-0003](../0003-input-acknowledgement-overflow-and-resynchronisation-policy.md) (2026-11-11):
+the one-input rule the recommendation defended is **reaffirmed unchanged**, and D7-P1 bounds the *admitted rate* instead of
+the consumption count. Gates A/B/C remain **Not Run**.
 
 The question this document leaves standing — what transport policy makes the acknowledgement honest, and what a client
 must do when it cannot — is put for owner decision in **[ADR-P-0003 — D-7 input acknowledgement, overflow and

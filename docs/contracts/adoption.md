@@ -423,6 +423,26 @@ Evidence preserved                             every bundle from every revision 
                                                inventory version was rewritten
 ```
 
+## UDG-003 D-7 decision recorded 2026-11-11 (ADR-0003)
+
+The owner adopted **D7-P1** as owner policy and authorised a decision record plus a reviewable Phase 2
+assignment draft. D-7, open since Phase 0 decision D-7 was left undecided, is **decided**. The accepted
+record is [ADR-0003](../adr/0003-input-acknowledgement-overflow-and-resynchronisation-policy.md);
+[ADR-P-0003](../adr/proposals/UDG-003-d7-input-acknowledgement-policy.md) remains the evidence and
+reasoning behind it, with its disposition table recorded in that document's header.
+
+| Item | Recorded position |
+|---|---|
+| Adopted policy | **D7-P1**: admitted continuous-input rate bounded to one frame per entity per authority tick; **consumption unchanged** at one FIFO-selected observation and one authority step per connected entity per tick; an authoritative per-entity disposition record (`inputResolvedThrough`, named gap ranges, `inputRetiredUnrepresented`) replaces the SDK acknowledgement as the representation claim; throttle on queue pressure; **bounded seat closure on confirmed unrepresented retirement**; mandatory client resynchronisation |
+| Provisional test settings | `B = 8`, `closureWindowMs = 250 ms`, `closureMaxMs = 1000 ms`, `clientSnapshotDeadlineMs = 500 ms`, rejoin budget 3 attempts at 250/500/1000 ms inside `clientRecoveryBudgetMs = 4000 ms`, sustained cap 2 rejoins per 60 s. **Provisional only**: Gate A must measure and justify production settings (GA-11) |
+| Correction 1 — client-local deadline | GA-6 and GA-7 run on a **client-local timer that expires even with no state delivery**: on expiry the client stops sending, discards pending prediction, and proceeds to bounded rejoin and snapshot recovery. If no fresh snapshot is available it stays stopped and surfaces a connection error on budget exhaustion instead of resuming. Test deadlines and the retry budget are declared in ADR-0003 §3.2 |
+| Correction 2 — X3 is a hypothesis | A suspected unsatisfiable acknowledgement (`size === 0` with an unresolved stamp) is **diagnostic**: record, attribute, may throttle, **never close** until positively validated by PE-1…PE-5, including a compliant control population that never produces the signature and an identified missing stamp (GA-12). GA-5 is split into **GA-5a** (dedupe followed by a later stamp, gap nameable) and **GA-5b** (terminal dedupe, where bounded client recovery must succeed although the server cannot identify the missing input). Terminal dedupe can never satisfy PE-3, so it is permanently outside the closure path |
+| Gate A criteria | GA-1…GA-13 in ADR-0003 §5, on the flat-reference-step harness with real replicated state and no dependency on locomotion, physics or navigation. A missing or unverifiable artefact is **FAIL**, not "not run" |
+| Explicitly **not** done here | The adopted clause text is **not applied** to [movement-authority.md §5.1](../interfaces/movement-authority.md); no `packages/protocol` schema, validator, mapping or fixture is changed; no close code is reserved; no configuration value is declared in `packages/config`. These are ADR-0003 §6 application actions and Phase 2 scope items |
+| Explicitly unchanged | The 50 ms frozen step, P03 stage Q, the 32-frame buffer bound (AC-3b), the one-input rule (reaffirmed, not relaxed), ADR-0001 and ADR-0002 |
+| Still open | **Part B** remains unadopted and the consumption rule stands; **D4** has no designated evidence backup destination; **Phases 2 and 3 remain unassigned** — the draft assignment is reviewable and assigns nothing; Gates A, B and C remain **Not Run** and `stackCompatibility` remains **not-established** |
+| Date basis | 2026-11-11, dated by the commit carrying the record into `main`; the owner's approval message carries no independently verifiable timestamp. Same basis as the Phase 1 acceptance |
+
 ## Reviewed edition and pins for the P01 approval
 
 ```text
