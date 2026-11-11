@@ -522,3 +522,24 @@ Per the records-only convention adopted in the Phase 0 record §10.5b and used f
 produced *by a records commit* is named in the evidence inventory chain rather than transcribed into a
 further repository commit. The CI run and retained evidence for **this** submission head are appended below
 by the following records-only commit.
+
+### 12.10 What giving the phase a capture plan surfaced
+
+Rehearsed locally on a clean tree at `f66cf3de10246c3d1d507ebee2606e6b2943746f`:
+`artifacts/UDG-003-2026-11-11T00-15-53-120Z-f66cf3de` captures `PASS` and verifies with
+`PASS evidence verify … (0 issue(s))` — `phase: "phase-1"`, 493 tests, 45 hash-covered files including
+`measurements/UDG-003.json` and 12 files under `vectors/`, a manifest whose `implementationSha` is the
+commit the run executed, and three prerequisite commits. Producing that bundle turned up four things that
+were invisible while no run was ever owned by this task:
+
+| # | Surfaced by | What was actually wrong | What was done |
+| --- | --- | --- | --- |
+| 12-6 | the `test` command of the new plan | `pnpm test` **failed**: the Phase 0 evidence assertion asks whether an owned run received `probe-results.json`, but those artefacts were written in `afterAll`, which runs after every test in the file. Under UDG-001 and UDG-002 captures this task never owned a run, so the assertion had never been evaluated in the branch that mattered | the artefacts are written as soon as the probes produce them and again at the end; a probe's measurement is unchanged |
+| 12-7 | the bundle's `vectors/` listing | the emitted-module child process wrote `emitted-run.mjs` into the vector artefact directory, so a scratch script would have been published as evidence | it writes to `artifacts/.local/udg-003-phase-1/` now |
+| 12-8 | `evidence.js verify` | every threshold the plan states must have a measured value under it, and the plan stated none it could measure | the vector run now measures the stage order of an executed tick, the one continuous observation consumed out of a three-frame burst, the navigation refusal read from the stage that refuses it, both sides of the cache window, the retained working set across churn, replay equivalence including a digest-blanked replay, and each artefact's digest recomputed from the bytes the manifest names |
+| 12-9 | `evidence.js verify` | a report must name its prerequisite commits, which it reads from `docs/contracts/assignments/<taskId>.md` — a file a *phased* task has no reason to create | prerequisite discovery now also reads `assignments/<taskId>-phase-*.md`, and the Phase 1 record states its three |
+
+On the prerequisites, one note worth keeping: the first draft of those lines was written from recall, and
+`git rev-parse` showed two of the three 40-character values were wrong. The record quotes only shas resolved
+from this repository's history and confirmed as ancestors of the head they are quoted against — which is the
+same rule the rest of the evidence follows: nothing enters a record because it sounds right.
