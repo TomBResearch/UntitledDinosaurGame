@@ -465,8 +465,14 @@ a2b2f58aedba8fb23cfbba3129fe671c797f421321ecde502013f6810b20b626  pa1-c1-provena
 ca115d09ec27242d97aa30412350d02283ce35b5fa51d58fb13e1d77a1e6a464  pa1-c2-time-basis.json
 67cfccd058f97b4b635fd83394a23030e67b23cce37ffddfef574c60f3f246a0  pa1-c3-retention.json
 8abd16afc87fa28c5f36aa1b1e3e9573397efb42f9bcf1717ab09b26502a6703  summary.json
-223c740a0fd638ec6e74dd94c2db55a57ff05a27c14b5d6c3906a4d350d78bfa  vectors-manifest.json
 ```
+
+The eleven artefacts above are the ones the gate requires, and their digests are identical on the hosted
+runner and in a local re-run of the same commit (§12.11). `vectors-manifest.json` is deliberately **not**
+digest-pinned here: it names the commit that produced it, so its own bytes — and therefore its digest — move
+with every submission. At the submission head `358f9ef5…` it is
+`a60604fd293774e5621b2a18c8fcc755571b31bda4bc294975a4e66ef574c78a`, and the retained bundle's
+`checksums.sha256` covers that byte-for-byte.
 
 §8 quoted eight digests from revision 1 and is left as written there, because it is the record of that submission. Two of
 them no longer reproduce at this revision, and the reason is the corrections themselves rather than any
@@ -546,7 +552,60 @@ were invisible while no run was ever owned by this task:
 
 12-10 is the one that matters most as a habit rather than a bug: the local bundle had verified cleanly, with
 zero issues, against a machine whose paths happened not to trip the scan. A gate that only passes on the host
-that wrote it is not yet shown to be a gate. The fix is measured by the condition that failed, not by the
+that wrote it is not yet shown to be a gate.
+
+### 12.11 CI, retained bytes and what the hosted runner added
+
+| Run | Head | Conclusion | What it decided |
+| --- | --- | --- | --- |
+| `42930387070` | `d87382e50c982e84a2107f27dfc26adb38541043` | **failure** | four `EVIDENCE-SECRET` issues in the UDG-003 bundle — defect 12-10, found only on a hosted runner |
+| `42932711426` | `3feb0758745180effc7ee9605f02208173d75e3f` | **failure** | the new sanitisation test asserted one host's alias (defect 12-11 below); 1 failed, 493 passed |
+| `42934515683` | `358f9ef5040d9daaaa3b20c23790ec855b3bf4bb` | **success** | the submission head. 23 steps green, including the new "Record and gate the UDG-003 Phase 1 vectors" step and the capture, assertion, verification and publication of **three** bundles |
+
+Retained in the evidence store, outside Git (`/workspace/udg-evidence/`), with a `NOTICE.txt` on each failed
+run naming the step and the cause rather than leaving the failure to inference:
+
+```text
+ci-run-42934515683/   UDG-001-…-358f9ef5  UDG-002-…-358f9ef5  UDG-003-…-358f9ef5
+                      UDG-00{1,2,3}-ci-summary.json   udg-003-phase-1/   probes/   runner/runner-log.txt.gz
+ci-run-42932711426/   UDG-001-…-3feb0758 (status FAIL, refused by verification)   udg-003-phase-1/   probes/   runner/ NOTICE.txt
+ci-run-42930387070/   UDG-001/002/003-…-d87382e5   udg-003-phase-1/   probes/   runner/ NOTICE.txt
+```
+
+Every bundle from the successful run verifies from the retained bytes, not from a local rebuild:
+
+```text
+PASS evidence verify …/ci-run-42934515683/UDG-001-2026-11-11T00-53-45-215Z-358f9ef5 (0 issue(s))
+PASS evidence verify …/ci-run-42934515683/UDG-002-2026-11-11T00-55-24-556Z-358f9ef5 (0 issue(s))
+PASS evidence verify …/ci-run-42934515683/UDG-003-2026-11-11T00-57-28-058Z-358f9ef5 (0 issue(s))
+```
+
+The Phase 1 bundle carries `phase: "phase-1"`, `status: PASS`, `implementationSha:
+358f9ef5040d9daaaa3b20c23790ec855b3bf4bb`, `workingTreeDirty: false`, 494 tests, and its `phaseNote` states
+that it is not Phase 2 or Phase 3, not a third-party stack compatibility claim and not a Gate A/B/C pass. The
+summary published beside it repeats the label and carries `verification.ok: true`.
+
+| # | Found by | Defect | Correction |
+| --- | --- | --- | --- |
+| 12-11 | CI `42932711426` | the sanitisation test asserted the rewritten text contained `<HOME>`. On a hosted runner the checkout path *is* under the home directory, so longest-path-first aliasing rewrites it to `REPO_ROOT` and no `<HOME>` appears. The assertion measured which machine ran the suite | assert the property instead: no home-shaped path survives, the secret pattern matches nothing, an alias was applied — and build the synthetic home path from `homedir()` so both hosts treat it identically |
+
+Two cross-checks close correction C4:
+
+* **the published bytes are the gated bytes.** `evidence.js vectors --dir
+  /workspace/udg-evidence/ci-run-42934515683/udg-003-phase-1` exits 0 against the retained artefact, and all
+  eleven vector digests plus `summary.json` are identical to a fresh local run of `358f9ef5…` — so retention
+  does not depend on trusting the upload.
+* **the Phase 0 surface is unchanged.** PR-0 pass (49), PR-1 pass (43), PR-2 pass (7), PR-3 pass (10), PR-8
+  pass (15), PR-12 pass (6), PR-13 pass (20); the declaration inventory still reports 27 third-party
+  diagnostics and 0 repository diagnostics; `stackCompatibility` is still `not-established`; Gates A/B/C are
+  still **Not Run**.
+
+| Commit after the submission head | Content |
+| --- | --- |
+| *(records-only commit)* | this section, and the two failed runs named with their causes |
+
+Nothing in this section records reviewer acceptance. **UDG-003 Phase 1 remains In Review**, Phases 2–3 remain
+unassigned, D-7 and D4 remain open, Part B remains unadopted, and the one-input rule is unchanged. The fix is measured by the condition that failed, not by the
 same green local run repeated.
 
 On the prerequisites, one note worth keeping: the first draft of those lines was written from recall, and
