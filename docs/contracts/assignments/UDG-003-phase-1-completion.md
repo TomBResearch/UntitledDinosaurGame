@@ -612,3 +612,171 @@ On the prerequisites, one note worth keeping: the first draft of those lines was
 `git rev-parse` showed two of the three 40-character values were wrong. The record quotes only shas resolved
 from this repository's history and confirmed as ancestors of the head they are quoted against — which is the
 same rule the rest of the evidence follows: nothing enters a record because it sounds right.
+
+## 13. Revision 3 — one recorded tick time, and a cutoff that bounds lifecycle cleanup
+
+The owner accepted revision 2's four items and returned two focused corrections, recorded as PA1-C6 and
+PA1-C7 in assignment §0.3. Both changed behaviour; neither changed the TTL, the one-input rule, or the phase
+boundary.
+
+### 13.1 PA1-C6 — the tick takes one reading, and nothing else gets to disagree
+
+Before this revision a single `step()` could consult the injected clock up to five times: for the tick's
+recorded value, for the screening context, inside `IdentityCache.lookup`, inside `IdentityCache.compact`, and
+again when stamping a cache write. Any two of those could fall on opposite sides of the 30-second boundary, and
+the journal recorded only the first. A replay restores that first reading, so it would reproduce a decision the
+live run had not made — which is precisely what a reviewer asked to be made impossible rather than unlikely.
+
+| Reader | Revision 2 | Revision 3 |
+| --- | --- | --- |
+| tick boundary | `tickAtMs = time.nowMs()` | unchanged, and it is now the tick's only reading |
+| screening context | `#contextFor(tick)` took a **fresh** reading | `#contextFor(tick, tickAtMs)` |
+| cache lookup | `IdentityCache` held a `TimeSource` and read it inside `lookup` | `lookup(entityId, epoch, requestId, nowMs)`; the class holds **no** clock |
+| cache compaction | `compact()` read the clock | `compact(nowMs)` |
+| cache write | `storedAtMs: this.#time.nowMs()` | `storedAtMs: atMs`, threaded from the same value |
+| `askStagesQSA` seam | took its own reading | takes the instant as an argument, so a "pure" question cannot disagree with the tick it describes |
+
+The TTL is untouched: `expiresAtMs = storedAtMs + TERMINAL_REQUEST_TTL_SECONDS * 1000`, still 30 s, still
+measured from the record's own write.
+
+`tests/unit/udg-003/tick-time.test.ts` (4 tests) supplies the clock the correction asks for — one that advances
+on every read — and then asserts the boundary genuinely falls inside a tick:
+
+```text
+recorded tick reading      storedAt + 25 000   (5 000 ms inside the window)
+next reading, same tick    storedAt + 35 000   (5 000 ms past it)
+disposition                answered / dedupe = cache      watermark unmoved
+lookup at recorded         found              lookup at next reading: expired
+write case                 storedAtMs === recorded tick time, expiresAtMs === recorded + 30 000
+replay, persisted rows     inside → answered/cache, outside → refused:generation, chain tip equal
+```
+
+Mutation checks, each reverted after measurement:
+
+| Mutation | Result |
+| --- | --- |
+| `#contextFor` takes a fresh reading (revision-2 behaviour) | 3 of the 4 new tests fail |
+| `storedAtMs: this.#time.nowMs()` for cache writes | the write-side test fails |
+
+### 13.2 PA1-C7 — a departure disposes only of what the cutoff covers
+
+`#refuseEpochMismatched` and the departure path's `continuousQueue.clear()` / `discreteQueue.clear()` are gone.
+One sweep replaces them:
+
+```ts
+#disposeEligible(entity, cutoff, cause /* 'departure' | 'epoch' */, rows, ceiling)
+// removes exactly the arrivals with  arrival.ordinal <= cutoff.ordinal && arrival.ordinal <= ceiling
+```
+
+`ceiling` is the cutoff for an ordinary pass, or `departureOrdinal - 1` when a retirement settles after a
+rejoin — so an arrival belonging to the *live* association is never dropped as the ended one's backlog. Each
+removal writes one observation row and increments one counter, whatever the cause.
+
+A departure that still holds residue keeps the entity's bookkeeping alive in `#retiring` (bounded by the entity
+count, reported by `retention().retiring`) and releases it at `#settleRetiring` on the next tick, before that
+tick reads its own controls. Without that, the residue would have no entity left to be journalled from.
+
+`tests/unit/udg-003/cutoff-lifecycle.test.ts` (5 tests) injects an arrival **while lifecycle work is in
+progress** — the injection runs on the tick's own clock reading, immediately after the cutoff is frozen — and
+measures:
+
+| Case | Live behaviour |
+| --- | --- |
+| leave | eligible arrival dropped at the cutoff tick; injected ordinal (`> cutoff`) has **no** row that tick; `retiring 1`, `queuedArrivals 1`, `reconciliation.stillQueued 1`, `balanced true`; next tick: exactly one `dropped:lifecycle` row, `retiring 0`, `queuedArrivals 0`, `releasedEntities 1`, alias unchanged, `counters['dropped:lifecycle'] === 2` |
+| expiry | same shape; the entity is `departed` and not stepped, residue accounted once at the next tick |
+| epoch change | the old-epoch frame in the frozen set is refused `refused:epoch`; the post-cutoff old-epoch frame is journalled `queued` (preserved, unrefused) and refused exactly once on the next tick; `watermark` never moves |
+| rejoin in the same tick | the ended association's backlog is dropped, the post-cutoff arrival stays, and at the next tick it is **consumed** by the live association (`watermark 2`) with only one `dropped:lifecycle` in the run |
+
+Mutation check: restoring the unbounded `clear()` fails 3 of the 5 tests; making the epoch sweep ignore the
+cutoff fails the epoch test.
+
+### 13.3 The limit this revision found, and did not paper over
+
+An arrival injected *inside* a tick is ordered **after** the departure control by its ordinal, yet it entered
+the queue before stage L ran. The journal records ordinals and cutoffs — the only ordering P03 recognises — so
+a replay re-derives queue membership from the ordinal, finds the association already released, and refuses the
+arrival at admission instead of holding it as residue. Live and replay therefore disagree, and the test asserts
+the disagreement rather than hiding it:
+
+```text
+shared prefix (join, eligible drop, leave event, both state/meta rows)   identical
+live residue for the injected ordinal        ['dropped:lifecycle']
+replay residue for the same ordinal           ['refused:epoch']            one disposition either way
+chain tips                                     deliberately unequal
+```
+
+`pa1-c7-cutoff-lifecycle.json` carries the same fact in machine-readable form (`replay.tipEqual: false` with
+the reason), so the limitation travels with the evidence.
+
+### 13.4 Wider variant considered and not taken
+
+Retiring **every** departed entity for one tick, residue or not, makes the injected case replay-identical: the
+release no longer depends on queue contents that only an intra-tick arrival could have changed. It was
+implemented and measured, and it rewrote twelve accepted assertions across the lifecycle and retention suites
+(release timing, `known: false` windows, churn accounting). That is a second behavioural change the reviewer
+did not ask for, and it would quietly redefine revision 2's accepted release semantics, so it is recorded here
+for the owner's decision instead of being taken:
+
+| Option | Replay of an intra-tick arrival | Cost |
+| --- | --- | --- |
+| as submitted | not exact; divergence asserted and vector-recorded | none beyond the disclosed gap |
+| retire every departure for one tick | exact | release timing shifts for all departures; 12 accepted assertions rewritten; one extra tick of bookkeeping per departure |
+
+The narrower reading of the correction is that a host must not ingest while a tick is running — a transport
+obligation for Phase 2 — and the cutoff bound itself is now unconditional either way.
+
+### 13.5 Defects this revision found
+
+| # | Found by | Defect | Correction |
+| --- | --- | --- | --- |
+| 13-1 | the new tick-time suite | `#contextFor` took a second clock reading per tick, so screening and the journal could disagree about the TTL | the reading is passed in |
+| 13-2 | tracing the cache question | `IdentityCache.lookup` and `compact` read a clock the class owned — an unrecorded instant inside a decision | the class holds no clock; both take `nowMs` |
+| 13-3 | the write-side test | cache writes were stamped from a third reading | `#applyPlan` receives the tick's value |
+| 13-4 | `accepts no old-epoch frame at all (AC-5)` | the new `ceiling` was first written as a strict `<`, which silently exempted the last queued arrival (`ordinal === cutoff.ordinal`) from every sweep | the ceiling is inclusive; the retirement marker is passed as `departureOrdinal - 1` |
+| 13-5 | review of the seam | `askStagesQSA` took its own reading, so a "pure" question about a tick could be answered at a different instant | the instant is a required argument |
+| 13-6 | the new suites themselves | the per-tick time was read from `TickRow.atMs`, which does not exist (the per-tick reading lives on the hashed chain record), and literal arrival stamps written by the test were ahead of the virtual clock, so replay correctly refused them as non-monotonic | read the chain record; stamp injected and deferred arrivals from `harness.time.nowMs()` |
+| 13-7 | the full suite | "retire every departure" was implemented before its blast radius was measured | reverted; recorded as §13.4 for owner decision |
+
+### 13.6 Commands and artefacts for revision 3
+
+| Command | Result |
+| --- | --- |
+| `pnpm typecheck` | exit 0 |
+| `pnpm lint` | exit 0 — `boundary check OK: 61 file(s), 0 violations, rule table 818c63d5b12f` |
+| `pnpm test` | exit 0 — `Test Files 25 passed (25)`, `Tests 504 passed (504)` |
+| `npx vitest run tests/unit/udg-003` | 16 files, 118 tests |
+| `npx vitest run tests/contracts/UDG-003.test.ts` | 70 tests |
+| UDG-001 / UDG-002 contract suites | 49 and 31, unmodified in intent, both green after the checksum re-pin |
+| `pnpm build`, `pnpm dependencies:verify`, `pnpm test:boundaries`, `pnpm test:fixtures`, `pnpm run declarations:strict` | exit 0 each |
+| `node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-1 --allow-dirty` | `PASS phase-1 vectors: 13 artefact(s) listed, hashed and attributable` |
+| `pnpm contracts:checksums` | in sync (63 files) after re-pinning `UDG-003.md` and `adoption.md` |
+
+Two vectors are new and eleven are unchanged, which is the statement worth having: the corrections did not
+perturb a single earlier vector. Only `summary.json` moved, because it counts artefacts.
+
+```text
+1b981db7194e3cf3910bf4f402445829944d977b67d27bf584177667ca3d0a06  disposition-reconciliation.json
+6794cb4e48cd7480de85e74fbad16743a49702150277ef719e60715c54f23fda  pa1-1-pa1-2-cutoff-consumption.json
+d48239dbaba3a580a7651b0d4a8f158ff1c7a0309e6b94114f007849f4cc7314  pa1-12-pa1-14-lifecycle-stepping-replay.json
+57228ba0790c23a9e040b860469f021e8062911b794012e80bdbf6fb2c6d09f3  pa1-3-generation.json
+7af0c5d7337be445e12a3a5abf7bd8750a2ef91de9c32b503c52e2f937e0bdcc  pa1-4-traces-t1-t2-t3-t6.json
+1e9df37cd65b85912302d0119600083b8385f5e3fbf704110e646a6740127d8e  pa1-5-pa1-8-commit-keepalive-neutral-bound.json
+b3547690846d4ba96e19875d0b19fbb72b4cb5087e8f553bb4aa2e5439bce0a8  pa1-9-pa1-11-bounds-identity-navigation.json
+a2b2f58aedba8fb23cfbba3129fe671c797f421321ecde502013f6810b20b626  pa1-c1-provenance.json
+ca115d09ec27242d97aa30412350d02283ce35b5fa51d58fb13e1d77a1e6a464  pa1-c2-time-basis.json
+67cfccd058f97b4b635fd83394a23030e67b23cce37ffddfef574c60f3f246a0  pa1-c3-retention.json
+76921771a31dec0ecd9ff260b427418f6b1b67d09427fceb5b17767ad1753c7d  pa1-c6-tick-time.json                                   (new)
+c1708877b2d4eddf91aa00b2796d6d07a94952ea6affc41a3cdc2070c61f1f29  pa1-c7-cutoff-lifecycle.json                             (new)
+24008e949a8a94a194bbe58481133ae257001b5f0acd1366f237f5add63ff50b  summary.json                                             (moved: 13 artefacts)
+```
+
+Two independent runs of `tests/unit/udg-003/vectors.test.ts` produced identical digest lists, so the artefacts
+stay byte-stable across runs as they were for revision 2.
+
+### 13.7 What revision 3 still does not claim
+
+Nothing here records reviewer acceptance. **UDG-003 Phase 1 remains In Review**, Phases 2–3 remain unassigned,
+D-7 remains open and continues to block transport acceptance, Part B remains unadopted, D4 remains
+undesignated, Gates A/B/C remain **Not Run**, and `stackCompatibility` remains `not-established`. Phase 1 adds
+no transport, no `RegionRoom`, no SDK input and no acknowledgement claim, and a green Phase 1 CI run is not
+evidence that UDG-003 passed.

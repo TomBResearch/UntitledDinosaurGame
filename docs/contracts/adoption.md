@@ -294,6 +294,26 @@ exception is not a compatibility result.
 | Evidence store | The damaged `inventory-v19.json` and `INTEGRITY-2026-11-10.md` are preserved exactly; no historical inventory or downstream link is rebuilt to manufacture continuity; new snapshots are create-only and fail before overwriting; the known `v19 → v20` discontinuity is carried forward and stated. `D4` (independent backup destination) remains open, and no external storage, release, tag or archive is authorised. |
 | Not repeated | No broad input-backlog survey and no upstream publication during this assignment. |
 
+## UDG-003 Phase 1 review instruction recorded 2026-11-13 (revision 3)
+
+The owner accepted that revision 2's provenance fix, journal sink, departed-entity cleanup and Phase 1 evidence
+upload addressed the previous findings, kept the task **In Review**, and asked for two focused corrections:
+
+1. **PA1-C6 — one recorded tick time.** Use the recorded tick time consistently for request-cache expiry and
+   writes; prefer capturing one time value at the tick boundary and passing it through screening, lookup and
+   commit, so replay restores the exact time used for those decisions; preserve the 30-second TTL; add a
+   regression with an injected clock that advances within a tick across the expiry boundary, then verify that
+   replay from persisted evidence reproduces the live disposition and chain tip.
+2. **PA1-C7 — the frozen cutoff bounds lifecycle cleanup.** Leave, expiry and epoch change dispose only of
+   eligible queued observations during the current tick; post-cutoff observations are preserved until their
+   next eligible tick, including when the entity expires; each disposition is accounted exactly once; add a
+   regression that injects an arrival after the cutoff during lifecycle processing.
+
+The instruction also required the affected regressions and required CI checks to be run, and the corrected
+submission SHA, passing CI link and verified Phase 1 bundle to be returned. **The assignment stays limited to
+Phase 1: Phases 2–3 require separate authorisation, and D-7 remains an open transport decision.** Gates A/B/C
+remain **Not Run**, Part B remains unadopted, and no backup storage destination is designated (D4 open).
+
 ## UDG-003 Phase 1 review instruction recorded 2026-11-12
 
 The first Phase 1 submission (`73d48c96895305f5773d716e012c13489ea62e4a`, CI `42914263581`) was returned

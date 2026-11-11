@@ -3,7 +3,7 @@
 Task ID: `UDG-003` — phase `1` of `3`
 Title: Authority core: frozen cutoff, lifecycle ordering, FIFO selection, screening, arbitration, commit, neutral rule, bounded queues, request identity cache, input-sufficient journal and deterministic replay
 Depends on: UDG-001 (Verified), UDG-002 (Verified), UDG-003 Phase 0 (owner-accepted at the ADR-0002 scoped compiler policy), ADR-0002, P03
-Status: **In Review** — revision 2, made against the owner's three reviewer corrections (§0.2)
+Status: **In Review** — revision 3, made against the owner's two further corrections (§0.3)
 Owner/reviewer: integration owner / Codex (implementation only; acceptance recorded by the owner alone)
 Base commit: `8987139f18653b05e57e64d0b14cdd1c753b6612` (retained CI for that head: `42794023731`, conclusion `success`)
 
@@ -51,6 +51,27 @@ The reviewer's constraints on this revision stand unchanged: no Phase 2 or Phase
 one-input rule, no resolving D-7 by assumption, no provisioning backup storage, and Gates A/B/C remain
 **Not Run**. Historical evidence and the disclosed `v19 → v20` inventory discontinuity are preserved, not
 rewritten.
+
+## 0.3 Reviewer corrections requested after the second submission
+
+Revision 2 (`358f9ef`, CI `42934515683`, records head `b2a6dd1`) was accepted as addressing C1–C4 and returned
+**In Review** with two further corrections. The reviewer asked for the corrected submission SHA, a passing CI
+link and the verified Phase 1 bundle, and restated that the assignment stays limited to Phase 1, that Phases
+2–3 require separate authorisation, and that **D-7 remains an open transport decision**.
+
+| # | Requirement as given | What it obliged in the code |
+|---|---|---|
+| **PA1-C6** | **Use the recorded tick time consistently for request-cache expiry and writes.** Prefer capturing one time value at the tick boundary and passing it through screening, lookup and commit, so replay restores the exact time used for those decisions. Preserve the 30-second TTL. Add a regression with an injected clock that advances within a tick across the expiry boundary, then verify that replay from persisted evidence reproduces the live disposition and chain tip. | `step()` captures `tickAtMs` once, beside the cutoff, and that value is the only reading the tick's decisions use: `#contextFor(tick, tickAtMs)` feeds screening, `IdentityCache.lookup(..., nowMs)` takes it as an argument, `#applyPlan(..., atMs)` stamps every cache write with it, and `planCommit` builds the winner on it. `IdentityCache` no longer holds a `TimeSource` at all, and `compact(nowMs)` cannot invent a reading either, so no cache question can be answered on an instant the journal did not record. The TTL is unchanged at 30 s measured from the record's own `storedAtMs`. `tests/unit/udg-003/tick-time.test.ts` uses a clock that advances on every read to put the tick's reading inside the window and the very next reading past it, asserts the cache answers from the record, asserts the write carries the recorded instant, and replays both sides of the boundary from persisted rows to the same chain tip. |
+| **PA1-C7** | **Apply the frozen cutoff to lifecycle queue cleanup.** Leave, expiry and epoch change should only dispose of eligible queued observations during the current tick. Preserve post-cutoff observations until their next eligible tick, including when the entity expires, and account for each disposition exactly once. Add a regression that injects an arrival after the cutoff during lifecycle processing. | `#refuseEpochMismatched` and the departure `clear()` are replaced by one bounded sweep, `#disposeEligible(entity, cutoff, cause, rows, ceiling)`, which touches only `arrival.ordinal <= cutoff.ordinal` and writes exactly one row per removal. A departure whose queue still holds residue keeps the entity's bookkeeping alive as `#retiring` for one tick and releases it at `#settleRetiring` on the next tick, so the residue is journalled under the cause that applies rather than lost; a rejoin in the meantime keeps the arrival for the live association. `retention()` reports `retiring`. `tests/unit/udg-003/cutoff-lifecycle.test.ts` injects an arrival *during* lifecycle processing with a clock that runs the injection on the tick's own reading, and covers leave, expiry, epoch change, rejoin and replay. |
+
+Two things this revision did **not** do, so that the correction stays the size the reviewer asked for:
+
+* it did not change when a departure releases bookkeeping in the ordinary case. A wider variant — retiring
+  every departed entity for a tick whether or not residue was queued — makes the injected case replay-identical
+  too, but it shifts release timing for every departure and rewrote twelve accepted assertions in the lifecycle
+  and retention suites. It is recorded in completion §13.5 as an option for the owner rather than taken here.
+* it did not touch the one-input rule, D-7, Part B, Gates A/B/C, or anything outside Phase 1.
+
 
 ## 1. Authorisation, and what this assignment is *not*
 
