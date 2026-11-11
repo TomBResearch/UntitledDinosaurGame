@@ -288,8 +288,11 @@ assignment:
 
 Probe verdicts `PR-0 49 · PR-1 43 · PR-2 7 · PR-3 10 · PR-8 15 · PR-12 6 · PR-13 20 · PR-15 27`, all `pass`, with
 `stackCompatibility: not-established`, in the retained bundles
-`/workspace/udg-evidence/ci-run-43033573543`, `ci-run-43035450600`, `ci-run-43043889689` and the run retained for this
-record. PR-15 is registered in `tests/probes/colyseus-server.probe.ts` and asserted by the UDG-003 contract suite, so a
+`/workspace/udg-evidence/ci-run-43033573543`, `ci-run-43035450600`, `ci-run-43043889689` and `ci-run-43051206820`.
+The last of those is the run that covers this record: the decision commit `376469b171832adba8363642eaf2723d6528cdbc`
+reached `main` in the same push as the Phase 2 draft head `0b139eabad429e67b0a168fd6a364918b9aa2800`, so the workflow ran
+once, on the head, with the decision commit as its ancestor. There is no separate CI run for `376469b…`, and none is
+claimed. PR-15 is registered in `tests/probes/colyseus-server.probe.ts` and asserted by the UDG-003 contract suite, so a
 future pin change fails loudly instead of silently altering this decision's basis. **PR-14 remains reserved** for the Gate A
 real-state probe and the suite asserts its absence.
 
