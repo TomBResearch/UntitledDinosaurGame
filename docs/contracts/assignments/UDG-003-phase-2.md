@@ -21,6 +21,11 @@ Base commit (implementation baseline): `8716b8c6e3c4a3f005fe260eebf5569bb02201dd
 Supersedes: [UDG-003-phase-2-assignment-draft.md](UDG-003-phase-2-assignment-draft.md), which is retained for its risk
 record and decision history and no longer carries live scope.
 
+Revisions to this record: introduced by `2bec1a4c1faebe62177229741e2a517012512473` (CI 43116444505) and recorded in
+[adoption](../adoption.md#udg-003-phase-2-assignment-recorded-2026-11-11). §8.2.1 — when the capture plan's phase label
+moves — was added by the next commit to touch this file; its sha and covering CI run are named in the handoff report,
+because a record cannot contain the identifier of the commit carrying it.
+
 Four commits are prerequisites in the sense the evidence gate means: accepted work this phase builds on, each resolved
 with `git rev-parse` from this repository's history and confirmed an ancestor of the base commit. The gate reads these
 lines, so each sha is written bare.
@@ -272,6 +277,28 @@ produced by the suite into the gitignored artefact directory, gated by the tool 
 their SHA-256 digests are committed. Vector artefacts carry no machine paths. The UDG-003 bundle keeps hashing
 `probes/probe-run-index.json` and the probe ledger alongside its vectors, and a Phase 2 bundle additionally names its
 own baseline (§6.4).
+
+### 8.2.1 What moves in the capture plan when Phase 2 artefacts land
+
+The UDG-003 capture plan still describes the evidence that exists today, and a bundle captured at this baseline
+correctly reports `phase: phase-1` with the 15 Phase 1 vector artefacts, the manifest and `probes/probe-run-index.json`
+plus the probe ledger. That label is a claim about the artefacts, not about the task, and it stops being true the
+moment Phase 2 evidence is produced. W-11/W-12 therefore move it deliberately, in one disclosed change:
+
+1. the plan's `phase` label becomes `phase-2`, with a scope note saying what the bundle is and is not — the same
+   discipline Phase 1 used, where the label exists precisely so a green UDG-001 or UDG-002 bundle cannot be read as
+   Phase 2 proof;
+2. the required-artefact list gains the Phase 2 vector set and its manifest, and the vector gate runs with the Phase 2
+   expectation instead of the default `phase-1` one; a missing, empty, altered or unattributable Phase 2 artefact is a
+   gate failure, not a gap in the record;
+3. the Phase 1 vector requirement is **not** removed: accepted evidence keeps being captured and gated, so the plan
+   carries both sets and each is attributed to its own phase;
+4. `pnpm evidence:probes` stays a required step and the probe bytes stay hashed inside the bundle;
+5. the bundle names the baseline it was produced under (§6.4), because after W-3 two different `configHash` values are
+   legitimately in the record and a bundle must say which one it belongs to.
+
+A capture that reports `phase: phase-1` after Phase 2 vectors exist is a mislabelled bundle, and a capture that renames
+the phase while the Phase 1 artefacts are still the only ones present is the same error in the other direction.
 
 ### 8.3 Invariants that must survive Phase 2 (regression-asserted, not asserted in prose)
 
