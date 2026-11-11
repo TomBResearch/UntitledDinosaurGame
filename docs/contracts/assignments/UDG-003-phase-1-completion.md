@@ -780,3 +780,36 @@ D-7 remains open and continues to block transport acceptance, Part B remains una
 undesignated, Gates A/B/C remain **Not Run**, and `stackCompatibility` remains `not-established`. Phase 1 adds
 no transport, no `RegionRoom`, no SDK input and no acknowledgement claim, and a green Phase 1 CI run is not
 evidence that UDG-003 passed.
+
+### 13.8 The thresholds the capture plan now states, measured
+
+The plan's threshold entries for the two corrections are answered by `measurements/UDG-003.json`, copied into
+the bundle and covered by its checksums:
+
+```json
+"tickTime":        { "ttlMs": 30000, "oneReadingPerTick": true, "recordedInsideWindow": true,
+                    "nextReadingPastWindow": true, "cacheAnswerFollowsRecordedTime": true,
+                    "replayReproducedBothSides": true },
+"cutoffLifecycle": { "injectedAfterCutoff": true, "residueHeldForNextTick": true,
+                    "residueAccountedOnce": true, "epochResidueRefusedOnce": true,
+                    "rejoinResidueConsumed": true, "noDoubleCount": true,
+                    "intraTickArrivalReplayable": false }
+```
+
+That last `false` is the §13.3 limit, published as a measured value inside a bundle whose overall status is
+`PASS`. It is not a gate failure and it is not a claim that Phase 1 passed: it is the phase saying, in the
+artefact itself, which property it does not have. `vectors` reports `listed 13, required 13,
+everyRequiredPresent true` and `digestsMatchBytes true`.
+
+A clean-tree local run at `d2f0057b` (before the records-only commit that names it):
+
+```text
+PASS  artifacts/UDG-003-2026-11-11T09-08-36-169Z-d2f0057b
+PASS evidence verify artifacts/UDG-003-2026-11-11T09-08-36-169Z-d2f0057b (0 issue(s))
+phase phase-1  status PASS  implementationSha d2f0057be1d959c5dc12c3eef6dbf35dd96ae4fa  workingTreeDirty false
+48 hash-covered files, of which 14 are under vectors/ (13 artefacts + manifest)
+no residual /workspace/ or /home/ path anywhere in the bundle
+```
+
+CI for the submitted head is named in the evidence inventory chain rather than transcribed into a further
+record, under the convention adopted in §10.5b.
