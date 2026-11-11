@@ -24,8 +24,17 @@ Affected task IDs and contract clauses:
 [acceptance-gates.md](../validation/acceptance-gates.md) (Gate A criteria GA-1…GA-13).
 
 **Not affected, explicitly:** the frozen 50 ms step, the one-input rule (P03 stage Q), the 32-frame buffer bound (AC-3b),
-and every gate. **No gate has been run.** `stackCompatibility` remains **not-established**. Phase 2 and Phase 3 remain
-**unassigned**.
+and every gate. **No gate has been run.** `stackCompatibility` remains **not-established**.
+
+**Amended 2026-11-11** on the owner's instruction (item D-P2-8 of the Phase 2 assignment): §3.2's retry budget is
+replaced by the owner-resolved recovery budget, and §7 carries a dated note recording that the **R-2** and **R-7**
+reliability defects disclosed here are fixed. The replaced §3.2 wording is quoted in full inside that section rather
+than deleted, so the amendment is auditable. Nothing else in the decision changes: D7-P1, the retirement arithmetic, the
+diagnostic-only status of a suspected strand, and every Gate A criterion stand as accepted.
+
+**Live status, 2026-11-11:** **Phase 2 is assigned** — [UDG-003-phase-2.md](../contracts/assignments/UDG-003-phase-2.md),
+**Ready and not started** — on the implementation baseline of §7's dated note. Phase 3 remains **unassigned**. The §6
+application actions are now authorised work, not outstanding instructions, and none of them is performed yet.
 
 ## 1. Trigger and reproduction
 
@@ -63,8 +72,9 @@ pins; probe verdicts and results are retained in the evidence bundles named in �
    of §3.2, and prunes by `inputResolvedThrough` — never by the SDK acknowledgement.
 
 Provisional settings accepted **as test settings only**: `B = 8`, `closureWindowMs = 250 ms`, `closureMaxMs = 1000 ms`,
-`clientSnapshotDeadlineMs = 500 ms`, rejoin budget 3 attempts at 250/500/1000 ms within `clientRecoveryBudgetMs = 4000 ms`,
-sustained cap 2 rejoins per 60 s. **Gate A must measure and justify production settings** (§5, GA-11).
+`clientSnapshotDeadlineMs = 500 ms`, and the client recovery budget of §3.2 as amended on 2026-11-11 — a 4000 ms
+episode deadline, at most **two actual rejoins in a rolling 60-second window**, and a 250/500/1000 ms backoff ladder that
+is a schedule rather than an entitlement. **Gate A must measure and justify production settings** (§5, GA-11).
 
 ### 2.1 Disposition of each decision item
 
@@ -129,11 +139,29 @@ if no fresh snapshot is available: remain stopped and continue within the retry 
                                  connection error and stay stopped — no sending, no prediction, no silent resume
 ```
 
-Retry budget (provisional test settings): 3 rejoin attempts with backoff 250 / 500 / 1000 ms inside
-`clientRecoveryBudgetMs = 4000 ms`, plus a sustained cap of 2 rejoins per 60 s. Exhaustion is a surfaced failure state, not a
-retry loop. Because `clientSnapshotDeadlineMs` (500 ms) is shorter than `closureMaxMs` (1000 ms), a stalled client is
-expected to recover on its own **while the server is still inside its closure window**; that is correct behaviour on both
-sides and is tested as GA-7.
+Recovery budget (provisional test settings), **as amended 2026-11-11**:
+
+| limit | value | behaviour when it is reached |
+| --- | --- | --- |
+| client-local snapshot deadline | `clientSnapshotDeadlineMs = 500 ms`, restarted on each accepted state delivery, able to expire with no delivery at all | stop sending, discard pending prediction, enter recovery |
+| recovery-episode deadline | `clientRecoveryDeadlineMs = 4000 ms`, measured from the start of the episode | the episode ends: the client stays stopped, keeps its prediction discarded, surfaces a connection error, and starts no further rejoin in that episode |
+| rolling rejoin allowance | **at most two actual rejoins in any rolling 60-second window**, counted per entity across episodes | the next rejoin is not attempted: the client stays stopped, records `recoverySuspended: 'rolling-window'`, and retries only when the oldest counted rejoin leaves the window |
+
+The 250 / 500 / 1000 ms ladder is a **backoff schedule, not an entitlement**: an attempt is made at the next ladder step
+only if the rolling allowance still has room and the episode deadline has not expired. **Whichever limit is reached first
+governs**, and the behaviour at each of the three limits is a required observation, not an internal detail: a limit that is
+silently absorbed is a limit nobody tests. Exhaustion of any kind is a surfaced failure state, never a retry loop. Because
+`clientSnapshotDeadlineMs` (500 ms) is shorter than `closureMaxMs` (1000 ms), a stalled client is expected to recover on its
+own **while the server is still inside its closure window**; that is correct behaviour on both sides and is tested as GA-7.
+
+> **Amendment, 2026-11-11 (owner decision D-P2-8).** The text this replaces read: *"Retry budget (provisional test
+> settings): 3 rejoin attempts with backoff 250 / 500 / 1000 ms inside `clientRecoveryBudgetMs = 4000 ms`, plus a sustained
+> cap of 2 rejoins per 60 s."* Those two clauses could not both hold — an episode that spent its third attempt breached the
+> cap the same sentence imposed, so a client could obey one clause only by breaking the other. The owner resolved it in
+> favour of the cap: **two actual rejoins in a rolling 60 seconds**, with the four-second episode deadline still applying.
+> The key is renamed `clientRecoveryDeadlineMs` because it bounds one episode rather than budgeting attempts; that is the
+> name Phase 2 declares in `packages/config`. The resolution was carried first by §2.1 of the Phase 2 assignment draft,
+> and this record is amended to match it so that the decision and the assignment cannot be read to say different things.
 
 The stalled-acknowledgement signal that normally fires this path is `INPUT_ACK_STALLED`, defined solely from
 client-observable quantities: an outstanding input, with neither the SDK acknowledgement nor `inputResolvedThrough`
@@ -259,7 +287,7 @@ not "not run". Provisional values below are test settings; GA-11 re-derives prod
 | **GA-4** | refused frames are represented | refused frame inside `dequeuedCount`, not charged as retired, advances `inputResolvedThrough`, neutral step journaled once | a refusal counted as retirement; a refusal with no disposition and no neutral step |
 | **GA-5a** | **dedupe followed by a later stamp** — a gap is nameable | the gap is named as a range in the record; the subtraction stays zero for that frame; the client detects the named range and resynchronises; the server **does not close** unless PE-1…PE-5 all pass, and the run records whether validation passed | the gap unreported or charged to the wrong mechanism; a closure with PE-1…PE-5 unproven; a run that closes because the shape looked like dedupe |
 | **GA-5b** | **terminal dedupe** — no later stamp, the server cannot identify the missing input | §3.2's bounded recovery succeeds despite the unidentifiable loss: deadline expires, client stops sending, discards pending prediction, rejoins within budget, applies a snapshot and matches authoritative state; the frame is applied at most once; the server reports the loss as **unidentifiable** rather than inventing a gap or a cause | a client loop, sending into the stall, double application, or a server record that asserts a cause or a missing range it cannot evidence |
-| **GA-6** | **stalled delivery stream, client-local deadline** | three sub-cases pass: **6a** patches stop while inputs are outstanding → the deadline expires at the declared test value, sending stops, pending prediction is discarded, rejoin and snapshot recovery complete within budget; **6b** the server neither sends nor closes → the client still recovers on its own timer, proving the deadline does not depend on a server event; **6c** the retry budget is exhausted → a surfaced connection error, client stays stopped, no prediction, no sends | recovery that requires a delivery or a close event to begin; a test value exceeded; any send after expiry; extrapolated prediction after expiry; more rejoins than the budget |
+| **GA-6** | **stalled delivery stream, client-local deadline** | three sub-cases pass: **6a** patches stop while inputs are outstanding → the deadline expires at the declared test value, sending stops, pending prediction is discarded, rejoin and snapshot recovery complete within budget; **6b** the server neither sends nor closes → the client still recovers on its own timer, proving the deadline does not depend on a server event; **6c** a limit is reached — the episode deadline expires, or the rolling two-rejoin allowance is spent → a surfaced error or a recorded `recoverySuspended` state as §3.2 requires; client stays stopped, no prediction, no sends | recovery that requires a delivery or a close event to begin; a test value exceeded; any send after expiry; extrapolated prediction after expiry; more rejoins than the budget |
 | **GA-7** | **final publication withheld** | the server still records the loss, its counters and `serverQueuedAtClose`; the client's deadline expires inside the server's closure window, it recovers through rejoin + snapshot, and applies nothing twice | waiting for the missing patch; pruning by `lastProcessed`; blind reissue; reporting a clean reconciliation |
 | **GA-8** | same-delivery comparison | every trigger evaluation reads the acknowledgement and `inputResolvedThrough` from one delivery | any cross-delivery comparison; a trigger citing two patches |
 | **GA-9** | isolation | the compliant entity's per-entity projection `(clientSeq \| null, disposition, dx, dy, entityStateDigest)` is identical to its solo baseline; room-wide ordinals compared as growth only | a projection difference; a failure caused only by another session legitimately consuming an ordinal |
@@ -273,16 +301,27 @@ dependencies. It **fails** if any single row fails or lacks a verifiable artefac
 is itself the failure. No row can be satisfied by a loopback probe: PR-8, PR-13 and PR-15 show that the mechanisms exist and
 where their limits are.
 
-## 6. Application actions outstanding
+## 6. Application actions: now assigned, none performed
 
-This record is documentation. The following are **not** done and each needs the owner's instruction or the Phase 2
-assignment:
+This record remains documentation: it performs none of the actions below. Items 1 to 3 were **authorised for Phase 2
+implementation on 2026-11-11** by the owner's decisions D-P2-2, D-P2-3 and D-P2-4, and are **assigned work** in
+[UDG-003-phase-2.md](../contracts/assignments/UDG-003-phase-2.md) (W-1, W-2, W-3), which is **Ready and not started**:
 
-1. apply §4 to [movement-authority.md §5.1](../interfaces/movement-authority.md) — contract-owned text;
+1. apply §4 to [movement-authority.md §5.1](../interfaces/movement-authority.md) — contract-owned text — **assigned (W-1),
+   not applied**;
 2. protocol edits in `packages/protocol` — the `DirectInputSchema` per-frame sequence field with validator, mapping and
-   fixtures, the per-entity record fields, and the reserved close codes (**D7-D** execution);
-3. declare `B`, `J`, the closure bounds, `G`, and the client deadline/budget in `packages/config` so they are hashed;
-4. run Gate A — **Not Run**, and nothing in this record passes it.
+   fixtures, the per-entity record fields, and the reserved close codes (**D7-D** execution) — **assigned (W-2), not
+   edited**;
+3. declare `B`, `J`, the closure bounds, `G`, and the client deadline and recovery budget of §3.2 as amended in
+   `packages/config` so they are hashed, moving the active `configHash` pins and their fixtures together while historical
+   evidence keeps the digest of the baseline it belongs to — **assigned (W-3), not declared**, and production tuning still
+   depends on the Gate A measurement;
+4. run Gate A — **Not Run**. Its formal execution belongs to **UDG-SPIKE-001** after that task's prerequisites are
+   verified (owner decision D-P2-5); Phase 2 builds the substrate and reports criterion evidence, and declares no gate
+   passed. Nothing in this record passes it.
+
+The three items are listed here rather than only in the assignment so that a reader of the decision sees the same
+distinction the assignment makes: **decided** is not **done**, and **authorised** is not **implemented**.
 
 ## 7. Evidence links and follow-up
 
@@ -309,14 +348,33 @@ present; only the assertion outcome varies with arrival interleaving. Hosted out
 runs; locally one failure in nine runs. Recorded as **R-2** and **R-7** of the
 [Phase 2 draft](../contracts/assignments/UDG-003-phase-2-assignment-draft.md), with the minimal deterministic fix specified
 and deliberately **not applied**, because the instruction behind this record authorises documentation only. Until that fix
-lands, PR-15 must not be used as a Gate A substrate. This decision's substance is unaffected: its structural findings —
+lands, PR-15 must not be used as a Gate A substrate.
+
+> **Dated note, 2026-11-11 — the condition above is discharged, and the sentence stands as written.** The owner accepted
+> the fixes at review `8716b8c6e3c4a3f005fe260eebf5569bb02201dd`, CI
+> [43079200640](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43079200640). **R-2** is fixed by
+> `98cd592fb2b4a35c53eec93f243a24449046faf8`: the room owns the observation, settles on `accessor.size === 0`, copies every
+> array by value and derives its own totals inside that single read, and the exact-gap assertions now live only in the
+> controlled case while the uncontrolled case is asserted on the identity
+> `consumed + skipped + unnamed = frames sent`. **R-7** is fixed in the same commit: every result file names its
+> invocation, each invocation writes its own directory, the ledger is append-only, and `evidence.js probes` refuses
+> unattributed, misattributed, unledgered or undisclosed-failure evidence — so the overwrite that destroyed the bytes above
+> is now a gate failure rather than a discovery. A third defect that the new gate caught on its first hosted run (the
+> bundle sanitiser rewriting every backslash, which made six probe artefacts unparseable) is fixed by
+> `f2b31ad6eca33c620dd54b1f6c079817f179115f`, with the red run
+> [43070703836](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43070703836) retained rather than re-run
+> away. Full incident detail is in [UDG-003-phase-2.md §7](../contracts/assignments/UDG-003-phase-2.md) and §9.1–§9.3 of
+> its predecessor draft. **PR-15 is therefore admissible as a Gate A substrate**, at 32 checks `pass`; PR-14 remains
+> reserved for the real-state probe, and Gate A itself remains **Not Run**. This decision's substance is unaffected: its structural findings —
 identity alignment, per-connection domain restart, pre-buffer discarding, atomic acknowledgement/state delivery — were each
 reproduced in retained artefacts. Gate A remains **Not Run**. PR-15 is registered in `tests/probes/colyseus-server.probe.ts` and asserted by the UDG-003 contract suite, so a
 future pin change fails loudly instead of silently altering this decision's basis. **PR-14 remains reserved** for the Gate A
 real-state probe and the suite asserts its absence.
 
-Follow-up: the [Phase 2 assignment draft](../contracts/assignments/UDG-003-phase-2-assignment-draft.md) is a reviewable
-draft and **assigns nothing**.
+Follow-up: the approved assignment is
+[UDG-003-phase-2.md](../contracts/assignments/UDG-003-phase-2.md) — **Ready, unstarted** — which supersedes the
+[reviewable draft](../contracts/assignments/UDG-003-phase-2-assignment-draft.md). The draft is retained for its risk
+record and its decision history; it no longer carries the live scope.
 
 Supersedes or is superseded by: supersedes [ADR-P-0003](proposals/UDG-003-d7-input-acknowledgement-policy.md) on two points
 only — the closure condition for a suspected strand (§3.4) and the client-local deadline (§3.2); the proposal remains the

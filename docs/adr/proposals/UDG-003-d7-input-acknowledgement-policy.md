@@ -16,9 +16,12 @@ record, §9 and §12 remain the measurement-backed answers to the owner's questi
 specification that ADR-0003 §5 cites. Where this document and ADR-0003 differ on the two corrected points, **ADR-0003
 governs.**
 
-Phase 2 and Phase 3 remain **unassigned**; Gates A, B and C remain **Not Run**; `stackCompatibility` remains
-**not-established**. UDG-003 remains **In Progress**, with Phase 1 accepted at phase level on 2026-11-11 at
-`5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c`. This document still assigns no work.
+**Live status, 2026-11-11:** Phase 2 is **assigned, Ready and unstarted** —
+[UDG-003-phase-2.md](../contracts/assignments/UDG-003-phase-2.md); Phase 3 remains **unassigned**; Gates A, B and C
+remain **Not Run**; `stackCompatibility` remains **not-established**. UDG-003 remains **In Progress**, with Phase 1
+accepted at phase level on 2026-11-11 at `5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c`. This document still assigns no
+work, and the recovery budget it quotes in §10.5/§11.2.1 is the pre-amendment wording: ADR-0003 §3.2 was amended on
+2026-11-11 to two actual rejoins in a rolling 60 seconds with a 4000 ms episode deadline, and that text governs.
 
 Two probes carry its evidence: **PR-8** (15 checks) and **PR-13** (20 checks) from Phase 0, and **PR-15** (27 checks,
 `pass`) added for this decision — input identity, gap visibility, client observability and acknowledgement/state pairing,
