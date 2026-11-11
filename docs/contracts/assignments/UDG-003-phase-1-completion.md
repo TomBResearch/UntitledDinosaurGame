@@ -516,7 +516,11 @@ group) with the UDG-001 (49) and UDG-002 (31) contract suites unchanged in inten
 | --- | --- |
 | `97af708` | gate the UDG-003 phase evidence in the tool (grant `A9`) |
 | `6f3cf6a` | the three core corrections, their suites, the vector manifest and the CI step (grants `A10`–`A12`) |
-| *(this commit)* | this record, §0.2 of the assignment, the review instruction in `adoption.md`, the status line and the re-pinned checksum manifest (`A4`–`A7`) |
+| `09077de` | this record, §0.2 of the assignment, the review instruction in `adoption.md`, the status line and the re-pinned checksum manifest (`A4`–`A7`) |
+| `18d1fe7` | the Phase 0 evidence-ordering and scratch-path fixes the new capture plan exposed (12-6, 12-7) |
+| `4e5fab4` | measure the thresholds the bundle states (12-8) |
+| `04ea3a6`, `f66cf3d` | record the prerequisite commits the bundle must name, in the form the gate reads (12-9) |
+| *(this commit)* | §12.10, recording what the capture plan surfaced |
 
 Per the records-only convention adopted in the Phase 0 record §10.5b and used for revision 1, the CI run
 produced *by a records commit* is named in the evidence inventory chain rather than transcribed into a
