@@ -153,7 +153,10 @@ exactly the predicted way — `consumedSeqs [9,10,11,12,14]`, `gaps [{from:12,to
 `skipped 0` — the array grew after the snapshot while the scalar did not — and `consumedSeqs` starting
 at 9 shows the second half of the cause: frames 1–8 were retired before the room's first consumption, so
 the only hole that existed at snapshot time was the leading one, which no gap record can name. Two
-conditions, therefore: **degenerate arrival interleaving** and **non-atomic capture**. Retained at
+conditions, therefore: **degenerate arrival interleaving** and **non-atomic capture**. The next head `496f3317859bb2415ae4cc9be85b2f1bcc05f85d`
+(run `43057524877`) then **passed** — and its artefact carries the identical inconsistency harmlessly: `gaps` sum to 3 while
+`skipped` says 2. So the defect is always present and only the assertion outcome moves; a green run here is evidence about
+timing, not about the code. Hosted outcome so far: two failures in four runs; local: one failure in nine. Retained at
 `/workspace/udg-evidence/ci-run-43055416863` with its `NOTICE.txt`. **Minimal fix, not applied because this instruction is documentation-only:** capture each scenario's arrays by value at one settled instant — drain to `accessor.size === 0` rather than relying on `pendingCount`, copy with `[...]`, and derive `skipped` from the copied array so the two fields cannot disagree. Phase 2 must not build Gate A scenarios on the current capture pattern, and **`main` carries failing
 heads at `b0a7a7b…` and `178dfce…` because of this defect** — neither was re-run to obtain a green |
 | **R-7** | **Evidence retention gap: a failing probe invocation can be overwritten by a later passing one.** The workflow runs the probe suite inside the test step and again during evidence capture, into the same directory, so the artefacts retained for the failed run show `PR-15 pass (27 checks)` and an all-`pass` index while the test step saw `fail`. Only the workflow log records the failure; the failing bytes were overwritten and are unrecoverable | Retained at `/workspace/udg-evidence/ci-run-43053089415` with a `NOTICE.txt` stating that its probe artefacts are not the failing invocation. Phase 2 must give each probe invocation a distinct, attributable output path, and the evidence gate should refuse an index that disagrees with the run it is filed under |

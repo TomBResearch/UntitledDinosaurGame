@@ -294,19 +294,24 @@ reached `main` in the same push as the Phase 2 draft head `0b139eabad429e67b0a16
 once, on the head, with the decision commit as its ancestor. There is no separate CI run for `376469b…`, and none is
 claimed.
 
-**The following run failed, and that is recorded rather than retried away.** The records-only commit
-`b0a7a7b51181202d2a07707f3f456563ce8ff02f`, which only clarifies this paragraph, produced run `43053089415` with conclusion
-**failure**: four UDG-003 contract tests failed on the **PR-15 probe**, whose observation capture is not atomic — it
-publishes a live array reference beside point-in-time scalars, so the artefact can be self-inconsistent and the assertion
-that reads it is intermittent. The same tree passed on `0b139ea…`, six local runs passed, and the host failed once: the
-defect is real and intermittent, not a content problem in this decision. Nothing was re-run to obtain a green, and the
-failing bytes were themselves overwritten by a later probe invocation in the same workflow (retention gap; both defects
-are recorded as **R-2** and **R-7** of the
-[Phase 2 draft](../contracts/assignments/UDG-003-phase-2-assignment-draft.md), with the retained failure evidence at
-`/workspace/udg-evidence/ci-run-43053089415` and its `NOTICE.txt`). This decision's substance is unaffected — PR-15's
-*structural* findings (identity alignment, per-connection domain restart, pre-buffer discarding, atomic ack/state delivery)
-were each reproduced in the retained passing artefacts — but the probe must not be relied on as a Gate A substrate until
-its capture is made deterministic. At the time of writing `main` carries a failing head, and Gate A remains **Not Run**. PR-15 is registered in `tests/probes/colyseus-server.probe.ts` and asserted by the UDG-003 contract suite, so a
+**Two runs failed because of a probe defect, and neither was re-run to obtain a green.** The records-only head
+`b0a7a7b51181202d2a07707f3f456563ce8ff02f` (run `43053089415`) failed four UDG-003 contract tests reading the **PR-15**
+verdict; the next records-only head `178dfcec011b89de37d175e6334b4ac218fef668` (run `43055416863`) had a green test step
+(`521 tests, 0 failures`) and failed at evidence verification, because that workflow's later probe invocation failed and the
+bundle honestly recorded status `FAIL`. The cause is the probe's **non-atomic observation capture**: it publishes a live
+array reference beside point-in-time scalars, so the artefact can disagree with itself and the assertions that read it are
+intermittent. Both retained bundles carry a `NOTICE.txt`; the first also records that its probe artefacts are *not* the
+failing invocation, because the workflow runs the probes twice into one directory and overwrote them (**R-7**).
+
+**A green run after them is not a fix.** Head `496f3317859bb2415ae4cc9be85b2f1bcc05f85d` (run `43057524877`) passed, and its
+artefact carries the same inconsistency harmlessly: `gaps` sum to 3 while `skipped` says 2. The defect is therefore always
+present; only the assertion outcome varies with arrival interleaving. Hosted outcome so far is two failures out of four
+runs; locally one failure in nine runs. Recorded as **R-2** and **R-7** of the
+[Phase 2 draft](../contracts/assignments/UDG-003-phase-2-assignment-draft.md), with the minimal deterministic fix specified
+and deliberately **not applied**, because the instruction behind this record authorises documentation only. Until that fix
+lands, PR-15 must not be used as a Gate A substrate. This decision's substance is unaffected: its structural findings —
+identity alignment, per-connection domain restart, pre-buffer discarding, atomic acknowledgement/state delivery — were each
+reproduced in retained artefacts. Gate A remains **Not Run**. PR-15 is registered in `tests/probes/colyseus-server.probe.ts` and asserted by the UDG-003 contract suite, so a
 future pin change fails loudly instead of silently altering this decision's basis. **PR-14 remains reserved** for the Gate A
 real-state probe and the suite asserts its absence.
 

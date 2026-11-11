@@ -15,7 +15,7 @@
     "docs/adr/0000-template.md": "4cddc0471025479043882c3efb792c548e35812f59bef9d38d7b756f48284abd",
     "docs/adr/0001-replica-precision-policy.md": "7e8c90552693654edce83289beb78da95e292ba7871a65d5a9b1da2e3c12d0b3",
     "docs/adr/0002-server-declaration-checking-exception.md": "420b28fa8b11ca42bdbdaed7f89415f769b5d10a6b7e1c3cefd9343a6229c766",
-    "docs/adr/0003-input-acknowledgement-overflow-and-resynchronisation-policy.md": "e17638cf63c2b8a41fb23ba200154161a7bb303cd817b844d72f82cc35b0467a",
+    "docs/adr/0003-input-acknowledgement-overflow-and-resynchronisation-policy.md": "1874f868d7a0192597d7c344300bc8479adda4048765b33e2a52820be41be1fa",
     "docs/adr/README.md": "9e205660dd46fc0b77bba3ba3fa53e624fcd3606229c9e266b0da6edf0b1dbf0",
     "docs/adr/proposals/UDG-003-compiler-exception-and-input-backlog-posture.md": "2fe1fc31a3f0b273131de8acb98c873e0efdc0119c9d68b100e0dad5cd261ca0",
     "docs/adr/proposals/UDG-003-d7-input-acknowledgement-policy.md": "429dd2ab9aceb06c5ad45cd388693707c6e04b45b11fc16e2c7c27e26fe3bbad",
