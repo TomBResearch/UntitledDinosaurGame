@@ -3,7 +3,15 @@
 Status: **Proposed. This document assigns no work, amends no contract clause, and adopts nothing.** It replaces the
 Part B recommendation of [ADR-P-0002](UDG-003-compiler-exception-and-input-backlog-posture.md), which the owner
 **did not approve** as the backlog solution and returned with five corrections (C-1…C-5, recorded in that document's
-§0). Phase 1 remains unassigned. **D-7 remains open.** Gates A/B/C remain **Not Run**.
+§0). Phase 1 was subsequently assigned and is **Accepted at phase level** (2026-11-11, `5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c`);
+that status line was refreshed when this document was linked to its successor, and no argument below depends on it.
+**D-7 remains open.** Gates A/B/C remain **Not Run**.
+
+The question this document leaves standing — what transport policy makes the acknowledgement honest, and what a client
+must do when it cannot — is put for owner decision in **[ADR-P-0003 — D-7 input acknowledgement, overflow and
+resynchronisation policy](UDG-003-d7-input-acknowledgement-policy.md)**, which recommends rate-bounded admission with
+consumption unchanged and is consistent with everything below. Read the two together: this document answers "may the
+one-input rule be relaxed?" (no), and ADR-P-0003 answers "what replaces the backlog posture instead?".
 
 What changed relative to the returned document: `take(n)` is no longer presented as configuration — it is an
 amendment to the adopted one-input rule and is priced as such (§3); PR-13's step arrays are described as what they
@@ -241,3 +249,10 @@ Rejected, with reasons: `take(n)` as the primary answer (amends R1 and the anti-
 **Validation before any of this becomes configuration:** PR-14 (§4.1), the burst and adversarial set (§4.2), and the
 UDG-SPIKE-001 network conditions (§4.3). Until then the numbers in §2.3 are formulas, not values, and Phase 1 stays
 unassigned.
+
+**Where item 5 of this recommendation went.** This document deliberately left D-7 open because the acknowledgement
+remains a send-order watermark with no per-frame disposition. That residue is now the subject of
+[ADR-P-0003](UDG-003-d7-input-acknowledgement-policy.md), which keeps items 1–3 unchanged, states the scoped guarantee
+item 4 anticipated as normative wording, and offers the owner a decision (D7-A…D7-E) on the offender consequence, the
+per-entity authoritative disposition watermark and the client's discard-and-resynchronise rule. **D-7 stays open until
+that decision is recorded.**

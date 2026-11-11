@@ -201,7 +201,9 @@ Every one of these stays inside the paths the assignment allowed; none widens fu
 1. **PH0-B1 remedy** — DOM library, `allowSyntheticDefaultImports`, a pin change, or an upstream fix.
    Phase 1 should not be assigned before this, because the probe project is the compiler's proof of the
    room's API usage.
-2. **D-7** — from §2.4 as corrected by [§9.2](#92-pr-8-corrected-the-first-s4-reading-was-wrong).
+2. **D-7** — from §2.4 as corrected by [§9.2](#92-pr-8-corrected-the-first-s4-reading-was-wrong). Put for owner
+   decision, with proposed amendment wording and acceptance tests, in
+   [ADR-P-0003](../../adr/proposals/UDG-003-d7-input-acknowledgement-policy.md). Still **open**.
 3. **D4** — an independent evidence backup destination.
 4. Whether Phase 1 proceeds on these pins once PH0-B1 is resolved, or on a re-pinned set.
 
@@ -426,7 +428,8 @@ storage, which the owner has not authorised.
 1. **PH0-B1 remedy** — R0 (recommended: stay blocked, escalate upstream) or one of the narrow R1/R2
    variants, both of which leave PR-0 blocked. Phase 1 should not be assigned on the current evidence.
 2. **D-7** — from §9.2: the pinned acknowledgement retires applied, refused **and** dropped frames
-   identically, and no approved lever makes it truthful on its own.
+   identically, and no approved lever makes it truthful on its own. Owner decision is requested in
+   [ADR-P-0003](../../adr/proposals/UDG-003-d7-input-acknowledgement-policy.md) (D7-A…D7-E); **open**.
 3. **Whether Phase 1 may proceed on the current provisional pins** once PH0-B1 has a decided posture, or
    only after an upstream fix. There is no newer version to move to (§9.4).
 4. **D4** — independent evidence backup destination, still undesignated.
