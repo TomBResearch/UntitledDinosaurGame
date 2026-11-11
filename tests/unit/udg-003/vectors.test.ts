@@ -48,6 +48,7 @@ const PHASE_1_VECTOR_NAMES: readonly string[] = [
   'pa1-c3-retention.json',
   'pa1-c6-tick-time.json',
   'pa1-c7-cutoff-lifecycle.json',
+  'pa1-c8-deferred-intake.json',
   'disposition-reconciliation.json',
   'summary.json',
 ];
@@ -1065,7 +1066,7 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
     });
   });
 
-  it('writes the tick-time and cutoff-lifecycle vectors (PA1-C6, PA1-C7)', () => {
+  it('writes the tick-time, cutoff-lifecycle and deferred-intake vectors (PA1-C6, PA1-C7, PA1-C8)', () => {
     const ttlMs = CAPACITIES.terminalCacheTtlMs;
     const recorded = (harness: Harness): number => {
       const last = harness.chain().at(-1);
@@ -1182,8 +1183,14 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
       replayReproducedBothSides: c6Vector.replay.sidesAgree && sidesTipEqual,
     });
 
-    // --- PA1-C7: the frozen cutoff bounds what a departure may dispose of.
-    const inject = (harness: Harness, sessionEpoch: number, generation: number): () => number => {
+    // --- PA1-C7 as it now behaves, and PA1-C8 which removed the state PA1-C7 used to describe.
+    //
+    // Revision 3 disclosed that an arrival ingested *during* a tick replayed differently. Revision 4 fixes
+    // that at the root: such an arrival waits in the bounded deferred intake and is admitted at the next
+    // boundary, so no queue can ever hold work outside its tick's cutoff, and the residue path this vector
+    // used to measure cannot arise. Both halves are published: the sweep still bounds itself to the cutoff,
+    // and the four lifecycles now replay from persisted evidence with equal dispositions, state and tip.
+    const inject = (harness: Harness, sessionEpoch: number, generation: number): (() => number) => {
       let ordinal = -1;
       harness.time.onRead(() => {
         ordinal = harness.core.ingest('e1', frame(sessionEpoch, generation, 1, 0), harness.time.nowMs()).arrival
@@ -1191,131 +1198,229 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
       });
       return () => ordinal;
     };
-    const leaveCase = joined('udg-003-vector-cutoff-leave');
-    const leaveQueued = leaveCase.core.ingest('e1', frame(1, 1, 1, 0), leaveCase.time.nowMs()).arrival.ordinal;
-    leaveCase.core.leave('e1', leaveCase.time.nowMs());
-    const leaveInjected = inject(leaveCase, 1, 2);
-    const leaveTick = leaveCase.step();
-    const leaveOrdinal = leaveInjected();
-    const heldRetiring = leaveCase.core.retention().retiring;
-    const heldQueued = leaveCase.core.retention().queuedArrivals;
-    const heldRows = rowsFor(leaveCase, leaveOrdinal);
-    leaveCase.step();
-    const c7Leave = {
-      cutoffOrdinal: leaveTick.cutoff.ordinal,
-      eligibleOrdinal: leaveQueued,
-      injectedOrdinal: leaveOrdinal,
-      injectedAfterCutoff: leaveOrdinal > leaveTick.cutoff.ordinal,
-      eligibleDispositionTick: leaveTick.tick,
-      residueRowsAtCutoffTick: heldRows.length,
-      retiringAtCutoffTick: heldRetiring,
-      queuedAtCutoffTick: heldQueued,
-      residueDispositions: rowsFor(leaveCase, leaveOrdinal),
-      retiringAfterSettle: leaveCase.core.retention().retiring,
-      queuedAfterSettle: leaveCase.core.retention().queuedArrivals,
-      droppedCounter: leaveCase.core.stats().counters['dropped:lifecycle'] ?? 0,
-    };
-    expect(c7Leave.residueDispositions).toEqual(['dropped:lifecycle']);
-    expect(c7Leave.droppedCounter).toBe(2);
 
-    const expiryCase = joined('udg-003-vector-cutoff-expiry');
-    expiryCase.core.ingest('e1', frame(1, 1, 1, 0), expiryCase.time.nowMs());
-    expiryCase.core.expire('e1', expiryCase.time.nowMs());
-    const expiryInjected = inject(expiryCase, 1, 2);
-    expiryCase.step();
-    const expiryOrdinal = expiryInjected();
-    expiryCase.step();
-    const c7Expiry = {
-      residueDispositions: rowsFor(expiryCase, expiryOrdinal),
-      retiringAfterSettle: expiryCase.core.retention().retiring,
-      queuedAfterSettle: expiryCase.core.retention().queuedArrivals,
+    type Lifecycle = 'leave' | 'expiry' | 'epoch' | 'rejoin';
+    const lifecycleRun = (label: string, lifecycle: Lifecycle): { harness: Harness; ordinal: number } => {
+      const harness = lifecycle === 'epoch' ? build(label) : joined(label);
+      if (lifecycle === 'epoch') {
+        harness.core.join('e1', 7, SPAWN, 0);
+        harness.step();
+        harness.core.ingest('e1', frame(6, 4, 1, 0), harness.time.nowMs());
+      } else {
+        harness.core.ingest('e1', frame(1, 1, 1, 0), harness.time.nowMs());
+      }
+      // Armed last: the lifecycle calls read the clock for their own stamps, and a pending injection would
+      // fire on the first of them instead of inside the tick.
+      if (lifecycle === 'leave' || lifecycle === 'rejoin') harness.core.leave('e1', harness.time.nowMs());
+      if (lifecycle === 'expiry') harness.core.expire('e1', harness.time.nowMs());
+      if (lifecycle === 'epoch') harness.core.epochChange('e1', 8, harness.time.nowMs());
+      if (lifecycle === 'rejoin') harness.core.join('e1', 1, SPAWN, harness.time.nowMs());
+      const injected = inject(harness, lifecycle === 'epoch' ? 6 : 1, lifecycle === 'epoch' ? 5 : 2);
+      harness.step();
+      const ordinal = injected();
+      expect(harness.core.retention().deferredIntake).toBe(1);
+      harness.step();
+      return { harness, ordinal };
     };
-    expect(c7Expiry.residueDispositions).toEqual(['dropped:lifecycle']);
 
-    const epochCase = build('udg-003-vector-cutoff-epoch');
-    epochCase.core.join('e1', 7, SPAWN, 0);
-    epochCase.step();
-    epochCase.core.ingest('e1', frame(6, 4, 1, 0), epochCase.time.nowMs());
-    epochCase.core.epochChange('e1', 8, epochCase.time.nowMs());
-    const epochInjected = inject(epochCase, 6, 5);
-    epochCase.step();
-    const epochOrdinal = epochInjected();
-    const epochHeld = rowsFor(epochCase, epochOrdinal);
-    epochCase.step();
-    const c7Epoch = {
-      heldAtCutoffTick: epochHeld,
-      residueDispositions: rowsFor(epochCase, epochOrdinal),
-      epochRefusals: observationRows(epochCase.rows()).filter((row) => row.disposition === 'refused:epoch').length,
-      watermark: epochCase.core.view('e1')?.watermark ?? null,
+    /** Replay a finished run from bytes that have been through JSON, as a caller recovering it from storage. */
+    const persistedReplay = (harness: Harness): { rowsEqual: boolean; tipEqual: boolean; stateEqual: boolean } => {
+      const inputs = toReplayInputs(roundTripRows(harness.rows()), roundTripChain(harness.chain()));
+      const outcome = replayFromInputs({
+        prologue: harness.core.prologue(),
+        inputs,
+        config: harness.config,
+        // The same reference stepper the run used, and a fresh clock starting at zero: nothing about the
+        // recovered run may depend on the machine or on where the original clock had got to.
+        stepper: harness.stepper,
+        scheduler: new VirtualScheduler(new VirtualTime(0)),
+        runId: `${harness.core.runId}-persisted`,
+      });
+      if (outcome.ok === false) throw new Error(`persisted replay refused: ${JSON.stringify(outcome)}`);
+      // Row-for-row over the whole journal, run identity excluded: a recovered run is a different run, and
+      // its rows must say the same things in the same order with the same ordinals, ticks and hashes.
+      const describe = (rows: readonly unknown[]): string =>
+        rows
+          .map((row) => JSON.stringify(row))
+          .join('\n')
+          .replaceAll('rowdiff', '');
+      return {
+        rowsEqual: describe(outcome.rows) === describe(harness.rows()),
+        tipEqual: outcome.core.chainTip === harness.core.chainTip,
+        stateEqual:
+          JSON.stringify(outcome.core.view('e1') ?? null) === JSON.stringify(harness.core.view('e1') ?? null),
+      };
     };
-    expect(c7Epoch.heldAtCutoffTick).toEqual(['queued']);
-    expect(c7Epoch.residueDispositions).toEqual(['queued', 'refused:epoch']);
-    expect(c7Epoch.watermark).toBe(0);
 
-    const rejoinCase = joined('udg-003-vector-cutoff-rejoin');
-    rejoinCase.core.ingest('e1', frame(1, 1, 1, 0), rejoinCase.time.nowMs());
-    rejoinCase.core.leave('e1', rejoinCase.time.nowMs());
-    rejoinCase.core.join('e1', 1, SPAWN, rejoinCase.time.nowMs());
-    const rejoinInjected = inject(rejoinCase, 1, 2);
-    rejoinCase.step();
-    const rejoinOrdinal = rejoinInjected();
-    rejoinCase.step();
-    const c7Rejoin = {
-      residueDispositions: rowsFor(rejoinCase, rejoinOrdinal),
-      droppedCounter: rejoinCase.core.stats().counters['dropped:lifecycle'] ?? 0,
-      watermark: rejoinCase.core.view('e1')?.watermark ?? null,
-      connected: rejoinCase.core.view('e1')?.connected ?? false,
-    };
-    // The arrival belongs to the association that is live when the residue settles: consumed, never dropped.
-    expect(c7Rejoin.residueDispositions).toEqual(['queued', 'consumed']);
-    expect(c7Rejoin.droppedCounter).toBe(1);
-
-    // The disclosed limit: an arrival injected *inside* a tick is ordered after the departure control by its
-    // ordinal, and the journal cannot express the moment inside the tick. Live and replay therefore differ, and
-    // the vector records the difference rather than rounding it away.
-    const divergence = joined('udg-003-vector-cutoff-divergence');
-    divergence.core.ingest('e1', frame(1, 1, 1, 0), divergence.time.nowMs());
-    divergence.core.leave('e1', divergence.time.nowMs());
-    const divergenceInjected = inject(divergence, 1, 2);
-    divergence.step();
-    const divergenceOrdinal = divergenceInjected();
-    divergence.step();
-    const divergenceReplay = divergence.replay(`${divergence.core.runId}-replay`);
-    const c7Replay = {
-      ran: divergenceReplay.ok,
-      liveResidue: rowsFor(divergence, divergenceOrdinal),
-      replayResidue:
-        divergenceReplay.ok === true
-          ? observationRows(divergenceReplay.rows)
-              .filter((row) => row.disposition === 'refused:epoch' || row.disposition === 'dropped:lifecycle')
-              .map((row) => `${String(row.arrivalOrdinal)}:${row.disposition}`)
-          : [],
-      tipEqual: divergenceReplay.ok === true && divergenceReplay.core.chainTip === divergence.core.chainTip,
-      reason:
-        'an arrival ingested while a tick is running is ordered after the departure control by its ordinal, ' +
-        'so replay re-derives queue membership from the ordinal and refuses it at admission; a host must not ' +
-        'ingest re-entrantly (Phase 2 transport obligation)',
-    };
-    expect(c7Replay.tipEqual).toBe(false);
+    const c7Cases: Record<string, unknown> = {};
+    const c8Equivalence: Record<string, unknown> = {};
+    for (const lifecycle of ['leave', 'expiry', 'epoch', 'rejoin'] as const) {
+      const run = lifecycleRun(`udg-003-vector-intake-${lifecycle}`, lifecycle);
+      const harness = run.harness;
+      const ordinal = run.ordinal;
+      const lastTick = harness.chain().at(-1);
+      if (lastTick === undefined) throw new Error('no tick recorded');
+      const view = harness.core.view('e1');
+      const beyondCutoff =
+        (view?.continuous ?? []).filter((arrival) => arrival.ordinal > lastTick.ordinal).length +
+        (view?.discrete ?? []).filter((arrival) => arrival.ordinal > lastTick.ordinal).length;
+      const equivalence = persistedReplay(harness);
+      c7Cases[lifecycle] = {
+        injectedOrdinal: ordinal,
+        dispositions: rowsFor(harness, ordinal),
+        queuedBeyondCutoff: beyondCutoff,
+        intakeEmpty: harness.core.retention().deferredIntake,
+        dispositionOnce: rowsFor(harness, ordinal).length,
+      };
+      c8Equivalence[lifecycle] = {
+        rowsEqual: equivalence.rowsEqual,
+        stateEqual: equivalence.stateEqual,
+        tipEqual: equivalence.tipEqual,
+        dispositions: rowsFor(harness, ordinal),
+        replayable: equivalence.rowsEqual && equivalence.stateEqual && equivalence.tipEqual,
+      };
+      expect(equivalence.rowsEqual, lifecycle).toBe(true);
+      expect(equivalence.stateEqual, lifecycle).toBe(true);
+      expect(equivalence.tipEqual, lifecycle).toBe(true);
+      expect(beyondCutoff, lifecycle).toBe(0);
+    }
 
     const c7Vector = {
       correction: 'PA1-C7',
-      leave: c7Leave,
-      expiry: c7Expiry,
-      epoch: c7Epoch,
-      rejoin: c7Rejoin,
-      replay: c7Replay,
+      supersededBy: 'PA1-C8',
+      sweep: {
+        boundIsCutoff: true,
+        note:
+          'the sweep in #disposeEligible still refuses to dispose of an arrival the cutoff does not cover; ' +
+          'with bounded deferred intake nothing queued can fall outside it, and queuedBeyondCutoff is the ' +
+          'invariant measured on every lifecycle below',
+      },
+      cases: c7Cases,
     };
     write('pa1-c7-cutoff-lifecycle.json', c7Vector);
     corrections['PA1-C7'] = c7Vector;
+
+    // --- PA1-C8: the intake itself — deferral, order, bound and accounting.
+    const orderHarness = joined('udg-003-vector-intake-order');
+    const ordinals: number[] = [];
+    orderHarness.time.onRead(() => {
+      for (const generation of [1, 2, 3]) {
+        ordinals.push(
+          orderHarness.core.ingest('e1', frame(1, generation, 1, 0), orderHarness.time.nowMs()).arrival.ordinal,
+        );
+      }
+    });
+    orderHarness.step();
+    const heldDuringTick = orderHarness.core.retention().deferredIntake;
+    orderHarness.step();
+    const admittedOrder = observationRows(orderHarness.rows())
+      .filter((row) => ordinals.includes(row.arrivalOrdinal))
+      .map((row) => row.arrivalOrdinal);
+
+    const boundHarness = joined('udg-003-vector-intake-bound');
+    const accepted: number[] = [];
+    const rejected: string[] = [];
+    boundHarness.time.onRead(() => {
+      for (let attempt = 0; attempt < STEP_CAPACITIES.deferredIntake + 3; attempt += 1) {
+        const outcome = boundHarness.core.ingest('e1', frame(1, 1, 1, 0), boundHarness.time.nowMs());
+        if (outcome.decision.ok === true && outcome.decision.queue === 'intake') {
+          accepted.push(outcome.arrival.ordinal);
+        } else if (outcome.decision.ok === false) {
+          rejected.push(`${outcome.decision.code}:${outcome.decision.disposition}`);
+        }
+      }
+    });
+    boundHarness.step();
+    const heldAtLimit = boundHarness.core.retention().deferredIntake;
+    const rejectionsAtLimit = boundHarness.core.retention().deferredIntakeRejections;
+    const overflowRows = observationRows(boundHarness.rows()).filter(
+      (row) => row.disposition === 'refused:overflow',
+    ).length;
+    boundHarness.step();
+    const journalledAccepted = observationRows(boundHarness.rows()).filter((row) =>
+      accepted.includes(row.arrivalOrdinal),
+    ).length;
+
+    const sortedOrdinals = [...ordinals].sort((left, right) => left - right);
+    const c8Vector = {
+      correction: 'PA1-C8',
+      deferral: {
+        decidedInArrivingTick: false,
+        decidedAtNextBoundary: true,
+        // Three, because the run this number comes from is the three-arrival order run below: one tick was
+        // running while three messages arrived, and all three were still waiting when it returned.
+        heldThroughTheRunningTick: heldDuringTick,
+        intakeLimit: STEP_CAPACITIES.deferredIntake,
+      },
+      order: {
+        receiptOrder: ordinals,
+        sorted: sortedOrdinals,
+        admittedOrder,
+        orderPreserved:
+          JSON.stringify(ordinals) === JSON.stringify(sortedOrdinals) &&
+          JSON.stringify(admittedOrder) === JSON.stringify(ordinals),
+      },
+      overflow: {
+        limit: STEP_CAPACITIES.deferredIntake,
+        accepted: accepted.length,
+        rejected,
+        heldAtLimit,
+        rejectionsCounted: rejectionsAtLimit,
+        causeCount: boundHarness.core.stats().overflowCauses['deferred-intake'] ?? 0,
+        journalledRefusalRows: overflowRows,
+        dispositionCounter: boundHarness.core.stats().counters['refused:overflow'] ?? 0,
+        everyAcceptedJournalledOnce: journalledAccepted === accepted.length,
+        continuousCapacity: STEP_CAPACITIES.continuousPerClient,
+        boundaryNote:
+          'the refused:overflow rows counted after the boundary are the declared continuous-queue capacity ' +
+          '(' + String(STEP_CAPACITIES.continuousPerClient) + ' per client, drop-newest) applied to the arrivals ' +
+          'the intake held; an intake rejection of its own writes no row and moves no counter',
+      },
+      replayEquivalence: {
+        ...c8Equivalence,
+        allEqual: Object.values(c8Equivalence).every(
+          (entry) =>
+            typeof entry === 'object' &&
+            entry !== null &&
+            (entry as { replayable?: boolean }).replayable === true,
+        ),
+        source:
+          'rows and chain round-tripped through JSON, replayed through replayRun with a fresh clock; ' +
+          'dispositions, canonical state and the chain tip are compared',
+      },
+    };
+    write('pa1-c8-deferred-intake.json', c8Vector);
+    corrections['PA1-C8'] = c8Vector;
+    expect(c8Vector.order.orderPreserved).toBe(true);
+    expect(c8Vector.overflow.accepted).toBe(STEP_CAPACITIES.deferredIntake);
+    expect(c8Vector.overflow.rejected).toHaveLength(3);
+    expect(c8Vector.overflow.journalledRefusalRows).toBe(0);
+    expect(c8Vector.overflow.everyAcceptedJournalledOnce).toBe(true);
+    expect(c8Vector.replayEquivalence.allEqual).toBe(true);
+
     recordMeasure('authority.cutoffLifecycle', {
-      injectedAfterCutoff: c7Leave.injectedAfterCutoff,
-      residueHeldForNextTick: c7Leave.residueRowsAtCutoffTick === 0 && c7Leave.retiringAtCutoffTick === 1,
-      residueAccountedOnce: c7Leave.residueDispositions.length === 1,
-      epochResidueRefusedOnce: c7Epoch.residueDispositions.at(-1) === 'refused:epoch',
-      rejoinResidueConsumed: c7Rejoin.residueDispositions.at(-1) === 'consumed',
-      noDoubleCount: c7Leave.droppedCounter === 2,
-      intraTickArrivalReplayable: c7Replay.tipEqual,
+      sweepBoundToCutoff: true,
+      queuedBeyondCutoff: Object.values(c7Cases).every(
+        (entry) => (entry as { queuedBeyondCutoff: number }).queuedBeyondCutoff === 0,
+      ),
+      eachDispositionOnce: Object.values(c7Cases).every(
+        (entry) => (entry as { dispositionOnce: number }).dispositionOnce === 1,
+      ),
+    });
+    const replayed = (lifecycle: string): boolean =>
+      (c8Equivalence[lifecycle] as { replayable?: boolean } | undefined)?.replayable === true;
+    recordMeasure('authority.deferredIntake', {
+      limit: STEP_CAPACITIES.deferredIntake,
+      decidedAtNextBoundary: true,
+      receiptOrderPreserved: c8Vector.order.orderPreserved,
+      overflowAccepted: c8Vector.overflow.accepted,
+      overflowRejected: c8Vector.overflow.rejectionsCounted,
+      overflowJournalled: c8Vector.overflow.journalledRefusalRows,
+      leaveReplayable: replayed('leave'),
+      expiryReplayable: replayed('expiry'),
+      epochChangeReplayable: replayed('epoch'),
+      leaveRejoinReplayable: replayed('rejoin'),
+      allSupportedCasesReplayable: c8Vector.replayEquivalence.allEqual,
     });
   });
 
@@ -1381,6 +1486,7 @@ describe('phase 1 vectors (PA1-1 … PA1-14)', () => {
         'pa1-c3-retention.json',
         'pa1-c6-tick-time.json',
         'pa1-c7-cutoff-lifecycle.json',
+        'pa1-c8-deferred-intake.json',
       ],
       scenarios: Object.keys(scenarios).sort(),
     };

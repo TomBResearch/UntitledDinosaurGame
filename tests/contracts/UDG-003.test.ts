@@ -31,6 +31,7 @@
  * identity-level evidence, not by this file.
  */
 
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -1670,6 +1671,92 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     const altered = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
     expect(altered.status).toBe(1);
     expect(altered.stderr).toContain('VECTORS-FILE-HASH');
+    spawnSync('rm', ['-rf', scratch], { cwd: ROOT });
+  });
+
+  it('refuses the phase unless every supported mid-tick case is proven to replay equally', () => {
+    // Reviewer instruction of 2026-11-14: the mismatch revision 3 published for a message received during a
+    // tick is fixed by admitting such a message at the next boundary, and the phase evidence check must now
+    // require replay equivalence for leave, expiry, epoch change and leave/rejoin. A vector that reports one
+    // of them unproven cannot be published as a passing phase.
+    const scratch = join(ROOT, 'artifacts', '.local', 'udg-003-replay-gate');
+    spawnSync('rm', ['-rf', scratch], { cwd: ROOT });
+    mkdirSync(scratch, { recursive: true });
+    const produced = spawnSync('pnpm', ['exec', 'vitest', 'run', 'tests/unit/udg-003/vectors.test.ts'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, UDG_VECTORS_OUT: scratch },
+    });
+    expect(produced.status, `${produced.stdout}${produced.stderr}`).toBe(0);
+    expect(spawnSync('pnpm', ['--filter', '@udg/checks', 'build'], { cwd: ROOT, encoding: 'utf8' }).status).toBe(0);
+    const gate = ['tools/checks/dist/evidence.js', 'vectors', '--dir', scratch, '--allow-dirty'];
+    expect(spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' }).status).toBe(0);
+
+    const vectorName = 'pa1-c8-deferred-intake.json';
+    const manifestPath = join(scratch, 'vectors-manifest.json');
+    const rewrite = (value: unknown): void => {
+      // Re-sign the manifest for the bytes being asserted, so a failure below can only come from the rule
+      // under test and not from a digest mismatch the tampering itself would cause.
+      writeFileSync(join(scratch, vectorName), JSON.stringify(value), 'utf8');
+      const bytes = readFileSync(join(scratch, vectorName));
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+        files: { name: string; bytes: number; sha256: string }[];
+      };
+      const entry = manifest.files.find((file) => file.name === vectorName);
+      if (entry === undefined) throw new Error(`${vectorName} is not in the manifest`);
+      entry.bytes = bytes.length;
+      entry.sha256 = createHash('sha256').update(bytes).digest('hex');
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+    };
+    const published = JSON.parse(readFileSync(join(scratch, vectorName), 'utf8')) as {
+      correction: string;
+      replayEquivalence: Record<string, unknown> & { allEqual: boolean };
+    };
+    expect(published.correction).toBe('PA1-C8');
+    expect(published.replayEquivalence.allEqual).toBe(true);
+    // The four cases the reviewer named are the four the gate knows about, by name.
+    for (const lifecycle of ['leave', 'expiry', 'epoch', 'rejoin']) {
+      const entry = published.replayEquivalence[lifecycle] as { replayable?: boolean } | undefined;
+      expect(entry, lifecycle).toBeDefined();
+      expect((entry as { replayable: boolean }).replayable, lifecycle).toBe(true);
+    }
+
+    // Re-publishing revision 3's answer — the mismatch still open — is refused, case by case.
+    for (const lifecycle of ['leave', 'expiry', 'epoch', 'rejoin']) {
+      const regressed = JSON.parse(JSON.stringify(published)) as {
+        replayEquivalence: Record<string, { replayable: boolean }> & { allEqual: boolean };
+      };
+      const recorded = regressed.replayEquivalence[lifecycle];
+      if (recorded === undefined) throw new Error(`the vector omits the ${lifecycle} case entirely`);
+      recorded.replayable = false;
+      rewrite(regressed);
+      const refused = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
+      expect(refused.status, lifecycle).toBe(1);
+      expect(refused.stderr, lifecycle).toContain('VECTORS-REPLAY-EQUIVALENCE');
+      expect(refused.stderr, lifecycle).toContain(lifecycle);
+    }
+
+    // A vector that dropped `allEqual` while naming every case is still not a claim of equivalence.
+    const withoutClaim = JSON.parse(JSON.stringify(published)) as { replayEquivalence: Record<string, unknown> };
+    delete withoutClaim.replayEquivalence['allEqual'];
+    rewrite(withoutClaim);
+    const incomplete = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
+    expect(incomplete.status).toBe(1);
+    expect(incomplete.stderr).toContain('VECTORS-REPLAY-EQUIVALENCE');
+
+    // Absent or unparseable is unproven, and unproven is refused.
+    spawnSync('rm', [join(scratch, vectorName)], { cwd: ROOT });
+    const absent = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
+    expect(absent.status).toBe(1);
+    expect(absent.stderr).toContain('VECTORS-REPLAY-EQUIVALENCE');
+    rewrite('not json');
+    const unparseable = spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' });
+    expect(unparseable.status).toBe(1);
+    expect(unparseable.stderr).toContain('VECTORS-REPLAY-EQUIVALENCE');
+
+    // Restoring the honest vector is the only thing that clears it.
+    rewrite(published);
+    expect(spawnSync(process.execPath, gate, { cwd: ROOT, encoding: 'utf8' }).status).toBe(0);
     spawnSync('rm', ['-rf', scratch], { cwd: ROOT });
   });
 });

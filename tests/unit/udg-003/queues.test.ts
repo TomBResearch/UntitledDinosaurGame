@@ -36,6 +36,11 @@ describe('the capacities are the adopted numbers (P03-f, protocol.md 4.3)', () =
       controlPerRoom: 64,
       terminalCacheRecords: 128,
       terminalCacheTtlMs: 30_000,
+      // Not one of the four adopted numbers: the bound on arrivals received *while a tick runs*, added by the
+      // reviewer instruction of 2026-11-14 (PA1-C8). It is listed here so a change to it is a decision, not a
+      // edit buried in a helper. An unbounded intake would be an unbounded per-tick work load, which P03-f
+      // exists to prevent.
+      deferredIntake: 64,
     });
   });
 });

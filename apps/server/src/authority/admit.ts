@@ -19,6 +19,18 @@ import type { ArrivalRecord, Disposition, LifecycleStatus } from './types.js';
 
 export type AdmissionQueue = 'continuous' | 'discrete' | 'control';
 
+/**
+ * The answer given when a message arrives while a tick is running (PA1-C8): it is held in the core's bounded
+ * deferred intake and decided at the next tick boundary, so it is in no gameplay queue yet. Kept apart from
+ * `AdmissionDecision` because admitting is precisely what has not happened, and a consumer that reads
+ * `queue` must not be able to mistake the intake for one of the three gameplay queues.
+ */
+export type IntakeAcceptance = Readonly<{
+  ok: true;
+  arrival: ArrivalRecord;
+  queue: 'intake';
+}>;
+
 export type AdmissionDecision =
   | { readonly ok: true; readonly arrival: ArrivalRecord; readonly queue: AdmissionQueue }
   | {
@@ -95,4 +107,5 @@ export type OverflowCause =
   | 'discrete-capacity-entity'
   | 'discrete-capacity-room'
   | 'control-capacity'
+  | 'deferred-intake'
   | 'ordinal-exhausted';

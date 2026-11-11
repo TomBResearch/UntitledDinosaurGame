@@ -210,6 +210,7 @@ export const PHASE_1_VECTOR_FILES: readonly string[] = [
   'pa1-c3-retention.json',
   'pa1-c6-tick-time.json',
   'pa1-c7-cutoff-lifecycle.json',
+  'pa1-c8-deferred-intake.json',
   'disposition-reconciliation.json',
   'summary.json',
 ];
@@ -240,7 +241,8 @@ export type VectorIssueCode =
   | 'VECTORS-FILE-UNPARSEABLE'
   | 'VECTORS-FILE-BYTES'
   | 'VECTORS-FILE-HASH'
-  | 'VECTORS-FILE-UNEXPECTED';
+  | 'VECTORS-FILE-UNEXPECTED'
+  | 'VECTORS-REPLAY-EQUIVALENCE';
 
 export interface ManifestIssue {
   readonly code: VectorIssueCode;
@@ -357,6 +359,60 @@ export const validateVectorManifest = (directory: string, expectation: ManifestE
     if (!expectation.requiredFiles.includes(name)) {
       issues.push({ code: 'VECTORS-FILE-UNEXPECTED', detail: `${name} is listed but no phase-1 vector produces it` });
     }
+  }
+  issues.push(...replayEquivalenceIssues(directory));
+  return issues;
+};
+
+/**
+ * The lifecycles whose mid-tick arrival must replay identically (reviewer instruction of 2026-11-14).
+ *
+ * Revision 3 published `intraTickArrivalReplayable: false` for exactly these cases. The fix is admission at
+ * the next tick boundary from a bounded deferred intake, so the phase gate now refuses a bundle in which any
+ * of them is unproven: a vector that reports the mismatch as still open, omits a case, or fails to parse is
+ * a gate failure, not a footnote.
+ */
+export const PHASE_1_REPLAY_EQUIVALENCE_CASES: readonly string[] = ['leave', 'expiry', 'epoch', 'rejoin'];
+export const PHASE_1_REPLAY_EQUIVALENCE_FILE = 'pa1-c8-deferred-intake.json';
+
+export const replayEquivalenceIssues = (directory: string): ManifestIssue[] => {
+  const path = join(directory, PHASE_1_REPLAY_EQUIVALENCE_FILE);
+  const bytes = readOptional(path);
+  if (bytes === undefined) {
+    return [
+      {
+        code: 'VECTORS-REPLAY-EQUIVALENCE',
+        detail: `${PHASE_1_REPLAY_EQUIVALENCE_FILE} is absent, so replay equivalence for a mid-tick arrival is unproven`,
+      },
+    ];
+  }
+  const parsed = safeJson(bytes);
+  if (parsed === undefined) {
+    return [
+      {
+        code: 'VECTORS-REPLAY-EQUIVALENCE',
+        detail: `${PHASE_1_REPLAY_EQUIVALENCE_FILE} is not parseable, so replay equivalence cannot be read`,
+      },
+    ];
+  }
+  const equivalence = asRecord(asRecord(parsed)['replayEquivalence']);
+  const issues: ManifestIssue[] = [];
+  for (const lifecycle of PHASE_1_REPLAY_EQUIVALENCE_CASES) {
+    const entry = asRecord(equivalence[lifecycle]);
+    if (entry['replayable'] !== true) {
+      issues.push({
+        code: 'VECTORS-REPLAY-EQUIVALENCE',
+        detail:
+          `${PHASE_1_REPLAY_EQUIVALENCE_FILE}: replay equivalence for "${lifecycle}" is not proven — a message ` +
+          'received during a tick must reach the same dispositions, canonical state and chain tip in replay',
+      });
+    }
+  }
+  if (equivalence['allEqual'] !== true) {
+    issues.push({
+      code: 'VECTORS-REPLAY-EQUIVALENCE',
+      detail: `${PHASE_1_REPLAY_EQUIVALENCE_FILE}: the vector does not claim every supported case replays equally`,
+    });
   }
   return issues;
 };
@@ -562,7 +618,8 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       'authority.boundedRetention': 'retained entities 1 and reachable arrivals 0 across churn while streamed rows grow monotonically',
       'authority.replayEquivalence': 'row count, chain tip and digest-blanked replay all equal the original run',
       'authority.tickTime': 'one captured reading per tick: the cache answer, the cache write and the recorded tick time are the same instant, and replay reproduces both sides of the 30 s window (PA1-C6)',
-      'authority.cutoffLifecycle': 'a departure disposes only of arrivals the cutoff covers, residue is held one tick and accounted exactly once, and the intra-tick replay limit is recorded rather than rounded away (PA1-C7)',
+      'authority.cutoffLifecycle': 'a departure disposes only of arrivals the cutoff covers; no queue holds an arrival the tick that holds it has frozen past, and each mid-tick arrival is dispositioned exactly once (PA1-C7, overtaken for the mid-tick case by PA1-C8)',
+      'authority.deferredIntake': 'an arrival received while a tick runs is decided at the next boundary in receipt order; the intake is bounded at 64 with every rejection counted and journalled nowhere; leave, expiry, epoch change and leave/rejoin each replay from persisted evidence to the same dispositions, canonical state and chain tip (PA1-C8)',
       'vectors.artefacts': `=== ${String(PHASE_1_VECTOR_FILES.length)} artefacts listed, each present with a matching digest`,
       'vectors.digestsMatchBytes': '=== true (every artefact re-read from disk hashes to the digest the manifest declares)',
       'capture.commandsRun': '>= 8 commands, capture.failingCommands === []',

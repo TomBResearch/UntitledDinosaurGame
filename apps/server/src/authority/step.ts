@@ -38,7 +38,7 @@ import type { ServerConfig } from '@udg/config';
 
 import type { FixedStepClock } from './clock.js';
 import { ArrivalOrder, buildArrival, buildControlArrival, payloadFromRendered } from './arrival.js';
-import { admit, type AdmissionDecision, type OverflowCause } from './admit.js';
+import { admit, type AdmissionDecision, type IntakeAcceptance, type OverflowCause } from './admit.js';
 import { BatchRegistry } from './bounded.js';
 import { planCommit, type CommitPlan } from './commit.js';
 import { EntityAuthority, initialState } from './entity.js';
@@ -163,7 +163,8 @@ export interface TickOutcome {
 
 export interface AdmissionOutcome {
   readonly arrival: ArrivalRecord;
-  readonly decision: AdmissionDecision;
+  /** An arrival received mid-tick is answered with an intake acceptance rather than an admission (PA1-C8). */
+  readonly decision: AdmissionDecision | IntakeAcceptance;
   readonly overflowCause: OverflowCause | null;
 }
 
@@ -190,7 +191,8 @@ export interface RetainedState {
   readonly cacheRecords: number;
   readonly controlQueue: number;
   readonly pendingReleases: number;
-  readonly retiring: number;
+  readonly deferredIntake: number;
+  readonly deferredIntakeRejections: number;
   /** Rows of the tick in flight. Bounded by entities x declared queue capacities; zero between ticks. */
   readonly tickRowBuffer: number;
   readonly aliasRecords: number;
@@ -234,6 +236,13 @@ const CONTROL_QUEUE_CAPACITY = DISCRETE_QUEUE_CAPACITY_PER_ROOM;
  */
 const ALIAS_MEMORY = 64;
 
+/**
+ * How many arrivals may wait in the deferred intake (PA1-C8). A core bound, not configuration: the number
+ * itself is not part of `configHash`, because it changes no gameplay decision — it only decides whether the
+ * core accepts a message it cannot decide honestly yet.
+ */
+const DEFERRED_INTAKE_LIMIT = 64;
+
 export const CAPACITIES = {
   continuousPerClient: CONTINUOUS_QUEUE_CAPACITY,
   discretePerEntity: DISCRETE_QUEUE_CAPACITY_PER_ENTITY,
@@ -241,6 +250,8 @@ export const CAPACITIES = {
   controlPerRoom: CONTROL_QUEUE_CAPACITY,
   terminalCacheRecords: TERMINAL_REQUEST_CACHE_SIZE,
   terminalCacheTtlMs: TERMINAL_REQUEST_TTL_SECONDS * 1000,
+  /** Arrivals received while a tick is run wait here for the next boundary (PA1-C8). */
+  deferredIntake: DEFERRED_INTAKE_LIMIT,
 } as const;
 
 export interface AuthorityCoreOptions {
@@ -323,13 +334,17 @@ export class AuthorityCore {
    */
   readonly #droppedThisTick = new Map<EntityId, ArrivalRecord[]>();
   /**
-   * Entities whose association ended but whose bookkeeping this tick may not release (reviewer correction PA1-C7):
-   * an arrival that landed after the frozen cutoff is still queued, and disposing of it here would be stage L
-   * reaching outside the frozen set. The value is the ordinal of the departure control itself, which marks the
-   * last arrival that belonged to the association that ended. Bounded by the entity count, and emptied at the
-   * next tick.
+   * Arrivals received while a tick was running (PA1-C8). Admission is a function of association state, and
+   * mid-tick that state is neither stable nor expressible in the journal: a message could be accepted before
+   * a departure in the same tick's stage L and refused by a replay that only knows the arrival's ordinal. So
+   * a mid-tick arrival is held here, in receipt order, and admitted at the next tick boundary — where live
+   * execution and replay see the same state and the same order. Bounded by `DEFERRED_INTAKE_LIMIT`.
    */
-  readonly #retiring = new Map<EntityId, ArrivalOrdinal>();
+  readonly #intake: ArrivalRecord[] = [];
+  /** True for the duration of a tick body; see `#tickRunning`'s single writer in `step()`. */
+  #tickRunning = false;
+  /** Intake rejections are counted, reported to the caller, and deliberately never journalled (PA1-C8). */
+  #intakeRejections = 0;
   #resultRows: JournalRow[] = [];
   readonly #stepper: EntityStepper;
   readonly #clock: FixedStepClock;
@@ -452,8 +467,9 @@ export class AuthorityCore {
       cacheRecords,
       controlQueue: this.#controls.length,
       pendingReleases: this.#pendingRelease.size,
-      /** Departed entities whose residue this tick may not release yet (reviewer correction PA1-C7). */
-      retiring: this.#retiring.size,
+      /** Arrivals waiting for the next boundary, and intake rejections so far (PA1-C8). */
+      deferredIntake: this.#intake.length,
+      deferredIntakeRejections: this.#intakeRejections,
       tickRowBuffer,
       aliasRecords: this.#aliases.size,
       releasedEntities: this.#released.entities,
@@ -461,7 +477,9 @@ export class AuthorityCore {
       releasedCacheRecords: this.#released.cacheRecords,
       streamedRows: this.#handedRows,
       streamedChainRecords: this.#handedChain,
-      reachableArrivals: queued + this.#controls.length + this.#pendingRelease.size + tickRowBuffer,
+      // The intake is working state too: an arrival held there is neither lost nor yet queued, and a report
+      // that omitted it would understate what the core is holding between a tick and its boundary.
+      reachableArrivals: queued + this.#controls.length + this.#pendingRelease.size + tickRowBuffer + this.#intake.length,
     };
   }
 
@@ -543,7 +561,102 @@ export class AuthorityCore {
     );
   }
 
+  /**
+   * Receive one message. A tick in progress defers the decision; otherwise admission runs at once (PA1-C8).
+   */
   #enqueue(
+    entityId: EntityId,
+    raw: unknown,
+    control: ControlKind | null,
+    sessionEpoch: SessionEpoch | null,
+    receivedAtMs: number,
+    rendered?: Readonly<Record<string, RenderedValue>>,
+  ): AdmissionOutcome {
+    if (this.#tickRunning) {
+      return this.#deferIntake(entityId, raw, control, sessionEpoch, receivedAtMs, rendered);
+    }
+    return this.#admit(entityId, raw, control, sessionEpoch, receivedAtMs, rendered);
+  }
+
+  /**
+   * Hold a mid-tick arrival until the next boundary. Arrival order is the receipt order, which is also the
+   * ordinal order, because the ordinal is reserved here rather than at admission.
+   *
+   * An intake that is already full refuses the message to its caller and counts the rejection. It writes no
+   * journal row and touches no disposition counter: a decision a replay could not reach (replay offers
+   * arrivals between ticks, where there is no intake to overflow) must not enter the journal's arithmetic,
+   * or the two runs would diverge for the very reason this deferral removes.
+   */
+  #deferIntake(
+    entityId: EntityId,
+    raw: unknown,
+    control: ControlKind | null,
+    sessionEpoch: SessionEpoch | null,
+    receivedAtMs: number,
+    rendered?: Readonly<Record<string, RenderedValue>>,
+  ): AdmissionOutcome {
+    if (this.#intake.length >= DEFERRED_INTAKE_LIMIT) {
+      this.#intakeRejections += 1;
+      // Counted in the overflow-by-cause table (AC-3e) and reported by `retention()`. It is the one refusal
+      // that reaches no journal row: `#overflowCauses` is not journalled, so naming the cause here accounts
+      // for the message without putting a decision into the run that a replay could not reach.
+      this.#noteOverflow('deferred-intake');
+      const arrival = buildArrival({
+        ordinal: this.#order.current,
+        entityId,
+        raw: raw ?? null,
+        receivedAtMs,
+      });
+      return {
+        arrival,
+        decision: {
+          ok: false,
+          arrival,
+          code: 'RATE_LIMITED',
+          disposition: 'refused:overflow',
+          reason: 'deferred intake is full; the message was not admitted and is not journalled',
+        },
+        overflowCause: 'deferred-intake',
+      };
+    }
+
+    const reserved = this.#order.next();
+    if (reserved === 'exhausted') {
+      // The ordinal bound is a decision replay reaches identically, so this refusal is journalled as usual.
+      return this.#admit(entityId, raw, control, sessionEpoch, receivedAtMs, rendered);
+    }
+    const arrival =
+      control === null
+        ? buildArrival(
+            rendered === undefined
+              ? { ordinal: reserved, entityId, raw, receivedAtMs }
+              : { ordinal: reserved, entityId, raw, receivedAtMs, rendered },
+          )
+        : buildControlArrival({ ordinal: reserved, entityId: entityId, control, sessionEpoch, receivedAtMs });
+    this.#intake.push(arrival);
+    return { arrival, decision: { ok: true, arrival, queue: 'intake' }, overflowCause: null };
+  }
+
+  /**
+   * Admit everything received during the previous tick, in receipt order, at the boundary and against the
+   * association state that boundary sees. This is the only place an arrival can enter the core from the
+   * intake, and it is the same call — in the same order — that a replay makes before the covering tick.
+   */
+  #drainIntake(): void {
+    if (this.#intake.length === 0) return;
+    const batch = this.#intake.splice(0, this.#intake.length);
+    for (const arrival of batch) {
+      // The arrival record is admitted as it was received: its ordinal was reserved on receipt, and its
+      // `raw` is the field-level rendering it was built with, so a malformed message is re-described exactly
+      // as it arrived rather than re-derived from JSON or given a second ordinal at admission.
+      this.#admitBuilt(arrival);
+    }
+  }
+
+  /**
+   * Reserve an ordinal, describe the message, then admit it. The path for anything received between ticks.
+   */
+  #admit(
     entityId: EntityId,
     raw: unknown,
     control: ControlKind | null,
@@ -581,6 +694,16 @@ export class AuthorityCore {
           )
         : buildControlArrival({ ordinal: reserved, entityId, control, sessionEpoch, receivedAtMs });
 
+    return this.#admitBuilt(arrival);
+  }
+
+  /**
+   * Classify, gate, enqueue: the admission decision itself (P03-b), over an arrival whose ordinal is already
+   * reserved. Both entry paths reach here, which is what makes a deferred arrival and a between-ticks arrival
+   * the same question asked the same way.
+   */
+  #admitBuilt(arrival: ArrivalRecord): AdmissionOutcome {
+    const entityId = arrival.entityId;
     this.#observed.set(entityId, (this.#observed.get(entityId) ?? 0) + 1);
 
     const decision = admit(arrival, {
@@ -677,7 +800,30 @@ export class AuthorityCore {
     // Reviewer correction PA1-C6: this is the *only* reading taken for the tick's decisions. Screening, the cache
     // lookup, the cache write and the commit all take this value, and the journal records it, so a replay
     // restores the instant the decision was made instead of re-deriving it from a clock that has moved on.
-    const tickAtMs = this.#time.nowMs();
+    // From here the tick is running, so any arrival that reaches the core before it returns — from a host
+    // callback, a journal sink, or a clock that does more than tell the time — waits for the next boundary
+    // (PA1-C8). The drain uses the admission path directly, so raising the flag first cannot postpone the
+    // arrivals this boundary exists to admit.
+    this.#tickRunning = true;
+    try {
+      // Whatever arrived while a previous tick was running is admitted here, at the boundary, in receipt
+      // order, against the association state this boundary sees — before this tick's time is taken, so the
+      // drain cannot be mistaken for an arrival this boundary should have deferred. Because ordinals are
+      // reserved on receipt, every drained arrival satisfies `ordinal <= cutoff.ordinal`, so it is eligible
+      // for this tick exactly as a between-ticks arrival is — and a replay feeding the same journal in ordinal
+      // order before this tick makes the same calls, in the same order, against the same state.
+      this.#drainIntake();
+      const tickAtMs = this.#time.nowMs();
+      return this.#tickBody(cutoff, tickAtMs);
+    } finally {
+      // One writer, one scope: if a host's stepper or sink throws, the core does not spend the rest of the
+      // run deferring arrivals it should have admitted.
+      this.#tickRunning = false;
+    }
+  }
+
+  /** The tick body proper: the cutoff and the time are already fixed and the intake is already settled. */
+  #tickBody(cutoff: Cutoff, tickAtMs: number): TickOutcome {
     this.#droppedThisTick.clear();
     const stages: Stage[] = ['F'];
     this.#tickRows = [];
@@ -691,9 +837,6 @@ export class AuthorityCore {
     this.#controls.length = 0;
     for (const arrival of deferred) this.#controls.push(arrival);
     const eventsByEntity = new Map<EntityId, ControlKind[]>();
-    // A previous tick's departure is settled before this tick's controls are read, so residue is accounted
-    // for exactly once and never under two causes.
-    this.#settleRetiring(cutoff, rows);
     for (const arrival of due) {
       const control = arrival.control;
       if (control === null) continue;
@@ -812,12 +955,16 @@ export class AuthorityCore {
           entity.resetForNewEpoch();
         }
         entity.writeLifecycle('active');
+        // A leave earlier in this same tick asked for the bookkeeping to be released at the end of the tick.
+        // It no longer does: an association that is live again is not the one that ended, and releasing it
+        // would delete a running entity together with its queues and counters.
+        this.#pendingRelease.delete(arrival.entityId);
       }
     } else if (control === 'leave' || control === 'expiry') {
       if (entity !== undefined) {
-        // The cutoff bounds the sweep (reviewer correction PA1-C7): whatever was queued when the tick froze goes
-        // now, and anything that landed after the cutoff keeps its place.
-        this.#disposeEligible(entity, cutoff, 'departure', rows, cutoff.ordinal);
+        // The cutoff bounds the sweep (PA1-C7), and with deferred intake (PA1-C8) everything in the queue at
+        // this point is inside that cutoff: an arrival received during this tick is in the intake, not here.
+        this.#disposeEligible(entity, cutoff, 'departure', rows);
         entity.writeLifecycle(control === 'leave' ? 'idle' : 'departed');
         const state = entity.view().state;
         entity.writeState(
@@ -829,20 +976,15 @@ export class AuthorityCore {
           cutoff.tick,
         );
         // The final state and the drop evidence are journalled above; the bookkeeping itself goes at the
-        // end of this tick, not here, so this tick's evidence can still be written from the entity — unless
-        // the queue still holds a post-cutoff arrival, in which case release waits for the next tick.
-        if (entity.continuousQueue.size + entity.discreteQueue.size > 0) {
-          this.#retiring.set(entity.entityId, arrival.ordinal);
-        } else {
-          this.#pendingRelease.add(entity.entityId);
-        }
+        // end of this tick, not here, so this tick's evidence can still be written from the entity.
+        this.#pendingRelease.add(entity.entityId);
       }
     } else {
       if (entity !== undefined && epochAfter !== null) {
         entity.writeEpoch(epochAfter);
         entity.resetForNewEpoch();
         // Old-epoch queued observations are refused and never stepped (P03-c L), within the cutoff.
-        this.#disposeEligible(entity, cutoff, 'epoch', rows, cutoff.ordinal);
+        this.#disposeEligible(entity, cutoff, 'epoch', rows);
       }
     }
 
@@ -869,27 +1011,25 @@ export class AuthorityCore {
   }
 
   /**
-   * Dispose of the queued observations this tick is permitted to touch (reviewer correction PA1-C7).
+   * Dispose of the queued observations this tick is permitted to touch (PA1-C7).
    *
-   * Stage L runs inside the frozen set, so an arrival that landed after the cutoff — including one that
-   * landed while lifecycle work was already in progress — is not this tick's to dispose of. It keeps its
-   * place and is accounted for on its own next eligible tick, under whichever cause applies then. Each
-   * removal writes exactly one observation row and is counted once, so an arrival can never be dropped
+   * Stage L runs inside the frozen set, so this sweep may touch only arrivals the cutoff covers. With
+   * deferred intake (PA1-C8) nothing queued can fall outside it — an arrival received during this tick is in
+   * the intake, not in a queue — but the bound stays as the enforcement point: were admission ever to move
+   * back inside a tick, the sweep would still refuse to reach outside the frozen set, and the invariant test
+   * in `deferred-intake.test.ts` would fail rather than quietly dropping rows.
+   *
+   * Each removal writes exactly one observation row and is counted once, so an arrival can never be dropped
    * twice or vanish without a disposition.
-   *
-   * `ceiling` is the greatest ordinal the sweep may touch: the cutoff for an ordinary pass, or the last
-   * arrival of an association that has ended when a departure is settled after a rejoin.
    */
   #disposeEligible(
     entity: EntityAuthority,
     cutoff: Cutoff,
     cause: 'departure' | 'epoch',
     rows: JournalRow[],
-    ceiling: ArrivalOrdinal,
   ): number {
     const epoch = entity.view().epoch;
-    const within = (arrival: ArrivalRecord): boolean =>
-      arrival.ordinal <= cutoff.ordinal && arrival.ordinal <= ceiling;
+    const within = (arrival: ArrivalRecord): boolean => arrival.ordinal <= cutoff.ordinal;
     const matches =
       cause === 'epoch'
         ? (arrival: ArrivalRecord): boolean =>
@@ -908,37 +1048,6 @@ export class AuthorityCore {
       rows.push(this.#observationRow(arrival, cutoff.tick, disposition, reason, false));
     }
     return removed.length;
-  }
-
-  /**
-   * Settle the departures a previous tick deferred, before this tick reads its own controls.
-   *
-   * Two outcomes, and no third: if the entity was joined again in the meantime, only the arrivals that
-   * belonged to the ended association are disposed of, because the later ones belong to the live association
-   * and the bookkeeping stays where it is; otherwise every remaining arrival is now eligible, is disposed of
-   * under the departure cause, and the bookkeeping is released at the end of this tick.
-   */
-  #settleRetiring(cutoff: Cutoff, rows: JournalRow[]): void {
-    for (const [entityId, departureOrdinal] of [...this.#retiring.entries()].sort(([left], [right]) =>
-      left < right ? -1 : 1,
-    )) {
-      const entity = this.#entities.get(entityId);
-      if (entity === undefined) {
-        this.#retiring.delete(entityId);
-        continue;
-      }
-      if (entity.view().lifecycle === 'active') {
-        // Only what belonged to the ended association goes; anything queued from the departure onwards
-        // belongs to the association that is live now.
-        this.#disposeEligible(entity, cutoff, 'departure', rows, departureOrdinal - 1);
-        this.#retiring.delete(entityId);
-        continue;
-      }
-      this.#disposeEligible(entity, cutoff, 'departure', rows, cutoff.ordinal);
-      if (entity.continuousQueue.size + entity.discreteQueue.size > 0) continue;
-      this.#retiring.delete(entityId);
-      this.#pendingRelease.add(entityId);
-    }
   }
 
   /**
@@ -981,7 +1090,7 @@ export class AuthorityCore {
     const rows: JournalRow[] = [];
 
     // Old-epoch backlog is refused before anything is selected, whatever the lifecycle — within the cutoff.
-    this.#disposeEligible(entity, cutoff, 'epoch', rows, cutoff.ordinal);
+    this.#disposeEligible(entity, cutoff, 'epoch', rows);
     const view = entity.view();
 
     if (view.lifecycle !== 'active') {
