@@ -193,6 +193,7 @@ the numeric gates pass on real transport.
 | **D-P2-4** | Approve the `configHash` change W-3 causes | the accepted default digest `948f8c10fc404e2ebdb015abc8e30b8e66caf357347db3a2636ace96687a208a` is pinned in records and fixtures; adding envelope values changes it, and every pin must move together and be disclosed rather than silently updated |
 | **D-P2-6** | Does the GA-12 validation succeed or fail? If the strand signal cannot be positively validated, closure stays unavailable for dedupe and only §3.2 recovery remains | Phase 2 must report the outcome either way; a convenient "validation succeeded" is exactly what PE-2 exists to prevent |
 | **D-P2-7** | D4 evidence backup destination | still **open**, and now more pointed: the R-7 incident shows a single mutable output directory can destroy the evidence of a failure. Backup remains undesignated and no provisioning is authorised |
+| **D-P2-9** | Add a dated forward-pointer to ADR-0003's incident paragraph so a reader of the decision record alone knows R-2 and R-7 are fixed? | still **open**. ADR-0003 says "until that fix lands, PR-15 must not be used as a Gate A substrate", which remains true as written and self-resolves on its own condition — but the fix landed at `98cd592…`/`f2b31ad…`, and only this draft says so. An accepted record is annotated on the owner's instruction, not by whoever noticed first, so this record points instead of editing |
 | **D-P2-8** | Amend ADR-0003 §3.2 so its retry-budget wording matches the resolution in §2.1? | still **open**. §2.1 is the operative reading for Phase 2, but the accepted record still says "3 attempts … ≤ 2 per 60 s", and an accepted ADR is amended only by the owner's instruction — not by this draft, and not by an implementation that quietly picks one reading |
 
 ## 9. Known risks, recorded before assignment
@@ -285,7 +286,8 @@ could no longer be quietly inconsistent and still parse.
 1. accept, amend or reject the scope of W-1…W-11 and the §5 path grants;
 2. decide what remains open: **D-P2-2** (apply the adopted clause), **D-P2-3** (protocol edits and close
    codes), **D-P2-4** (the `configHash` change), **D-P2-6** (the GA-12 outcome, reported either way),
-   **D-P2-7** (D4 backup destination) and **D-P2-8** (amend ADR-0003 §3.2 to match §2.1);
+   **D-P2-7** (D4 backup destination), **D-P2-8** (amend ADR-0003 §3.2 to match §2.1) and **D-P2-9**
+   (a forward-pointer in ADR-0003's incident paragraph now that R-2 and R-7 are fixed);
    D-P2-1 and D-P2-5 are decided and recorded above;
 3. re-pin this record to the acceptance commit and mark it **Ready**, or leave it a draft — this revision is
    pinned to the probe and evidence baseline `f2b31ad…`, which is a code baseline, not an acceptance pin;
