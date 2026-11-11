@@ -162,8 +162,8 @@ const describeInventory = (entries: readonly { readonly relativeFile: string; re
 };
 
 describe('UDG-003 Phase 0 — probe harness', () => {
-  it('runs the assigned probe ids plus the authorised overflow investigation, and nothing else', () => {
-    expect(PROBE_IDS).toEqual(['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13']);
+  it('runs the assigned probe ids plus the two authorised investigations, and nothing else', () => {
+    expect(PROBE_IDS).toEqual(['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13', 'PR-15']);
     expect(run.probes.map((record) => record.id)).toEqual([...PROBE_IDS]);
   });
 
@@ -850,6 +850,197 @@ describe('UDG-003 Phase 0 — PR-13 overflow postures (the owner-authorised reme
   });
 });
 
+describe('UDG-003 Phase 0 — PR-15 input identity and ack/state pairing (the D-7 feasibility evidence for ADR-P-0003)', () => {
+  interface IdentityTable {
+    sent: { stamped: number; returned: number; wire: number }[];
+    consumedSeqs: number[];
+    depthDuringBurst: number;
+    pendingSeq: number;
+    foundWhilePending: boolean;
+    bodyless: { first: number; second: number; sentCount: number };
+  }
+  interface GapTable {
+    sent: number;
+    consumedSeqs: number[];
+    gaps: { from: number; to: number; skipped: number; tick: number }[];
+    skipped: number;
+    lastProcessed: number;
+    sentCount: number;
+    pendingCount: number;
+    sizeSamples: number[];
+    evictedSeq: number;
+    evictedFindable: boolean;
+  }
+  interface Unnamed {
+    firstConsumedSeq: number;
+    unnamedLeading: number;
+    namedSkipsSoFar: number;
+    stepped: number;
+    accessorConsumedCount: number;
+    countFromAccessor: number;
+    countFromClientSide: number;
+  }
+  interface Replayed {
+    replayedStamp: number;
+    replayedWire: number;
+    sendsBefore: number;
+    sendsAfter: number;
+    consumedSeqs: number[];
+    lastProcessed: number;
+    pendingCount: number;
+  }
+  interface Domain {
+    before: { sentCount: number; lastProcessed: number; pendingCount: number; epoch: number; sessionId: string };
+    after: { sentCount: number; lastProcessed: number; epoch: number; sessionId: string; serverConsumedCount: number } | null;
+    reconnectError: string | null;
+  }
+  interface Observability {
+    ackedSeq: number;
+    ackedVisible: boolean;
+    inFlightSeq: number;
+    pendingVisible: boolean;
+    sentCount: number;
+    lastProcessed: number;
+    pendingCount: number;
+    pendingArithmetic: boolean;
+    replayBufferSize: number;
+  }
+  interface Pairing {
+    sampleCount: number;
+    patchCount: number;
+    ackChangesWithoutPatch: number;
+    mismatchSamples: number;
+    maxDelta: number;
+    settled: boolean;
+    finalAck: number;
+    finalResolvedThrough: number;
+  }
+  interface Verdict {
+    serverCanNameEveryConsumedFrame: boolean;
+    serverCanNameOnlyThroughAStampedField: boolean;
+    serverCanDetectGaps: boolean;
+    serverCanRetrieveAnEvictedFrame: boolean;
+    clientCanSeeDisposition: boolean;
+    ackAndStateAreOneDelivery: boolean;
+    preBufferDedupeBreaksSeqEqualsAck: boolean;
+  }
+
+  const identity = () => observation<IdentityTable>('PR-15', 'S1_identity');
+  const gap = () => observation<GapTable>('PR-15', 'S2_gap');
+  const unnamed = () => observation<Unnamed>('PR-15', 'S2b_unnamedRetirement');
+  const replayed = () => observation<Replayed>('PR-15', 'S3_replayedSequence');
+  const domain = () => observation<Domain>('PR-15', 'S4_reconnect');
+  const client = () => observation<Observability>('PR-15', 'S5_clientObservability');
+  const pairing = () => observation<Pairing>('PR-15', 'S6_pairing');
+  // S7 records the same quantities under `slow*` keys because it runs alongside a second scenario.
+  const slowPairing = () => observation<Pairing & {
+    slowAckMovesWithoutPatch: number;
+    slowMismatchSamples: number;
+    slowMaxDelta: number;
+    slowSettled: boolean;
+    patchIntervalMs: number;
+  }>('PR-15', 'S7_slowPatchCadence');
+
+  it('proves one supported identity maps a consumed observation to its client send sequence', () => {
+    const table = identity();
+    expect(table.sent.length).toBeGreaterThan(0);
+    // The whole mapping rests on this: the value the client stamped before the send is the value send()
+    // returned, the value sentCount reports, and the value the room later consumed, in order.
+    for (const entry of table.sent) {
+      expect(entry.stamped).toBe(entry.returned);
+      expect(entry.returned).toBe(entry.wire);
+    }
+    expect(table.consumedSeqs.slice(0, table.sent.length)).toEqual(table.sent.map((entry) => entry.returned));
+    expect(table.bodyless.second).toBe(table.bodyless.first + 1);
+    expect(table.foundWhilePending).toBe(true);
+  });
+
+  it('shows the gap is visible between consumed frames and unnameable before the first one', () => {
+    const observed = gap();
+    const leading = unnamed();
+    expect(observed.gaps.length).toBeGreaterThan(0);
+    expect(observed.skipped).toBeGreaterThan(0);
+    expect(observed.consumedSeqs.length + observed.skipped).toBeLessThanOrEqual(observed.sent);
+    expect(observed.evictedFindable).toBe(false);
+    // Overflow is counted as consumed, so the acknowledgement covers frames that never reached state.
+    expect(observed.lastProcessed).toBe(observed.sent);
+    expect(observed.consumedSeqs.length).toBeLessThan(observed.sent);
+    // The leading hole has no earlier endpoint: the room can count it but cannot name it.
+    expect(leading.unnamedLeading).toBeGreaterThan(0);
+    expect(leading.firstConsumedSeq).toBeGreaterThan(1);
+    expect(leading.countFromAccessor).toBe(leading.countFromClientSide);
+    expect(leading.countFromAccessor).toBeGreaterThan(leading.namedSkipsSoFar);
+  });
+
+  it('shows a replayed sequence is dropped before the buffer and strands the ack below sentCount', () => {
+    const replay = replayed();
+    expect(replay.consumedSeqs).not.toContain(replay.replayedStamp);
+    expect(replay.lastProcessed).toBeLessThan(replay.sendsAfter);
+    expect(replay.pendingCount).toBeGreaterThan(0);
+    // So a client rule of "pendingCount reached zero, therefore everything is resolved" is unsafe, and
+    // "prune on seq <= lastProcessed" would strand an input the server already discarded.
+    expect(observation<Verdict>('PR-15', 'mechanismVerdict').preBufferDedupeBreaksSeqEqualsAck).toBe(true);
+  });
+
+  it('shows the input sequence domain is per connection, so epoch identity must be UDG-owned', () => {
+    const observed = domain();
+    expect(observed.reconnectError).toBeNull();
+    expect(observed.after).not.toBeNull();
+    const after = observed.after;
+    if (after === null) return;
+    expect(after.sessionId).toBe(observed.before.sessionId);
+    // Reconnection preserves the session and restarts the input counters. A sequence number therefore
+    // cannot identify a frame across a rejoin without a domain the server owns.
+    expect(after.sentCount).toBeLessThanOrEqual(observed.before.sentCount);
+    expect(after.epoch).toBe(observed.before.epoch);
+    expect(after.serverConsumedCount).toBeLessThan(observed.before.lastProcessed + observed.before.sentCount);
+  });
+
+  it('reports exactly what the client can still observe once the SDK has pruned', () => {
+    const observed = client();
+    expect(observed.ackedVisible).toBe(false);
+    expect(observed.pendingVisible).toBe(true);
+    expect(observed.pendingArithmetic).toBe(true);
+    expect(observed.replayBufferSize).toBeGreaterThan(0);
+    // Nothing in this list is a disposition: the client-side view is two counters and a replay ring.
+    expect(observation<Verdict>('PR-15', 'mechanismVerdict').clientCanSeeDisposition).toBe(false);
+  });
+
+  it('pairs the acknowledgement with authoritative state inside one delivery, at both cadences', () => {
+    const fast = pairing();
+    const slow = slowPairing();
+    expect(fast.ackChangesWithoutPatch).toBe(0);
+    expect(fast.patchCount).toBeGreaterThan(0);
+    expect(fast.mismatchSamples).toBe(0);
+    expect(fast.settled).toBe(true);
+    expect(fast.finalAck).toBe(fast.finalResolvedThrough);
+    // A slower patch cadence does not separate them, because they are the same delivery. The tolerance in
+    // the proposal is therefore for a server that publishes its watermark a tick after consuming, and for
+    // a real round trip, and must not be justified as patch timing.
+    expect(slow.ackChangesWithoutPatch ?? slow.slowAckMovesWithoutPatch).toBe(0);
+    expect(slow.mismatchSamples ?? slow.slowMismatchSamples).toBe(0);
+    expect(slow.settled || slow.slowSettled).toBe(true);
+    expect(slow.patchIntervalMs).toBe(250);
+    expect(observation<Verdict>('PR-15', 'mechanismVerdict').ackAndStateAreOneDelivery).toBe(true);
+  });
+
+  it('states the mechanism verdict and keeps it out of scope creep', () => {
+    const verdict = observation<Verdict>('PR-15', 'mechanismVerdict');
+    expect(verdict.serverCanNameEveryConsumedFrame).toBe(true);
+    expect(verdict.serverCanNameOnlyThroughAStampedField).toBe(true);
+    expect(verdict.serverCanDetectGaps).toBe(true);
+    expect(verdict.serverCanRetrieveAnEvictedFrame).toBe(false);
+    expect(verdict.clientCanSeeDisposition).toBe(false);
+    expect(byId.get('PR-15')?.result?.verdict).toBe('pass');
+    // The probe measures, it does not adopt: no compatibility claim, and PR-14 stays reserved.
+    expect(run.compatibility.stackCompatibility).toBe('not-established');
+    const text = JSON.stringify(byId.get('PR-15')?.result ?? {});
+    expect(text).toContain('Loopback only');
+    expect(text).toContain('probe-local');
+    expect(PROBE_IDS).not.toContain('PR-14');
+  });
+});
+
 describe('UDG-003 Phase 0 — boundary and evidence hygiene', () => {
   it('keeps the probe tree free of escape hatches and private package paths', () => {
     const sources = probeSources(ROOT);
@@ -935,8 +1126,8 @@ describe('UDG-003 Phase 0 — boundary and evidence hygiene', () => {
       compatibility: { stackCompatibility: string; pr0: string; fullCheckDiagnostics: number };
     };
     expect(index.probes.map((probe) => probe.id)).toEqual([...PROBE_IDS]);
-    expect(index.probes.map((probe) => probe.verdict)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass']);
-    expect(index.probes.filter((probe) => probe.ok).map((probe) => probe.id)).toEqual(['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13']);
+    expect(index.probes.map((probe) => probe.verdict)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass']);
+    expect(index.probes.filter((probe) => probe.ok).map((probe) => probe.id)).toEqual(['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13', 'PR-15']);
     expect(index.compatibility.stackCompatibility).toBe('not-established');
     expect(index.compatibility.pr0).toBe('pass');
     expect(index.compatibility.fullCheckDiagnostics).toBe(27);

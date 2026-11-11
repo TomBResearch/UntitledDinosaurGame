@@ -26,13 +26,17 @@ import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 /**
- * The probes Phase 0 was assigned, plus PR-13.
+ * The probes Phase 0 was assigned, plus PR-13 and PR-15.
  *
- * PR-13 is not part of the assigned Phase 0 set: it is the overflow/acknowledgement remedy investigation
- * the owner authorised on 2026-11-09, run as a minimal Phase-0 probe against the same pins. It is reported
- * in the same index so one artefact carries both, and it changes no Phase 0 verdict.
+ * Neither extra probe is part of the assigned Phase 0 set. **PR-13** is the overflow/acknowledgement
+ * remedy investigation the owner authorised on 2026-11-09. **PR-15** is the input-identity and
+ * ack/state-pairing feasibility probe the owner authorised for the D-7 decision in ADR-P-0003. Both run
+ * against the same pins and are reported in the same index so one artefact carries all of them, and
+ * neither changes any Phase 0 verdict. **PR-14 is deliberately absent: that identifier is reserved** for
+ * the Gate A real-state probe specified in ADR-P-0003 §11, which must not be attempted until the owner
+ * approves the policy it depends on.
  */
-export const PROBE_IDS = ['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13'] as const;
+export const PROBE_IDS = ['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13', 'PR-15'] as const;
 
 export type ProbeId = (typeof PROBE_IDS)[number];
 
@@ -45,6 +49,7 @@ export const PROBE_FILES: Readonly<Record<ProbeId, string>> = {
   'PR-8': 'pr8-ack.probe.js',
   'PR-12': 'pr12-epoch.probe.js',
   'PR-13': 'pr13-overflow-policy.probe.js',
+  'PR-15': 'pr15-input-identity.probe.js',
 };
 
 export const PROBE_SUBJECTS: Readonly<Record<ProbeId, string>> = {
@@ -55,6 +60,7 @@ export const PROBE_SUBJECTS: Readonly<Record<ProbeId, string>> = {
   'PR-8': 'what the acknowledgement tracks: received, consumed or applied',
   'PR-12': 'epoch renewal lifecycle in the public API',
   'PR-13': 'overflow postures: can a supported API prevent unrepresented retirement?',
+  'PR-15': 'input identity, gap visibility, client observability and ack/state pairing',
 };
 
 /** One line of compiler output, resolved to an absolute path and classified by origin. */

@@ -8,7 +8,14 @@
  */
 
 import { Room, type Client as ServerClient, type StepContext } from '@colyseus/core';
-import { DIRECT_INPUT_FIELDS, DirectInputSchema, RegionSchema, type RegionSchema as RegionState } from '@udg/protocol/schema';
+import {
+  DIRECT_INPUT_FIELDS,
+  DirectInputSchema,
+  RegionSchema,
+  schema,
+  t,
+  type RegionSchema as RegionState,
+} from '@udg/protocol/schema';
 
 import type { DirectInputFrame } from './support.js';
 
@@ -444,11 +451,193 @@ export class SessionRoom extends Room<{ state: RegionState }> {
   }
 }
 
+/**
+ * The protocol's five input fields plus one monotonic sequence field, for PR-15 only.
+ *
+ * `packages/protocol/src/schema/DirectInputSchema.ts` is frozen at protocol 1.0.0 and carries no
+ * per-frame monotonic field: `generation` is UDG's *intention* generation, which advances only on a
+ * deliberate control intention, and `sessionEpoch` is the session epoch. Neither identifies a frame.
+ * This declaration exists so the probe can measure what `defineInput({ seqField })` does with an
+ * application-stamped per-frame sequence, and it deliberately does not touch the protocol package.
+ * Whether the shipped input schema gains such a field is the owner decision in
+ * [ADR-P-0003 §9.1](../../docs/adr/proposals/UDG-003-d7-input-acknowledgement-policy.md).
+ *
+ * `schema` and `t` come from `@udg/protocol/schema`, which is the only place the schema runtime may be
+ * imported, so the probe stays inside the package boundary while declaring a probe-local shape.
+ */
+export const SequencedInputSchema = schema(
+  {
+    sessionEpoch: t.uint32().default(0),
+    generation: t.uint32().default(0),
+    directIntent: t.boolean().default(false),
+    moveX: t.float64().default(0),
+    moveZ: t.float64().default(0),
+    seq: t.uint32().default(0),
+  },
+  'SequencedInputSchema',
+);
+
+export interface SequencedInputFrame {
+  sessionEpoch: number;
+  generation: number;
+  directIntent: boolean;
+  moveX: number;
+  moveZ: number;
+  seq: number;
+}
+
+/**
+ * The smallest authoritative surface that can carry a resolution watermark, for PR-15 only.
+ *
+ * The point of these four fields is the pairing question, not their shape: the client must be able to
+ * read "the server resolved input sequence N" from the *same delivery* as the acknowledgement it
+ * prunes against, or it is comparing two messages that were never sent together.
+ */
+export const InputTraceStateSchema = schema(
+  {
+    /** Highest client sequence the room resolved into state, contiguous prefix only. */
+    resolvedThrough: t.uint32().default(0),
+    /** Tick at which that resolution happened. */
+    resolvedTick: t.uint32().default(0),
+    /** A stand-in for authoritative motion: one unit per resolved frame. */
+    position: t.float64().default(0),
+    /** Count of gaps the room detected in the stamped sequence, so the client can see them at all. */
+    gapCount: t.uint32().default(0),
+  },
+  'InputTraceStateSchema',
+);
+
+export type InputTraceState = InstanceType<typeof InputTraceStateSchema>;
+
+/** State-patch cadence in ms, or null for the library default. */
+export interface IdentityRoomOptions extends ProbeRoomOptions {
+  /** Decouple the patch cadence from the step (`Room.patchRate`) to measure the skew between them. */
+  patchIntervalMs?: number;
+  /** Declare `seqField: 'seq'`. Off is the control: it measures what the room can identify without it. */
+  useSeqField?: boolean;
+}
+
+/**
+ * Identity, gap and pairing evidence for PR-15.
+ *
+ * Consumption is exactly the adopted posture — at most one observation per tick, oldest first — so what
+ * is measured is the *identity* of what was consumed, not a different policy. Every record is written by
+ * the room from public surface: `InputAccessor.next()`, `.peek()`, `.at(value)`, `.size`,
+ * `.consumedCount`, `.latest`, and state assignment the client receives as a patch.
+ */
+export class IdentityRoom extends Room<{ state: InputTraceState; input: SequencedInputFrame }> {
+  /** `seqField` values in consumption order — the identity stream the probe reasons about. */
+  readonly consumedSeqs: number[] = [];
+  /** `accessor.consumedCount` sampled after each consumption, so ack arithmetic can be checked. */
+  readonly consumedCountAfter: number[] = [];
+  /** `accessor.size` sampled once per tick. */
+  readonly sizeSamples: number[] = [];
+  /** Steps in which a consumption happened, with the tick and the ack counter at that moment. */
+  readonly resolutions: { seq: number; tick: number; consumedCount: number }[] = [];
+  /** Consecutive consumed seqs that are not adjacent: the only server-side evidence of a retirement. */
+  readonly gaps: { from: number; to: number; skipped: number; tick: number }[] = [];
+  /** Lookups by stamped seq, recording whether the accessor could still find the frame. */
+  readonly lookups: { seq: number; found: boolean }[] = [];
+  readonly sessions: string[] = [];
+  ticks = 0;
+  private session: string | undefined;
+  private useSeqField = true;
+
+  override onCreate(options: IdentityRoomOptions = {}): void {
+    this.autoDispose = false;
+    this.setState(new InputTraceStateSchema());
+    this.useSeqField = options.useSeqField ?? true;
+    this.bufferMaxSize = options.bufferMaxSize ?? 32;
+    // Public and declared: `Room.patchRate` decouples state delivery from the simulation step, which is
+    // exactly the skew a client-side reconciliation trigger has to tolerate.
+    if (options.patchIntervalMs !== undefined) this.patchRate = options.patchIntervalMs;
+
+    this.inputs = this.useSeqField
+      ? this.defineInput(SequencedInputSchema, { bufferMaxSize: this.bufferMaxSize, seqField: 'seq' })
+      : this.defineInput(SequencedInputSchema, { bufferMaxSize: this.bufferMaxSize });
+
+    this.setFixedTimestep((): void => {
+      this.step();
+    }, options.tickRate ?? 20);
+
+    identityRooms.push(this);
+  }
+
+  /** The bound the library enforces for this accessor, recorded for the result file. */
+  bufferMaxSize = 32;
+
+  override onJoin(client: ServerClient): void {
+    this.session = client.sessionId;
+    this.sessions.push(client.sessionId);
+  }
+
+  /** Session ids the seat saw rejoin, so the probe can tell a reconnect from a fresh join. */
+  readonly reconnections: string[] = [];
+  reconnectionWindowsClosed = 0;
+
+  /**
+   * Open a reconnection window, which is what makes the reconnect scenario measurable at all: without
+   * `allowReconnection` the token is refused (Phase 0 measured "reconnection token invalid or expired").
+   */
+  override onLeave(client: ServerClient): void {
+    const seat = this.allowReconnection(client, 10);
+    void seat
+      .then((rejoined: ServerClient) => {
+        this.reconnections.push(rejoined.sessionId);
+        this.session = rejoined.sessionId;
+      })
+      .catch(() => {
+        this.reconnectionWindowsClosed += 1;
+      });
+  }
+
+  /** Ask the accessor whether a stamped seq is still retrievable — the client-blindness question, server side. */
+  lookup(sessionId: string, seq: number): boolean {
+    const accessor = this.inputs?.get(sessionId);
+    if (accessor === undefined) return false;
+    const found = accessor.at(seq);
+    this.lookups.push({ seq, found: found !== undefined });
+    return found !== undefined;
+  }
+
+  /** `accessor.size` right now, which is the only pre-eviction signal a room can observe. */
+  currentSize(sessionId: string): number {
+    return this.inputs?.get(sessionId)?.size ?? -1;
+  }
+
+  private step(): void {
+    this.ticks += 1;
+    const accessor = this.session === undefined ? undefined : this.inputs?.get(this.session);
+    if (accessor === undefined) return;
+    this.sizeSamples.push(accessor.size);
+
+    // One observation per tick, oldest first: `next()` is the declaration's blessed shared-world form.
+    const frame = accessor.next();
+    if (frame === undefined) return;
+
+    const seq = frame.seq;
+    const previous = this.consumedSeqs[this.consumedSeqs.length - 1];
+    this.consumedSeqs.push(seq);
+    this.consumedCountAfter.push(accessor.consumedCount);
+    this.resolutions.push({ seq, tick: this.ticks, consumedCount: accessor.consumedCount });
+    if (previous !== undefined && seq > previous + 1) {
+      this.gaps.push({ from: previous, to: seq, skipped: seq - previous - 1, tick: this.ticks });
+      this.state.gapCount = this.state.gapCount + 1;
+    }
+
+    // Resolution into state, published as a patch. This is the pairing half of the measurement.
+    this.state.resolvedThrough = seq;
+    this.state.resolvedTick = this.ticks;
+    this.state.position = this.state.position + 1;
+  }
+}
+
 /** Rooms are created by the matchmaker, so a probe finds its instance through these registries. */
 export const tickRooms: TickRoom[] = [];
 export const inputRooms: InputRoom[] = [];
 export const sessionRooms: SessionRoom[] = [];
 export const overflowRooms: OverflowRoom[] = [];
+export const identityRooms: IdentityRoom[] = [];
 
 export function lastOf<T>(entries: readonly T[]): T | undefined {
   return entries[entries.length - 1];
