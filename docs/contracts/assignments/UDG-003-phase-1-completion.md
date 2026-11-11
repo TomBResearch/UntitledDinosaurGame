@@ -207,10 +207,13 @@ b3547690846d4ba96e19875d0b19fbb72b4cb5087e8f553bb4aa2e5439bce0a8  pa1-9-pa1-11-b
 numbers came from: explicit test bounds (no invented production default, per D5) and the fact that the
 resulting `configHash` differs from the pinned default, which is the point of an explicit override.
 
-Retention: these digests identify the artefacts; the artefacts themselves live in the working tree's
-`artifacts/` directory and in no durable store. **The independent backup destination is still undesignated
-(D4 open)**, so this record does not claim the vectors are preserved anywhere outside this repository and the
-run that produced them.
+Retention as at revision 1, and it was true then: these digests identified artefacts that lived only in the
+working tree's `artifacts/` directory. **Revision 2 changed that** under reviewer correction C4: the same
+suite now writes a manifest naming the commit and every digest, CI gates it and uploads the directory beside
+the bundles, and the `UDG-003` capture plan copies it into the verified bundle as `vectors/`. See §12.4 and
+§12.6 for the digests that supersede the two that moved. **The independent backup destination is still
+undesignated (D4 open)**: the published CI artefact and the retained bundle are the same repository's
+artefacts, not an independent copy, and this record claims no preservation outside them.
 
 ## 9. Commits, and CI as at submission
 
@@ -261,6 +264,10 @@ and verifies on every push to `main` — verified with 0 issues at this head, wh
 bundles" actually refers to. Adding a `UDG-003` capture plan is a small, well-defined change to a controlled
 path; it needs an explicit grant and is listed in §11 as a decision the owner owes rather than being done here.
 
+> **Superseded by §12.4 at revision 2.** The reviewer's correction C4 supplied that grant (`A9`), so
+> `UDG-003` now has its own capture plan and bundle, labelled `phase: "phase-1"`. The paragraph above is kept
+> as what was true at the first submission; it is not a current gap.
+
 ## 10. What Phase 1 did not do
 
 - No `RegionRoom`, no `@colyseus/*` import under `apps/server/src/authority/**`, no SDK input attachment, no
@@ -291,5 +298,227 @@ path; it needs an explicit grant and is listed in §11 as a decision the owner o
 3. **D-7** — still open; it gates any transport work, not this phase.
 4. **D4** — the independent evidence backup destination is still undesignated.
 5. **Phases 2 and 3** — unassigned; nothing in Phase 1 should be read as pre-authorising them.
-6. **A `UDG-003` evidence capture plan** (§9) — `tools/checks/**` is outside this phase's grants, so bundle-level
-   evidence for UDG-003 cannot be produced without one.
+6. ~~**A `UDG-003` evidence capture plan** (§9)~~ — **answered by the review instruction**: the owner authorised
+   the narrowly scoped tooling and CI change under grant `A9`, so `UDG-003` now has a capture plan, a phase
+   label and a gate (§12.4). What the owner still owes here is the decision of **where** the published bytes
+   are copied for independent retention, which is item 4 (`D4`) and unchanged.
+
+## 12. Revision 2 — the three reviewer corrections, and the phase's own evidence gate
+
+The first submission (§9) was returned **In Review** with three technical corrections and one evidence
+requirement. They are restated in [the assignment's §0.2](UDG-003-phase-1.md); this section records what the
+code now does, what was measured, and what was found on the way. The owner's acceptance of revision 1 was
+never recorded, and none of this changes that: **Phase 1 remains In Review.**
+
+### 12.1 C1 — lifecycle authority comes from the server alone
+
+The defect was in replay, not in the live path. Live, a lifecycle operation could only arrive through
+`join`/`leave`/`epochChange`. Replay rebuilt arrivals from the journal and asked the payload what it was:
+`control = raw['control']`. A client message carrying a field named `control` was therefore journalled as a
+refused structural message **and** fed back to a replay as a server command.
+
+`ArrivalOrigin` (`'server-lifecycle' | 'client-payload'`) is now assigned where the arrival is created — the
+control path or `ingest` — and travels into `observation.origin`, `observation.control` and `event.origin`.
+`toReplayInputs` sets `control` from `origin` and nothing else, and `replayRun` refuses a journal whose
+provenance and control disagree (`provenance-inconsistent`) before it runs a single tick, so a hand-edited
+artefact cannot launder a client message into a lifecycle event either.
+
+Measured, live and replayed (`pa1-c1-provenance.json`):
+
+```text
+live     refused=true code=INVALID_PAYLOAD origin=[client-payload] typedControl=[null]
+         payloadSaid="leave" lifecycleEvents=[join] watermark 0 -> 0 connected=true
+replay   refused again, same origin, state digest identical to the live run, same row count
+persisted JSON round trip: state digest identical to the live run
+tampered inputs claiming server provenance: refused, reason=provenance-inconsistent
+```
+
+The mutation check was run rather than assumed: restoring the old `raw['control']` projection makes the two
+replay tests in `tests/unit/udg-003/provenance.test.ts` fail with the entity in `disconnected`, and they pass
+again only when the correction is put back. The emitted module is checked the same way in a child process
+(§7, re-run for this revision): the forged message is refused `INVALID_PAYLOAD`, journalled `client-payload`
+with `control: null`, and the only lifecycle event in the journal is the join.
+
+### 12.2 C2 — replay restores the clock the decisions were made under
+
+The terminal-request cache expires after `TERMINAL_REQUEST_TTL_SECONDS` (30) of the injected `TimeSource`.
+Whether an identical retry is answered from the cache or decided afresh is therefore a fact about the clock,
+and a replay that started its own clock at zero would silently move every retry back inside the window —
+answering a request the original refused, while still matching every digest it bothered to compare.
+
+The journal now declares `timeBasis: 'recorded-clock-readings'`, records the run's clock origin in the
+prologue, and stamps `atMs` on every observation, every event and every tick-chain record. `RecordedTime`
+(determinism.ts) implements `TimeSource` over the recorded readings and refuses a restore that would move
+time backwards; `replayRun` restores each arrival's and each boundary's reading before feeding it, and refuses
+the run (`recorded-time-not-monotonic`) rather than replaying in a different time order.
+
+Measured (`pa1-c2-time-basis.json`), with three runs whose only difference is the clock:
+
+| Retry delay | Live decision | Its own replay |
+| --- | --- | --- |
+| `TTL − 1` (29 999 ms) | `answered`, `dedupe: cache`, `atMs = 30 999` | `answered`, `cache`, same `atMs`, same state digest |
+| `TTL` (30 000 ms) | `refused:generation` `INVALID_GENERATION`, `dedupe: none` | same |
+| `TTL + 1` (30 001 ms) | `refused:generation` `INVALID_GENERATION`, `dedupe: none` | same |
+
+Each was replayed twice — from the rows in memory and from a JSON round trip of rows and chain — and each
+replay restored its own side. A fourth run starting at `startMs = 5 000 000` confirms the prologue carries a
+non-zero origin (`timeOriginMs`) and that the replay reports the same origin it was given. A tampered journal
+whose last arrival is stamped `atMs = 0` is refused rather than obeyed.
+
+**One honest residual, and how it is handled.** A field JSON cannot carry (an object, an array, a bigint) is
+journalled as an `invalid` descriptor: `{ kind: 'invalid', type: 'object', render: '<invalid:object>' }`.
+Reconstructing a payload from that descriptor and rendering it again described the field differently on the
+second pass — the artefact said *object* the first time and *string* the second — so the replayed row's
+`malformed` list was smaller than the original's. That is the exact thing correction C2 asks not to lose, so
+`buildArrival`/`ingest` accept an optional recorded rendering, and replay re-attaches the one the artefact
+carries. No transport handler passes that parameter, so no client can choose how its own fields are
+described; a tampered artefact can misstate its own fields, which is no more than a tampered artefact can
+already do to its own payload. With that in place, a message carrying `NaN`, an object and a non-numeric
+string replays with `malformed: ['moveX', 'moveZ']`, the same descriptors, the same `atMs` and the same
+`INVALID_PAYLOAD` refusal (§4's defect list gains the entry below as 12-1).
+
+### 12.3 C3 — the core retains a working set, not its history
+
+`JournalSink` is now a **required** build option and the core keeps no journal of its own: rows go to the sink
+as they are decided, chain records the same way, and the only history left is the chain tip. The previous
+public `journalRows` and `chain` getters are gone — this is a breaking change to the test surface, and the
+suites that used them were rewritten to read the journal they were handed rather than to keep a second copy
+inside the system under test. Released entities now report `reconciliation(id).known === false` and are refused
+rather than silently processed if a message arrives for them afterwards.
+
+Departed bookkeeping is released once the tick's rows have reached the sink, with the entity's alias retained
+under a bounded 64-record window (the alias counter itself stays monotonic, so no alias is ever reused) and its
+observed/cache totals folded into the released totals. `retention()` reports the working set directly.
+
+Measured across 60 join/leave cycles with a resident entity working throughout (`pa1-c3-retention.json`):
+
+```text
+arrivals offered 301      observed counted 301      released entities 60
+retained: entities 1, queued 0, controlQueue 0, tickRowBuffer 0, aliasRecords 61, reachableArrivals 0
+sampled every 10 cycles: streamedRows 216 -> 426 -> 636 -> 846 -> 1056 -> 1266 (monotone)
+                         chain 21 -> 41 -> 61 -> 81 -> 101 -> 121
+                         reachableArrivals 0 at every sample
+replay of the churned run: same row count, same chain tip, same released-entity count, same resident set
+```
+
+`aliasRecords` grows to the 64 bound and stops; the cache test floods 400 distinct requests and the retained
+record count never leaves 128. A separate test shows a departed entity cannot be resurrected by a later
+message, and that the refusal is still journalled with a stable alias.
+
+### 12.4 C4 — the phase's evidence is gated by the tool
+
+`node tools/checks/dist/evidence.js plans` now lists `UDG-001`, `UDG-002` **and** `UDG-003`, so the existing
+CI capture/verify/publish loop exercises this phase without a second source of truth naming it. The bundle's
+`report.json` carries `phase: "phase-1"` and a `phaseNote` that says in as many words that it is not Phase 2
+or Phase 3, not a stack-compatibility claim and not a Gate A/B/C pass; `verify` refuses a bundle whose plan
+declares a phase the report does not (§10's non-claims are now inside the artefact).
+
+The gate itself recomputes everything from bytes and takes nothing from the manifest on trust. Observed
+negative measurements, each against the directory the suite had just written:
+
+| Condition | Exit | Stderr |
+| --- | --- | --- |
+| complete, clean | 0 | `PASS phase-1 vectors: 11 artefact(s) listed, hashed and attributable` |
+| `pa1-c3-retention.json` deleted | 1 | `VECTORS-FILE-MISSING: … is listed but absent` |
+| `cycles` edited in place | 1 | `VECTORS-FILE-BYTES: manifest says 788 bytes, found 789` and `VECTORS-FILE-HASH` |
+| `--expect-phase phase-2` | 1 | `VECTORS-PHASE-MISMATCH` |
+| manifest absent | 1 | `VECTORS-MANIFEST-MISSING` |
+| produced from a dirty tree, gate without `--allow-dirty` | 1 | `VECTORS-TREE-DIRTY: … not attributable to a commit` |
+
+The manifest names the 40-character commit it was produced from; `verify` cross-checks it against the
+bundle's `implementationSha`, so vectors from one commit cannot be filed against another. CI runs the vector
+suite with `UDG_VECTORS_OUT` pointed at `artifacts/udg-003-phase-1`, gates it, and uploads the directory
+beside the bundles; the capture plan writes the same artefacts into the bundle under `vectors/` and runs the
+gate as one of its own commands, so a missing artefact fails the capture as well as the standalone step.
+
+Two lists of the required vectors now exist on purpose — `PHASE_1_VECTOR_FILES` in the gate and
+`PHASE_1_VECTOR_NAMES` in the suite — because the gate must own the requirement and the suite must own the
+production. `tests/contracts/UDG-003.test.ts` refuses them drifting apart, and exercises the built gate
+against a scratch directory it corrupts on purpose, asserting the exit codes rather than the prose.
+
+### 12.5 Defects this revision found in the corrections themselves
+
+| # | Found by | Defect | Correction |
+| --- | --- | --- | --- |
+| 12-1 | `time-basis.test.ts` | Replaying a malformed message re-derived its rendering from a reconstructed payload, so an object field came back a string and `malformed` shrank from two fields to one | replay re-attaches the recorded rendering through `ingest`; the parameter is unreachable from a transport handler |
+| 12-2 | `retention.test.ts` | The new test asserted that an accepted message journalled a row at ingest; accepted messages are journalled when decided | the assertion now states both halves truly: a gate refusal streams immediately, an accepted message streams at its tick |
+| 12-3 | the contract suite's child process | The emitted-run script drove ticks only through the scheduler callback, and the core drives its own tick counter — no tick ever ran (`stepCalls: 0`), so every assertion about it was vacuous | the script calls `run.step()` and moves the clock, and now asserts `ticksRan = 4` explicitly |
+| 12-4 | the same script | It joined at epoch 1 while the harness passes `sessionEpoch: 1` to the build; every message was refused `EPOCH_MISMATCH` and the "evidence" recorded an empty run | the build option is passed, and the assertions (`forged`, `retained`, `replayTime`) now fail loudly if the run is ever empty again |
+| 12-5 | the same script | It read `run.journalRows`, which no longer exists | the script creates its own collector, and `exposesJournal: false` is asserted — the absence of a retained journal became a positive check |
+
+12-3 and 12-4 matter more than their size: an evidence script that silently runs zero ticks passes every
+"counted" assertion in the file. Both are now asserted rather than assumed.
+
+### 12.6 Vector digests for revision 2, and why two of §8's moved
+
+Re-run twice from the same tree; the digest lists are identical, so the artefacts remain byte-stable.
+
+```text
+1b981db7194e3cf3910bf4f402445829944d977b67d27bf584177667ca3d0a06  disposition-reconciliation.json
+6794cb4e48cd7480de85e74fbad16743a49702150277ef719e60715c54f23fda  pa1-1-pa1-2-cutoff-consumption.json
+d48239dbaba3a580a7651b0d4a8f158ff1c7a0309e6b94114f007849f4cc7314  pa1-12-pa1-14-lifecycle-stepping-replay.json
+57228ba0790c23a9e040b860469f021e8062911b794012e80bdbf6fb2c6d09f3  pa1-3-generation.json
+7af0c5d7337be445e12a3a5abf7bd8750a2ef91de9c32b503c52e2f937e0bdcc  pa1-4-traces-t1-t2-t3-t6.json
+1e9df37cd65b85912302d0119600083b8385f5e3fbf704110e646a6740127d8e  pa1-5-pa1-8-commit-keepalive-neutral-bound.json
+b3547690846d4ba96e19875d0b19fbb72b4cb5087e8f553bb4aa2e5439bce0a8  pa1-9-pa1-11-bounds-identity-navigation.json
+a2b2f58aedba8fb23cfbba3129fe671c797f421321ecde502013f6810b20b626  pa1-c1-provenance.json
+ca115d09ec27242d97aa30412350d02283ce35b5fa51d58fb13e1d77a1e6a464  pa1-c2-time-basis.json
+67cfccd058f97b4b635fd83394a23030e67b23cce37ffddfef574c60f3f246a0  pa1-c3-retention.json
+8abd16afc87fa28c5f36aa1b1e3e9573397efb42f9bcf1717ab09b26502a6703  summary.json
+223c740a0fd638ec6e74dd94c2db55a57ff05a27c14b5d6c3906a4d350d78bfa  vectors-manifest.json
+```
+
+§8 quoted eight digests from revision 1 and is left as written there, because it is the record of that submission. Two of
+them no longer reproduce at this revision, and the reason is the corrections themselves rather than any
+silent restatement: `disposition-reconciliation.json` and
+`pa1-12-pa1-14-lifecycle-stepping-replay.json` count and describe journal rows, and journal rows now carry
+`origin`, `control` and `atMs`. The other six are byte-identical. The manifest lists all eleven artefacts
+plus itself; its own digest cannot appear inside itself, which is why the manifest's digest is quoted here
+and the bundle's `checksums.sha256` covers it.
+
+### 12.7 Commands run for revision 2
+
+| Command | Exit | Result actually observed |
+| --- | --- | --- |
+| `pnpm typecheck` | 0 | all workspace projects, including the new suites |
+| `pnpm lint` | 0 | eslint clean; `boundary check OK: 61 file(s), 0 violations, rule table 818c63d5b12f` |
+| `pnpm test` | 0 | `Test Files 23 passed (23)`, `Tests 493 passed (493)` |
+| `npx vitest run tests/unit/udg-003` | 0 | `Test Files 14 passed (14)`, `Tests 107 passed (107)` |
+| `npx vitest run tests/contracts/UDG-003.test.ts` | 0 | `Tests 69 passed (69)` |
+| `pnpm --filter @udg/checks build` | 0 | clean |
+| `node tools/checks/dist/evidence.js plans` | 0 | `UDG-001`, `UDG-002`, `UDG-003` |
+| `node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-1 --allow-dirty` | 0 | `PASS phase-1 vectors: 11 artefact(s) …` |
+| the same gate, six corrupted conditions | 1 | the table in §12.4 |
+
+The full §5 table from revision 1 was re-run for the commands whose behaviour could be affected by these
+changes; `pnpm test` rose from 470 to 493 tests (five provenance, six time-basis, six retention, one vector
+group) with the UDG-001 (49) and UDG-002 (31) contract suites unchanged in intent.
+
+### 12.8 What revision 2 still does not claim
+
+* **Acceptance.** Phase 1 is **In Review**. Nothing here records, implies or requests reviewer acceptance.
+* **The one-input rule.** Stage Q still consumes at most one continuous observation per entity per tick. No
+  coalescing, draining or `take(n)` was introduced, and Part B remains unadopted.
+* **D-7.** Still open, still blocking transport acceptance; nothing in this revision speaks about SDK
+  acknowledgement, and no `inputDisposition` port appears.
+* **Phases 2–3.** Unassigned. No `RegionRoom`, no transport, no physics, no navigation, no client prediction,
+  no `MovementAuthorityAdapter`.
+* **Compatibility and gates.** `stackCompatibility` remains **not-established**; Gates A, B and C remain
+  **Not Run**; the Phase 0 probe verdicts and the 27-diagnostic declaration inventory are unchanged.
+* **Storage.** The published bytes go to the existing evidence store and the existing CI artefact upload.
+  `D4` — an independent backup destination — is still undesignated, and no new storage, release, tag or
+  archive was created.
+* **History.** Prior bundles, prior inventories and the disclosed `v19 → v20` discontinuity are untouched.
+
+### 12.9 Commits, CI and retained evidence for revision 2
+
+| Commit | Content |
+| --- | --- |
+| `97af708` | gate the UDG-003 phase evidence in the tool (grant `A9`) |
+| `6f3cf6a` | the three core corrections, their suites, the vector manifest and the CI step (grants `A10`–`A12`) |
+| *(this commit)* | this record, §0.2 of the assignment, the review instruction in `adoption.md`, the status line and the re-pinned checksum manifest (`A4`–`A7`) |
+
+Per the records-only convention adopted in the Phase 0 record §10.5b and used for revision 1, the CI run
+produced *by a records commit* is named in the evidence inventory chain rather than transcribed into a
+further repository commit. The CI run and retained evidence for **this** submission head are appended below
+by the following records-only commit.

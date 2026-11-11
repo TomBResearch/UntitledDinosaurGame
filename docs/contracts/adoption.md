@@ -294,6 +294,22 @@ exception is not a compatibility result.
 | Evidence store | The damaged `inventory-v19.json` and `INTEGRITY-2026-11-10.md` are preserved exactly; no historical inventory or downstream link is rebuilt to manufacture continuity; new snapshots are create-only and fail before overwriting; the known `v19 → v20` discontinuity is carried forward and stated. `D4` (independent backup destination) remains open, and no external storage, release, tag or archive is authorised. |
 | Not repeated | No broad input-backlog survey and no upstream publication during this assignment. |
 
+## UDG-003 Phase 1 review instruction recorded 2026-11-12
+
+The first Phase 1 submission (`73d48c96895305f5773d716e012c13489ea62e4a`, CI `42914263581`) was returned
+**In Review** with three technical corrections and one evidence requirement. The owner scoped each one and
+restated the boundaries; nothing in the instruction widens the phase.
+
+| Item | Recorded position |
+|---|---|
+| C1 trusted provenance | Never infer a lifecycle operation from a client payload field. A refused message carrying a lifecycle-like field must remain refused on replay and must not change entity state. |
+| C2 recorded time basis | Replay must reproduce the approved cache-expiry time basis by recording and restoring the actual time inputs, tested with identical retries just before, exactly at and just after the 30-second boundary, including replay from persisted evidence; malformed input must retain enough information to reproduce its refusal. A deterministic alternative is acceptable **only** if the TTL semantics change, which they have not. |
+| C3 bounded retained state | Journal and chain output stream through an injected sink; the core retains only bounded working state; expired or departed entity bookkeeping is released or explicitly bounded; a long-run churn test must show memory-resident counts do not grow with total history. |
+| C4 phase evidence | Narrowly scoped CI/evidence-tooling/test changes are authorised to validate and upload the required Phase 1 vectors and hashes; CI must fail when that evidence is missing or invalid; the published bytes are retained in the **existing** evidence store against the exact tested SHA; the evidence is labelled Phase 1 only, because the UDG-001 and UDG-002 bundles neither prove Phase 1 nor imply a full UDG-003 pass. |
+| Controlled paths granted for C4 | `A9` `tools/checks/src/evidence.ts`, `A10` `.github/workflows/ci.yml`, `A11` `tests/unit/udg-003/vectors.test.ts`, `A12` `tests/support/authority/harness.ts` — recorded in [UDG-003-phase-1.md](assignments/UDG-003-phase-1.md) §3.3. No functional scope is added by these grants, and no other task's capture plan or thresholds change. |
+| Still prohibited | Starting Phase 2 or Phase 3, changing the one-input-per-entity-per-tick rule, resolving `D-7` by assumption, and provisioning backup storage. Gates A, B and C remain **Not Run**, `stackCompatibility` remains **not-established**, and `D4` remains open. |
+| History | Existing evidence and the disclosed `v19 → v20` inventory discontinuity are preserved; nothing historical is rewritten to make a chain look continuous. |
+
 ## Reviewed edition and pins for the P01 approval
 
 ```text
