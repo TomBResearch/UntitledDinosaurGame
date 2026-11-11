@@ -501,7 +501,13 @@ export const sanitiseMachineText = (text: string, extraRoots: readonly (readonly
   const ordered = [...pairs].sort((a, b) => b[0].length - a[0].length);
   let out = text;
   for (const [path, alias] of ordered) out = out.split(path).join(alias);
-  out = out.replaceAll(/\\/g, '/');
+  // Normalise Windows separators, but only inside a Windows-style absolute path. A blanket
+  // `\\` -> `/` rewrite corrupts escaped characters: the UDG-003 bundle captured by CI run
+  // 43070703836 published `\"not used, and why\"` as `/"not used, and why/"`, because a probe
+  // limitation string contained escaped quotes and the artefact stopped being parseable JSON.
+  // Machine-path aliasing above already ran, so the repository's own paths are aliases by now and
+  // only foreign Windows paths still carry backslashes here.
+  out = out.replace(/[A-Za-z]:(?:\\[^\s"',;`)\]}<>]+)+/g, (match) => match.replaceAll('\\', '/'));
   out = out.replace(/\/home\/[A-Za-z0-9._-]+/g, '<HOME>');
   out = out.replace(/\/Users\/[A-Za-z0-9._-]+/g, '<HOME>');
   out = out.replace(/[A-Za-z]:\/Users\/[A-Za-z0-9._-]+/g, '<HOME>');

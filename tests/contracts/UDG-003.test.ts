@@ -52,7 +52,7 @@ import {
   type ProbeRecord,
   type ProbeRun,
 } from '../probes/colyseus-server.probe.js';
-import { probeInvocationIssues } from '@udg/checks';
+import { machineRoots, probeInvocationIssues, sanitiseMachineText } from '@udg/checks';
 
 const TASK = 'UDG-003';
 const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '../..');
@@ -2101,6 +2101,40 @@ describe('UDG-003 — probe capture is one consistent snapshot (CI incident, R-2
     expect((leading['unnamedLeading'] as number) > 0).toBe(true);
     expect(leading['gaps']).toEqual([]);
     expect(leading['skipped']).toBe(0);
+  });
+});
+
+describe('UDG-003 — the bundle sanitiser must not corrupt what it passes over', () => {
+  // Caught by the gate this commit adds, not by hand: CI run 43070703830's bundle carried probe
+  // artefacts in which `\"not used, and why\"` had been published as `/"not used, and why/"`. The
+  // sanitiser had rewritten every backslash in the tree, which turns a JSON escape into a slash and
+  // leaves the artefact unparseable — evidence that cannot be read is not evidence.
+  const roots = machineRoots(ROOT, join(ROOT, 'artifacts'), undefined);
+
+  it('leaves every probe artefact parseable JSON after sanitisation', () => {
+    const names = readdirSync(PROBE_OUT).filter((name) => name.endsWith('.json')).sort();
+    expect(names.length > 0).toBe(true);
+    for (const name of names) {
+      const raw = readFileSync(join(PROBE_OUT, name), 'utf8');
+      const sanitised = sanitiseMachineText(raw, roots);
+      expect(() => JSON.parse(sanitised), `${name} stopped being parseable JSON after sanitisation`).not.toThrow();
+      for (const [path] of roots) expect(sanitised, `${name} still names ${path}`).not.toContain(path);
+    }
+  });
+
+  it('preserves escaped characters while still normalising Windows paths', () => {
+    const escaped = 'the map records each absent name as \\"not used, and why\\" and a newline as \\n';
+    expect(sanitiseMachineText(escaped, roots)).toBe(escaped);
+    expect(sanitiseMachineText('built at D:\\a\\repo\\tools\\checks\\dist\\evidence.js', roots))
+      .toBe('built at D:/a/repo/tools/checks/dist/evidence.js');
+    const out = sanitiseMachineText(
+      `wrote ${join(ROOT, 'artifacts', 'probes')}/probe-run-index.json from ${join(ROOT, 'tools', 'checks')}`,
+      roots,
+    );
+    // Longest root first, so the bundle path wins over the repository prefix it sits under.
+    expect(out).toContain('BUNDLE_ROOT/probes');
+    expect(out).toContain('REPO_ROOT/tools/checks');
+    expect(out).not.toContain(ROOT);
   });
 });
 
