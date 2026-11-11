@@ -7,6 +7,10 @@ Status: **In Review** — revision 2, made against the owner's three reviewer co
 Owner/reviewer: integration owner / Codex (implementation only; acceptance recorded by the owner alone)
 Base commit: `8987139f18653b05e57e64d0b14cdd1c753b6612` (retained CI for that head: `42794023731`, conclusion `success`)
 
+Prerequisite commit (UDG-003 Phase 0, accepted as ADR-0002): `8987139f18653b05e57e64d0b14cdd1c753b6612`
+Prerequisite commit (UDG-001 acceptance): `524658e1fb4c53a450cdf933886c7ad4b17c72e9`
+Prerequisite commit (UDG-002 acceptance): `d364d2dafbc88f469ef60e5e61c5e5c5c6cfd7e4`
+
 ## 0. Correction to this record before any code was written
 
 The first version of §3.1/§4/§5 of this record (`e1b0026`) was written from memory of P03 instead of from its text, and it mis-stated the adopted algorithm in seven ways. No code had been written against it, so the error is confined to this record; it is listed rather than quietly replaced, because the record is the implementation authority:

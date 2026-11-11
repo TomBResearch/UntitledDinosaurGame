@@ -1078,9 +1078,25 @@ const writeReport = (root: string, plan: CapturePlan, absoluteRunDir: string, ru
  * cannot name what it was built on has not shown that its prerequisites were checked.
  */
 const prerequisiteShas = (root: string, taskId: string): string[] => {
-  const raw = readOptional(join(root, 'docs', 'contracts', 'assignments', `${taskId}.md`));
-  if (raw === undefined) return [];
-  return [...raw.matchAll(/Prerequisite commit(?: \([^)]*\))?:\s*([0-9a-f]{40})/g)].map((match) => match[1] as string);
+  const directory = join(root, 'docs', 'contracts', 'assignments');
+  // A phased task records its prerequisites in the phase assignment rather than in a whole-task file that
+  // would have to claim a phase that has not been assigned yet. Both shapes are read, and the result is the
+  // union: a bundle may not name fewer prerequisites than the record it was built from states.
+  const candidates = [join(directory, `${taskId}.md`)];
+  if (existsSync(directory)) {
+    for (const name of readdirSync(directory).sort()) {
+      if (name.startsWith(`${taskId}-phase-`) && name.endsWith('.md')) candidates.push(join(directory, name));
+    }
+  }
+  const found = new Set<string>();
+  for (const file of candidates) {
+    const raw = readOptional(file);
+    if (raw === undefined) continue;
+    for (const match of raw.matchAll(/Prerequisite commit(?: \([^)]*\))?:\s*([0-9a-f]{40})/g)) {
+      if (match[1] !== undefined) found.add(match[1]);
+    }
+  }
+  return [...found].sort();
 };
 
 const writeChecksums = (absoluteRunDir: string): void => {
