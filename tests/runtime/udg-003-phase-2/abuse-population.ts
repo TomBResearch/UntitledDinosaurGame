@@ -117,6 +117,11 @@ const rowOf = (room: SdkRoom<ProbeRegionState>): PlayerRow | undefined =>
   room.state.players.get(room.sessionId);
 
 async function main(): Promise<void> {
+  // The output directory is created BEFORE the first artefact, not before the last one. The local
+  // default directory pre-existed from earlier runs and hid this; a fresh capture environment does
+  // not pre-create it, and the close-path write — the phase's W-9 evidence — was the first file the
+  // script tried to make, into a directory that did not exist (found by the first real capture run).
+  mkdirSync(OUT_DIR, { recursive: true });
   const [{ RegionRoom, defineOperatorRegionRoom }, schemaMod, configMod, serverConfigMod] = await Promise.all([
     import(pathToFileURL(resolve(ROOT, 'apps/server/dist/rooms/RegionRoom.js')).href) as Promise<RegionRoomModule>,
     import(pathToFileURL(resolve(ROOT, 'packages/protocol/dist/schema/index.js')).href) as Promise<Record<string, unknown>>,
@@ -310,6 +315,9 @@ async function main(): Promise<void> {
         closuresTotal: closuresOf().length,
         retired: pressureRow?.inputRetiredUnrepresented ?? -1,
         pressureStillSeated: (room().evidence()['seats'] as unknown[]).length > pressureEntityBefore,
+        // Attribution, not optimism: when this scenario flakes the record must already say WHICH
+        // closure happened with WHICH code, instead of leaving the review to guess.
+        closureLedger: closuresOf(),
       },
       closuresOf().length === 0
         && (pressureRow?.inputRetiredUnrepresented ?? -1) === 0
