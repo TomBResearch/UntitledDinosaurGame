@@ -46,18 +46,41 @@ export const publishPlayer = (
 ): PublishResult => {
   const projected = toReplica(state);
   if (projected.ok === false) return { ok: false, issues: projected.issues.map((issue) => `${issue.field}: ${issue.reason}`) };
+  // The explicit copy above must stay in step with the protocol's own field list. A divergence here
+  // is a defect, so it is a failure, not a comment: the canonical rows are 17 fields; the remaining
+  // six are the disposition record and effect ledger, which `applyDisposition` owns.
+  if (PLAYER_FIELDS.length !== 23) {
+    return { ok: false, issues: [`PLAYER_FIELDS grew to ${String(PLAYER_FIELDS.length)}; the explicit copy in publishPlayer must move with it`] };
+  }
   const key = entityId;
   let row = region.players.get(key);
   if (row === undefined) {
     row = new PlayerSchema();
     region.players.set(key, row);
   }
-  for (const field of PLAYER_FIELDS) {
-    const source = projected.value as unknown as Record<string, unknown>;
-    const target = row as unknown as Record<string, unknown>;
-    // `fields` is the protocol's own closed list; copying it by name cannot invent or drop a field.
-    target[field] = source[field];
-  }
+  // Explicit field-by-field copy — the field names are `PLAYER_FIELDS`, the protocol's own closed
+  // list, and the statements below are exactly that list in order. No cast trick is used to move
+  // values between schema instances: the escape-hatch prohibition is a rule for all repository code,
+  // and a 23-line copy is auditable in a way an indexed-union cast never is.
+  row.entityId = projected.value.entityId;
+  row.x = projected.value.x;
+  row.y = projected.value.y;
+  row.z = projected.value.z;
+  row.yaw = projected.value.yaw;
+  row.vx = projected.value.vx;
+  row.vy = projected.value.vy;
+  row.vz = projected.value.vz;
+  row.grounded = projected.value.grounded;
+  row.verticalVelocity = projected.value.verticalVelocity;
+  row.movementMode = projected.value.movementMode;
+  row.routeRevision = projected.value.routeRevision;
+  row.nextWaypointIndex = projected.value.nextWaypointIndex;
+  row.intentGeneration = projected.value.intentGeneration;
+  row.sessionEpoch = projected.value.sessionEpoch;
+  row.connected = projected.value.connected;
+  row.lastAuthorityTick = projected.value.lastAuthorityTick;
+  // The disposition and ledger fields are deliberately NOT copied here: they never travel through
+  // the canonical projection (§6.5) and `applyDisposition` below is their only writer.
   const applied = applyDisposition(row, {
     inputResolvedThrough: disposition.inputResolvedThrough,
     gap: disposition.gap,

@@ -296,7 +296,9 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
       existing.epoch = epoch;
       existing.input.beginDomain(this.#authorityInput(client.sessionId));
       existing.closing = null;
-      this.#authority.core.epochChange(existing.entityId, epoch);
+      // See `handleRejoin`: after a drop the entity's bookkeeping was released with the leave, so
+      // the legal re-entry is `join` under the fresh epoch, not a renewal of a released entity.
+      this.#authority.core.join(existing.entityId, epoch, spawnFor(bounds));
     }
   }
 
@@ -311,13 +313,41 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
       entityId: seat.entityId,
     });
     this.#authority.core.leave(seat.entityId);
+    // The drop itself is a server-observed departure: journal it as `leave` now, so the entity's
+    // lifecycle leaves `connected` and a later reconnection is the legal `epochChange` transition
+    // rather than an impossible one. If the window closes without a rejoin, `expire` is the second,
+    // distinct observation (below); the journal keeps the two apart exactly as the core defines them.
+    this.#authority.core.leave(seat.entityId);
     // Bounded reconnection over the declared window; every outcome is logged by DevelopmentSessions.
-    this.#sessions.hold(client, (target, seconds) => this.allowReconnection(target, seconds).catch(() => {
-      // The window closed: the entity's seat is released and its replica row goes with it.
-      unpublishPlayer(this.state, seat.entityId);
-      this.#seats.delete(seat.sessionId);
-      throw new Error('reconnection-window-closed');
-    }));
+    // The authority call for a departed seat fires when the window CLOSES, not on the drop: a
+    // deliberate leave and a lost connection both arrive as `onLeave`, and the server's honest
+    // statement at that moment is "this domain is held, pending expiry" — `expire()` is the
+    // server-observed loss of the domain, which is exactly what the journal should carry (the
+    // lifecycle authority never comes from a client payload, §8.3 invariant 5). A rejoin answers
+    // with a fresh epoch through `onJoin` instead.
+    this.#sessions.hold(
+      client,
+      (target, seconds) => new Promise<unknown>((resolved, rejected) => {
+        // `allowReconnection` returns the library's Deferred, which is thenable but not a native
+        // promise; the seam is declared as a promise, so the room adapts rather than leaks.
+        this.allowReconnection(target, seconds).then(() => {
+          // The server's observable moment of a successful rejoin is THIS resolution: no `onJoin`
+          // fires for a reconnected session. The epoch is issued here, the transport record's stamp
+          // domain restarts here, and the core is told through `epochChange` — all on the server
+          // call path, none of it inferred from a payload (§8.3 invariant 5).
+          this.handleRejoin(seat);
+          resolved(undefined);
+        }, (error: unknown) => {
+          rejected(error);
+        });
+      }),
+      () => {
+        if (!this.#seats.has(seat.sessionId)) return;
+        this.#authority.core.expire(seat.entityId);
+        unpublishPlayer(this.state, seat.entityId);
+        this.#seats.delete(seat.sessionId);
+      },
+    );
   }
 
   override onDispose(): void {
@@ -361,15 +391,20 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
 
       const accessor = this.#authorityInputOrUndefined(seat.sessionId);
       if (accessor === undefined) continue;
-      const observation = seat.input.observe(accessor, envelope, record.tick, nowMs);
+      const observation = seat.input.observe(accessor, envelope, record.tick, nowMs, this.#configValue.network.statePatchIntervalMs);
       if (observation.dequeued !== undefined) {
         record.consumed.push({ entityId: seat.entityId, seq: observation.dequeued.seq });
         // The wire frame is validated as the wire shape and projected to the authority five. Only
         // the five reach the core (§8.3 invariant 5: no client-chosen number is a movement input);
         // a refusal of any kind still becomes a journalled disposition and a neutral step (GA-4).
-        const verdict = validateDirectWireFrame(observation.dequeued.frame, { sessionEpoch: seat.epoch });
+        // The consumed frame is a schema instance whose fields live on the prototype: the wire
+        // shape is copied BY NAME (the codec's own instruction for `latest`-like values, PR-3) into
+        // a plain record before validation. A closed-field-set validator against the raw instance
+        // would refuse every frame for a reason no client chose.
+        const wire = plainWireFrame(observation.dequeued.frame);
+        const verdict = validateDirectWireFrame(wire, { sessionEpoch: seat.epoch });
         if (verdict.ok === false) record.refused.push({ entityId: seat.entityId, count: 1 });
-        this.#authority.core.ingest(seat.entityId, coreFrameOfWireFrame(observation.dequeued.frame));
+        this.#authority.core.ingest(seat.entityId, coreFrameOfWireFrame(wire));
       }
       record.maxDepth = Math.max(record.maxDepth, observation.sizeAfter);
 
@@ -486,6 +521,26 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
     if (client !== undefined) client.leave(code);
   }
 
+  /**
+   * Server-side completion of a reconnection: fresh epoch, restarted stamp domain, journal row.
+   *
+   * The authority call is `join`, not `epochChange`, and the reason is in Phase 1's own release
+   * rule: a `leave` releases the entity's bookkeeping at the end of its tick, so by the time a
+   * held reconnection resolves there is no entity to renew — `join` re-creates the association
+   * under the fresh epoch, exactly as the core's join branch is written to do. `epochChange`
+   * remains the right call for a renewal that happens **while the seat is live** (O09/AC-5), and
+   * nothing here disputes that; the disconnect case is a different transition and the room says so.
+   */
+  private handleRejoin(seat: Seat): void {
+    if (!this.#seats.has(seat.sessionId)) return;
+    seat.epoch = this.#epochIssuer.issue();
+    const accessor = this.#authorityInputOrUndefined(seat.sessionId);
+    if (accessor !== undefined) seat.input.beginDomain(accessor);
+    const bounds = this.#configValue.region.bounds;
+    if (bounds === null) return;
+    this.#authority.core.join(seat.entityId, seat.epoch, spawnFor(bounds));
+  }
+
   private publishSeat(seat: Seat): void {
     const view = this.#authority.core.view(seat.entityId);
     if (view === undefined) return;
@@ -534,6 +589,15 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
         closing: seat.closing !== null,
       })),
       joinRefusals: this.joinRefusals.length,
+      // The server's own replica rows, for the suites to compare against what a client observes.
+      replicaRows: [...this.state.players.entries()].map(([key, row]) => ({
+        key,
+        epoch: row.sessionEpoch,
+        resolvedThrough: row.inputResolvedThrough,
+        gapStart: row.inputGapStart,
+        retired: row.inputRetiredUnrepresented,
+        effects: row.effectCount,
+      })),
       closeObservations: this.closeObservations,
       metrics: this.metrics.summary(),
       lastTick: this.#lastTickRecord,
@@ -571,3 +635,21 @@ const trustedDeployment = (raw: unknown): RegionRoomOptions | null => {
   if (typeof candidate.deployment !== 'object' || candidate.deployment === null) return null;
   return candidate.deployment as RegionRoomOptions;
 };
+
+/**
+ * Copy the decoded frame's fields by name into a plain record.
+ *
+ * The pinned codec's own instruction for schema-backed values (`latest`, buffered frames): fields
+ * are copied BY NAME, never spread — a spread of a schema instance yields the proxy's own
+ * properties, not the declared fields, and a closed-field-set validator would then refuse every
+ * frame for a reason no client chose (live-caught 2026-11-12). The copy is six names, exactly the
+ * wire schema's declaration; nothing is added and nothing is dropped.
+ */
+const plainWireFrame = (frame: DirectWireFrame): DirectWireFrame => ({
+  sessionEpoch: frame.sessionEpoch,
+  generation: frame.generation,
+  directIntent: frame.directIntent,
+  moveX: frame.moveX,
+  moveZ: frame.moveZ,
+  seq: frame.seq,
+});

@@ -32,11 +32,14 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
  * remedy investigation the owner authorised on 2026-11-09. **PR-15** is the input-identity and
  * ack/state-pairing feasibility probe the owner authorised for the D-7 decision in ADR-P-0003. Both run
  * against the same pins and are reported in the same index so one artefact carries all of them, and
- * neither changes any Phase 0 verdict. **PR-14 is deliberately absent: that identifier is reserved** for
- * the Gate A real-state probe specified in ADR-P-0003 §11, which must not be attempted until the owner
- * approves the policy it depends on.
+ * neither changes any Phase 0 verdict. **PR-14 landed as UDG-003 Phase 2 W-8** (owner decision D-P2-3
+ * through D-P2-5, 2026-11-11): the reserved Gate A real-state substrate, created by the assignment
+ * that reserved slot finally authorised. It lives in `tests/probes/**`, not `apps/server/probes/**`,
+ * because it drives the real `RegionRoom` through the test-side harness; the runner spawns it as a
+ * root-level Node module instead of an emitted probe, and everything else — attribution, ledger,
+ * index, gate — is identical.
  */
-export const PROBE_IDS = ['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13', 'PR-15'] as const;
+export const PROBE_IDS = ['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13', 'PR-14', 'PR-15'] as const;
 
 export type ProbeId = (typeof PROBE_IDS)[number];
 
@@ -50,6 +53,19 @@ export const PROBE_FILES: Readonly<Record<ProbeId, string>> = {
   'PR-12': 'pr12-epoch.probe.js',
   'PR-13': 'pr13-overflow-policy.probe.js',
   'PR-15': 'pr15-input-identity.probe.js',
+  // PR-14 is never emitted (it runs from the root, below); the slot exists so the record type stays
+  // total over ProbeId and no lookup can silently miss it.
+  'PR-14': 'pr14 is a root-level probe; this slot is never resolved',
+};
+
+/**
+ * Probes that run from the repository root rather than the emitted server project.
+ *
+ * PR-14 is a root-level Node module (Node's own type stripping runs it); it reaches the pinned
+ * packages through the same resolution `apps/server` uses, so nothing about the pins changes.
+ */
+export const ROOT_PROBE_FILES: Readonly<Partial<Record<ProbeId, string>>> = {
+  'PR-14': 'tests/probes/pr14-gate-a.probe.ts',
 };
 
 export const PROBE_SUBJECTS: Readonly<Record<ProbeId, string>> = {
@@ -60,6 +76,7 @@ export const PROBE_SUBJECTS: Readonly<Record<ProbeId, string>> = {
   'PR-8': 'what the acknowledgement tracks: received, consumed or applied',
   'PR-12': 'epoch renewal lifecycle in the public API',
   'PR-13': 'overflow postures: can a supported API prevent unrepresented retirement?',
+  'PR-14': 'Gate A real-state substrate: RegionRoom + replicated state at the flat reference step',
   'PR-15': 'input identity, gap visibility, client observability and ack/state pairing',
 };
 
@@ -393,7 +410,11 @@ export interface ProbeReports {
 
 /** Run one emitted probe in its own process and read back the result file it wrote. */
 export function runProbe(root: string, outDir: string, id: ProbeId, reports?: ProbeReports, invocationId?: string): ProbeRecord {
-  const emitted = join(serverDirectory(root), 'probes', 'dist', 'probes', PROBE_FILES[id]);
+  const rootFile = ROOT_PROBE_FILES[id];
+  const emitted = rootFile === undefined
+    ? join(serverDirectory(root), 'probes', 'dist', 'probes', PROBE_FILES[id])
+    : join(root, rootFile);
+  const workingDirectory = rootFile === undefined ? serverDirectory(root) : root;
   const out = resultPathFor(outDir, id);
   mkdirSync(outDir, { recursive: true });
   if (existsSync(out)) rmSync(out);
@@ -402,7 +423,7 @@ export function runProbe(root: string, outDir: string, id: ProbeId, reports?: Pr
   if (reports?.typecheck !== undefined) argv.push('--typecheck-report', reports.typecheck);
   if (reports?.declaration !== undefined) argv.push('--declaration-report', reports.declaration);
   if (invocationId !== undefined) argv.push('--invocation', invocationId);
-  const executed = run(argv, serverDirectory(root), PROBE_TIMEOUT_MS);
+  const executed = run(argv, workingDirectory, PROBE_TIMEOUT_MS);
   let result: ProbeResultFile | undefined;
   let failureDetail: string | undefined;
   if (existsSync(out)) {

@@ -93,8 +93,12 @@ assigned Phase 0 probe: it is the overflow/acknowledgement remedy investigation 
 run against the same pins and reported in the same artefact ([§9](#9-pr-13-overflow-postures-can-a-supported-mechanism-prevent-unrepresented-retirement)).
 `PR-15` is likewise not an assigned probe: it is the input-identity and acknowledgement/state-pairing feasibility
 measurement the owner authorised for the D-7 decision ([§11](#11-pr-15-input-identity-gap-visibility-and-ackstate-pairing-d-7-feasibility-evidence)).
-**`PR-14` is reserved** for the Gate A real-state probe specified in
-[ADR-P-0003 §11](../adr/proposals/UDG-003-d7-input-acknowledgement-policy.md) and is deliberately absent from the index: the suite asserts that absence.
+`PR-14` was **reserved throughout Phase 0** for the Gate A real-state probe specified in
+[ADR-P-0003 §11](../adr/proposals/UDG-003-d7-input-acknowledgement-policy.md), and the Phase 0 suite asserted that
+absence. It **landed as UDG-003 Phase 2 W-8** (owner decisions D-P2-3…D-P2-5): the real `RegionRoom`, the real
+replicated `RegionSchema`/`PlayerSchema`, the accepted Phase 1 authority, the flat reference step — and it is the one
+probe that runs from the repository root (`tests/probes/pr14-gate-a.probe.ts`) through the test-side harness, so the
+runner spawns it as a root-level Node module. Formal Gate A execution remains UDG-SPIKE-001's (D-P2-5).
 
 | Probe | Module | Question | Outcome |
 | --- | --- | --- | --- |
@@ -106,6 +110,7 @@ measurement the owner authorised for the D-7 decision ([§11](#11-pr-15-input-id
 | `PR-12` | `apps/server/probes/pr12-epoch.probe.ts` | what lifecycle primitives exist for a UDG-owned session epoch | passes, 6 checks; records the primitives, the renewal procedure still required and what stays unproved ([§6](#6-reclassified-ph0-b2-the-session-epoch-is-udg-owned)) |
 | `PR-13` | `apps/server/probes/pr13-overflow-policy.probe.ts` | can a public, supported mechanism keep the buffer from retiring a frame the room never represented | passes, 20 checks; nine postures measured, one prevents the violation ([§9](#9-pr-13-overflow-postures-can-a-supported-mechanism-prevent-unrepresented-retirement)) |
 | `PR-15` | `apps/server/probes/pr15-input-identity.probe.ts` | can the server name the client send sequence of each consumed observation, and can the client tell that the acknowledgement and authoritative state agree | passes, 27 checks; one supported identity mapping confirmed, the unnameable leading gap measured, the per-connection sequence domain measured, and ack/state delivery shown to be atomic at both cadences ([§11](#11-pr-15-input-identity-gap-visibility-and-ackstate-pairing-d-7-feasibility-evidence)) |
+| `PR-14` | `tests/probes/pr14-gate-a.probe.ts` | does the Gate A substrate exist and behave: the real room, replicated state, stamped inputs, disposition record, bounded closure, isolation, pairing, rejoin domain restart, all with no locomotion, physics or navigation behind it | passes, 24 checks (Phase 2, W-8); the hash gate refuses a mismatched join, the compliant stream retires nothing, a skipped-range gap is named and the watermark stops at it, a refused frame is dequeued and represented, an over-buffer burst retires and closes inside the bounded window with the compliant neighbour untouched, and the ledger charges nothing for abandoned or re-answered identities — with the recorded limitation that M0's rejection vocabulary admits no committing discrete identity, so GA-10's Δ==1 half waits for UDG-007 |
 
 Each probe result carries `verdict`: `pass`, `fail`, or `blocked` — `blocked` meaning the probe could not
 be attempted as stated because a precondition of it is unmet. `pass` for a behaviour probe is not a
@@ -549,7 +554,8 @@ desynchronisation, and a real round trip that loopback cannot measure.
 
 **What it does not establish.** No client reconciliation, no loss, no RTT, no Gate A number, no Phase 2 behaviour, no
 protocol change, and no compatibility claim — `stackCompatibility` remains `not-established` and the suite asserts it.
-`PR-14` remains reserved for the real-state probe, which the contract suite also asserts.
+`PR-14` has since landed as the Phase 2 W-8 substrate (above); Phase 0's assertion of its absence was correct for
+every run taken before that work item, and the historical records are not rewritten (rule R-1).
 
 [docs]: https://docs.colyseus.io/ 'Colyseus documentation (versionless URL; the pinned package is the authority)'
 [pinned]: https://www.npmjs.com/package/@colyseus/core/v/0.18.27 'pinned package page'

@@ -66,6 +66,7 @@ export class DevelopmentSessions {
   hold(
     client: Client,
     holdReconnection: (client: Client, seconds: number) => Promise<unknown>,
+    onWindowClosed: () => void = () => undefined,
   ): void {
     const sessionId = client.sessionId;
     if (this.#windowMs === 0) {
@@ -79,6 +80,7 @@ export class DevelopmentSessions {
       })
       .catch(() => {
         this.#outcomes.push({ sessionId, outcome: 'window-closed', atMs: this.#nowMs() });
+        onWindowClosed();
       })
       .finally(() => {
         this.#held -= 1;

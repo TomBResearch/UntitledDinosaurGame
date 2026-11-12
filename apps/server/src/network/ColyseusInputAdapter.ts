@@ -145,7 +145,13 @@ export class SessionInputState {
    * runs the §3.1 subtraction against the counter movement this tick, names a gap when a dequeued
    * stamp is not adjacent, and evaluates the §3.3 signals from accessor state only.
    */
-  observe(accessor: InputPort, envelope: InputEnvelopeConfig, tick: number, nowMs: number): TickObservation {
+  observe(
+    accessor: InputPort,
+    envelope: InputEnvelopeConfig,
+    tick: number,
+    nowMs: number,
+    patchIntervalMs: number,
+  ): TickObservation {
     // Sampling order is part of the arithmetic: the counter is read **around** the dequeue, because
     // `next()` is what advances it. Reading it before the call and comparing against a dequeue that
     // has not happened yet charges the next tick with this tick's frame — a guaranteed phantom
@@ -203,13 +209,14 @@ export class SessionInputState {
     if (retiredDelta > 0) signals.push('RETIRED_UNREPRESENTED');
 
     // §3.3 strand suspicion: empty buffer, newest stamp beyond the resolved watermark, unmoved for
-    // one patch interval. Diagnostic only (W-6, GA-12): this code path cannot close, and the room's
+    // one patch interval (`patchIntervalMs` — the §3.3 signal names the patch cadence, not the
+    // closure window). Diagnostic only (W-6, GA-12): this code path cannot close, and the room's
     // consequence table has no closure row for it.
     const latestSeq = accessor.latest?.seq ?? 0;
     if (accessor.size === 0 && latestSeq > this.resolvedThrough) {
       if (this.#strandAt === 0) this.#strandAt = nowMs;
       this.#strandStreakMs = nowMs - this.#strandAt;
-      if (this.#strandStreakMs >= envelope.closureWindowMs && latestSeq > 0) {
+      if (this.#strandStreakMs >= patchIntervalMs && latestSeq > 0) {
         signals.push('STRAND_SUSPECTED');
       }
     } else {

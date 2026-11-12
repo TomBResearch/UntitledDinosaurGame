@@ -51,6 +51,7 @@ import {
   type ProbeId,
   type ProbeRecord,
   type ProbeRun,
+  ROOT_PROBE_FILES,
 } from '../probes/colyseus-server.probe.js';
 import { machineRoots, probeInvocationIssues, sanitiseMachineText } from '@udg/checks';
 
@@ -166,13 +167,19 @@ const describeInventory = (entries: readonly { readonly relativeFile: string; re
 
 describe('UDG-003 Phase 0 — probe harness', () => {
   it('runs the assigned probe ids plus the two authorised investigations, and nothing else', () => {
-    expect(PROBE_IDS).toEqual(['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13', 'PR-15']);
+    expect(PROBE_IDS).toEqual(['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13', 'PR-14', 'PR-15']);
     expect(run.probes.map((record) => record.id)).toEqual([...PROBE_IDS]);
   });
 
   it('emits the probe project so the assertions below are about executed code', () => {
     expect(run.emit.exitCode, `emit failed: ${run.emit.stdout}${run.emit.stderr}`).toBe(0);
     for (const id of PROBE_IDS) {
+      const rootFile = ROOT_PROBE_FILES[id];
+      if (rootFile !== undefined) {
+        // PR-14 runs from the repository root as a Node module (Phase 2 W-8); it is spawned, not emitted.
+        expect(existsSync(join(ROOT, rootFile)), `${id} root probe ${rootFile}`).toBe(true);
+        continue;
+      }
       const emitted = join(ROOT, 'apps', 'server', 'probes', 'dist', 'probes', PROBE_FILES[id]);
       expect(existsSync(emitted), `${id} emitted file ${emitted}`).toBe(true);
     }
@@ -1068,12 +1075,70 @@ describe('UDG-003 Phase 0 — PR-15 input identity and ack/state pairing (the D-
     expect(verdict.serverCanRetrieveAnEvictedFrame).toBe(false);
     expect(verdict.clientCanSeeDisposition).toBe(false);
     expect(byId.get('PR-15')?.result?.verdict).toBe('pass');
-    // The probe measures, it does not adopt: no compatibility claim, and PR-14 stays reserved.
+    // The probe measures, it does not adopt: no compatibility claim, whatever else is in the index.
     expect(run.compatibility.stackCompatibility).toBe('not-established');
     const text = JSON.stringify(byId.get('PR-15')?.result ?? {});
     expect(text).toContain('Loopback only');
     expect(text).toContain('probe-local');
-    expect(PROBE_IDS).not.toContain('PR-14');
+  });
+});
+
+describe('UDG-003 Phase 2 — PR-14 Gate A substrate (W-8)', () => {
+  it('passes on its own claim and stays inside its stated scope', () => {
+    const record = byId.get('PR-14');
+    expect(record?.result?.verdict, record?.failureDetail).toBe('pass');
+    const names = (record?.result?.checks ?? []).map((check) => check.name);
+    // Every posture the substrate exists to prove, named — an existence check is not enough.
+    for (const name of [
+      'substrate-boots',
+      'operator-config-not-client-configurable',
+      'hash-gate-refuses-wrong-configHash',
+      'compliant-stream-resolves-all-six',
+      'compliant-stream-retires-nothing',
+      'one-observation-per-entity-per-tick',
+      'consumption-is-fifo-in-stamp-order',
+      'gap-is-named-as-a-range',
+      'watermark-stops-at-the-gap',
+      'refused-frame-is-dequeued-and-represented',
+      'refusal-costs-no-retirement-and-keeps-the-seat-open',
+      'pairing-reads-ack-and-record-from-one-delivery',
+      'abandoned-identity-charges-nothing',
+      'reissue-of-a-known-identity-is-answered-not-recharged',
+      'rejoin-restarts-the-stamp-domain',
+      'rejoin-carries-a-server-issued-epoch',
+      'offender-joined-the-compliant-room',
+      'burst-beyond-the-buffer-retires',
+      'confirmed-retirement-closes-inside-the-bounded-window',
+      'compliant-neighbour-is-untouched',
+      'closure-window-forced-one-final-publication',
+      'substrate-carries-no-locomotion-physics-or-navigation',
+    ]) {
+      expect(names, `PR-14 check ${name}`).toContain(name);
+    }
+    const failed = (record?.result?.checks ?? []).filter((check) => !check.ok);
+    expect(failed.map((check) => `${check.name} :: ${check.detail}`)).toEqual([]);
+  });
+
+  it('claims substrate, not Gate A: the verdict fields stay exactly as Phase 2 promised', () => {
+    // §8.3 invariant 4 and D-P2-5: the substrate exercises criteria shapes; the formal gate belongs
+    // to UDG-SPIKE-001 and stackCompatibility does not move because a probe passed.
+    expect(run.compatibility.stackCompatibility).toBe('not-established');
+    const record = byId.get('PR-14');
+    const text = JSON.stringify(record?.result ?? {});
+    expect(text).toContain('not the formal Gate A');
+    expect(text).toContain('provisional test-setting');
+    // GA-10's committing half is named as unproducible on M0 rather than quietly dropped (W-8 honesty).
+    expect(text).toContain('UDG-007');
+  });
+
+  it('keeps the Phase 2 substrate inside its declared runtime: root module, harness imports, no SDK in the runner', () => {
+    const source = readFileSync(join(ROOT, 'tests', 'probes', 'pr14-gate-a.probe.ts'), 'utf8');
+    expect(source).toContain('../support/client-harness/transport.mjs');
+    // The probe reaches the pinned packages only through the harness resolution, never a bare import.
+    expect(source).not.toContain("from '@colyseus/");
+    const runner = readFileSync(join(ROOT, 'tests', 'probes', 'colyseus-server.probe.ts'), 'utf8');
+    expect(runner).not.toContain("from '@colyseus/");
+    expect(ROOT_PROBE_FILES['PR-14']).toBe('tests/probes/pr14-gate-a.probe.ts');
   });
 });
 
@@ -1139,6 +1204,12 @@ describe('UDG-003 Phase 0 — boundary and evidence hygiene', () => {
     expect(citedDocs.length).toBeGreaterThan(0);
     for (const path of citedDocs) expect(existsSync(join(ROOT, path)), `api map cites ${path}`).toBe(true);
     for (const id of PROBE_IDS) {
+      const rootFile = ROOT_PROBE_FILES[id];
+      if (rootFile !== undefined) {
+        expect(map, `api map cites the root probe for ${id}`).toContain(rootFile);
+        expect(existsSync(join(ROOT, rootFile)), `root probe ${rootFile} exists`).toBe(true);
+        continue;
+      }
       const file = PROBE_FILES[id].replace('.js', '.ts');
       expect(citedProbes, `api map cites the module for ${id}`).toContain(`apps/server/probes/${file}`);
     }
@@ -1162,8 +1233,8 @@ describe('UDG-003 Phase 0 — boundary and evidence hygiene', () => {
       compatibility: { stackCompatibility: string; pr0: string; fullCheckDiagnostics: number };
     };
     expect(index.probes.map((probe) => probe.id)).toEqual([...PROBE_IDS]);
-    expect(index.probes.map((probe) => probe.verdict)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass']);
-    expect(index.probes.filter((probe) => probe.ok).map((probe) => probe.id)).toEqual(['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13', 'PR-15']);
+    expect(index.probes.map((probe) => probe.verdict)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass']);
+    expect(index.probes.filter((probe) => probe.ok).map((probe) => probe.id)).toEqual(['PR-0', 'PR-1', 'PR-2', 'PR-3', 'PR-8', 'PR-12', 'PR-13', 'PR-14', 'PR-15']);
     expect(index.compatibility.stackCompatibility).toBe('not-established');
     expect(index.compatibility.pr0).toBe('pass');
     expect(index.compatibility.fullCheckDiagnostics).toBe(27);

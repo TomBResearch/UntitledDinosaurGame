@@ -50,7 +50,7 @@ export const loadServerConfig = (options: {
   if (options.documentPath !== undefined) {
     let raw: unknown;
     try {
-      raw = JSON.parse(readFileSync(options.documentPath, 'utf8')) as unknown;
+      raw = JSON.parse(readFileSync(options.documentPath, 'utf8'));
     } catch (error) {
       return { ok: false, issues: [`config document unreadable: ${String(error)}`] };
     }
