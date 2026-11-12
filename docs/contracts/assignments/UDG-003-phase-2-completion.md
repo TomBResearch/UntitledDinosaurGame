@@ -202,6 +202,10 @@ half, because M0 refuses every discrete command until UDG-007), and **W-10 is in
 RTT, jitter and loss populations, which is why **GA-11 is FAIL** rather than merely deferred. It also
 lists the gaps with **no deferral clause** (Phase 2 journal replay for GA-13/AC-3d/AC-20, the GA-9
 projection instrument behind AC-7, AC-1’s 200-tick trace, AC-3c over the population, AC-3b’s discrete
-high-water marks, AC-3e’s per-reason reporting shape) and two record defects found in this batch.
-Nothing in that file moves a status upward: dedupe-triggered closure stays disabled, D4 stays
-undesignated, Gate A stays Not Run, and acceptance stays with the owner.
+high-water marks, AC-3e’s per-reason reporting shape), two record defects found in this batch, and
+one measured consequence of the §8.2.1 plan move: `evidence verify` is plan-relative, so the accepted
+Phase 1 bundle and the handoff bundle verify **PASS at their own commit** and **FAIL against this
+tree’s plan** (25 and 23 issues, all `vectors-phase-2/… absent` / `phase-2-* never run`). Nothing was
+re-captured or edited to make anything look greener. Nothing in that file moves a status upward:
+dedupe-triggered closure stays disabled, D4 stays undesignated, Gate A stays Not Run, and acceptance
+stays with the owner.
