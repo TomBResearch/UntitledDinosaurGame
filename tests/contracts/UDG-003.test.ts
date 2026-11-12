@@ -1820,16 +1820,39 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     const planStart = evidenceSource.indexOf("  'UDG-003': {\n    taskId: 'UDG-003',");
     expect(planStart, 'the UDG-003 capture plan').toBeGreaterThan(-1);
     const plan = evidenceSource.slice(planStart, evidenceSource.indexOf('\n  },\n};', planStart));
-    expect(plan).toContain("phase: { label: PHASE_1_LABEL, note: PHASE_1_SCOPE_NOTE }");
-    expect(plan).toContain("manifestArtefacts: ['vectors/vectors-manifest.json']");
-    expect(plan).toContain('manifestRequiredFiles: [...PHASE_1_VECTOR_FILES]');
+    // §8.2.1, moved in one disclosed change by W-11/W-12: the label describes the ARTEFACTS, and the
+    // artefacts now include the Phase 2 set. The Phase 1 requirement is not removed — the plan
+    // carries both sets and each manifest declares its own phase.
+    expect(plan).toContain("phase: { label: PHASE_2_LABEL, note: PHASE_2_SCOPE_NOTE }");
+    expect(plan).toContain("{ path: 'vectors/vectors-manifest.json', phase: PHASE_1_LABEL, requiredFiles: [...PHASE_1_VECTOR_FILES] }");
+    expect(plan).toContain("{ path: 'vectors-phase-2/vectors-manifest.json', phase: PHASE_2_LABEL, requiredFiles: [...PHASE_2_VECTOR_FILES] }");
     expect(plan).toContain('...PHASE_1_VECTOR_FILES.map((name) => `vectors/${name}`)');
-    // The plan must gate its own artefacts during capture, not only at review time.
+    expect(plan).toContain('...PHASE_2_VECTOR_FILES.map((name) => `vectors-phase-2/${name}`)');
+    // The plan must gate its own artefacts during capture, not only at review time — both halves.
     expect(plan).toContain("'phase-1-vectors-verify'");
+    expect(plan).toContain("'phase-2-vectors-verify'");
+    expect(plan).toContain("'phase-2-abuse-population'");
+    expect(plan).toContain("'phase-2-recovery-scenarios'");
     expect(evidenceSource).toContain("export const PHASE_1_LABEL = 'phase-1'");
+    expect(evidenceSource).toContain("export const PHASE_2_LABEL = 'phase-2'");
     for (const phrase of ['Phase 1', 'not a third-party stack compatibility claim', 'Gate A, B or C pass']) {
       expect(evidenceSource, phrase).toContain(phrase);
     }
+  });
+
+  it('keeps the Phase 2 vector requirement in one place the producing suite cannot edit around', () => {
+    // The Phase 2 suite IMPORTS the gate's list rather than restating it: the Phase 1 drift test
+    // above needs two lists to compare because Phase 1 predates the import discipline; Phase 2
+    // removes the second list instead of policing it.
+    const phase2Vectors = readFileSync(join(ROOT, 'tests', 'unit', 'udg-003-phase-2', 'vectors.test.ts'), 'utf8');
+    expect(phase2Vectors).toContain("import { PHASE_2_VECTOR_FILES } from '../../../tools/checks/src/evidence.ts'");
+    const gate = literalList(evidenceSource, 'PHASE_2_VECTOR_FILES: readonly string[] = [');
+    expect(gate).toHaveLength(15);
+    // Runtime evidence is half the set; a manifest written without those files present must fail,
+    // and the suite that writes the manifest is the one that asserts it.
+    expect(phase2Vectors).toContain('close-path-accounting.json');
+    expect(phase2Vectors).toContain('a half-run, not evidence');
+    expect(evidenceSource).toContain('phase === PHASE_2_LABEL ? PHASE_2_VECTOR_FILES : PHASE_1_VECTOR_FILES');
   });
 
   it('labels the manifest with the phase it covers and the commit it came from', () => {

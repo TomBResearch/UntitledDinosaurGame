@@ -124,6 +124,24 @@ jobs:
           pnpm --filter @udg/checks build
           node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-1
 
+      # Phase 2's own evidence, alongside Phase 1's and never in place of it (§8.2.1): the runtime
+      # scripts write the population and recovery artefacts, the vectors suite writes the pure half
+      # and the manifest that names all fifteen, and the tool then gates the directory against the
+      # gate's OWN Phase 2 list. A half-run — the pure files without the runtime files — fails the
+      # manifest, exactly as an empty directory would.
+      - name: Record and gate the UDG-003 Phase 2 vectors
+        if: ${{ !cancelled() }}
+        env:
+          UDG_VECTORS_OUT: artifacts/udg-003-phase-2
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/runtime/udg-003-phase-2/abuse-population.ts
+          node tests/runtime/udg-003-phase-2/recovery-scenarios.ts
+          pnpm exec vitest run tests/unit/udg-003-phase-2/vectors.test.ts
+          pnpm --filter @udg/checks build
+          node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-2 --expect-phase phase-2
+
       # Probe evidence is only evidence if it can say which invocation wrote it. This step checks every
       # invocation the job produced - including a failing one - and fails on unattributed bytes, on a
       # result file attributed to the wrong invocation, and on any failed invocation that the latest index

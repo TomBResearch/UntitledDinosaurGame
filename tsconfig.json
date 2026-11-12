@@ -5,6 +5,10 @@
   "compilerOptions": {
     "noEmit": true,
     "skipLibCheck": true,
+    // The runtime harness scripts execute on Node's own type stripping, which imports modules by
+    // their real filenames — including `recovery.ts`, the pure rule module the UDG-008 hand-off
+    // points at. Extensionless imports would resolve for tsc and 404 for Node.
+    "allowImportingTsExtensions": true,
     "types": ["node"]
   },
   "include": ["tests/**/*.ts", "vitest.config.ts", "playwright.config.ts"],

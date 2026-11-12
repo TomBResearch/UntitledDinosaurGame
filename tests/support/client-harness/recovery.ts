@@ -101,7 +101,15 @@ export class RecoveryPolicy {
   private lastDeliveryAt: number | null = null;
   private readonly events: RecoveryEvent[] = [];
 
-  constructor(private readonly env: InputEnvelopeConfig, private readonly now: () => number) {}
+  // Explicit fields, not parameter properties: this module runs on Node's strip-only type
+  // removal in the runtime harness, and parameter properties are not erasable syntax.
+  private readonly env: InputEnvelopeConfig;
+  private readonly now: () => number;
+
+  constructor(env: InputEnvelopeConfig, now: () => number) {
+    this.env = env;
+    this.now = now;
+  }
 
   /** Events in occurrence order; the vectors compare this list, not prose. */
   history(): readonly RecoveryEvent[] {

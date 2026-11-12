@@ -172,9 +172,16 @@ export interface CapturePlan {
    * count moved or whose digest no longer matches is a verification failure: the list is a requirement,
    * not a description (reviewer correction 4).
    */
-  readonly manifestArtefacts?: readonly string[];
-  /** File names a manifest must list. The expectation lives here, in the gate, not in the suite. */
-  readonly manifestRequiredFiles?: readonly string[];
+  /**
+   * Each manifest in the bundle, the phase IT declares, and the file list the gate — not the
+   * manifest — requires. §8.2.1: a plan that carries two phases carries two manifests, and a
+   * phase-1 manifest must not be asked to declare itself phase-2 nor the other way round.
+   */
+  readonly manifests?: readonly {
+    readonly path: string;
+    readonly phase: string;
+    readonly requiredFiles: readonly string[];
+  }[];
   /** Task-specific report prose. It used to be written inline as UDG-001 text for every task. */
   readonly reportProse: Readonly<{
     profiles: string;
@@ -224,6 +231,40 @@ export const PHASE_1_SCOPE_NOTE =
   'UDG-003 Phase 1 (transport-independent movement authority core) only. It is not evidence for Phase 2 or ' +
   'Phase 3, not a third-party stack compatibility claim, and not a Gate A, B or C pass. The UDG-001 and ' +
   'UDG-002 bundles from the same run cover those tasks, not this one.';
+
+/**
+ * The Phase 2 vector set (assignment §5 W-12 and §8.2.1).
+ *
+ * One machine-readable artefact per GA criterion touched and per §5 item with a numeric claim. The
+ * first nine are produced by the pure vectors suite; the last six are runtime evidence written by
+ * the population and recovery scripts against the real room — a directory that contains only the
+ * pure half is a half-run, and the manifest requires all fifteen.
+ */
+export const PHASE_2_VECTOR_FILES: readonly string[] = [
+  'envelope-hashes.json',
+  'stamped-seq-roundtrip.json',
+  'retirement-arithmetic.json',
+  'disposition-record.json',
+  'consequence-handling.json',
+  'input-overflow.json',
+  'input-reconciliation.json',
+  'strand-and-dedupe-policy.json',
+  'pe-determination.json',
+  'close-path-accounting.json',
+  'recovery-harness.json',
+  'abuse-results.json',
+  'buffer-depth.csv',
+  'room-lifecycle.json',
+  'tick-metrics.json',
+];
+
+export const PHASE_2_LABEL = 'phase-2';
+export const PHASE_2_SCOPE_NOTE =
+  'UDG-003 Phase 2 (transport substrate: RegionRoom, ColyseusInputAdapter, the ADR-0003 envelope and its ' +
+  'consequences) plus the Phase 1 vectors it still requires. It is not a third-party stack compatibility ' +
+  'claim, not a Gate A, B or C pass, and not UDG-008 production client recovery; formal Gate A execution ' +
+  'belongs to UDG-SPIKE-001. Bundles labelled phase-1 from earlier runs remain the accepted Phase 1 ' +
+  'record; this label describes the artefacts inside this bundle, not the task.';
 
 /** A machine path inside a published artefact is a publication failure, not a warning. */
 const MACHINE_PATH_IN_ARTEFACT = /(^|[\s"'])\/(?:home|Users|workspace|tmp|var|private)\//;
@@ -608,10 +649,12 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
   },
   'UDG-003': {
     taskId: 'UDG-003',
-    // Phase 1's own evidence: the vectors the acceptance list is written from, the manifest that names them,
-    // and the run that produced them. A bundle with an empty vectors/ directory is a verification failure,
-    // not a green run (reviewer correction 4).
-    phase: { label: PHASE_1_LABEL, note: PHASE_1_SCOPE_NOTE },
+    // Phase 2 moved this plan's label, in one disclosed change (§8.2.1): the label describes the
+    // artefacts, and the artefacts now include the Phase 2 set. The Phase 1 requirement is NOT
+    // removed — the plan carries both sets, each attributed to its own phase, and a bundle missing
+    // either half fails. A bundle with an empty vectors directory was and remains a verification
+    // failure, not a green run (reviewer correction 4).
+    phase: { label: PHASE_2_LABEL, note: PHASE_2_SCOPE_NOTE },
     requiredFiles: [
       'environment.json',
       'commands.json',
@@ -621,6 +664,8 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       'measurements/UDG-003.json',
       'vectors/vectors-manifest.json',
       ...PHASE_1_VECTOR_FILES.map((name) => `vectors/${name}`),
+      'vectors-phase-2/vectors-manifest.json',
+      ...PHASE_2_VECTOR_FILES.map((name) => `vectors-phase-2/${name}`),
       // The probe bytes and their attribution ledger, hashed alongside everything else. A bundle that
       // cannot say which invocation wrote its probe results is not evidence about the stack.
       'probes/probe-run-index.json',
@@ -630,14 +675,17 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
     requiresMeasurements: true,
     artefactsIntoBundle: [
       { source: 'artifacts/udg-003-phase-1', target: 'vectors/' },
+      { source: 'artifacts/udg-003-phase-2', target: 'vectors-phase-2/' },
       { source: 'artifacts/probes', target: 'probes/' },
     ],
-    manifestArtefacts: ['vectors/vectors-manifest.json'],
-    manifestRequiredFiles: [...PHASE_1_VECTOR_FILES],
+    manifests: [
+      { path: 'vectors/vectors-manifest.json', phase: PHASE_1_LABEL, requiredFiles: [...PHASE_1_VECTOR_FILES] },
+      { path: 'vectors-phase-2/vectors-manifest.json', phase: PHASE_2_LABEL, requiredFiles: [...PHASE_2_VECTOR_FILES] },
+    ],
     measurementsIntoBundle: true,
     // The manifest is the identity artefact: it names the commit the vectors were produced from, so a
     // placeholder or another run's directory cannot stand in for this one.
-    identityArtefacts: ['vectors/vectors-manifest.json', 'measurements/UDG-003.json'],
+    identityArtefacts: ['vectors/vectors-manifest.json', 'vectors-phase-2/vectors-manifest.json', 'measurements/UDG-003.json'],
     reportProse: {
       profiles:
         'No network profile applies to Phase 1: the authority core is transport-independent and owns no socket, room or client. Spike runs record LAN, moderate, elevated and poor profiles with achieved RTT and jitter statistics.',
@@ -652,12 +700,12 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
         noCiRun:
           'Phase 1 covers the transport-independent authority core only. It stays In Review until the owner accepts it, and this summary records no CI run.',
         ciRun:
-          'Workflow ci on the pushed commit, identified by the url field, for UDG-003 Phase 1 only. It is not a UDG-003 task pass, not a third-party stack compatibility claim, and not a Gate A, B or C pass; Phases 2 and 3 remain unassigned.',
+          'Workflow ci on the pushed commit, identified by the url field, for UDG-003 Phases 1 and 2 (the artefacts this bundle carries). It is not a UDG-003 task pass, not a third-party stack compatibility claim, and not a Gate A, B or C pass; formal Gate A execution belongs to UDG-SPIKE-001 and Phase 3 remains unassigned.',
       },
     },
     thresholds: {
       'toolchain.node': '=== "v24.22.2" (unchanged from the accepted foundation)',
-      'phase.scope': '=== "phase-1" — the label the manifest declares and report.json repeats',
+      'phase.scope': '=== "phase-2" — the label the bundle carries; each manifest inside still declares its own phase, and both are verified against their own lists',
       'authority.stageOrder': '=== ["F","L","Q","S","A","C","R","X"] on an executed tick; M and P are absent and disclosed as Phase 2',
       'authority.oneInputPerTick': '=== 1 continuous observation consumed when three frames arrive in one tick (the rule is at most one per entity per tick)',
       'authority.navigationRefusal': 'UDG_MOVE_TO admitted at the gate and refused in screening with "NAVIGATION_BUSY", with zero path candidates',
@@ -669,7 +717,7 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       'authority.cutoffLifecycle': 'a departure disposes only of arrivals the cutoff covers; no queue holds an arrival the tick that holds it has frozen past, and each mid-tick arrival is dispositioned exactly once (PA1-C7, overtaken for the mid-tick case by PA1-C8)',
       'authority.deferredIntake': 'an arrival received while a tick runs is decided at the next boundary in receipt order; the intake is bounded at 64 with every rejection counted and journalled nowhere; leave, expiry, epoch change and leave/rejoin each replay from persisted evidence to the same dispositions, canonical state and chain tip (PA1-C8)',
       'authority.receiptOrder': 'a between-ticks arrival is admitted after everything already waiting in the intake, so stage Q selects the older observation and drop-newest refuses the newer one; live and replay agree on both identities, on canonical state and on the chain tip, with room available and with exactly one slot free (PA1-C9)',
-      'vectors.artefacts': `=== ${String(PHASE_1_VECTOR_FILES.length)} artefacts listed, each present with a matching digest`,
+      'vectors.artefacts': `=== ${String(PHASE_1_VECTOR_FILES.length)} phase-1 artefacts and ${String(PHASE_2_VECTOR_FILES.length)} phase-2 artefacts listed, each present with a matching digest`,
       'vectors.digestsMatchBytes': '=== true (every artefact re-read from disk hashes to the digest the manifest declares)',
       'capture.commandsRun': '>= 8 commands, capture.failingCommands === []',
     },
@@ -683,7 +731,6 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
         env: {
           UDG_EVIDENCE_JUNIT: 'BUNDLE/junit.xml',
           UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-003.json',
-          UDG_VECTORS_OUT: 'BUNDLE/vectors',
           // This is the second probe invocation in the job, after the workflow's own `ci-test-step`.
           // It writes its own attributed directory instead of overwriting that one, so a probe failure
           // discovered during capture cannot be hidden behind a passing earlier invocation - the defect
@@ -703,6 +750,28 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
         measurements: true,
       },
       { label: 'phase-1-vectors-verify', argv: ['node', 'tools/checks/dist/evidence.js', 'vectors', '--dir', 'BUNDLE/vectors'] },
+      // Phase 2's runtime evidence is written by its own scripts — the adversarial population and
+      // the recovery scenarios — BEFORE the pure vectors suite writes the manifest that names them
+      // all; order is part of the contract, and a missing runtime file fails the manifest.
+      {
+        label: 'phase-2-abuse-population',
+        argv: ['node', 'tests/runtime/udg-003-phase-2/abuse-population.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      {
+        label: 'phase-2-recovery-scenarios',
+        argv: ['node', 'tests/runtime/udg-003-phase-2/recovery-scenarios.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      {
+        label: 'phase-2-vectors',
+        argv: ['pnpm', 'exec', 'vitest', 'run', 'tests/unit/udg-003-phase-2/vectors.test.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      {
+        label: 'phase-2-vectors-verify',
+        argv: ['node', 'tools/checks/dist/evidence.js', 'vectors', '--dir', 'BUNDLE/vectors-phase-2', '--expect-phase', 'phase-2'],
+      },
       { label: 'test-unit', argv: ['pnpm', 'test:unit'] },
       { label: 'test-boundaries', argv: ['pnpm', 'test:boundaries'] },
       { label: 'test-fixtures', argv: ['pnpm', 'test:fixtures'] },
@@ -1619,13 +1688,15 @@ export const verify = (root: string, runRelative: string): VerifyResult => {
       });
     }
 
-    for (const relative of plan.manifestArtefacts ?? []) {
+    for (const manifest of plan.manifests ?? []) {
+      const relative = manifest.path;
       // The manifest is a requirement list, so it is checked against the gate's own expectation and against
-      // the bytes on disk, and it must name the commit this run executed.
+      // the bytes on disk, and it must name the commit this run executed. Each manifest declares its OWN
+      // phase (§8.2.1): the Phase 1 set inside a Phase 2 bundle stays a Phase 1 claim.
       for (const issue of validateVectorManifest(dirname(join(absoluteRunDir, relative)), {
         taskId: report.taskId,
-        phase: plan.phase?.label ?? '',
-        requiredFiles: plan.manifestRequiredFiles ?? [],
+        phase: manifest.phase,
+        requiredFiles: manifest.requiredFiles,
         requireCleanTree: report.workingTreeDirty === false,
         implementationSha: report.implementationSha,
       })) {
@@ -2469,17 +2540,19 @@ const main = (): number => {
   if (mode === 'vectors') {
     // The CI gate for the Phase 1 vectors, independent of any bundle: a missing manifest, a missing vector,
     // a changed byte or a manifest from another commit all exit non-zero (reviewer correction 4).
-    const directory = requireFlag(flags, 'dir', 'usage: evidence.js vectors --dir <directory> [--expect-task UDG-003] [--expect-phase phase-1] [--allow-dirty]');
+    const directory = requireFlag(flags, 'dir', 'usage: evidence.js vectors --dir <directory> [--expect-task UDG-003] [--expect-phase phase-1|phase-2] [--allow-dirty]');
+    const phase = flagString(flags, 'expect-phase') ?? PHASE_1_LABEL;
+    const requiredFiles = phase === PHASE_2_LABEL ? PHASE_2_VECTOR_FILES : PHASE_1_VECTOR_FILES;
     const issues = validateVectorManifest(resolve(process.cwd(), directory), {
       taskId: flagString(flags, 'expect-task') ?? 'UDG-003',
-      phase: flagString(flags, 'expect-phase') ?? PHASE_1_LABEL,
-      requiredFiles: PHASE_1_VECTOR_FILES,
+      phase,
+      requiredFiles,
       requireCleanTree: flags['allow-dirty'] !== true,
     });
     for (const issue of issues) process.stderr.write(`::error::${issue.code}: ${issue.detail}\n`);
     if (issues.length > 0) return 1;
     process.stdout.write(
-      `PASS phase-1 vectors: ${String(PHASE_1_VECTOR_FILES.length)} artefact(s) listed, hashed and attributable\n`,
+      `PASS ${phase} vectors: ${String(requiredFiles.length)} artefact(s) listed, hashed and attributable\n`,
     );
     return 0;
   }
