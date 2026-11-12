@@ -171,6 +171,11 @@ describe('UDG-003 Phase 0 — probe harness', () => {
     expect(run.probes.map((record) => record.id)).toEqual([...PROBE_IDS]);
   });
 
+  it('rebuilds the server it probes, because PR-14 imports the emitted room module', () => {
+    expect(run.serverBuild.exitCode, `server build failed: ${run.serverBuild.stdout}${run.serverBuild.stderr}`).toBe(0);
+    expect(existsSync(join(ROOT, 'apps', 'server', 'dist', 'rooms', 'RegionRoom.js')), 'PR-14 runs the emitted room').toBe(true);
+  });
+
   it('emits the probe project so the assertions below are about executed code', () => {
     expect(run.emit.exitCode, `emit failed: ${run.emit.stdout}${run.emit.stderr}`).toBe(0);
     for (const id of PROBE_IDS) {

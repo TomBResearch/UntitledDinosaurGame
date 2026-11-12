@@ -183,6 +183,15 @@ export interface DeclarationInventoryEntry {
 
 export interface ProbeRun {
   readonly emit: CommandResult;
+  /**
+   * The emitted `apps/server` JavaScript (UDG-003 Phase 2).
+   *
+   * PR-14 drives the *production* room module through the same resolution an app would use, so it imports
+   * `apps/server/dist`, not source. A probe suite that ran against a stale `dist` would silently measure
+   * yesterday's room, so the runner rebuilds the server itself, on every invocation, and records the
+   * command — self-contained, including inside `pnpm test`, which runs before the job's build step.
+   */
+  readonly serverBuild: CommandResult;
   readonly compatibility: CompatibilityVerdict;
   readonly typecheck: CommandResult;
   readonly diagnostics: readonly ProbeDiagnostic[];
@@ -261,6 +270,10 @@ export function parseDiagnostics(output: string, cwd: string, root: string): rea
 /** Emit the probe project without consulting third-party declarations. */
 export const emitProbes = (root: string): CommandResult =>
   run([process.execPath, compilerPath(root), '-p', 'tsconfig.probes.json', '--noCheck'], serverDirectory(root), PROBE_TIMEOUT_MS);
+
+/** The accepted server build (`tsc -p tsconfig.json`, fully typechecked), re-run by the probe runner itself. */
+export const buildServer = (root: string): CommandResult =>
+  run([process.execPath, compilerPath(root), '-p', 'tsconfig.json'], serverDirectory(root), PROBE_TIMEOUT_MS);
 
 /**
  * The accepted compiler gate. Since ADR-0002 the two `apps/server` projects set `skipLibCheck: true`, so this
@@ -487,6 +500,9 @@ export function runColyseusProbes(root: string, outDir: string, options: ProbeRu
   mkdirSync(invocationDir, { recursive: true });
 
   const emit = emitProbes(root);
+  // PR-14 imports the emitted room module; a stale or absent `dist` must fail loudly here, not quietly
+  // measure an old build. Full typecheck included: this is the accepted build, not the --noCheck emit.
+  const serverBuild = buildServer(root);
 
   // The accepted compiler gate (ADR-0002): first-party code checked against the pinned declarations.
   const typecheck = typecheckProbes(root);
@@ -628,6 +644,12 @@ export function runColyseusProbes(root: string, outDir: string, options: ProbeRu
     failedInvocations,
     invocationCount: ledger.invocations.length,
     emit: { command: emit.command, exitCode: emit.exitCode, timedOut: emit.timedOut, purpose: 'diagnostic emission only (--noCheck)' },
+    serverBuild: {
+      command: serverBuild.command,
+      exitCode: serverBuild.exitCode,
+      timedOut: serverBuild.timedOut,
+      purpose: 'the accepted server build re-run by the runner, because PR-14 imports the emitted room module',
+    },
     typecheck: {
       command: typecheck.command,
       exitCode: typecheck.exitCode,
@@ -690,6 +712,7 @@ export function runColyseusProbes(root: string, outDir: string, options: ProbeRu
 
   return {
     emit,
+    serverBuild,
     compatibility,
     typecheck,
     diagnostics,

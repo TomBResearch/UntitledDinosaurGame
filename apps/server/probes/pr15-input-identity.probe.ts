@@ -235,6 +235,13 @@ async function main(): Promise<void> {
       const beforeInterior = gap === undefined ? undefined : gap.snapshot(gapRoom.sessionId);
 
       await gate(gapRoom, 1);
+      // Hold the gate until a step has actually been withheld. Without this wait the window is only
+      // the length of two loopback messages, and whether it contains a step at all is the scheduler's
+      // decision — §7's reliability rule allows exact assertions only where the construction controls
+      // the case, and the withheld window is part of this construction. Observed live as a false
+      // failure of `I2a-the-step-gate-held-a-window-without-counting-it-as-a-tick` (suspended 0, ticks
+      // 5) under probe load on 2026-11-12; the assertion itself did not move, the construction did.
+      const windowHeld = await until(() => (gap?.suspendedSkips ?? 0) >= 1, 2000);
       // One synchronous burst: no `await` between sends, so nothing else on the client can interleave,
       // and the room's own gate means no step can consume while the buffer is filling.
       const gapBurst = await send(gapHandle, 6, 0);
@@ -249,6 +256,8 @@ async function main(): Promise<void> {
       checks.observe('S2a_interiorGap', {
         sentTotal: interiorGapTotal,
         settledBeforeGate: gapSettled,
+        windowHeld,
+        withheldWindows: gap?.suspendedSkips ?? 0,
         drainedAfterResume: gapDrained,
         before: beforeInterior ?? null,
         after: interior ?? null,
