@@ -21,6 +21,15 @@ import { Decoder, Encoder, MapSchema, schema, t } from '@colyseus/schema';
  */
 export { Decoder, Encoder, MapSchema, schema, t };
 
+/**
+ * The projection layer is re-exported here from Phase 2 (UDG-003 W-2) so that a consumer holding the
+ * replica classes can populate them without naming a second subpath. `@udg/protocol/mapping` remains
+ * the canonical name for the projection; the two barrels resolve to the same modules, so there is one
+ * implementation and two spellings of it. Consumers that must stay engine-free (simulation, config)
+ * still name `@udg/protocol/domain` and can reach neither barrel.
+ */
+export * from '../mapping/index.js';
+
 export { DirectInputSchema, DIRECT_INPUT_FIELDS } from './DirectInputSchema.js';
 export { PlayerSchema, PLAYER_FIELDS } from './PlayerSchema.js';
 export { RegionSchema, REGION_FIELDS } from './RegionSchema.js';
