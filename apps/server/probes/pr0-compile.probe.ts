@@ -252,7 +252,10 @@ async function main(): Promise<void> {
       for (const [name, reference] of typeReferences) {
         checks.check(name, reference === null, 'declared in a typed position; the compile is the proof');
       }
-      checks.check('input-field-count', inputFieldCount === 5, `DIRECT_INPUT_FIELDS has ${String(inputFieldCount)} entries`);
+      // Phase 2 (UDG-003 W-2, owner decision D-P2-3) amended the adopted input schema with the
+      // per-frame send sequence: six declared fields where Phase 0 measured five. The expectation
+      // moved with the approved schema; the five authority fields still stand, in order, first.
+      checks.check('input-field-count', inputFieldCount === 6, `DIRECT_INPUT_FIELDS has ${String(inputFieldCount)} entries`);
 
       // No escape hatches anywhere in the probe tree: the compile must be honest.
       const probeDir = join(root, 'apps/server/probes');

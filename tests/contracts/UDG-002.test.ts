@@ -463,7 +463,9 @@ describe('replica field map', () => {
       'manifestHash',
       'players',
     ]);
-    expect(DIRECT_INPUT_FIELDS).toEqual(['sessionEpoch', 'generation', 'directIntent', 'moveX', 'moveZ']);
+    // Phase 2 (W-2): the wire schema gains the per-frame send sequence; the field-map rows, the
+    // widths table and this pin move together with the schema, per §6.1 of the Phase 2 assignment.
+    expect(DIRECT_INPUT_FIELDS).toEqual(['sessionEpoch', 'generation', 'directIntent', 'moveX', 'moveZ', 'seq']);
     record('field.map.rows', fieldMap.length);
   });
 

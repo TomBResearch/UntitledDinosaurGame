@@ -15,10 +15,13 @@ export * from './version.js';
 export * from './domain/index.js';
 export {
   DIRECT_FRAME_FIELDS,
+  DIRECT_WIRE_FRAME_FIELDS,
   NEUTRAL_DIRECT_INPUT,
+  coreFrameOfWireFrame,
   directInputOf,
   neutralDirectFrame,
   validateDirectFrame,
+  validateDirectWireFrame,
   type DirectFrameContext,
 } from './validation/direct.js';
 export {

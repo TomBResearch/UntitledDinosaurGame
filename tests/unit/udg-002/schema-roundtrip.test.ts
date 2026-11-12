@@ -158,8 +158,12 @@ describe('the pinned codec preserves the scalar set', () => {
     expect(decoded.configHash).toBe('a'.repeat(64));
     expect(decoded.manifestHash).toBe('b'.repeat(64));
     expect(REGION_FIELDS.length).toBe(8);
-    expect(DIRECT_INPUT_FIELDS.length).toBe(5);
-    expect(PLAYER_FIELDS.length).toBe(17);
+    // Phase 2 (W-2, ADR-0003 §4): DirectInputSchema carries the per-frame send sequence `seq`,
+    // and PlayerSchema carries the disposition record and effect ledger (6 new fields). The old
+    // pins (5 and 17) held until that approved wire change; the movement and region sets are
+    // unchanged, which is the half that matters for movementHash (§6.6 of the Phase 2 assignment).
+    expect(DIRECT_INPUT_FIELDS.length).toBe(6);
+    expect(PLAYER_FIELDS.length).toBe(23);
   });
 
   it('produces an empty full-sync only when the state has no recorded changes', () => {

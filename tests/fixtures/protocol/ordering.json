@@ -4,7 +4,7 @@
   "kind": "protocol-ordering",
   "ownerTask": "UDG-002",
   "protocolVersion": "udg-m0-1.0.0",
-  "configHash": "948f8c10fc404e2ebdb015abc8e30b8e66caf357347db3a2636ace96687a208a",
+  "configHash": "2743a9a047ce7264833af88e8bd2f8aeea970a45e306a348e1fe0654191bec7a",
   "seed": null,
   "boundsProvenance": "test-only-synthetic",
   "bounds": {

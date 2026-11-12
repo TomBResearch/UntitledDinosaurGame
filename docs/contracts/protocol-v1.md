@@ -15,6 +15,29 @@ Status markers used below:
   treated as settled by a dependent task.
 - **Deferred** — deliberately absent from this edition; the named task owns it.
 
+### Phase 2 disclosure (UDG-003, owner decision D-P2-3, 2026-11-11)
+
+Phase 2 amends this edition's wire surface in three disclosed ways, on the owner's approval, **inside
+the `udg-m0-1.0.0` version string** because exact-match compatibility has nothing to negotiate with —
+there is exactly one deployment of this protocol and `configHash` moves with the code that implements
+it, so a stale peer fails the hash before it parses a frame:
+
+1. `DirectInputSchema` gains a sixth field, `seq` — the per-frame client send sequence declared as
+   the room's input `seqField` (ADR-0003 §4). A frame stamped `0` (the schema default, meaning
+   "unstamped") is refused by the transport. This is **a breaking wire change**: a pre-Phase-2 client
+   cannot produce a frame this edition accepts, and that is intended, disclosed, and enforced by the
+   version/hash pair rather than papered over.
+2. `PlayerSchema` gains the per-entity input disposition record and effect ledger (§6.5): four
+   `uint32` fields, a `uint32` counter and a bounded string. Rows 17–22 of the field map.
+3. Three close codes are reserved (§6.6). Reserving is declaring: no other task may terminate a seat
+   under them without a record here first.
+
+What did **not** change: the direct frame's *authority* shape — the five fields the accepted Phase 1
+core screens, journals and steps — stays exactly as UDG-002 built it. The stamp is reconciliation
+metadata owned by the transport; `validateDirectFrame` and its closed five-field set are untouched,
+and the wire shape has its own validator (§4). `movementHash` is unchanged: this is configuration and
+transport, not movement semantics (§6.6 of the Phase 2 assignment).
+
 ## 1. Identity and compatibility
 
 | Item | Value | Status |
@@ -108,11 +131,19 @@ supersede ordering stay in UDG-003 (decision U2-6).
 ## 4. Wire messages
 
 Every message is validated against a **closed** field set: a missing field, an extra field and a
-mis-typed field are all `INVALID_PAYLOAD` before any semantics are considered.
+mis-typed field are all `INVALID_PAYLOAD` before any semantics are considered. The direct frame has
+two closed sets since Phase 2, and they are deliberately not the same: the **wire shape** carries
+the send stamp the transport reconciles against, and the **authority shape** — what the core screens,
+journals and steps — does not. `validateDirectWireFrame` validates the six fields and
+`coreFrameOfWireFrame` projects the five; only the five enter the authority's payload, so no movement
+decision can be made from a client-chosen number (Phase 2 assignment §8.3, invariant 5). The stamp
+must be an integer in `[INPUT_SEQ_MIN, INPUT_SEQ_MAX]`; strictly-increasing order is per-connection
+state and belongs to the room's disposition record, not to a stateless validator.
 
 | Message | Fields (exact set) | Validator |
 | --- | --- | --- |
-| direct frame | `sessionEpoch`, `generation`, `directIntent`, `moveX`, `moveZ` | `validateDirectFrame` |
+| direct frame (authority shape) | `sessionEpoch`, `generation`, `directIntent`, `moveX`, `moveZ` | `validateDirectFrame` |
+| direct frame (wire shape, Phase 2) | `sessionEpoch`, `generation`, `directIntent`, `moveX`, `moveZ`, `seq` | `validateDirectWireFrame` |
 | `UDG_MOVE_TO` | `requestId`, `sessionEpoch`, `generation`, `x`, `y`, `z` | `validateMoveTo` |
 | `UDG_CANCEL_PATH` | `requestId`, `sessionEpoch`, `generation` | `validateCancelPath` |
 | join metadata | `protocolVersion`, `configHash`, `manifestHash` | `validateJoin` |
@@ -186,6 +217,19 @@ declaration field-for-field, name-for-name and width-for-width.
 | 14 | `sessionEpoch` | `uint32` | `sessionEpoch` | must be ≥ `EPOCH_MIN`, which is also the truncation tripwire |
 | 15 | `connected` | `boolean` | `connected` | |
 | 16 | `lastAuthorityTick` | `uint32` | `locomotion.lastAuthorityTick` | |
+| 17 | `inputResolvedThrough` | `uint32` | `disposition.inputResolvedThrough` | Phase 2; highest stamp with an explicit disposition at or below it, contiguous from the domain's first stamp; `0` = nothing resolved |
+| 18 | `inputGapStart` | `uint32` | `disposition.inputGap.start` | Phase 2; inclusive named-gap bound; `0` with `inputGapEnd = 0` means no gap named |
+| 19 | `inputGapEnd` | `uint32` | `disposition.inputGap.end` | Phase 2; `start <= end` when named; `0` is never a legal stamp, so the `0 / 0` pair is unambiguous |
+| 20 | `inputRetiredUnrepresented` | `uint32` | `disposition.inputRetiredUnrepresented` | Phase 2; ADR-0003 §3.1 retirement count within the current connection domain |
+| 21 | `effectCount` | `uint32` | `ledger.effectCount` | Phase 2; committed discrete effects for this entity and epoch (GA-10) |
+| 22 | `lastAppliedRequestId` | `string<=64` | `ledger.lastAppliedRequestId` | Phase 2; the identity whose commitment last moved the ledger; `''` = none yet |
+
+Phase 2 rows (17–22) are projected by their own pair of functions — `applyDisposition` and
+`readDisposition` in `@udg/protocol/mapping` — beside the canonical projection, not inside it: the
+record describes what the transport resolved, not where the entity is, and it is **not** part of
+`PlayerSimulationState`. Their "canonical state path" column names the record's own field, and the
+round-trip assertion in `tests/contracts/UDG-002.test.ts` sees them as absent-on-both-sides, which is
+exactly the discipline: canonical state neither carries nor can forge a disposition.
 
 Absent by design: route point lists, transport session maps, per-client scratch state, and any
 authoritative transform setter. Route points remain server-only; a client learns a route through
@@ -195,8 +239,11 @@ authoritative transform setter. Route points remain server-only; a client learns
 `configHash`, `manifestHash` and a `players` map keyed by `playerMapKey` (`entityId`). The map key is
 an ASCII identifier, so the same key rule applies.
 
-`DirectInputSchema` mirrors the direct-frame field set for the SDK's fixed-step input layer, so the
-input sequence is encoded by the pinned schema rather than by a hand-rolled frame.
+`DirectInputSchema` mirrors the direct-frame **wire** field set — the authority five plus `seq`
+(Phase 2) — for the SDK's fixed-step input layer, so the input sequence is encoded by the pinned
+schema rather than by a hand-rolled frame. The room declares it with `seqField: 'seq'`
+(`defineInput`, pinned `@colyseus/core@0.18.27`), which is what makes `accessor.at(seq)` and the
+buffer's ordering and dedupe speak in the same stamps the authoritative record publishes.
 
 ### 6.1 Enum encoding
 
@@ -276,6 +323,42 @@ claim made before normalisation would be false in a way nobody would notice.
 - Room-free full snapshots use `new Encoder(state).encodeAll()` with `new Decoder(target).decode(bytes)`.
 - `InputEncoder` rejects nested schema fields, so the direct-input declaration stays flat.
 
+### 6.5 Input disposition record and effect ledger (Phase 2, ADR-0003 §4)
+
+The acknowledgement is a send-order watermark, not a representation claim (PR-8, ADR-0003 §2). The
+replacement claim lives in replica fields 17–22 and is governed by the adopted clause:
+
+* `inputResolvedThrough` is the highest client send sequence for which **every** sequence at or below
+  it has an explicit disposition; advancing it past a sequence with no disposition is prohibited,
+  whether or not a gap is named. A client prunes against this field, never `lastProcessed`.
+* the gap pair names a range the server *observed* (a hole between two consumed stamps). Frames
+  retired before the buffer — the dedupe case PR-15 measured — can only be named when a later stamp
+  exists; the terminal case stays unnameable, and `inputGap*` stays `0 / 0` there rather than
+  inventing a range;
+* `inputRetiredUnrepresented` is the §3.1 arithmetic (`consumedDelta − dequeuedCount` per connection
+  domain), charged for eviction and for `clear()`, never for a frame dequeued and then refused by UDG
+  rules;
+* `effectCount` / `lastAppliedRequestId` are the discrete-effect ledger GA-10 measures: `Δ == 1` per
+  committed identity, `Δ == 0` for an abandoned one, `Δ == 1` for a deliberate reissue under a new
+  identity.
+
+The record is published **in the tick in which the room consumes**, and is rebuilt from scratch on a
+connection-domain change (new epoch), because the stamp domain restarts across a rejoin (PR-15) while
+`InputHandle.epoch` does not move.
+
+### 6.6 Reserved close codes (Phase 2, ADR-0003 §3.3)
+
+| Code | Name | Raised when |
+| --- | --- | --- |
+| 4100 | `INPUT_RETIRED_UNREPRESENTED` | a confirmed unrepresented retirement closed the seat through the bounded window of §3.3 |
+| 4101 | `INPUT_RATE_CEILING` | the observed arrival rate exceeded the declared ceiling; direct closure |
+| 4102 | `INPUT_RECOVERY` | the §3.2 recovery path ended — the client surfaces the connection error and stays stopped |
+
+Single-sourced from `RESERVED_CLOSE_CODES` in `@udg/protocol`, declared inside the hashed
+configuration (`input.closeCodes`), and refused by configuration validation if overridden. `4008`
+appears in Phase 0 probe evidence as a probe-local code and is **not** a UDG reservation. A new close
+code needs a row here before any code may send it.
+
 ## 7. Configuration canonicalisation and hashing
 
 `@udg/config` defines the digest both server and client must reproduce:
@@ -291,8 +374,15 @@ claim made before normalisation would be false in a way nobody would notice.
   the same hash; `tests/unit/udg-002/config.test.ts` cross-checks every digest against
   `node:crypto`.
 
-`ServerConfig` blocks are `protocolVersion`, `region`, `movement`, `controller`, `network` and
-`limits`. `limits` is not accepted from a configuration document: it is re-issued from the protocol
+`ServerConfig` blocks are `protocolVersion`, `region`, `movement`, `controller`, `network`, `input`
+and `limits`. The `input` block (Phase 2 W-3) declares the ADR-0003 envelope — `λ`, `B`, `J`, the
+buffer bound the envelope is expressed against, `G`, the closure bounds, the amended §3.2 recovery
+budget (`clientSnapshotDeadlineMs`, `clientRecoveryDeadlineMs`, the rolling rejoin allowance and the
+backoff ladder), the reserved close codes and the rate ceiling — so a client and a server that
+disagree about what "compliant" means produce different digests and refuse each other at the hash
+gate. Every value in it is a **provisional test setting** until Gate A (GA-11) measures production
+ones; the block validates its own relations (`B + J·λ + stall ≤ bufferMaxSize`, the §3.2
+deadline/closure ordering, the strictly increasing ladder). `limits` is not accepted from a configuration document: it is re-issued from the protocol
 build, and an overriding or unknown `limits` block is `UNKNOWN_KEY`/`INCONSISTENT`. Values whose
 authority is still pending (the P07 controller and gravity numbers) are named in
 `PROVISIONAL_P07_FIELDS` so no consumer can mistake them for adopted defaults.

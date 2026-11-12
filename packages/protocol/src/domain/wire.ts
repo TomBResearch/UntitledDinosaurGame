@@ -12,8 +12,11 @@ import type { Generation, ProtocolVersion, RejectionCode, ServerTick, SessionEpo
  * than a default: `directIntent` distinguishes a real direct-control sample, including a release,
  * from a neutral keepalive while path mode owns movement.
  *
- * There is deliberately no position, speed, elapsed time, route, authoritative tick or client
- * sequence counter: the server owns those (baseline §4, protocol.md 4.2).
+ * There is deliberately no position, speed, elapsed time, route or authoritative tick: the server
+ * owns those (baseline §4, protocol.md 4.2). The one client-owned counter is the send sequence on
+ * the *wire* frame below — it is a send-order identity, not a transform, and ADR-0003 §4 (owner
+ * decision D-P2-3, Phase 2 W-2) adopted it as the identity the authoritative disposition record
+ * resolves against.
  */
 export interface DirectFrame {
   readonly sessionEpoch: SessionEpoch;
@@ -21,6 +24,44 @@ export interface DirectFrame {
   readonly directIntent: boolean;
   readonly moveX: number;
   readonly moveZ: number;
+}
+
+/**
+ * The frame as the wire declares it: the five authority fields plus the per-frame client send
+ * sequence stamped into the field declared as the room's `seqField` (ADR-0003 §4; W-2).
+ *
+ * `DirectFrame` stays the *authority* shape — the payload the accepted core screens and journals.
+ * The transport validates the wire shape with `validateDirectWireFrame` and projects the authority
+ * fields with `coreFrameOfWireFrame`; the stamp itself belongs to the disposition record, not to
+ * movement. No server rule may be decided from the stamp beyond reconciliation (invariant §8.3.5).
+ */
+export interface DirectWireFrame extends DirectFrame {
+  /** Client send sequence: `sentCount + 1` read before the send, strictly increasing per domain. */
+  readonly seq: number;
+}
+
+/**
+ * The per-entity input disposition record and effect ledger, as authoritative state carries them
+ * (ADR-0003 §4; W-2). One record per entity per session epoch; a domain change resets it.
+ *
+ * This is a *projection* record, not part of `PlayerSimulationState`: it describes what the transport
+ * did with client input, not where the entity is. `applyDisposition` writes it onto a replica beside
+ * the canonical projection; `readDisposition` reads it back.
+ */
+export interface InputDispositionRecord {
+  /**
+   * Highest sequence for which **every** sequence at or below it has an explicit disposition.
+   * `0` means nothing resolved. Advancing it past a sequence with no disposition is prohibited.
+   */
+  readonly inputResolvedThrough: number;
+  /** The named gap range the server observed, inclusive; `null` when no gap has been named. */
+  readonly gap: { readonly start: number; readonly end: number } | null;
+  /** §3.1 retirement count within the current connection domain: consumed delta minus real dequeues. */
+  readonly inputRetiredUnrepresented: number;
+  /** Committed effects for this entity and epoch (GA-10 exactly-once ledger). */
+  readonly effectCount: number;
+  /** The request identity whose commitment last incremented the ledger; `null` when none has. */
+  readonly lastAppliedRequestId: string | null;
 }
 
 /** Reliable one-shot request. Coordinates are validated against explicitly supplied region bounds. */

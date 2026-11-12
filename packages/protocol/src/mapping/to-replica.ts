@@ -14,6 +14,7 @@
 
 import type { EntityId, MovementMode } from '../domain/primitives.js';
 import type { KinematicState, PlayerSimulationState, RegionReplicaState } from '../domain/state.js';
+import type { InputDispositionRecord } from '../domain/wire.js';
 import {
   GENERATION_MAX,
   HASH_PATTERN,
@@ -258,3 +259,73 @@ export const playerMapKey = (entityId: EntityId): string => entityId;
 
 /** Exposed so the field-map test can pin the enum against declaration order. */
 export const movementModeCode = (mode: MovementMode): number | undefined => modeCodeOf(mode);
+
+// --- Disposition record and effect ledger (ADR-0003 §4; UDG-003 Phase 2 W-2) --------------------
+
+/**
+ * Validate an `InputDispositionRecord` against the widths the replica carries.
+ *
+ * The record is *not* part of `PlayerSimulationState` — it describes what the transport resolved,
+ * not where the entity is — so it is projected by its own function, beside the canonical one, in
+ * the same publication. The same boundary discipline as `checkPlayerState` applies: an out-of-domain
+ * value is refused here rather than silently wrapped by the codec.
+ *
+ * Rules that are semantic, not merely wide:
+ * - `inputResolvedThrough` may be `0` ("nothing resolved") but never a stamp the domain forbids;
+ * - a named gap needs both bounds, `start <= end`, and each bound is a legal stamp (`>= 1`);
+ * - `lastAppliedRequestId` is `null` ("none yet") or a protocol identifier.
+ */
+export const checkDisposition = (record: InputDispositionRecord | undefined): readonly MappingIssue[] => {
+  const issues: MappingIssue[] = [];
+  if (!isRecord(record)) {
+    collect(issues, 'disposition', 'must be an InputDispositionRecord object');
+    return issues;
+  }
+  checkUint(issues, 'inputResolvedThrough', record.inputResolvedThrough, UINT32_MAX);
+  const gap = record.gap;
+  if (gap === null || gap === undefined) {
+    // Absence is legal and encodes as the `0 / 0` sentinel pair.
+  } else if (!isRecord(gap)) {
+    collect(issues, 'inputGap', 'must be null or a { start, end } pair');
+  } else {
+    checkUint(issues, 'inputGapStart', gap.start, UINT32_MAX);
+    checkUint(issues, 'inputGapEnd', gap.end, UINT32_MAX);
+    if (isIntegerInRange(gap.start, 1, UINT32_MAX) && isIntegerInRange(gap.end, 1, UINT32_MAX) && gap.start > gap.end) {
+      collect(issues, 'inputGapEnd', 'a named gap must satisfy start <= end');
+    }
+    if (gap.start === 0 || gap.end === 0) {
+      collect(issues, 'inputGap', '0 is the no-gap sentinel; a named bound must be a legal stamp (>= 1)');
+    }
+  }
+  checkUint(issues, 'inputRetiredUnrepresented', record.inputRetiredUnrepresented, UINT32_MAX);
+  checkUint(issues, 'effectCount', record.effectCount, UINT32_MAX);
+  const requestId = record.lastAppliedRequestId;
+  if (requestId !== null && requestId !== undefined) {
+    if (typeof requestId !== 'string' || requestId.length === 0) {
+      collect(issues, 'lastAppliedRequestId', 'must be null or a non-empty identifier');
+    } else if (requestId.length > MAX_IDENTIFIER_LENGTH || !ASCII_IDENTIFIER.test(requestId)) {
+      collect(issues, 'lastAppliedRequestId', 'must be a printable-ASCII identifier of at most 64 characters');
+    }
+  }
+  return issues;
+};
+
+/**
+ * Project the disposition record onto a replica the canonical state was already mapped into.
+ *
+ * The room calls this in the same tick in which it consumed (ADR-0003 §4: "The server publishes
+ * these fields in the tick in which it consumes"), after `toReplica` and before the patch leaves.
+ * A refused record leaves the replica untouched — a half-written disposition is worse than the
+ * previous honest one — and reports the issues instead.
+ */
+export const applyDisposition = (replica: PlayerSchema, record: InputDispositionRecord): MappingResult<PlayerSchema> => {
+  const issues = checkDisposition(record);
+  if (issues.length > 0) return { ok: false, issues };
+  replica.inputResolvedThrough = record.inputResolvedThrough;
+  replica.inputGapStart = record.gap === null ? 0 : record.gap.start;
+  replica.inputGapEnd = record.gap === null ? 0 : record.gap.end;
+  replica.inputRetiredUnrepresented = record.inputRetiredUnrepresented;
+  replica.effectCount = record.effectCount;
+  replica.lastAppliedRequestId = record.lastAppliedRequestId ?? '';
+  return { ok: true, value: replica };
+};

@@ -18,6 +18,7 @@ import {
   CONFIG_BOUNDS,
   CONTROLLER_DEFAULTS,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_INPUT_ENVELOPE_CONFIG,
   DEFAULT_REGION_CONFIG,
   DEFAULT_SERVER_CONFIG,
   MOVEMENT_DEFAULTS,
@@ -195,6 +196,9 @@ describe('configHash', () => {
     const reordered = deepFreeze({
       limits: PROTOCOL_LIMITS,
       network: DEFAULT_NETWORK_CONFIG,
+      // Phase 2 (W-3): the ADR-0003 input envelope block is part of the hashed configuration; a
+      // reordered document must carry it or it is a different document, not the same one reordered.
+      input: DEFAULT_INPUT_ENVELOPE_CONFIG,
       controller: CONTROLLER_DEFAULTS,
       movement: MOVEMENT_DEFAULTS,
       region: DEFAULT_REGION_CONFIG,

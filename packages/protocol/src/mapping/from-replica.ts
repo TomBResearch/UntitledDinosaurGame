@@ -9,6 +9,7 @@
  */
 
 import type { PlayerSimulationState, RegionReplicaState } from '../domain/state.js';
+import type { InputDispositionRecord } from '../domain/wire.js';
 import type { MovementMode } from '../domain/primitives.js';
 import type { Validation } from '../domain/wire.js';
 import {
@@ -219,4 +220,62 @@ export const readPlayerMap = (replica: RegionSchema | undefined): readonly Playe
     entries.push({ key, state: read.value ?? null, issues });
   });
   return entries;
+};
+
+// --- Disposition record and effect ledger (ADR-0003 §4; UDG-003 Phase 2 W-2) --------------------
+
+/** Field-by-field check of the disposition fields on a decoded replica. */
+export const readDispositionIssues = (replica: PlayerSchema | undefined): readonly ReplicaReadIssue[] => {
+  const issues: ReplicaReadIssue[] = [];
+  if (typeof replica !== 'object' || replica === null) {
+    issue(issues, 'disposition', 'must be a decoded PlayerSchema instance');
+    return issues;
+  }
+  requireUint(issues, 'inputResolvedThrough', replica.inputResolvedThrough, UINT32_MAX);
+  requireUint(issues, 'inputGapStart', replica.inputGapStart, UINT32_MAX);
+  requireUint(issues, 'inputGapEnd', replica.inputGapEnd, UINT32_MAX);
+  if (replica.inputGapStart !== 0 || replica.inputGapEnd !== 0) {
+    // A named range must be a pair of legal stamps in order; the `0 / 0` pair is the no-gap sentinel.
+    if (replica.inputGapStart === 0 || replica.inputGapEnd === 0) {
+      issue(issues, 'inputGapStart', 'a named gap must carry two legal stamps; only the 0/0 pair means "no gap"');
+    } else if (replica.inputGapStart <= replica.inputGapEnd) {
+      // Valid pair: `0` is never a legal stamp, and `start <= end` is the pair rule.
+    } else {
+      issue(issues, 'inputGapEnd', 'a named gap must satisfy start <= end');
+    }
+  }
+  requireUint(issues, 'inputRetiredUnrepresented', replica.inputRetiredUnrepresented, UINT32_MAX);
+  requireUint(issues, 'effectCount', replica.effectCount, UINT32_MAX);
+  const requestId = replica.lastAppliedRequestId;
+  if (typeof requestId !== 'string') {
+    issue(issues, 'lastAppliedRequestId', 'must be a string; the empty string means "none yet"');
+  } else if (requestId !== '' && (requestId.length > MAX_IDENTIFIER_LENGTH || !ASCII_IDENTIFIER.test(requestId))) {
+    issue(issues, 'lastAppliedRequestId', 'must be empty or a printable-ASCII identifier of at most 64 characters');
+  }
+  return issues;
+};
+
+/**
+ * Reconstruct the disposition record from a decoded replica.
+ *
+ * Same discipline as `fromReplica`: a decoded instance is not a validated value. The `0 / 0` gap
+ * pair reconstructs to `null` (no gap named) and the empty request id to `null` (no effect yet).
+ */
+export const readDisposition = (
+  replica: PlayerSchema | undefined,
+): { readonly issues: readonly ReplicaReadIssue[]; readonly value?: InputDispositionRecord } => {
+  const issues = [...readDispositionIssues(replica)];
+  if (issues.length > 0 || replica === undefined) return { issues };
+  return {
+    issues,
+    value: {
+      inputResolvedThrough: replica.inputResolvedThrough,
+      gap: replica.inputGapStart === 0 && replica.inputGapEnd === 0
+        ? null
+        : { start: replica.inputGapStart, end: replica.inputGapEnd },
+      inputRetiredUnrepresented: replica.inputRetiredUnrepresented,
+      effectCount: replica.effectCount,
+      lastAppliedRequestId: replica.lastAppliedRequestId === '' ? null : replica.lastAppliedRequestId,
+    },
+  };
 };

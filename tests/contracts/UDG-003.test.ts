@@ -445,11 +445,11 @@ describe('UDG-003 Phase 0 — PR-2 fixed step', () => {
 });
 
 describe('UDG-003 Phase 0 — PR-3 input declaration and codec', () => {
-  it('declares the adopted five fields in order', () => {
+  it('declares the adopted fields in order (Phase 2: six, with the send sequence last)', () => {
     const record = byId.get('PR-3');
     const detail = (record?.result?.checks.find((check) => check.name === 'declaration-is-the-adopted-one')?.detail ?? '')
       .replaceAll(', ', ',');
-    expect(detail).toContain('sessionEpoch,generation,directIntent,moveX,moveZ');
+    expect(detail).toContain('sessionEpoch,generation,directIntent,moveX,moveZ,seq');
   });
 
   it('preserves all five values through the wire codec', () => {

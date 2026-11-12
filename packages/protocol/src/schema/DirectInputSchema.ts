@@ -35,6 +35,14 @@ export const DirectInputSchema = schema(
     directIntent: t.boolean().default(false),
     moveX: t.float64().default(0),
     moveZ: t.float64().default(0),
+    /**
+     * The per-frame client send sequence (ADR-0003 §4; W-2). Declared as the room's input
+     * `seqField`, it is the identity the authoritative disposition record resolves against and the
+     * value `defineInput({ seqField })` orders and dedupes by. `0` is the *unstamped* default: a
+     * frame arriving without a stamp in `[INPUT_SEQ_MIN, INPUT_SEQ_MAX]` is refused by
+     * `validateDirectWireFrame` before anything consumes it.
+     */
+    seq: t.uint32().default(0),
   },
   'DirectInputSchema',
 );
@@ -42,4 +50,4 @@ export const DirectInputSchema = schema(
 export type DirectInputSchema = InstanceType<typeof DirectInputSchema>;
 
 /** Field order as declared, used by the completeness test. */
-export const DIRECT_INPUT_FIELDS = ['sessionEpoch', 'generation', 'directIntent', 'moveX', 'moveZ'] as const;
+export const DIRECT_INPUT_FIELDS = ['sessionEpoch', 'generation', 'directIntent', 'moveX', 'moveZ', 'seq'] as const;

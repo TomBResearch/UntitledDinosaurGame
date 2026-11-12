@@ -46,7 +46,11 @@ async function main(): Promise<void> {
 
       const sessionId = room.sessionId;
       checks.check('session-id-matches-server', instance.sessionIds.includes(sessionId), `server saw ${instance.sessionIds.join(', ')}`);
-      checks.check('declaration-is-the-adopted-one', instance.declaredFields().join(',') === 'sessionEpoch,generation,directIntent,moveX,moveZ', `declared fields ${instance.declaredFields().join(', ')}`);
+      // Phase 2 (UDG-003 W-2, owner decision D-P2-3) amended the adopted declaration with the
+      // per-frame send sequence `seq`; this expectation moved with the approved schema, and the
+      // five authority fields still stand first and in order. The old expectation read
+      // 'sessionEpoch,generation,directIntent,moveX,moveZ' and held until that disclosed change.
+      checks.check('declaration-is-the-adopted-one', instance.declaredFields().join(',') === 'sessionEpoch,generation,directIntent,moveX,moveZ,seq', `declared fields ${instance.declaredFields().join(', ')}`);
 
       const handle = room.input<DirectInputFrame>();
 

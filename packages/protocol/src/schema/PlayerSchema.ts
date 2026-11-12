@@ -30,6 +30,25 @@ export const PlayerSchema = schema(
     sessionEpoch: t.uint32().default(0),
     connected: t.boolean().default(false),
     lastAuthorityTick: t.uint32().default(0),
+    // --- Per-entity input disposition record (ADR-0003 §4; UDG-003 Phase 2 W-2). ---
+    /**
+     * Highest client send sequence for which **every** sequence at or below it has an explicit
+     * disposition, within the epoch this replica carries. `0` means "nothing resolved yet".
+     * Pruning uses this field, never the SDK acknowledgement's `lastProcessed`.
+     */
+    inputResolvedThrough: t.uint32().default(0),
+    /**
+     * The named gap the server observed, as an inclusive range; `0 / 0` means "no gap named".
+     * A stamp of `0` is not a legal sequence, so the sentinel cannot collide with a real range.
+     */
+    inputGapStart: t.uint32().default(0),
+    inputGapEnd: t.uint32().default(0),
+    /** §3.1 retirement count for this entity and domain: increase in consumed minus real dequeues. */
+    inputRetiredUnrepresented: t.uint32().default(0),
+    // --- Effect ledger (GA-10): committed effects for this entity and epoch. ---
+    effectCount: t.uint32().default(0),
+    /** The request identity whose commitment last incremented the ledger; `''` means none yet. */
+    lastAppliedRequestId: t.string().default(''),
   },
   'PlayerSchema',
 );
@@ -55,4 +74,10 @@ export const PLAYER_FIELDS = [
   'sessionEpoch',
   'connected',
   'lastAuthorityTick',
+  'inputResolvedThrough',
+  'inputGapStart',
+  'inputGapEnd',
+  'inputRetiredUnrepresented',
+  'effectCount',
+  'lastAppliedRequestId',
 ] as const;

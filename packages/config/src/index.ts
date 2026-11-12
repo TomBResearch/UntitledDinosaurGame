@@ -26,6 +26,12 @@ import {
   type MovementControllerConfig,
 } from './movement.js';
 import { DEFAULT_NETWORK_CONFIG, NETWORK_DEFAULTS, validateNetworkConfig, type NetworkConfig } from './network.js';
+import {
+  DEFAULT_INPUT_ENVELOPE_CONFIG,
+  INPUT_ENVELOPE_DEFAULTS,
+  validateInputEnvelopeConfig,
+  type InputEnvelopeConfig,
+} from './input.js';
 import { CONFIG_BOUNDS, PROTOCOL_LIMITS, PROTOCOL_PATTERNS } from './limits.js';
 import {
   REGION_ID,
@@ -54,6 +60,7 @@ export * from './validation.js';
 export * from './movement.js';
 export * from './network.js';
 export * from './limits.js';
+export * from './input.js';
 export * from './region.js';
 
 /**
@@ -70,12 +77,13 @@ export interface ServerConfig {
   readonly movement: Readonly<MovementConfig>;
   readonly controller: Readonly<MovementControllerConfig>;
   readonly network: Readonly<NetworkConfig>;
+  readonly input: Readonly<InputEnvelopeConfig>;
   readonly limits: typeof PROTOCOL_LIMITS;
 }
 
 // `limits` is a permitted key only in the exact form the protocol build produces; see
 // validateServerConfig, which refuses an override instead of ignoring one.
-export const SERVER_CONFIG_KEYS = ['protocolVersion', 'region', 'movement', 'controller', 'network', 'limits'] as const;
+export const SERVER_CONFIG_KEYS = ['protocolVersion', 'region', 'movement', 'controller', 'network', 'input', 'limits'] as const;
 
 /**
  * The default M0 configuration: v0.2 defaults throughout, P07-proposed controller values marked as
@@ -90,6 +98,7 @@ export const DEFAULT_SERVER_CONFIG: Readonly<ServerConfig> = deepFreeze({
   movement: MOVEMENT_DEFAULTS,
   controller: CONTROLLER_DEFAULTS,
   network: DEFAULT_NETWORK_CONFIG,
+  input: DEFAULT_INPUT_ENVELOPE_CONFIG,
   limits: PROTOCOL_LIMITS,
 });
 
@@ -120,6 +129,9 @@ export const validateServerConfig = (raw: unknown): ConfigResult<Readonly<Server
   const network = validateNetworkConfig(raw['network']);
   if (!network.ok) issues.push(...network.issues);
 
+  const input = validateInputEnvelopeConfig(raw['input']);
+  if (!input.ok) issues.push(...input.issues);
+
   // `limits` is derived, not configurable. A document that carries it is only accepted when it says
   // exactly what this protocol build says; anything else is a claim of authority over wire bounds that
   // configuration does not own. Accepting the matching form keeps a round-tripped configuration
@@ -134,8 +146,8 @@ export const validateServerConfig = (raw: unknown): ConfigResult<Readonly<Server
   }
 
   if (issues.length > 0) return configError(issues);
-  if (!version.ok || !region.ok || !movement.ok || !controller.ok || !network.ok) {
-    return configError([configFail('config', 'MISSING', 'protocolVersion, region, movement, controller and network are required')]);
+  if (!version.ok || !region.ok || !movement.ok || !controller.ok || !network.ok || !input.ok) {
+    return configError([configFail('config', 'MISSING', 'protocolVersion, region, movement, controller, network and input are required')]);
   }
 
   return configOk(
@@ -145,6 +157,7 @@ export const validateServerConfig = (raw: unknown): ConfigResult<Readonly<Server
       movement: movement.value,
       controller: controller.value,
       network: network.value,
+      input: input.value,
       limits: PROTOCOL_LIMITS,
     }),
   );
@@ -182,6 +195,7 @@ export const withConfigOverrides = (
     readonly movement?: Partial<MovementConfig>;
     readonly controller?: Partial<MovementControllerConfig>;
     readonly network?: Partial<NetworkConfig>;
+    readonly input?: Partial<InputEnvelopeConfig>;
   },
 ): Readonly<ServerConfig> =>
   deepFreeze({
@@ -190,6 +204,7 @@ export const withConfigOverrides = (
     movement: deepFreeze({ ...config.movement, ...overrides.movement }),
     controller: deepFreeze({ ...config.controller, ...overrides.controller }),
     network: deepFreeze({ ...config.network, ...overrides.network }),
+    input: deepFreeze({ ...config.input, ...overrides.input }),
     limits: PROTOCOL_LIMITS,
   });
 
@@ -202,7 +217,7 @@ export const isConfigHash = (value: unknown): boolean => checkHash('configHash',
 
 export const CONFIG_PROVENANCE = deepFreeze({
   provisionalFields: PROVISIONAL_P07_FIELDS,
-  v02Defaults: { movement: MOVEMENT_BLOCK, network: NETWORK_DEFAULTS },
+  v02Defaults: { movement: MOVEMENT_BLOCK, network: NETWORK_DEFAULTS, inputEnvelope: INPUT_ENVELOPE_DEFAULTS },
   patterns: PROTOCOL_PATTERNS,
   bounds: CONFIG_BOUNDS,
 });

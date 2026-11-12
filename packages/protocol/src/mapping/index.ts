@@ -15,6 +15,8 @@ export {
   playerMapKey,
   toRegionReplica,
   toReplica,
+  applyDisposition,
+  checkDisposition,
   type MappingIssue,
   type MappingResult,
 } from './to-replica.js';
@@ -23,6 +25,8 @@ export {
   fromReplica,
   readPlayerMap,
   readPlayerReplica,
+  readDisposition,
+  readDispositionIssues,
   readRegionIssues,
   readRegionReplica,
   readReplicaIssues,

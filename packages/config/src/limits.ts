@@ -97,6 +97,43 @@ export const CONFIG_BOUNDS = deepFreeze({
     max: MAX_GENERATION_FORWARD_GAP,
     reason: 'protocol.md 4.2 admits a forward gap of at most 64; a smaller window is stricter, a larger one is not the protocol',
   } satisfies NumericBound,
+  // --- Input envelope (ADR-0003; Phase 2 W-3). Ranges that make an incoherent policy impossible;
+  //     the relational checks that make it coherent live with the block in `input.ts`. ---
+  inputRatePerTick: {
+    min: 1,
+    max: 1,
+    reason: 'the one-input rule (P03 stage Q, re-adopted by ADR-0003 §2) is exactly one continuous frame per entity per authority tick; a wider range would make a non-conforming posture hashable',
+  } satisfies NumericBound,
+  bufferPressureMargin: {
+    min: 1,
+    max: 31,
+    reason: 'the pressure margin must leave at least one frame of headroom below the buffer bound or the signal would fire at the overflow itself',
+  } satisfies NumericBound,
+  jitterAllowanceFrames: {
+    min: 0,
+    max: 30,
+    reason: 'the jitter term participates in B + J·lambda + stall <= bufferMaxSize; the relational check refuses an envelope that cannot fit, this bound only refuses nonsense',
+  } satisfies NumericBound,
+  bufferMaxSize: {
+    min: 1,
+    max: 32,
+    reason: 'the buffering clause is bounded at 32 frames per client; a deployment may declare a smaller buffer, never a larger one',
+  } satisfies NumericBound,
+  stallDetectionDeliveries: {
+    min: 1,
+    max: 20,
+    reason: 'G consecutive non-advancing state deliveries; below 1 there is no window, above 20 the signal is decoration next to a 500 ms deadline',
+  } satisfies NumericBound,
+  rejoinWindowSeconds: {
+    min: 1,
+    max: 600,
+    reason: 'the rolling window of the amended §3.2 allowance; one hour is ten times the accepted window and beyond that a "rolling" allowance has stopped meaning anything',
+  } satisfies NumericBound,
+  rejoinWindowAllowance: {
+    min: 1,
+    max: 5,
+    reason: 'the amendment resolved the budget contradiction at two actual rejoins per window; the bound refuses a rejoin loop dressed as configuration',
+  } satisfies NumericBound,
 });
 
 /** The block that configuration hashing covers for limits, so a protocol change moves the hash. */

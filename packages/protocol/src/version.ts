@@ -91,6 +91,44 @@ export const MOVEMENT_MODE_BY_VALUE: Readonly<Record<number, 'idle' | 'direct' |
 export const ROUTE_ABSENT_REVISION = 0;
 export const ROUTE_ABSENT_INDEX = 0;
 
+/**
+ * Per-frame send-sequence domain (ADR-0003 §4, adopted by D-7; Phase 2 item W-2).
+ *
+ * Every continuous frame carries a client send sequence — the value `sentCount + 1` read before the
+ * send, stamped into the field declared as the room's input `seqField`, strictly increasing within
+ * one connection domain. A stamp of `0` is the schema's *unstamped* default, and an unstamped frame
+ * carries no identity the authoritative record could resolve, so the legal stamp domain starts at 1.
+ * The monotonicity rule itself is per-connection state and belongs to the room, not to a stateless
+ * validator.
+ */
+export const INPUT_SEQ_MIN = 1;
+export const INPUT_SEQ_MAX = UINT32_MAX;
+
+/**
+ * Reserved application close codes (UDG-003 Phase 2 W-2, policy in ADR-0003 §3.3).
+ *
+ * The WebSocket application range is 4000–4999. These three values are *reserved by UDG*: no other
+ * task may terminate a seat under them, and a new close code needs a record here first. They are
+ * declared in `packages/config` as part of the hashed configuration so a deployment cannot close
+ * under a code the protocol has not reserved.
+ *
+ * - `INPUT_RETIRED_UNREPRESENTED` (4100): a confirmed unrepresented retirement (§3.1) closed the
+ *   seat through the bounded window of §3.3.
+ * - `INPUT_RATE_CEILING` (4101): the arrival rate exceeded the declared ceiling; direct closure.
+ * - `INPUT_RECOVERY` (4102): the recovery path of §3.2 ended the episode — the client surfaces the
+ *   connection error and stays stopped.
+ */
+export const CLOSE_CODE_INPUT_RETIRED_UNREPRESENTED = 4100;
+export const CLOSE_CODE_INPUT_RATE_CEILING = 4101;
+export const CLOSE_CODE_INPUT_RECOVERY = 4102;
+
+/** The reserved set as one record, so validators and configuration read one source. */
+export const RESERVED_CLOSE_CODES = {
+  INPUT_RETIRED_UNREPRESENTED: CLOSE_CODE_INPUT_RETIRED_UNREPRESENTED,
+  INPUT_RATE_CEILING: CLOSE_CODE_INPUT_RATE_CEILING,
+  INPUT_RECOVERY: CLOSE_CODE_INPUT_RECOVERY,
+} as const;
+
 /** Wire widths per replica field. Provisional until Gate A per ADR 0001. */
 export const REPLICA_WIDTHS = {
   entityId: 'string<=64',
@@ -110,6 +148,15 @@ export const REPLICA_WIDTHS = {
   sessionEpoch: 'uint32',
   connected: 'boolean',
   lastAuthorityTick: 'uint32',
+  // The per-entity input disposition record and effect ledger (ADR-0003 §4; W-2). The zero sentinel
+  // means "nothing resolved / no gap named / no retirement / no effect yet"; a stamp of 0 is not a
+  // legal sequence, so 0 is unambiguous for every numeric field here.
+  inputResolvedThrough: 'uint32',
+  inputGapStart: 'uint32',
+  inputGapEnd: 'uint32',
+  inputRetiredUnrepresented: 'uint32',
+  effectCount: 'uint32',
+  lastAppliedRequestId: 'string<=64',
 } as const;
 
 /**
