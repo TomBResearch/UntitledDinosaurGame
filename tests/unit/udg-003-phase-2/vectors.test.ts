@@ -706,10 +706,19 @@ describe('UDG-003 Phase 2 vectors — the manifest names the whole set (§8.2.1)
       'tick-metrics.json',
     ];
     const missing = runtimeFiles.filter((name) => !existsSync(join(OUTPUT_DIRECTORY, name)));
-    expect(
-      missing,
-      `runtime vectors ${missing.join(', ')} must be produced by the runtime suites before this manifest exists — a pure-only directory is a half-run, not evidence`,
-    ).toEqual([]);
+
+    if (missing.length > 0) {
+      // The half-run branch. Inside a plain `pnpm test` on a fresh checkout the runtime suites have
+      // not run yet when this unit file executes — ordering across vitest files is not a thing to
+      // depend on — so the honest assertion is the gate's own: a directory missing runtime evidence
+      // carries NO manifest, and writing one over it is refused. The capture plan and the CI record
+      // step both run the runtime scripts FIRST, where this test takes the other branch and writes.
+      expect(
+        existsSync(join(OUTPUT_DIRECTORY, 'vectors-manifest.json')),
+        `runtime vectors ${missing.join(', ')} are absent — a manifest over a pure-only directory is a half-run, not evidence, and must not exist`,
+      ).toBe(false);
+      return;
+    }
 
     for (const name of ['abuse-results.json', 'recovery-harness.json']) {
       const parsed = JSON.parse(readFileSync(join(OUTPUT_DIRECTORY, name), 'utf8')) as Record<string, unknown>;

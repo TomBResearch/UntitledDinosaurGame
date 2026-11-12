@@ -361,7 +361,10 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
   }
 
   override onDispose(): void {
-    this.#authority.clock.stop();
+    // A room refused during construction is disposed before any authority exists (no operator
+    // bounds is the live case). The refusal is the fact this room produced; disposing it must not
+    // turn that fact into a TypeError over a clock that was never built.
+    if (this.#authority !== undefined) this.#authority.clock.stop();
     RegionRoom.live.delete(this);
   }
 

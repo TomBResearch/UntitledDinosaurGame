@@ -386,7 +386,10 @@ export const validateVectorManifest = (directory: string, expectation: ManifestE
     if (MACHINE_PATH_IN_ARTEFACT.test(bytes)) {
       issues.push({ code: 'VECTORS-FILE-MACHINE-PATH', detail: `${required} carries a machine path` });
     }
-    if (safeJson(bytes) === undefined) {
+    // JSON is parsed and checked for machine paths; other serialisations (the Phase 2 CSV depth
+    // trace, for one) are hashed as written — a CSV is evidence in its own shape, and refusing to
+    // read one because it is not JSON would only push evidence into a JSON wrapper.
+    if (required.endsWith('.json') && safeJson(bytes) === undefined) {
       issues.push({ code: 'VECTORS-FILE-UNPARSEABLE', detail: `${required} is not valid JSON` });
     }
     const size = statSync(absolute).size;
@@ -402,10 +405,16 @@ export const validateVectorManifest = (directory: string, expectation: ManifestE
   }
   for (const name of entries.keys()) {
     if (!expectation.requiredFiles.includes(name)) {
-      issues.push({ code: 'VECTORS-FILE-UNEXPECTED', detail: `${name} is listed but no phase-1 vector produces it` });
+      issues.push({ code: 'VECTORS-FILE-UNEXPECTED', detail: `${name} is listed but no vector of this phase produces it` });
     }
   }
-  issues.push(...replayEquivalenceIssues(directory));
+  // The PA1-C8/PA1-C9 replay-equivalence gate belongs to the Phase 1 list it was written against.
+  // Running it unconditionally made every later phase's directory fail for files that phase does
+  // not own; a phase-2 directory is gated on the phase-2 list, and the phase-1 requirement stands
+  // wherever the phase-1 list is required.
+  if (expectation.requiredFiles.includes(PHASE_1_REPLAY_EQUIVALENCE_FILE)) {
+    issues.push(...replayEquivalenceIssues(directory));
+  }
   return issues;
 };
 
@@ -675,7 +684,12 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
     requiresMeasurements: true,
     artefactsIntoBundle: [
       { source: 'artifacts/udg-003-phase-1', target: 'vectors/' },
-      { source: 'artifacts/udg-003-phase-2', target: 'vectors-phase-2/' },
+      // Phase 2 has NO copy: its runtime artefacts carry measured wall-clock times, so a second
+      // producer writing the same file names (the in-suite run under `pnpm test`) would overwrite
+      // the bundle's bytes AFTER the manifest digested them, and the bundle would fail its own
+      // digests. The dedicated steps above are the sole author of vectors-phase-2/, writing to the
+      // bundle directly in the order the manifest demands. (Phase 1 keeps its copy: its vectors are
+      // byte-deterministic, which is exactly the property Phase 2's runtime files do not claim.)
       { source: 'artifacts/probes', target: 'probes/' },
     ],
     manifests: [
