@@ -112,7 +112,7 @@ export class SessionInputState {
   #pressureLatched = false;
   #strandStreakMs = 0;
   #strandAt = 0;
-  #rateSamples: number[] = [];
+  #rateWindow: { atMs: number; arrivals: number }[] = [];
   #lastArrivalCount = 0;
 
   /**
@@ -127,7 +127,7 @@ export class SessionInputState {
     this.#dequeuedTotal = 0;
     this.#strandStreakMs = 0;
     this.#strandAt = 0;
-    this.#rateSamples = [];
+    this.#rateWindow = [];
     this.#lastArrivalCount = accessor.consumedCount + accessor.size;
     this.resolvedThrough = 0;
     this.gap = null;
@@ -226,11 +226,26 @@ export class SessionInputState {
 
     // §3.3 rate ceiling: observed arrivals per second, where an arrival is a dequeued frame or a
     // frame still waiting — the growth of (consumedCount + size) is everything the buffer ever held.
+    // The measurement is a rate, not a tick count: at a 20 Hz tick the moving-tick count is capped
+    // at 20/s and could never cross a 30/s ceiling no matter how fast the sender was. (Measured
+    // live by the W-10 rate scenario, which sent 44 frames/s forever and saw nothing — the signal,
+    // not the sender, was wrong.) Arrivals are sampled per tick and differenced across a trailing
+    // one-second window; the span needs 250 ms of history so a single tight burst is attributed to
+    // the buffer consequences it actually has, not to a rate the window cannot yet show.
     const arrivals = accessor.consumedCount + accessor.size;
-    this.#rateSamples.push(arrivals - this.#lastArrivalCount > 0 ? nowMs : -1);
+    const lastWindow = this.#rateWindow[this.#rateWindow.length - 1];
+    if (lastWindow === undefined || arrivals > lastWindow.arrivals) this.#rateWindow.push({ atMs: nowMs, arrivals });
     if (arrivals > this.#lastArrivalCount) this.#lastArrivalCount = arrivals;
-    this.#rateSamples = this.#rateSamples.filter((sample) => sample >= 0 && nowMs - sample < 1_000);
-    if (this.#rateSamples.length > envelope.rateCeilingMessagesPerSecond) signals.push('RATE_CEILING');
+    this.#rateWindow = this.#rateWindow.filter((sample, index) => index === 0 || nowMs - sample.atMs < 1_000);
+    if (this.#rateWindow.length >= 2) {
+      const oldest = this.#rateWindow[0] as { atMs: number; arrivals: number };
+      const newest = this.#rateWindow[this.#rateWindow.length - 1] as { atMs: number; arrivals: number };
+      const spanMs = newest.atMs - oldest.atMs;
+      if (spanMs >= 250) {
+        const arrivalsPerSecond = ((newest.arrivals - oldest.arrivals) * 1_000) / spanMs;
+        if (arrivalsPerSecond > envelope.rateCeilingMessagesPerSecond) signals.push('RATE_CEILING');
+      }
+    }
 
     return {
       dequeued,

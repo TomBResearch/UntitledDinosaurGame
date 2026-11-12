@@ -85,6 +85,8 @@ export declare const startHarnessServer: (rootDir: string, rooms: Record<string,
 export interface Seat<S = unknown> {
     readonly room: SdkRoom<S>;
     readonly handle: SdkInputHandle<Record<string, unknown>>;
+    /** The SDK client owning this connection: reconnection is a client operation (D-P2-8 §3.2). */
+    readonly client: SdkClient;
 }
 /** Connect one SDK client to `roomName` with the join options that satisfy the hash gate. */
 export declare const connectSeat: <S = unknown>(stack: PinnedStack, endpoint: string, roomName: string, joinOptions: unknown, schemaCtor: unknown) => Promise<Seat<S>>;

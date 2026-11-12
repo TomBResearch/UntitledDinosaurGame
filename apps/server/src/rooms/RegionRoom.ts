@@ -185,7 +185,6 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
 
   override onCreate(raw: unknown = {}): void {
     this.autoDispose = false;
-    RegionRoom.live.add(this);
     const options: RegionRoomOptions = trustedDeployment(raw) ?? {};
     const configured = withConfigOverrides(this.#configValue, options.config ?? {});
     const validated = validateServerConfig(JSON.parse(JSON.stringify(configured)));
@@ -210,6 +209,10 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
     });
     if (built.ok === false) throw new Error(`RegionRoom authority refused: ${built.failure}`);
     this.#authority = built.authority;
+    // The registry sees only rooms that *exist*. Joining it before the gates ran left refused rooms
+    // as zombies a telemetry reader would trip over — measured, not theorised, by the W-10
+    // unbounded-refusal scenario, whose refused room answered `evidence()` with a TypeError.
+    RegionRoom.live.add(this);
 
     this.setState(new RegionSchema());
     const header = publishRegion(this.state, {
@@ -245,9 +248,16 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
       this.ingestCommand(client, payload, 'cancelPath');
     });
 
+    // The second argument is the step FREQUENCY, not a millisecond interval — passing
+    // `simulationStepSeconds * 1000` asked for 50 Hz and the room ticked at ~55 Hz, draining the
+    // input buffer two and a half times faster than the §2 envelope’s λ = 1 frame per 20 Hz tick
+    // promises and making queue depth unobservable at the declared pressure line (measured live by
+    // the W-10 population, which could not build depth no matter how fast it sent). The authority’s
+    // own clock still decides which ticks move the simulation; this number only decides how often
+    // the room gets the chance.
     this.setFixedTimestep((): void => {
       this.tick();
-    }, this.#configValue.network.simulationStepSeconds * 1_000);
+    }, this.#configValue.network.tickRate);
   }
 
   nowMs(): number {
@@ -516,7 +526,18 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
   /** The single close site for a seat: publish happened (or was attempted), then the socket goes. */
   private closeSeat(seat: Seat, code: number): void {
     const client = this.clients.find((candidate) => candidate.sessionId === seat.sessionId);
+    // §3.1's three close observations belong to EVERY consequence-driven closure, not only to the
+    // dropped seat: W-9's question — what the buffer does on the way out — is only answerable if
+    // the rate and retirement closures sample their queues too. (Measured by the W-10 population,
+    // whose rate-closed seat had no observation to read until this line existed.)
+    this.closeObservations.push({
+      ...seat.input.closeObservation(this.#authorityInputOrUndefined(seat.sessionId), this.nowMs()),
+      entityId: seat.entityId,
+    });
     this.#seats.delete(seat.sessionId);
+    // A closed seat's entity departs: the core journals the leave and releases the bookkeeping.
+    // Without this the authority kept a phantom seated entity behind a removed row.
+    this.#authority.core.leave(seat.entityId);
     unpublishPlayer(this.state, seat.entityId);
     if (client !== undefined) client.leave(code);
   }
@@ -570,6 +591,10 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
 
   /** Evidence accessors used by the Phase 2 suites and the smoke run. */
   evidence(): Record<string, unknown> {
+    if (this.#authority === undefined) {
+      // A refused room is a fact worth reporting, not a crash waiting to happen.
+      return { refused: true };
+    }
     return {
       configHash: computeConfigHash(this.#configValue),
       ticks: this.#authority.core.tick,

@@ -85,7 +85,9 @@ export const startHarnessServer = async (rootDir, rooms) => {
 export const connectSeat = async (stack, endpoint, roomName, joinOptions, schemaCtor) => {
     const client = new stack.sdk.ClientCtor(endpoint);
     const room = await client.create(roomName, joinOptions, schemaCtor);
-    return { room, handle: room.input() };
+    // `client` travels with the seat: reconnection is a CLIENT operation (the token belongs to the
+    // connection that held it), and a harness that dropped the client could not test §3.2 at all.
+    return { room, handle: room.input(), client };
 };
 /** Stamp and send one direct wire frame: `sentCount + 1`, the value the SDK will acknowledge (PR-15 S1). */
 export const stampAndSend = (handle, frame) => {
@@ -96,7 +98,7 @@ export const stampAndSend = (handle, frame) => {
 export async function connectSeatById(stack, endpoint, roomId, joinOptions, schemaCtor) {
   const client = new stack.sdk.ClientCtor(endpoint);
   const room = await client.joinById(roomId, joinOptions, schemaCtor);
-  return { room, handle: room.input() };
+  return { room, handle: room.input(), client };
 }
 export const httpEndpoint = (wsEndpoint) => wsEndpoint.startsWith('wss://') ? `https://${wsEndpoint.slice(6)}` : `http://${wsEndpoint.slice(5)}`;
 export const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
