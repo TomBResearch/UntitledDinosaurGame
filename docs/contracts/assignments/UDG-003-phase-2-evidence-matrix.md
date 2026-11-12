@@ -92,7 +92,7 @@ reported row by row rather than inherited.
 | **AC-12** built before asserting | `tests/probes/colyseus-server.probe.ts` (`serverBuild`), contract assertion *rebuilds the server it probes* | the runner rebuilds `apps/server` on every invocation and records `serverBuild` (`exitCode 0`); the suite fails if the emitted room is absent, so PR-14 cannot measure a stale build | recorded in the probe index inside the bundle | **PASS** |
 | **AC-13** startup refusals | `abuse-results.json`, `apps/server/src/server-config.ts` | absent bounds refused; unvalidated config refused; operator deployment ignored unless it carries the per-process nonce | live | **PARTIAL, clause: §4.4** — malformed bounds, inverted axis range, unknown key, world/region identity mismatch, non-finite bound and the synthetic-bounds opt-in have no input surface until the region asset (UDG-007) supplies one |
 | **AC-14** journal row schema | Phase 1 `journal.test.ts`, `room-lifecycle.json` | the accepted schema test still refuses a digest-only journal; the room wrote **3 621** rows through the accepted sink in this run | rows are the replay input Phase 2 never replays (§6 item 1) | **PASS** |
-| **AC-15** root commands, bundles, neighbours | CI run 43263252706, retained bundles | every §8.1 command green locally and on the hosted runner; the three bundles from this run verify **PASS, 0 issues** from the retained copies; UDG-001 49/49 and UDG-002 31/31 at this head; full suite 552/552; checksums in sync. The clause's last half — *every retained bundle still verifies* — is where §7 **E1** bites: pre-Phase-2 UDG-003 bundles no longer verify against this tree's plan | re-verification run against the retained bytes, both here and at the historical bundles' own commit | **PARTIAL** — this run's bundles: PASS. Historical UDG-003 bundles: FAIL at this head, PASS at their own commit (§7 **E1**, **OD-5**) |
+| **AC-15** root commands, bundles, neighbours | CI run 43263252706, retained bundles | every §8.1 command green locally and on the hosted runner; the three bundles from this run verify **PASS, 0 issues** from the retained copies; UDG-001 49/49 and UDG-002 31/31 at this head; full suite 552/552; checksums in sync. The clause's last half — *every retained bundle still verifies* — is where §7 **E1** bites: `verify` is plan-relative, so retained UDG-003 bundles verify at the plan of their own capture, not against a newer tree | re-verification run against the retained bytes at three commits (`cf34987`, `190a5a6`, and each bundle's own) | **PARTIAL** — this run's three bundles: **PASS, 0 issues** from the retained copies. Handoff bundle: PASS at `17ade43` and `190a5a6`, FAIL here. Accepted Phase 1 bundle: FAIL even at `190a5a6` (§7 **E1**, **OD-5**) |
 | **AC-16** keepalive invariance | `vectors/pa1-5-pa1-8-…json` | keepalive frames leave `H`, `latchedKind`, `G_d` unchanged with `horizontalDrive NONE`; `direct → keepalive → direct` resumes at the same generation, one step per tick | deterministic vectors | **PASS** |
 | **AC-17** queue policy and counter reconciliation | `vectors/disposition-reconciliation.json`, PR-14 counters | 5 scenarios `balanced: true`; live counters satisfy consumed + refused + answered + queued against observed on the room's rows | vectors + Phase 1 replay | **PASS** |
 | **AC-18** no-winner branches | `neutral.test.ts`, `vectors` §PA1-7 | each branch steps the connected entity exactly once with neutral input; no branch dereferences an absent winner | deterministic vectors | **PASS** |
@@ -199,20 +199,33 @@ change or a client):
   the APIs shipped code uses, with a probe path and check id; the row needs the corrected signature,
   the `tickRate` semantics, and PR-2's `rate-is-20hz` plus PR-14's `one-observation-per-entity-per-tick`
   as its runtime ids.
-* **E1 — the §8.2.1 plan move makes every pre-Phase-2 UDG-003 bundle unverifiable *against this tree*.**
-  Measured at `cf34987`/`e32dfed`, not reasoned:
-  `UDG-003-2026-11-11T11-20-26-111Z-5d77c612` (the **accepted** Phase 1 bundle) fails with
-  **25 issues** and `UDG-003-2026-11-11T23-28-12-047Z-17ade43b` (the handoff bundle) with **23** —
-  all of them `vectors-phase-2/… is absent` plus `phase-2-* was never run`. The bytes are untouched
-  and internally consistent; the gate is **plan-relative**, and `evidence verify` compares a bundle's
-  `requiredFiles` and `commands.json` against the plan in the working tree rather than the plan that
-  produced it. Verified in a worktree at `17ade43` with that commit's own tool: the same handoff
-  bundle verifies **PASS, 0 issues**. Consequences, stated plainly: the UDG-001 and UDG-002 bundles
-  still verify (their plans did not move), CI still passes (it verifies only freshly captured
-  bundles), and no historical byte was rewritten — but any record that says "the bundle verifies"
-  is now only reproducible at the commit that captured it, which is exactly the half of AC-15 that
-  this matrix therefore reports as PARTIAL. §8.2.1 authorises the move and the mislabelling rule;
-  nothing in it says historical bundles stop verifying, so the gap comes back as **OD-5**.
+* **E1 — `evidence verify` is plan-relative, so no retained bundle verifies against a *newer* tree,
+  and this phase's plan move extended that one commit further back.** Measured at four commits, not
+  reasoned:
+
+  | bundle | verified with the tool at `cf34987` (this submission) | at `190a5a6` (before the §8.2.1 move) | at its own commit |
+  | --- | --- | --- | --- |
+  | `UDG-003-…-17ade43b` (handoff) | **FAIL, 23 issues** | **PASS, 0 issues** | **PASS, 0 issues** (`17ade43`) |
+  | `UDG-003-…-5d77c612` (accepted Phase 1) | **FAIL, 25 issues** | **FAIL, 2 issues** | — |
+  | `UDG-001/UDG-002-…-17ade43b` | **PASS, 0 issues** | PASS | PASS |
+  | the three bundles of run 43263252706 | **PASS, 0 issues** from the retained copies | — | PASS in CI |
+
+  Every issue is the same shape: a required artefact `vectors-phase-2/…` is absent, or a plan command
+  `phase-2-*` was never run — because `evidence verify` compares a bundle's `requiredFiles` and
+  `commands.json` against the plan **in the working tree**, not the plan that produced it. Two things
+  follow, and they are different. (i) The mechanism predates this phase: the accepted Phase 1 bundle
+  already failed at `190a5a6`, before W-11/W-12, with 2 issues (`probes/probe-run-index.json` and
+  `probes/probe-invocations.json`), because the probe-ledger requirement was added to the plan after
+  that bundle was captured. (ii) This phase's §8.2.1 move did real damage of its own: the handoff
+  bundle verified PASS at `17ade43` and at `190a5a6` and verifies FAIL here, so the newest pre-Phase-2
+  evidence is now unverifiable against the live tree.
+
+  So AC-15's half-clause *"every retained bundle still verifies"* is not a property the tool has ever
+  had across plan changes; what is true and measured is that **the bundles this run captured verify**,
+  from the retained copies, with 0 issues, and that UDG-001/UDG-002 bundles verify either way because
+  their plans did not move. No historical byte was rewritten, re-captured or edited. **OD-5** puts the
+  choice to the owner: record that reading of AC-15 explicitly, or give `verify` the plan identity its
+  bundle already carries (`phase`) so a phase-1 bundle is gated against the phase-1 requirement set.
 * **D3 — the flake history, restated with its instrumentation.** `pressure-throttles-and-never-closes`
   failed 3 times in ~20 runs before `dcae4ec`, unreproduced in 28+ runs since; the scenario now
   records its own `closureLedger` inside its observation so a recurrence names the code and entity
@@ -236,12 +249,13 @@ change or a client):
    stages exist only as the transport's own pipeline, and nothing asserts that pipeline as AC-6's M
    and P. Either accept that reading in writing, amend AC-6, or name the phase that gives the
    authority explicit M/P stages. Until then AC-6 is PARTIAL, not PASS.
-5. **OD-5 — historical bundles and the plan-relative gate (E1).** Options: accept it and record it
-   (historical UDG-003 bundles verify at their own commit, and the records that cite them say so);
-   or give the tool the plan identity it needs — the bundle already carries `phase`, so `verify`
-   could gate against the requirement set its own `phase` names, which is a `tools/checks` change
-   under the narrow evidence-tooling grant and must not weaken any existing check. This submission
-   changed no tool behaviour beyond §8.2.1 and does not fix this silently.
+5. **OD-5 — the plan-relative gate (E1).** Either (a) record the achievable reading of AC-15 — the
+   bundles a run captured verify, historical bundles verify at the plan of their own capture — and
+   say so in the records that cite old bundles; or (b) let `verify` gate a bundle against the
+   requirement set the `phase` field *inside that bundle* names, which is a `tools/checks` change
+   under the narrow evidence-tooling grant and must not weaken any existing check. Either way the
+   reviewer should know that re-verifying `UDG-003-…-17ade43b` from the live tree fails today, and
+   that the accepted Phase 1 bundle failed there before this phase as well.
 6. **OD-6 — the two record defects (D1, D2).** Both are corrections to records, not behaviour; D2 is
    an AC-11 requirement and D1 is a threshold line that currently contradicts its own bundle.
 7. **OD-7 — acceptance.** Nothing in this file records or implies acceptance. Dedupe-triggered
