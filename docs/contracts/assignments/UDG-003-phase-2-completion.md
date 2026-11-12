@@ -187,6 +187,21 @@ claiming them).
 
 Implementation commits (baseline `8716b8c`, handoff `17ade43`): `7f03be1` (W-1) · `aea0ce3`
 (W-2/W-3) · `26bcd03` (W-4/W-5) · `3ad1a46` (W-8) · `99da1cd` (W-8 corrections) · `190a5a6`
-(W-6…W-10) · `95e1dbd` (W-11/W-12) — plus this record’s commit. §8.1 commands were run locally
-with results recorded in the submission message and CI; the Phase 2 bundle is the phase-2-labelled
-capture of this commit in the existing store; nothing earlier is rewritten (R-1).
+(W-6…W-10) · `95e1dbd` (W-11/W-12) · `4e389f5` (this record) · `dcae4ec` · `cf34987` (the CI run’s
+findings). §8.1 commands were run locally with results recorded in the submission message and CI;
+the Phase 2 bundle is the phase-2-labelled capture of `cf34987445f737d21285b8b1f5d6b650f85873b5`,
+retained at `/workspace/udg-evidence/ci-run-43263252706/` and re-verified `PASS` (0 issues) from the
+retained copy; nothing earlier is rewritten (R-1).
+
+**Added 2026-11-12, review basis (dated addition; §6.3: new facts go in new records).** The
+per-criterion index the reviewer asked for is
+[UDG-003-phase-2-evidence-matrix.md](UDG-003-phase-2-evidence-matrix.md). It maps GA-1…GA-13 and
+AC-1…AC-20 onto artefacts inside the retained bundle, and it corrects two things this record said too
+smoothly: **GA-10 is FAIL** (both `Δ == 1` halves are unproduced, not only the committed-identity
+half, because M0 refuses every discrete command until UDG-007), and **W-10 is incomplete** on its
+RTT, jitter and loss populations, which is why **GA-11 is FAIL** rather than merely deferred. It also
+lists the gaps with **no deferral clause** (Phase 2 journal replay for GA-13/AC-3d/AC-20, the GA-9
+projection instrument behind AC-7, AC-1’s 200-tick trace, AC-3c over the population, AC-3b’s discrete
+high-water marks, AC-3e’s per-reason reporting shape) and two record defects found in this batch.
+Nothing in that file moves a status upward: dedupe-triggered closure stays disabled, D4 stays
+undesignated, Gate A stays Not Run, and acceptance stays with the owner.
