@@ -19,11 +19,11 @@ import {
   applyDisposition,
   PLAYER_FIELDS,
   PlayerSchema,
-  RegionSchema,
   toRegionReplica,
   toReplica,
 } from '@udg/protocol/schema';
 import type { EntityId, PlayerSimulationState, RegionReplicaState } from '@udg/protocol';
+import type { RegionSchema } from '@udg/protocol/schema';
 
 import type { DispositionRecordState } from '../network/ColyseusInputAdapter.js';
 

@@ -249,7 +249,6 @@ export const validateInputEnvelopeConfig = (raw: unknown): ConfigResult<Readonly
 
   // Close codes: exactly the protocol's reserved set — same three names, same three numbers.
   const codes = raw['closeCodes'];
-  let codesOk = false;
   if (!isRecord(codes)) {
     issues.push(configFail('input.closeCodes', 'WRONG_TYPE', 'must declare the three reserved close codes'));
   } else {
@@ -258,9 +257,7 @@ export const validateInputEnvelopeConfig = (raw: unknown): ConfigResult<Readonly
       INPUT_RATE_CEILING: codes['INPUT_RATE_CEILING'],
       INPUT_RECOVERY: codes['INPUT_RECOVERY'],
     });
-    const reserved = canonicalHash(RESERVED_CLOSE_CODES);
-    codesOk = declared === reserved;
-    if (!codesOk) {
+    if (declared !== canonicalHash(RESERVED_CLOSE_CODES)) {
       issues.push(
         configFail('input.closeCodes', 'INCONSISTENT', 'close codes are single-sourced from the protocol build and may not be overridden'),
       );

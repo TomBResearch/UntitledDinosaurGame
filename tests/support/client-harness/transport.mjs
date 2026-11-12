@@ -21,6 +21,7 @@
  * is the point.
  */
 import { createRequire } from 'node:module';
+import { setTimeout as sleepTimer } from 'node:timers/promises';
 import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -101,7 +102,7 @@ export async function connectSeatById(stack, endpoint, roomId, joinOptions, sche
   return { room, handle: room.input(), client };
 }
 export const httpEndpoint = (wsEndpoint) => wsEndpoint.startsWith('wss://') ? `https://${wsEndpoint.slice(6)}` : `http://${wsEndpoint.slice(5)}`;
-export const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+export const sleep = (ms) => sleepTimer(ms);
 /** Poll `condition` until true or the budget runs out. */
 export const until = async (condition, budgetMs, stepMs = 5) => {
     const deadline = Date.now() + budgetMs;

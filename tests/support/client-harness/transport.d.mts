@@ -104,7 +104,6 @@ export interface ProbeCheck {
     readonly detail: string;
 }
 export declare class ProbeRecorder {
-    #private;
     readonly checks: ProbeCheck[];
     readonly observations: Record<string, unknown>;
     readonly limitations: string[];
