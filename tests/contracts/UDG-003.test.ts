@@ -2318,3 +2318,101 @@ describe('UDG-003 — probe evidence is attributable to one invocation (CI incid
     });
   });
 });
+
+// --- Phase 2 (W-1) -----------------------------------------------------------------------------
+//
+// W-1 is a documentation edit with a machine check: ADR-0003 §4 was adopted *as wording*, and the
+// owner's approval (D-P2-2) binds Phase 2 to apply it to `movement-authority.md` §5.1 **byte for
+// byte**, with the buffer bound, the first sentence and every other clause of §5.1 untouched. A
+// paraphrase that "says the same thing" is exactly the drift this assertion refuses.
+
+const readUtf8 = (relativePath: string): string => readFileSync(join(ROOT, relativePath), 'utf8');
+
+const gitBlob = (sha: string, relativePath: string): string => {
+  const result = spawnSync('git', ['show', `${sha}:${relativePath}`], { cwd: ROOT, encoding: 'utf8' });
+  if (result.status !== 0) {
+    throw new Error(`git show ${sha}:${relativePath} failed: ${result.stderr.slice(0, 200)}`);
+  }
+  return result.stdout;
+};
+
+/**
+ * Flatten a Markdown region to comparable text.
+ *
+ * Markdown line wrapping is presentation, not content: the adopted wording travels as a blockquote
+ * in the ADR and as body paragraphs in the interface document, so byte-for-byte comparison is done
+ * on text whose paragraph structure is preserved and whose intra-paragraph wrapping is joined.
+ * Nothing else is normalised — spelling, punctuation, bold markers and sentence order all still
+ * participate in the comparison.
+ */
+const flattenMarkdown = (text: string): string =>
+  text
+    .split('\n')
+    .map((line) => (line.startsWith('>') ? line.slice(1).replace(/^ /, '') : line))
+    .join('\n')
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.split('\n').map((line) => line.trim()).join(' '))
+    .filter((paragraph) => paragraph !== '')
+    .join('\n\n')
+    .trim();
+
+/** The ADR-0003 §4 blockquote, as the decision adopted it. */
+const adoptedClause = (): string => {
+  const adr = readUtf8('docs/adr/0003-input-acknowledgement-overflow-and-resynchronisation-policy.md');
+  const section = adr.split('## 4. Adopted wording for the acknowledgement clause', 2)[1];
+  if (section === undefined) throw new Error('ADR-0003 §4 is missing');
+  const lines: string[] = [];
+  for (const line of section.split('\n')) {
+    if (line.startsWith('>')) lines.push(line);
+    else if (lines.length > 0 && line.trim() === '') lines.push('>');
+    else if (lines.length > 0) break;
+  }
+  if (lines.length === 0) throw new Error('ADR-0003 §4 carries no adopted blockquote');
+  return lines.join('\n');
+};
+
+/** The applied region of movement-authority.md §5.1: the amended buffering paragraph cluster. */
+const appliedClause = (document: string): string => {
+  const start = document.indexOf('Input buffering is initially bounded at 32 frames per client.');
+  const end = document.indexOf('### 5.2');
+  if (start < 0 || end < 0 || end < start) throw new Error('movement-authority.md §5.1 buffering region is missing');
+  const region = document.slice(start, end);
+  // The retained final sentence of the original paragraph is *outside* the adopted clause; the
+  // comparison region ends with the adopted clause's own last sentence.
+  const cut = region.indexOf('ordinary delivery timing causes no resynchronisation.');
+  if (cut < 0) throw new Error('the applied clause does not end where ADR-0003 §4 ends');
+  return region.slice(0, cut + 'ordinary delivery timing causes no resynchronisation.'.length);
+};
+
+describe('UDG-003 Phase 2 — W-1 applies ADR-0003 §4 byte for byte (D-P2-2)', () => {
+  const documentPath = 'docs/interfaces/movement-authority.md';
+  const baseline = gitBlob('8716b8c6e3c4a3f005fe260eebf5569bb02201dd', documentPath);
+  const applied = readUtf8(documentPath);
+
+  it('applies the adopted clause exactly as ADR-0003 §4 states it', () => {
+    expect(flattenMarkdown(appliedClause(applied))).toBe(flattenMarkdown(adoptedClause()));
+  });
+
+  it('keeps the buffer bound, the first sentence and every other clause of §5.1 untouched', () => {
+    // The buffer-bound sentence appears exactly once, unchanged.
+    const boundSentence = 'Input buffering is initially bounded at 32 frames per client.';
+    expect(applied.split(boundSentence).length - 1).toBe(1);
+
+    // Everything outside the replaced region is byte-identical to the accepted baseline: the
+    // §5.1 preamble paragraphs, the retained final sentence, and §5.2 onward.
+    const baselineStart = baseline.indexOf('Input buffering is initially bounded at 32 frames per client.');
+    const baselineEnd = baseline.indexOf('### 5.2');
+    expect(applied.slice(0, baselineStart)).toBe(baseline.slice(0, baselineStart));
+    // The tail is compared against the baseline's own §5.2-onward text, anchored at each file's
+    // own '### 5.2' — the replaced region changed length, so an absolute offset would not match.
+    const appliedEnd = applied.indexOf('### 5.2');
+    expect(applied.slice(appliedEnd)).toBe(baseline.slice(baselineEnd));
+    const keptTail = 'Gate A must prove the client reconciles that rejection correctly.';
+    expect(applied).toContain(keptTail);
+
+    // The two sentences the adopted clause replaces are gone, and the replacement is not a paraphrase:
+    // the old middle sentence must not survive anywhere.
+    expect(applied).not.toContain('acknowledge frames that were never represented in state');
+    expect(applied).not.toContain('their SDK acknowledgement remains truthful');
+  });
+});
