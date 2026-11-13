@@ -138,6 +138,11 @@ jobs:
           set -euo pipefail
           node tests/runtime/udg-003-phase-2/abuse-population.ts
           node tests/runtime/udg-003-phase-2/recovery-scenarios.ts
+          # PR-14's journal lives inside its probe result, so the probe must run on THIS commit before a
+          # fresh process replays from it; then the replay runs the journals in a process that never saw
+          # a room. Both run before the vectors suite, because the manifest names what the suite sees.
+          node tests/probes/pr14-gate-a.probe.ts --out artifacts/probes/PR-14.probe-result.json
+          node tests/runtime/udg-003-phase-2/journal-replay.ts
           pnpm exec vitest run tests/unit/udg-003-phase-2/vectors.test.ts
           pnpm --filter @udg/checks build
           node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-2 --expect-phase phase-2

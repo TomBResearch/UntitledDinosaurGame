@@ -35,10 +35,28 @@ const OUT_DIR =
     ? resolve(ROOT, 'artifacts', 'udg-003-phase-2')
     : resolve(process.cwd(), process.env['UDG_VECTORS_OUT']);
 
+/** A live room, as far as this script needs it: evidence, plus the bytes a replay consumes. */
+interface LiveRoom {
+  evidence(): Record<string, unknown>;
+  journal(): { rows: readonly Record<string, unknown>[]; chain: readonly Record<string, unknown>[]; dropped: number };
+  journalPrologue(): Record<string, unknown> | undefined;
+  liveConfig(): Record<string, unknown> | undefined;
+}
+
 interface RegionRoomModule {
-  RegionRoom: { liveRooms(): readonly { evidence(): Record<string, unknown> }[] };
+  RegionRoom: { liveRooms(): readonly LiveRoom[] };
   defineOperatorRegionRoom(deployment?: Record<string, unknown>): RegisteredHandler;
 }
+
+/**
+ * One room journal per recovery scenario, serialised for the fresh-process replay (R-1).
+ *
+ * Each recovery scenario creates its OWN room (`connectSeat` creates), so a scenario's journal is a whole
+ * room's journal rather than a slice — which is the easier case: the replay starts from the prologue with
+ * nothing assumed about prior state.
+ */
+const roomJournals: Record<string, unknown>[] = [];
+let exportedRoomCount = 0;
 
 interface PlayerRow {
   inputResolvedThrough: number;
@@ -101,6 +119,30 @@ async function main(): Promise<void> {
     manifestHash: regionHash(cfg),
   };
   const inputConfig = cfg['input'] as ConstructorParameters<typeof RecoveryPolicy>[0];
+
+  /** Hand the room this scenario just finished to the replay record. */
+  const exportRoomJournals = (scenario: string): void => {
+    const rooms = roomMod['RegionRoom'].liveRooms();
+    for (const room of rooms.slice(exportedRoomCount)) {
+      const journal = room.journal();
+      const prologue = room.journalPrologue();
+      roomJournals.push({
+        scenario,
+        configDocument: room.liveConfig() ?? null,
+        prologue: prologue ?? null,
+        rows: journal.rows,
+        chain: journal.chain,
+        dropped: journal.dropped,
+        evidence: {
+          journalRows: room.evidence()['journalRows'],
+          ticks: room.evidence()['ticks'],
+          chainTip: room.evidence()['chainTip'],
+        },
+      });
+    }
+    exportedRoomCount = rooms.length;
+  };
+
   const stack = await loadPinnedStack(ROOT);
   const server = await startHarnessServer(ROOT, {
     region: roomMod['defineOperatorRegionRoom']({ config: overrides, runId: 'udg-003-phase-2-recovery', journalRetention: 40_000, regionProvenance: 'test-only-synthetic' }),
@@ -157,6 +199,7 @@ async function main(): Promise<void> {
       observed: { deliveries: s1Deliveries.length, allPairsConsistent: consistent, events: s1Events.map((e) => e.event.type), state: s1Policy.snapshot().state },
       pass: consistent && s1Deliveries.length > 0 && s1Events.length === 0,
     });
+    exportRoomJournals('same-delivery-pairing-on-the-wire');
 
     // ── S2 the 500 ms deadline runs with zero deliveries; a rejoin recovers through the record ──
     const s2Events: { atMs: number; event: RecoveryEvent }[] = [];
@@ -250,6 +293,7 @@ async function main(): Promise<void> {
         // the only tolerance, and it is named rather than hidden.
         && stallDelayFromLastDeliveryMs >= inputConfig.clientSnapshotDeadlineMs,
     });
+    exportRoomJournals('client-deadline-fires-with-zero-deliveries-and-the-record-recovers');
 
     // ── S3 the 4000 ms episode deadline closes the client itself ────────────────────────────────
     const s3Events: { atMs: number; event: RecoveryEvent }[] = [];
@@ -295,6 +339,7 @@ async function main(): Promise<void> {
         && closeEvent.event.code === inputConfig.closeCodes.INPUT_RECOVERY
         && episodeAgeMs >= inputConfig.clientRecoveryDeadlineMs,
     });
+    exportRoomJournals('episode-deadline-closes-the-client-at-4000ms');
 
     // ── S4 the rolling allowance: two actual rejoins in 60 s, the third attempt is refused ───────
     const s4Events: { atMs: number; event: RecoveryEvent }[] = [];
@@ -375,8 +420,33 @@ async function main(): Promise<void> {
         && totalAttempts === inputConfig.rejoinWindowAllowance
         && s4Policy.snapshot().state === 'closed',
     });
+    exportRoomJournals('two-actual-rejoins-per-rolling-window-and-the-third-is-refused');
   } finally {
     mkdirSync(OUT_DIR, { recursive: true });
+    // The replay inputs R-1 retains: one whole-room journal per recovery scenario, replayed by a different
+    // process from these bytes (`journal-replay.ts`). A recovery scenario whose room produced no rows is
+    // reported with `rows: 0` rather than quietly dropped from the file.
+    writeFileSync(
+      resolve(OUT_DIR, 'journal-recovery.json'),
+      `${JSON.stringify(
+        {
+          taskId: 'UDG-003',
+          phase: 'phase-2',
+          criterion: ['GA-13', 'AC-3d', 'AC-20'],
+          kind: 'udg-003-phase-2-journal-inputs',
+          producer: 'tests/runtime/udg-003-phase-2/recovery-scenarios.ts',
+          runId: 'udg-003-phase-2-recovery',
+          stepper: 'flat-reference',
+          rooms: roomJournals,
+          settingsNote:
+            'One room per recovery scenario, so each journal is a whole run from its own prologue. Reconnection rows carry the '
+            + 'server-issued epoch of the domain they belonged to; a stamp is never replayed across a domain.',
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
     const failed = scenarios.filter((entry) => !entry.pass);
     writeFileSync(
       resolve(OUT_DIR, 'recovery-harness.json'),

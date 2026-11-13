@@ -136,6 +136,14 @@ export interface EvidenceReport {
    */
   readonly phase?: string;
   readonly phaseNote?: string;
+  /**
+   * The `phase.scope` the capture read out of `measurements/<task>.json`.
+   *
+   * Recorded so verification can assert the bundle label and the measurement scope as a PAIR (R-2, option A).
+   * Absent on bundles captured before the pairing existed, and `'absent'` when the plan expects a scope and the
+   * measurement file did not carry one.
+   */
+  readonly measurementsScope?: string;
 }
 
 export interface CapturePlan {
@@ -164,7 +172,7 @@ export interface CapturePlan {
    * label is written into `report.json`, checked on verification, and copied into the summary, so the
    * limitation is attached to the bytes rather than to a sentence in a separate document.
    */
-  readonly phase?: Readonly<{ label: string; note: string }>;
+  readonly phase?: Readonly<{ label: string; note: string; measurementsScope?: string }>;
   /** Copy a directory of task artefacts into the bundle so its hashes cover them too. */
   readonly artefactsIntoBundle?: readonly Readonly<{ source: string; target: string }>[];
   /**
@@ -256,9 +264,27 @@ export const PHASE_2_VECTOR_FILES: readonly string[] = [
   'buffer-depth.csv',
   'room-lifecycle.json',
   'tick-metrics.json',
+  // R-1: the replay inputs and the replay verdict. The two journal files are required because the
+  // acceptance claim is that a FRESH process replays from them; a verdict with no retained inputs is a
+  // sentence again. The PR-14 journal is retained inside its own probe result under probes/.
+  // Adding to this list moves the required-file set for every bundle captured afterwards; see the
+  // disclosure in docs/contracts/assignments/UDG-003-phase-2-evidence-matrix.md (finding E1).
+  'journal-population.json',
+  'journal-recovery.json',
+  'journal-replay.json',
 ];
 
 export const PHASE_2_LABEL = 'phase-2';
+
+/**
+ * The label the measurement file carries.
+ *
+ * It is **not** the bundle label. `measurements/UDG-003.json` is written by the Phase 1 vectors suite and
+ * measures the accepted authority; the Phase 2 numbers live in `vectors-phase-2/`, hashed and gated there.
+ * Recording the expected scope next to the expected bundle label is what lets verification assert the pair
+ * rather than demand that one file claim to be the other (review correction R-2, option A).
+ */
+export const PHASE_1_MEASUREMENTS_SCOPE = 'phase-1';
 export const PHASE_2_SCOPE_NOTE =
   'UDG-003 Phase 2 (transport substrate: RegionRoom, ColyseusInputAdapter, the ADR-0003 envelope and its ' +
   'consequences) plus the Phase 1 vectors it still requires. It is not a third-party stack compatibility ' +
@@ -663,7 +689,11 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
     // removed — the plan carries both sets, each attributed to its own phase, and a bundle missing
     // either half fails. A bundle with an empty vectors directory was and remains a verification
     // failure, not a green run (reviewer correction 4).
-    phase: { label: PHASE_2_LABEL, note: PHASE_2_SCOPE_NOTE },
+    phase: {
+      label: PHASE_2_LABEL,
+      note: PHASE_2_SCOPE_NOTE,
+      measurementsScope: PHASE_1_MEASUREMENTS_SCOPE,
+    },
     requiredFiles: [
       'environment.json',
       'commands.json',
@@ -719,7 +749,13 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
     },
     thresholds: {
       'toolchain.node': '=== "v24.22.2" (unchanged from the accepted foundation)',
-      'phase.scope': '=== "phase-2" — the label the bundle carries; each manifest inside still declares its own phase, and both are verified against their own lists',
+      // Review correction R-2, option A. This threshold names ONE file — measurements/UDG-003.json — and
+      // that file is the accepted Phase 1 authority measurement block, written by the Phase 1 vectors suite.
+      // It keeps its `phase-1` label; relabelling it would rewrite an accepted artefact. The bundle's own
+      // phase is a different field in a different file (`report.json.phase === "phase-2"`), the vectors
+      // manifests declare their own phases per manifest, and the capture records the pairing in
+      // `report.json.measurementsScope` so verification can assert both halves of it.
+      'phase.scope': '=== "phase-1" on measurements/UDG-003.json — the accepted Phase 1 authority block keeps the label of the suite that writes it; the bundle label is a separate field, report.json phase === "phase-2", paired with it at capture and asserted at verification (R-2, option A)',
       'authority.stageOrder': '=== ["F","L","Q","S","A","C","R","X"] on an executed tick; M and P are absent and disclosed as Phase 2',
       'authority.oneInputPerTick': '=== 1 continuous observation consumed when three frames arrive in one tick (the rule is at most one per entity per tick)',
       'authority.navigationRefusal': 'UDG_MOVE_TO admitted at the gate and refused in screening with "NAVIGATION_BUSY", with zero path candidates',
@@ -775,6 +811,21 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       {
         label: 'phase-2-recovery-scenarios',
         argv: ['node', 'tests/runtime/udg-003-phase-2/recovery-scenarios.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      // PR-14's journal travels inside its own probe result, so the probe has to have run on THIS commit
+      // before a fresh process replays from it. The contract suite runs it too, but later in this plan;
+      // re-running it here is a minute of runner time against a replay whose inputs would otherwise be a
+      // stale directory whose room this commit never ran.
+      {
+        label: 'phase-2-pr14-journal',
+        argv: ['node', 'tests/probes/pr14-gate-a.probe.ts', '--out', 'artifacts/probes/PR-14.probe-result.json'],
+      },
+      // R-1: replay the retained journals in a process that never saw any of these rooms. It runs after
+      // every journal producer and before the vectors suite writes the manifest that names its verdict.
+      {
+        label: 'phase-2-journal-replay',
+        argv: ['node', 'tests/runtime/udg-003-phase-2/journal-replay.ts'],
         env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
       },
       {
@@ -989,6 +1040,18 @@ const pnpmStorePath = (root: string): string | undefined => {
   } catch {
     return undefined;
   }
+};
+
+/**
+ * The `phase.scope` a measurement block declares, or `'absent'`.
+ *
+ * Recorded in the report so verification can assert the bundle label and the measurement scope as a pair
+ * (R-2, option A) without either file having to claim the other's label.
+ */
+export const measurementsScopeOf = (measured: Readonly<Record<string, unknown>>): string => {
+  const phase = measured['phase'];
+  const scope = typeof phase === 'object' && phase !== null ? (phase as { scope?: unknown }).scope : undefined;
+  return typeof scope === 'string' ? scope : 'absent';
 };
 
 const readMeasurements = (root: string, taskId: string): Record<string, unknown> => {
@@ -1298,7 +1361,15 @@ const writeReport = (root: string, plan: CapturePlan, absoluteRunDir: string, ru
     },
     ...(plan.phase === undefined
       ? {}
-      : { phase: plan.phase.label, phaseNote: plan.phase.note }),
+      : {
+        phase: plan.phase.label,
+        phaseNote: plan.phase.note,
+        // The label the measurement file is expected to carry, recorded so verification can assert the pair
+        // (bundle label + measurement scope) instead of comparing one file against the other's label.
+        ...(plan.phase.measurementsScope === undefined
+          ? {}
+          : { measurementsScope: measurementsScopeOf(input.measurements) }),
+      }),
   };
   writeJson(join(absoluteRunDir, 'report.json'), report);
 };
@@ -1366,6 +1437,7 @@ export type VerifyCode =
   | 'EVIDENCE-ARTEFACT-UNPARSEABLE'
   | 'EVIDENCE-ARTEFACT-TASK-MISMATCH'
   | 'EVIDENCE-PHASE-MISMATCH'
+  | 'EVIDENCE-PHASE-SCOPE-MISMATCH'
   | `EVIDENCE-${VectorIssueCode}`
   | ProbeInvocationCode
   | 'EVIDENCE-PATH-ESCAPE';
@@ -1700,6 +1772,20 @@ export const verify = (root: string, runRelative: string): VerifyResult => {
         code: 'EVIDENCE-PHASE-MISMATCH',
         detail: `the plan covers ${plan.phase.label} but report.json does not say so`,
       });
+    }
+
+    // R-2, option A: the two phase labels are different fields in different files, and the pair is asserted.
+    // Bundles captured before the pairing was recorded carry no `measurementsScope`, so the check is
+    // conditional on the field — recorded here rather than silently skipped.
+    if (plan.phase?.measurementsScope !== undefined && report.measurementsScope !== undefined) {
+      if (report.measurementsScope !== plan.phase.measurementsScope) {
+        issues.push({
+          code: 'EVIDENCE-PHASE-SCOPE-MISMATCH',
+          detail:
+            `the plan expects measurements/ to carry phase.scope ${plan.phase.measurementsScope} `
+            + `but the capture recorded ${report.measurementsScope}`,
+        });
+      }
     }
 
     for (const manifest of plan.manifests ?? []) {

@@ -45,7 +45,7 @@ import { applyDisposition, readDisposition, toReplica } from '../../../packages/
 import { SessionInputState } from '../../../apps/server/src/network/ColyseusInputAdapter.js';
 import type { InputPort } from '../../../apps/server/src/network/ColyseusInputAdapter.js';
 import { RecoveryPolicy, type Delivery } from '../../support/client-harness/recovery.ts';
-import { PHASE_2_VECTOR_FILES } from '../../../tools/checks/src/evidence.ts';
+import { measurementsScopeOf, PHASE_1_MEASUREMENTS_SCOPE, PHASE_2_LABEL, PHASE_2_VECTOR_FILES } from '../../../tools/checks/src/evidence.ts';
 
 /**
  * Where the artefacts go. Evidence capture points this at the bundle (`UDG_VECTORS_OUT`), so the
@@ -696,7 +696,7 @@ describe('UDG-003 Phase 2 vectors — reconciliation rules (W-7, GA-6/GA-7)', ()
 });
 
 describe('UDG-003 Phase 2 vectors — the manifest names the whole set (§8.2.1)', () => {
-  it('refuses a half-run and writes the manifest over all fifteen artefacts', () => {
+  it(`refuses a half-run and writes the manifest over all ${String(PHASE_2_VECTOR_FILES.length)} artefacts`, () => {
     const runtimeFiles = [
       'close-path-accounting.json',
       'recovery-harness.json',
@@ -704,6 +704,11 @@ describe('UDG-003 Phase 2 vectors — the manifest names the whole set (§8.2.1)
       'buffer-depth.csv',
       'room-lifecycle.json',
       'tick-metrics.json',
+      // R-1: the journals are runtime evidence too. A manifest written without them would certify a
+      // directory in which nothing can be replayed.
+      'journal-population.json',
+      'journal-recovery.json',
+      'journal-replay.json',
     ];
     const missing = runtimeFiles.filter((name) => !existsSync(join(OUTPUT_DIRECTORY, name)));
 
@@ -731,5 +736,27 @@ describe('UDG-003 Phase 2 vectors — the manifest names the whole set (§8.2.1)
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { files: { name: string }[]; phase: string };
     expect(manifest.phase).toBe('phase-2');
     expect(manifest.files.map((entry) => entry.name).sort()).toEqual([...PHASE_2_VECTOR_FILES].sort());
+  });
+});
+
+describe('UDG-003 Phase 2 — the two phase labels are a pair, not a contradiction (R-2, option A)', () => {
+  it('reads the scope the accepted Phase 1 measurement block declares', () => {
+    // The correction under review changes a CLAIM, not data: `measurements/UDG-003.json` is written by the
+    // Phase 1 vectors suite and measures the accepted authority, so it keeps its own label and the bundle's
+    // Phase 2 label lives in report.json. The capture records both; this is the reading half.
+    expect(measurementsScopeOf({ phase: { scope: 'phase-1' } })).toBe('phase-1');
+    expect(measurementsScopeOf({ phase: { scope: 'phase-2' } })).toBe('phase-2');
+    // The two constants the capture pairs up. If either moves, the threshold text and this reading move with it.
+    expect(PHASE_1_MEASUREMENTS_SCOPE).toBe('phase-1');
+    expect(PHASE_2_LABEL).toBe('phase-2');
+  });
+
+  it('says absent rather than inventing a scope', () => {
+    // A measurement file that declares no phase must not be read as declaring the expected one: the pairing
+    // check would then pass on a file that says nothing.
+    expect(measurementsScopeOf({})).toBe('absent');
+    expect(measurementsScopeOf({ phase: null })).toBe('absent');
+    expect(measurementsScopeOf({ phase: { scope: 7 } })).toBe('absent');
+    expect(measurementsScopeOf({ phase: 'phase-1' })).toBe('absent');
   });
 });

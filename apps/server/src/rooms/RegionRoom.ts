@@ -54,7 +54,7 @@ import { publishPlayer, publishRegion, unpublishPlayer } from '../state/map-play
 import { DevelopmentSessions } from '../lifecycle/DevelopmentSessions.js';
 import { TickMetrics } from '../telemetry/tick-metrics.js';
 import type { TickChainRecord } from '../authority/journal.js';
-import type { JournalRow } from '../authority/types.js';
+import type { JournalRow, PrologueRow } from '../authority/types.js';
 
 /**
  * The operator channel, authenticated.
@@ -249,12 +249,12 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
     });
 
     // The second argument is the step FREQUENCY, not a millisecond interval — passing
-    // `simulationStepSeconds * 1000` asked for 50 Hz and the room ticked at ~55 Hz, draining the
-    // input buffer two and a half times faster than the §2 envelope’s λ = 1 frame per 20 Hz tick
-    // promises and making queue depth unobservable at the declared pressure line (measured live by
-    // the W-10 population, which could not build depth no matter how fast it sent). The authority’s
-    // own clock still decides which ticks move the simulation; this number only decides how often
-    // the room gets the chance.
+    // `network.simulationStepSeconds * 1000` = 50 asked for 50 Hz while the hashed configuration
+    // declares 20: measured 49.5 Hz against 19.5 Hz on this machine in an idle two-second window, so
+    // the room stepped two and a half times faster than the §2 envelope's λ = 1 frame per tick assumes.
+    // That drains each seat's buffer faster than it can fill, which is why the W-10 population could not
+    // reach the pressure line at any send rate. The authority's own clock still decides which ticks move
+    // the simulation; this number only decides how often the room gets the chance.
     this.setFixedTimestep((): void => {
       this.tick();
     }, this.#configValue.network.tickRate);
@@ -637,6 +637,23 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
   /** Rows and chain for replay assertions; the sink is bounded, and `dropped` says so honestly. */
   journal(): { rows: readonly JournalRow[]; chain: readonly TickChainRecord[]; dropped: number } {
     return { rows: this.#sink.rows, chain: this.#sink.chain, dropped: this.#sink.dropped };
+  }
+
+  /**
+   * The run's prologue: configuration digests plus the initial canonical state of every entity.
+   *
+   * `journal()` alone cannot be replayed. The accepted replay entry point refuses a journal it cannot bind to
+   * a configuration, so an exporter that kept the rows and lost the prologue would hand over bytes that no
+   * reviewer can re-check — and `undefined` here means the room refused to build an authority at all, which
+   * is a reported fact rather than an empty journal.
+   */
+  journalPrologue(): PrologueRow | undefined {
+    return this.#authority?.core.prologue();
+  }
+
+  /** The validated configuration this room actually ran on, for a replay that must bind to the prologue. */
+  liveConfig(): Readonly<ServerConfig> | undefined {
+    return this.#authority === undefined ? undefined : this.#configValue;
   }
 
   static reservedCloseCodes = RESERVED_CLOSE_CODES;

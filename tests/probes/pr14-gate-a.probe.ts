@@ -41,6 +41,7 @@ import {
   type RegisteredHandler,
   type SdkRoom,
 } from '../support/client-harness/transport.mjs';
+import { compareJournal, journalFromPersisted } from '../support/replay/journal-replay.ts';
 
 const ROOT = resolve(import.meta.dirname, '..', '..');
 const args = process.argv.slice(2);
@@ -58,6 +59,10 @@ interface RegionRoomModule {
 interface RoomInstance {
   readonly config: { protocolVersion: string };
   evidence(): Record<string, unknown>;
+  /** R-1: the journal this probe's room wrote, plus the prologue that binds it to a configuration. */
+  journal(): { rows: readonly Record<string, unknown>[]; chain: readonly Record<string, unknown>[]; dropped: number };
+  journalPrologue(): Record<string, unknown> | undefined;
+  liveConfig(): Record<string, unknown> | undefined;
   tickRecords: readonly {
     tick: number;
     consumed: readonly { entityId: string; seq: number }[];
@@ -394,6 +399,96 @@ async function main(): Promise<void> {
     const forbiddenImports = ['@udg/physics', '@udg/locomotion', '@udg/navigation', '@babylonjs', 'recast-navigation', '@dimforge'];
     const found = forbiddenImports.filter((name) => roomSource.includes(`from '${name}`) || roomSource.includes(`import('${name}`));
     recorder.check('substrate-carries-no-locomotion-physics-or-navigation', found.length === 0, `forbidden imports found: ${JSON.stringify(found)}`);
+
+    // ── The journal replays ─────────────────────────────────────────────────────────────────────
+    // GA-13 says every scenario replays to the same dispositions, canonical state and chain tip. This
+    // probe's room is a scenario, so its journal is replayed here through the ACCEPTED Phase 1 replay and
+    // compared three ways — and the serialised journal + prologue are retained in this probe's own result,
+    // so a reviewer can replay it again from bytes in the bundle (`journal-replay.ts` does exactly that).
+    const journal = room().journal();
+    const prologue = room().journalPrologue();
+    const liveConfig = room().liveConfig();
+    const [journalMod, replayMod, adapterMod] = await Promise.all([
+      import(pathToFileURL(resolve(ROOT, 'apps/server/dist/authority/journal.js')).href) as Promise<Record<string, unknown>>,
+      import(pathToFileURL(resolve(ROOT, 'apps/server/dist/authority/replay.js')).href) as Promise<Record<string, unknown>>,
+      import(pathToFileURL(resolve(ROOT, 'apps/server/dist/movement/MovementAuthorityAdapter.js')).href) as Promise<Record<string, unknown>>,
+    ]);
+    const toReplayInputs = journalMod['toReplayInputs'] as (rows: unknown[], chain: unknown[]) => unknown;
+    const withDigestsBlanked = journalMod['withDigestsBlanked'] as (rows: unknown[]) => unknown[];
+    const replayRun = replayMod['replayRun'] as (options: Record<string, unknown>) => { ok: boolean; reason?: string };
+    const FlatReferenceStepper = adapterMod['FlatReferenceStepper'] as new (speed: number) => unknown;
+    const SystemScheduler = adapterMod['SystemScheduler'] as new () => unknown;
+
+    const replayHere = (blank: boolean, tamperPrologue: boolean): { ok: boolean; rows: Record<string, unknown>[]; chain: Record<string, unknown>[]; refusal?: string } => {
+      const rowsOut: Record<string, unknown>[] = [];
+      const chainOut: Record<string, unknown>[] = [];
+      const result = replayRun({
+        prologue: tamperPrologue ? { ...(prologue ?? {}), configHash: '0'.repeat(64) } : (prologue ?? {}),
+        inputs: toReplayInputs(blank ? withDigestsBlanked([...journal.rows]) : [...journal.rows], [...journal.chain]),
+        config: liveConfig,
+        stepper: new FlatReferenceStepper(((liveConfig ?? {}) as { movement: { speed: number } }).movement.speed),
+        scheduler: new SystemScheduler(),
+        sink: {
+          recordRow: (row: Record<string, unknown>) => {
+            rowsOut.push(row);
+          },
+          recordTickChain: (record: Record<string, unknown>) => {
+            chainOut.push(record);
+          },
+        },
+        runId: 'pr14-journal-replay',
+      });
+      return result.ok
+        ? { ok: true, rows: rowsOut, chain: chainOut }
+        : { ok: false, rows: rowsOut, chain: chainOut, refusal: String(result.reason ?? 'refused') };
+    };
+
+    const asRecorded = replayHere(false, false);
+    // Both sides go through the same boundary a reviewer's copy would: the persisted-journal reader. A probe
+    // that compared live objects to live objects would prove less than it appears to.
+    const liveJournal = journalFromPersisted({
+      prologue: prologue ?? null,
+      rows: [...journal.rows],
+      chain: [...journal.chain],
+      dropped: journal.dropped,
+    });
+    const comparison = compareJournal(liveJournal.rows, liveJournal.chain, asRecorded.rows, asRecorded.chain);
+    recorder.check(
+      'the-rooms-journal-replays-to-the-same-dispositions-state-and-tip',
+      asRecorded.ok && comparison.equal,
+      `${String(journal.rows.length)} rows, ${String(journal.chain.length)} chain records: ${JSON.stringify(comparison.mismatches.slice(0, 2))}${asRecorded.refusal === undefined ? '' : ` refused=${asRecorded.refusal}`}`,
+    );
+    const blanked = replayHere(true, false);
+    const blankedComparison = compareJournal(liveJournal.rows, liveJournal.chain, blanked.rows, blanked.chain);
+    recorder.check(
+      'the-digest-blanked-journal-replays-to-the-same-tip',
+      blanked.ok && blankedComparison.equal,
+      `blanked replay tip ${String(blankedComparison.replayedTip)} against live ${String(blankedComparison.liveTip)}`,
+    );
+    const tampered = replayHere(false, true);
+    recorder.check(
+      'a-tampered-prologue-is-refused-rather-than-replayed',
+      tampered.ok === false,
+      `tampered configHash: ${String(tampered.refusal ?? 'THE REPLAY ACCEPTED IT')}`,
+    );
+    recorder.observe('journal', {
+      rows: journal.rows.length,
+      chainRecords: journal.chain.length,
+      dropped: journal.dropped,
+      tip: comparison.liveTip,
+      replayedTip: comparison.replayedTip,
+      blankedTip: blankedComparison.replayedTip,
+    });
+    // Retained, not merely observed at runtime: the bytes travel with this result into `probes/`, which the
+    // capture plan copies and report.json hashes.
+    recorder.observe('journalRecord', {
+      stepper: 'flat-reference',
+      configDocument: liveConfig ?? null,
+      prologue: prologue ?? null,
+      rows: journal.rows,
+      chain: journal.chain,
+      dropped: journal.dropped,
+    });
 
     recorder.observe('roomEvidence', room().evidence());
     recorder.observe('ticks', room().tickRecords.length);

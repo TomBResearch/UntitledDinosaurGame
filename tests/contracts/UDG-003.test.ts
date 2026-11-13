@@ -32,6 +32,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -1111,6 +1112,10 @@ describe('UDG-003 Phase 2 — PR-14 Gate A substrate (W-8)', () => {
       'reissue-of-a-known-identity-is-answered-not-recharged',
       'rejoin-restarts-the-stamp-domain',
       'rejoin-carries-a-server-issued-epoch',
+      // R-1: the probe's own journal replays, and it is retained inside this result for a reviewer to replay.
+      'the-rooms-journal-replays-to-the-same-dispositions-state-and-tip',
+      'the-digest-blanked-journal-replays-to-the-same-tip',
+      'a-tampered-prologue-is-refused-rather-than-replayed',
       'offender-joined-the-compliant-room',
       'burst-beyond-the-buffer-retires',
       'confirmed-retirement-closes-inside-the-bounded-window',
@@ -1121,6 +1126,12 @@ describe('UDG-003 Phase 2 — PR-14 Gate A substrate (W-8)', () => {
       expect(names, `PR-14 check ${name}`).toContain(name);
     }
     const failed = (record?.result?.checks ?? []).filter((check) => !check.ok);
+    const journalRecord = observation<Record<string, unknown>>('PR-14', 'journalRecord');
+    expect(Array.isArray(journalRecord['rows']) ? (journalRecord['rows'] as unknown[]).length : 0, 'PR-14 retains its journal rows').toBeGreaterThan(0);
+    expect(Array.isArray(journalRecord['chain']) ? (journalRecord['chain'] as unknown[]).length : 0, 'PR-14 retains its tick chain').toBeGreaterThan(0);
+    expect(journalRecord['prologue'], 'PR-14 retains the prologue that binds the journal to a configuration').toBeTruthy();
+    expect(journalRecord['configDocument'], 'PR-14 retains the configuration it ran on').toBeTruthy();
+
     expect(failed.map((check) => `${check.name} :: ${check.detail}`)).toEqual([]);
   });
 
@@ -1195,6 +1206,39 @@ describe('UDG-003 Phase 0 — boundary and evidence hygiene', () => {
     const source = readFileSync(join(ROOT, 'apps', 'server', 'src', 'index.ts'), 'utf8');
     expect(source).toContain('export {};');
     expect(source).not.toContain('@colyseus');
+  });
+
+  it('records Room.setFixedTimestep with the signature and the unit the pinned package declares', () => {
+    // Review correction R-3. This row read `setFixedTimestep(intervalMs, callback)` while PR-2 measured the
+    // opposite since Phase 0, and `RegionRoom` called it as an interval: the wrong row and the wrong call site
+    // agreed with each other, and the measurement that contradicted both was never compared against them. A
+    // row that drifts from the pinned declaration must now fail the suite instead of corroborating a bug.
+    const mapPath = join(ROOT, 'docs', 'integration', 'colyseus-0.18-api-map.md');
+    const map = readFileSync(mapPath, 'utf8');
+    const row = map.split('\n').find((line) => line.startsWith('| `Room.setFixedTimestep` |')) ?? '';
+    expect(row, 'the api map keeps a Room.setFixedTimestep row').not.toBe('');
+
+    // Resolve the pinned package exactly as apps/server does; no bare specifier from the repository root.
+    const requireFromServer = createRequire(join(ROOT, 'apps', 'server', 'index.js'));
+    const declarationPath = join(dirname(requireFromServer.resolve('@colyseus/core')), 'Room.d.ts');
+    const declaration = readFileSync(declarationPath, 'utf8').replace(/\s+/g, ' ');
+    const signature = 'setFixedTimestep(step: FixedTimestepCallback, tickRate?: number, opts?: { subSteps?: number; }): void';
+    expect(declaration, 'the pinned declaration really says this').toContain(signature);
+    // The DECLARATION column (the fourth cell) is the claim that must match the package. The row's
+    // limitations column quotes the wrong text it replaced, so the cell, not the whole line, is compared.
+    const declarationCell = (row.split('|')[4] ?? '').replace(/\s+/g, ' ').trim();
+    expect(declarationCell, 'the api map declaration column says the same thing').toContain(signature);
+    expect(declarationCell).not.toContain('intervalMs');
+    expect(declarationCell).toContain('tick rate in Hz');
+    // The row cites the probe that measured the rate, and the room now passes a rate.
+    expect(row).toContain('rate-is-20hz');
+    expect(row).toContain('tests/probes/pr14-gate-a.probe.ts');
+    // The CALL SITE is what must pass a rate; the file's comments are allowed to name the wrong expression,
+    // because naming it is how the room stops someone re-introducing it.
+    const roomSource = readFileSync(join(ROOT, 'apps', 'server', 'src', 'rooms', 'RegionRoom.ts'), 'utf8');
+    const call = /this\.setFixedTimestep\([\s\S]*?\},\s*this\.#configValue\.([A-Za-z0-9_.]+)\);/.exec(roomSource);
+    expect(call, 'the room schedules its tick with the pinned facility, from the live configuration').not.toBeNull();
+    expect(call?.[1], 'the second argument is the tick rate, not a millisecond interval').toBe('network.tickRate');
   });
 
   it('documents every assigned probe in the api map, with files that exist', () => {
@@ -1823,7 +1867,11 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     // §8.2.1, moved in one disclosed change by W-11/W-12: the label describes the ARTEFACTS, and the
     // artefacts now include the Phase 2 set. The Phase 1 requirement is not removed — the plan
     // carries both sets and each manifest declares its own phase.
-    expect(plan).toContain("phase: { label: PHASE_2_LABEL, note: PHASE_2_SCOPE_NOTE }");
+    expect(plan).toContain('label: PHASE_2_LABEL');
+    expect(plan).toContain('note: PHASE_2_SCOPE_NOTE');
+    // R-2, option A: the bundle label and the measurement scope are different fields in different files,
+    // and the plan declares BOTH so a future reader cannot take one for the other.
+    expect(plan).toContain('measurementsScope: PHASE_1_MEASUREMENTS_SCOPE');
     expect(plan).toContain("{ path: 'vectors/vectors-manifest.json', phase: PHASE_1_LABEL, requiredFiles: [...PHASE_1_VECTOR_FILES] }");
     expect(plan).toContain("{ path: 'vectors-phase-2/vectors-manifest.json', phase: PHASE_2_LABEL, requiredFiles: [...PHASE_2_VECTOR_FILES] }");
     expect(plan).toContain('...PHASE_1_VECTOR_FILES.map((name) => `vectors/${name}`)');
@@ -1835,6 +1883,22 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     expect(plan).toContain("'phase-2-recovery-scenarios'");
     expect(evidenceSource).toContain("export const PHASE_1_LABEL = 'phase-1'");
     expect(evidenceSource).toContain("export const PHASE_2_LABEL = 'phase-2'");
+    expect(evidenceSource).toContain("export const PHASE_1_MEASUREMENTS_SCOPE = 'phase-1'");
+    // R-2, option A: the pairing is asserted by the gate, not left to prose. The Phase 1 measurement file
+    // keeps its own label — relabelling it would rewrite an accepted artefact — and the capture records the
+    // pair so verification can refuse a bundle that claims one label and measures the other.
+    expect(evidenceSource).toContain('EVIDENCE-PHASE-SCOPE-MISMATCH');
+    expect(evidenceSource).toContain('measurementsScope: PHASE_1_MEASUREMENTS_SCOPE');
+    const scopeThreshold = evidenceSource.slice(
+      evidenceSource.indexOf("'phase.scope':"),
+      evidenceSource.indexOf("'phase.scope':") + 480,
+    );
+    expect(scopeThreshold).toContain('=== "phase-1"');
+    expect(scopeThreshold).toContain('measurements/UDG-003.json');
+    expect(scopeThreshold).toContain('report.json phase === "phase-2"');
+    // The Phase 1 suite still writes the label it has always written; nothing in this batch touched it.
+    expect(readFileSync(join(ROOT, 'tests', 'unit', 'udg-003', 'vectors.test.ts'), 'utf8'))
+      .toContain("recordMeasure('phase.scope', 'phase-1')");
     for (const phrase of ['Phase 1', 'not a third-party stack compatibility claim', 'Gate A, B or C pass']) {
       expect(evidenceSource, phrase).toContain(phrase);
     }
@@ -1845,9 +1909,16 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     // above needs two lists to compare because Phase 1 predates the import discipline; Phase 2
     // removes the second list instead of policing it.
     const phase2Vectors = readFileSync(join(ROOT, 'tests', 'unit', 'udg-003-phase-2', 'vectors.test.ts'), 'utf8');
-    expect(phase2Vectors).toContain("import { PHASE_2_VECTOR_FILES } from '../../../tools/checks/src/evidence.ts'");
+    expect(phase2Vectors).toMatch(
+      /import \{[^}]*\bPHASE_2_VECTOR_FILES\b[^}]*\} from '\.\.\/\.\.\/\.\.\/tools\/checks\/src\/evidence\.ts'/,
+    );
     const gate = literalList(evidenceSource, 'PHASE_2_VECTOR_FILES: readonly string[] = [');
-    expect(gate).toHaveLength(15);
+    // 15 as submitted, plus the three R-1 artefacts: the two retained journals and the replay verdict.
+    // A replay claim whose inputs are not required files is a claim about bytes nobody gated.
+    expect(gate).toHaveLength(18);
+    for (const name of ['journal-population.json', 'journal-recovery.json', 'journal-replay.json']) {
+      expect(gate, `the Phase 2 requirement must name ${name}`).toContain(name);
+    }
     // Runtime evidence is half the set; a manifest written without those files present must fail,
     // and the suite that writes the manifest is the one that asserts it.
     expect(phase2Vectors).toContain('close-path-accounting.json');
@@ -1941,6 +2012,25 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     );
     expect(phaseStep).toContain('set -euo pipefail');
     expect(phaseStep).toContain('!cancelled()');
+
+    // R-1: the Phase 2 step is an ORDER, not a bag of commands. The journals have to exist before the
+    // process that replays them starts, PR-14 has to have run on this commit before a stranger replays
+    // from its result, and the manifest has to be written after the replay it certifies.
+    const phase2Step = workflow.slice(
+      workflow.indexOf('Record and gate the UDG-003 Phase 2 vectors'),
+      workflow.indexOf('- name: Verify probe invocation attribution'),
+    );
+    expect(phase2Step, 'the Phase 2 record step exists').toContain('set -euo pipefail');
+    const phase2Order = [
+      'node tests/runtime/udg-003-phase-2/abuse-population.ts',
+      'node tests/runtime/udg-003-phase-2/recovery-scenarios.ts',
+      'node tests/probes/pr14-gate-a.probe.ts --out artifacts/probes/PR-14.probe-result.json',
+      'node tests/runtime/udg-003-phase-2/journal-replay.ts',
+      'pnpm exec vitest run tests/unit/udg-003-phase-2/vectors.test.ts',
+      'node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-2 --expect-phase phase-2',
+    ].map((command) => phase2Step.indexOf(command));
+    expect(phase2Order.every((index) => index >= 0), `every Phase 2 command is in the step: ${String(phase2Order)}`).toBe(true);
+    expect([...phase2Order].sort((a, b) => a - b), `Phase 2 CI order is ${String(phase2Order)}`).toEqual(phase2Order);
   });
 
   it('refuses a manifest whose bytes do not match what it names, using the built gate', () => {

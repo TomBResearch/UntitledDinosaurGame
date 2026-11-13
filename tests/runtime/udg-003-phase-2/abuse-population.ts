@@ -64,7 +64,33 @@ interface RoomInstance {
     maxDepth: number;
   }[];
   readonly inputs: { get(sessionId: string): InputAccessor | undefined } | undefined;
+  /** R-1: the journal a fresh process replays, plus the prologue that binds it to a configuration. */
+  journal(): { rows: readonly Record<string, unknown>[]; chain: readonly Record<string, unknown>[]; dropped: number };
+  journalPrologue(): Record<string, unknown> | undefined;
+  liveConfig(): Record<string, unknown> | undefined;
 }
+
+/** One scenario's slice of the shared room's journal, in row order. */
+interface ScenarioRange {
+  scenario: string;
+  rowStart: number;
+  rowEnd: number;
+  pass: boolean;
+  /**
+   * Whether the scenario drives seats through the authority (`authority`), asserts over state that an
+   * earlier window journalled (`earlier-window`), or measures something the authority never decides —
+   * configuration loading, telemetry presence, disposal (`none`). The replay reports these differently
+   * because "no rows in its own watermark range" means three different things, and collapsing them would
+   * let a scenario that produced nothing hide behind one that merely asserted late.
+   */
+  surface: 'authority' | 'earlier-window' | 'none';
+}
+
+const scenarioRanges: ScenarioRange[] = [];
+/** Where the shared room's journal stood when the previous scenario finished. */
+let journalCursor = 0;
+/** Replaced once a live room exists; until then there is no journal to read and 0 is the truth. */
+let rowsNow: () => number = () => 0;
 
 interface PlayerRow {
   inputResolvedThrough: number;
@@ -91,8 +117,21 @@ const stage = (name: string): void => {
   process.stderr.write(`[abuse][stage] ${String(Math.round(performance.now()))}ms ${name}\n`);
 };
 
-const record = (scenario: string, expectation: string, observed: Record<string, unknown>, pass: boolean): void => {
+const record = (
+  scenario: string,
+  expectation: string,
+  observed: Record<string, unknown>,
+  pass: boolean,
+  surface: ScenarioRange['surface'] = 'authority',
+): void => {
   results.push({ scenario, expectation, observed, pass });
+  // Every scenario of the population runs in ONE shared room, so its journal is one continuous record.
+  // `record` is called at the END of a scenario, so the row counter read here is that scenario's end and
+  // the previous cursor is its start. Marking it is what lets a replay attribute rows to scenarios and
+  // report a per-scenario verdict instead of one verdict for the whole room.
+  const end = rowsNow();
+  scenarioRanges.push({ scenario, rowStart: journalCursor, rowEnd: end, pass, surface });
+  journalCursor = end;
 };
 
 const withTimeout = async <T>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
@@ -165,6 +204,15 @@ async function main(): Promise<void> {
   const closuresOf = (): readonly { entityId: string; code: number }[] =>
     room().tickRecords.flatMap((t) => t.closures);
 
+  // From here on a live room exists, so each scenario can be closed against the journal's real row count.
+  rowsNow = () => {
+    try {
+      return room().journal().rows.length;
+    } catch {
+      return journalCursor;
+    }
+  };
+
   const room = (): RoomInstance => {
     // The bounded room is the only RegionRoom that survives construction here (the unbounded type
     // refuses before it can be seated), but take the bounded one by name rather than by count so a
@@ -193,6 +241,7 @@ async function main(): Promise<void> {
         operatorLoadOk: operatorLoad['ok'],
       },
       defaults['ok'] === true && defaultRegion?.['bounds'] === null && operatorLoad['ok'] === true,
+      'none',
     );
 
     stage('unbounded');
@@ -214,6 +263,7 @@ async function main(): Promise<void> {
       'A RegionRoom booted without operator bounds refuses every create with region-bounds-missing rather than inventing a spawn',
       { refusal: unboundedRefusal.slice(0, 240) },
       unboundedRefusal.includes('region-bounds-missing'),
+      'none',
     );
 
     stage('control');
@@ -447,6 +497,7 @@ async function main(): Promise<void> {
           || (rowOf(rateSeat.room)?.inputRetiredUnrepresented ?? 0) === 0,
       },
       rateClosed && rateClosure?.code === closeCodes['INPUT_RATE_CEILING'],
+      'earlier-window',
     );
 
     stage('offender');
@@ -515,6 +566,7 @@ async function main(): Promise<void> {
       // server-issued epoch, which is GA-3's point rather than a violation of it. What the control
       // population must show is that no neighbour was retired, closed, or evicted by an offender.
       survivors.every((row) => row.retired === 0 && row.epoch >= 1),
+      'earlier-window',
     );
 
     stage('lifecycle');
@@ -567,12 +619,59 @@ async function main(): Promise<void> {
       )}\n`,
       'utf8',
     );
-    record('tick-metrics-present', 'The room carries tick telemetry through the whole population run', { summary: metricsEvidence }, metricsEvidence !== undefined);
+    record('tick-metrics-present', 'The room carries tick telemetry through the whole population run', { summary: metricsEvidence }, metricsEvidence !== undefined, 'none');
+
+    // ── The replay inputs R-1 retains ───────────────────────────────────────────────────────────
+    // Snapshotted BEFORE shutdown (the room is gone after it) and WRITTEN after the last scenario is
+    // recorded, so the inventory in the file names all eleven scenarios rather than the nine that had
+    // finished when the rows were read. The prologue is part of the record because the accepted replay
+    // refuses a journal it cannot bind to a configuration; rows without a prologue are bytes, not evidence.
+    const exportedJournal = room().journal();
+    const journalSnapshot = {
+      configDocument: room().liveConfig() ?? null,
+      prologue: room().journalPrologue() ?? null,
+      rows: exportedJournal.rows,
+      chain: exportedJournal.chain,
+      dropped: exportedJournal.dropped,
+    };
+    const writeJournalRecord = (): void => writeFileSync(
+      resolve(OUT_DIR, 'journal-population.json'),
+      `${JSON.stringify(
+        {
+          taskId: 'UDG-003',
+          phase: 'phase-2',
+          criterion: ['GA-13', 'AC-3d', 'AC-20'],
+          kind: 'udg-003-phase-2-journal-inputs',
+          producer: 'tests/runtime/udg-003-phase-2/abuse-population.ts',
+          roomLabel: 'region',
+          runId: 'udg-003-phase-2-abuse',
+          stepper: 'flat-reference',
+          configDocument: journalSnapshot.configDocument,
+          prologue: journalSnapshot.prologue,
+          rows: journalSnapshot.rows,
+          chain: journalSnapshot.chain,
+          dropped: journalSnapshot.dropped,
+          // `rowStart`/`rowEnd` are WATERMARKS between verdicts, not a partition: a frame consumed on a tick
+          // that runs after its scenario's verdict was recorded is journalled in a later range. Coverage is
+          // therefore claimed for the whole room journal by the replay, and the watermark shows where each
+          // scenario stood when it made its claim.
+          scenarioRanges,
+          settingsNote:
+            'Provisional test settings on a loopback transport. Rows and chain are the authority’s own journalled decisions; '
+            + 'retirement, gap naming, close codes, close observations and the effect ledger are transport and room facts and are '
+            + 'reported separately by journal-replay.json as recorded inputs, not recomputed outputs.',
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
 
     // `gracefullyShutdown` waits for rooms to empty, and a RegionRoom has `autoDispose = false` by
     // design — the harness must not inherit that wait, or the process outlives its own evidence.
     await Promise.race([server.close(), sleep(4_000)]);
-    record('server-disposes-cleanly', 'The harness server disposes without leaving a live room behind', { liveRoomsAfterDispose: RegionRoom.liveRooms().length }, true);
+    record('server-disposes-cleanly', 'The harness server disposes without leaving a live room behind', { liveRoomsAfterDispose: RegionRoom.liveRooms().length }, true, 'none');
+    writeJournalRecord();
   } finally {
     // Evidence first, shutdown second: the pinned shutdown can end the process.
     mkdirSync(OUT_DIR, { recursive: true });
