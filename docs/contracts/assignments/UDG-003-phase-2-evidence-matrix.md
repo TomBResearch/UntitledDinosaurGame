@@ -1331,8 +1331,11 @@ What did **not** move, and was not allowed to: `protocol-v1`, the dependency set
 ## 17. The P-batch executed — what each artefact establishes, and what it refuses to
 
 Executed in the approved order **P-3 → P-1 → P-2 → P-4**, wired into the capture plan as **P-5**, at
-`16d356d48ce89805c77146f07b470029f9c8afb8`. A second commit follows it, `8db422628b8f582a82429407702dbcc5dbd3ca74`,
-and it exists because CI found two experiments that were measuring themselves rather than the property.
+`16d356d48ce89805c77146f07b470029f9c8afb8`. Two commits follow it — `8db422628b8f582a82429407702dbcc5dbd3ca74`
+and `f1e853daa56b99077dc8c354a5e19ebd1b3fd4ee` — and both exist because the hosted runner found experiments
+that were measuring themselves, or betting on the machine, rather than measuring the property. They are part
+of the batch's record rather than footnotes to it: each one is a control that would have passed for the
+wrong reason.
 
 ### P-3 — `abuse-results.json → retiredOffender`: two verdicts, four named residues
 
@@ -1436,7 +1439,7 @@ asserts the count, the names and the order. Finding E1 applies again verbatim: b
 `16d356d4` do not contain these files and fail the requirement when re-verified, and none of them has been
 rewritten.
 
-### CI's two findings, kept because they are the useful part
+### CI's findings, kept because they are the useful part
 
 Run `43523832137` failed UDG-001's bundle at `16d356d4` — `pnpm test` runs the Phase 2 runtime suite, and
 `stage-sequence.ts` exited 2 on the hosted runner. Because the scripts now write their false checks to
@@ -1447,6 +1450,15 @@ pair of deltas. The same commit gives the loopback floor a measured allowance �
 run's own unarmed seat measured against the declared patch interval — so a busy hosted box moves the bound
 instead of turning the artefact red, and a runner slow enough to invalidate the imposed figures still gets
 caught.
+
+Run `43526033368` then failed at `8db42262` on one check only, again named by stderr:
+`departedEntityStopsBeingMappedWhileNeighboursContinue`. The per-entity control had sampled the departed row
+and a neighbour's *before* awaiting the leave, so a frame already in flight landed afterwards and moved the
+row the check expected to hold still. The baseline moved to 400 ms after the leave resolved, taken in
+parallel with the stream so the withhold window is not disturbed. The same commit removed the last two
+`sleep`s that were bets on the machine: settlement is now polled against the equality that matters, under a
+12 s bound, with the elapsed figure published either way (256 ms and 503 ms locally). A wait that a hosted
+runner is entitled to lose is not a control.
 
 ### Verdict table after the batch
 
@@ -1467,6 +1479,9 @@ caught.
 | AC-15 | PASS under H1 | OD-5; H2 deferred |
 | **Gate A** | **Not Run** | UDG-SPIKE-001; PR-14 remains substrate only |
 
-Bundle `{{BUNDLE}}`, CI run `{{CI_RUN}}`, verification: `{{VERIFY}}`.
+**The retained bundle for this head is named in §18, the retention addendum, which is a later commit.** It
+is left unwritten here rather than guessed at, because a bundle path and a verification line are exactly the
+kind of claim that must not be written before the run exists. §18 carries the CI run at the head this batch
+landed on, the durable path, the hashed-file count and the gate result.
 
-Records commit for this section: pending. Phase 2 remains **In Review**; the owner keeps acceptance.
+Phase 2 remains **In Review**; the owner keeps acceptance.

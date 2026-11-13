@@ -532,9 +532,11 @@ outstanding under UDG-007; OD-5 leave AC-15 PASS under H1 and defer H2 and P-2b 
 **P-3 → P-1 → P-2 → P-4 → P-5**.
 
 **Chain.** `f0b2adb8` applied the clauses (three ledgered digests moved, sixty-five tracked).
-`16d356d48ce89805c77146f07b470029f9c8afb8` is the batch. `8db422628b8f582a82429407702dbcc5dbd3ca74` corrects
-two experiments that CI caught measuring themselves. Records follow at `{{RECORDS}}`, with CI run
-`{{CI_RUN}}` and bundle `{{BUNDLE}}` verified as `{{VERIFY}}`.
+`16d356d48ce89805c77146f07b470029f9c8afb8` is the batch. `8db422628b8f582a82429407702dbcc5dbd3ca74` and
+`f1e853daa56b99077dc8c354a5e19ebd1b3fd4ee` correct experiments the hosted runner caught measuring themselves
+or betting on the machine — see matrix §17, because what they taught is part of what was delivered. The records for this sitting are this file and matrix §16–§17; the retained bundle for the head the batch
+landed on is named in matrix §18, a later commit, and is deliberately not written here before the run that
+produces it exists.
 
 **What the batch added to the record.** A criterion split that names its owner (GA-10a/GA-10b at UDG-007,
 GA-11 and both production inequalities at UDG-SPIKE-001, the client-side deadline at UDG-008). An artefact
@@ -544,12 +546,14 @@ reported without being promoted into a replay. And four residues on GA-13 that s
 retained bytes do not settle them, pinned by name in the runtime suite so that losing one is a test failure
 rather than an improvement.
 
-**What the batch changed about how it was written.** Two of its own experiments were wrong in ways that
-only a slower machine showed: a withhold window that slept and therefore stalled the input it was meant to
-observe, and a delay control built on a tick-quantised figure that passed or failed on where the send
-landed relative to a tick boundary. Both are now stated as the property rather than as a millisecond band,
-and both scripts write their false checks and their numbers to stderr, because a retained log that says
-only `exit 2` is not evidence of anything.
+**What the batch changed about how it was written.** Three of its own experiments were wrong in ways only a
+slower machine showed: a withhold window that slept and so stalled the input it meant to observe; a delay
+control built on a tick-quantised figure, which passed or failed on where a send landed relative to a tick
+boundary; and a per-entity baseline sampled before the leave had drained, so ordinary in-flight work looked
+like mapping a retired entity. All three are now stated as the property — deltas across a live stream, a
+comparative cadence, a baseline taken after the drain, settlement polled against the equality that matters
+with the elapsed time published. Both scripts write their false checks and their numbers to stderr, because
+a retained log that says only `exit 2` is not evidence of anything.
 
 **Decisions closed.** OD-1, OD-2, OD-3, OD-4, OD-5, OD-8, OD-9, OD-10.
 
