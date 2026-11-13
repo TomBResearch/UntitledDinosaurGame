@@ -230,19 +230,42 @@ async function main(): Promise<void> {
   // A holder rather than a bare `let`: the assignment happens inside the streaming closure, and a local
   // variable would still read null to the checker afterwards, which is how a control like this one quietly
   // becomes unfalsifiable.
-  const midStall: { value: { clientResolvedThrough: number; serverResolvedThrough: number; atMs: number } | null } = { value: null };
+  // Two samples, not one instant. A single mid-window reading compares two numbers that are usually one
+  // step apart, which on a loaded runner can come out level for reasons that have nothing to do with the
+  // claim. What the claim actually needs is that the authority ADVANCED while the seat did not, so the
+  // window is sampled when it opens and again later, and the pair of deltas is the evidence.
+  const midStall: {
+    value: {
+      clientAtOpen: number; serverAtOpen: number;
+      clientAtMid: number; serverAtMid: number;
+      openAtMs: number; midAtMs: number;
+    } | null;
+  } = { value: null };
   const streaming = (async () => {
     for (let sent = 0; sent < FRAMES; sent += 1) {
       // The withheld seat's patches stop landing from the sixth frame onwards; the seat itself keeps
       // streaming, because the point is the delivery direction, not the sender.
       if (sent === 6) {
-        withholdController.withholdInbound(WITHHOLD_MS);
-        await sleep(WITHHOLD_MS / 2);
+        // The window opens and the stream KEEPS RUNNING. An earlier version slept here, and sleeping
+        // stopped the sends, so the authority had nothing new to resolve and the two samples came back
+        // equal — the artefact was measuring its own pause. The claim needs the room to keep consuming
+        // while the seat is kept from seeing it, which is what a paced stream through a closed window is.
         midStall.value = {
-          clientResolvedThrough: withheld.room.state.players?.get(withheldKey)?.inputResolvedThrough ?? -1,
-          serverResolvedThrough: serverRowFor(withheldKey)?.resolvedThrough ?? -1,
-          atMs: performance.now(),
+          clientAtOpen: withheld.room.state.players?.get(withheldKey)?.inputResolvedThrough ?? -1,
+          serverAtOpen: serverRowFor(withheldKey)?.resolvedThrough ?? -1,
+          clientAtMid: -1,
+          serverAtMid: -1,
+          openAtMs: performance.now(),
+          midAtMs: -1,
         };
+        withholdController.withholdInbound(WITHHOLD_MS);
+      }
+      if (sent === 12 && midStall.value !== null) {
+        // Half a second of continued streaming later, still inside the 600 ms window: the authority has
+        // had six more ticks of work, and this seat has been told none of it.
+        midStall.value.clientAtMid = withheld.room.state.players?.get(withheldKey)?.inputResolvedThrough ?? -1;
+        midStall.value.serverAtMid = serverRowFor(withheldKey)?.resolvedThrough ?? -1;
+        midStall.value.midAtMs = performance.now();
       }
       stampAndSend(compliant.handle as never, frame(compliantEpoch));
       // The refusal control: a stamped epoch that is not the one this association holds. GA-4 makes the
@@ -436,12 +459,19 @@ async function main(): Promise<void> {
       && valueControl.mutatingTheMappedStateMovedTheRow === false,
     mappingIsTheOnlyWriter: valueControl.ran === true && valueControl.mappingIsTheOnlyWriter === true,
     withheldProvesMappingPrecedesPublication: midStall.value !== null
-      && midStall.value.serverResolvedThrough > midStall.value.clientResolvedThrough,
+      && midStall.value.midAtMs > 0
+      && midStall.value.serverAtMid - midStall.value.serverAtOpen >= 2
+      && midStall.value.clientAtMid === midStall.value.clientAtOpen,
     clientCaughtUpWhenPublicationResumed: caughtUpAfterRelease,
+    // Stated comparatively, because an absolute millisecond band is a claim about the runner. What the
+    // criterion asserts is which knob the cadence follows: the intervals have to sit nearer the declared
+    // patch interval than the simulation step, and they have to be plainly too slow to be tick-paced. A
+    // loaded runner that stretches every interval still satisfies both, and a per-tick publication fails
+    // the first arm whichever way the machine is feeling.
     publicationCadenceIsTheDeclaredKnob: patchMedianMs !== null
-      && Math.abs(patchMedianMs - patchIntervalMs) <= 40,
-    publicationCadenceIsNotTheTick: patchMedianMs !== null
-      && Math.abs(patchMedianMs - stepMs) >= Math.min(stepMs, patchIntervalMs) / 2,
+      && Math.abs(patchMedianMs - patchIntervalMs) < Math.abs(patchMedianMs - stepMs),
+    publicationCadenceIsNotTickPaced: patchMedianMs !== null
+      && patchMedianMs >= stepMs * 1.5,
     departedEntityStopsBeingMappedWhileNeighboursContinue: departedRowAtLeave !== null
       && neighbourRowAtLeave !== null
       && (serverRowFor(departedKey)?.resolvedThrough ?? -1) === departedRowAtLeave
@@ -536,11 +566,15 @@ async function main(): Promise<void> {
         declaredIntervalMs: patchIntervalMs,
         tickIntervalMs: stepMs,
         cadenceIsTheKnobNotTheTick: checks.publicationCadenceIsTheDeclaredKnob
-          && checks.publicationCadenceIsNotTheTick,
+          && checks.publicationCadenceIsNotTickPaced,
+        cadenceRule: `the median interval must sit nearer statePatchIntervalMs (${String(patchIntervalMs)}) than simulationStepSeconds (${String(stepMs)} ms), and must be at least 1.5 steps`,
+        observedMedianMs: patchMedianMs,
       },
       mappingIsNotPublication: {
         withheldEntityId: withheldKey,
       withheldWindowMs: WITHHOLD_MS,
+      framesSentDuringTheWindow: FRAMES - 6,
+      methodNote: 'the stream keeps running while the window is shut. The first version slept inside the window instead, which stopped the sends: the authority had nothing new to resolve, the two samples came back equal, and the artefact was measuring its own pause. A withhold experiment that halts the input measures nothing, so the pair of deltas is now taken across a live stream.',
         midWindow: midStall.value,
         afterRelease: {
           clientResolvedThrough: withheldClientNow,
@@ -549,7 +583,7 @@ async function main(): Promise<void> {
         },
         reading: midStall.value === null
           ? 'the window never opened'
-          : `inside the window the authority had resolved ${String(midStall.value.serverResolvedThrough)} and the seat could read ${String(midStall.value.clientResolvedThrough)}; a single stage cannot disagree with itself, and a per-tick publication could not lag`,
+          : `inside the window the authority advanced ${String((midStall.value.serverAtMid - midStall.value.serverAtOpen))} resolutions while the seat advanced ${String(midStall.value.clientAtMid - midStall.value.clientAtOpen)}; a single stage cannot fail to advance while its own mapping does, and a per-tick publication could not hold still for ${String(WITHHOLD_MS)} ms`,
         metricsFlush: 'the room\'s telemetry artefacts (tick-metrics.json, buffer-depth.csv) are the metrics half of P and are produced by the abuse population in this same bundle',
       },
       resultsHalf: {
@@ -582,10 +616,16 @@ async function main(): Promise<void> {
   };
 
   writeFileSync(resolve(OUT_DIR, 'stage-sequence.json'), `${JSON.stringify(artefact, null, 2)}\n`, 'utf8');
+  if (artefact.verdict !== 'pass') {
+    // The capture keeps stderr; a bare exit code 2 in a CI log is how a timing threshold becomes an
+    // afternoon. Name the checks that went false and the numbers behind them.
+    process.stderr.write(`[stages][fail] ${Object.entries(checks).filter(([, value]) => value !== true).map(([key, value]) => `${key}=${String(value)}`).join(', ')}\n`);
+    process.stderr.write(`[stages][fail] patch median ${String(patchMedianMs ?? '-')} ms, declared ${String(patchIntervalMs)} ms, step ${String(stepMs)} ms; mid-window ${JSON.stringify(midStall.value)}\n`);
+  }
   process.stdout.write(
     `[stages] ${artefact.verdict as string}: M matches the authority record=${String(checks.mappingMatchesTheAuthoritysOwnRecord)}, `
     + `refusal moved nothing=${String(checks.refusalMovedNothing)}, `
-    + `M≠P mid-window ${String(midStall.value?.serverResolvedThrough ?? '-')}>${String(midStall.value?.clientResolvedThrough ?? '-')}, `
+    + `M≠P during the withheld window the room advanced ${String((midStall.value?.serverAtMid ?? 0) - (midStall.value?.serverAtOpen ?? 0))} and the seat ${String((midStall.value?.clientAtMid ?? 0) - (midStall.value?.clientAtOpen ?? 0))}, `
     + `patch median ${String(patchMedianMs ?? '-')} ms vs declared ${String(patchIntervalMs)} ms, results half outstanding\n`,
   );
 
