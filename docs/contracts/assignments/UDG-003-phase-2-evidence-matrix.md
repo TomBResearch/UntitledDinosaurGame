@@ -1286,3 +1286,187 @@ dependency and zero hash change, ordered P-3 → P-1 → P-2 → P-4 because P-4
 withhold. What it does not close is listed in the plan and is not small: GA-10a/b (UDG-007), GA-1's production
 envelope and GA-11's inequalities (Gate A), AC-3b's discrete half (UDG-007), GA-12 and PE-1…PE-5 (NOT PASSED,
 reported).
+
+---
+
+## 16. The amendments applied — OD-1 … OD-5 accepted, clauses moved, owners named
+
+The owner accepted the plan in §15 with five rulings. The clauses themselves then moved, at `f0b2adb8`,
+and `pnpm contracts:checksums` rewrote exactly three ledgered digests to say so: ADR-0003,
+`docs/contracts/UDG-007.md` and `docs/contracts/UDG-SPIKE-001.md`. Sixty-five files are tracked; three
+changed; nothing else in the manifest moved.
+
+**OD-1 — GA-10 is three criteria now.** §5 carries GA-10 (zero effect for a refusal control, measured
+here), GA-10a (a committed identity publishes exactly once — first publication counted, cache and batch
+re-answers charged nothing) and GA-10b (a deliberate reissue republishes). GA-10a and GA-10b are required
+at **UDG-007 acceptance** and are recorded **outstanding** until measured; UDG-SPIKE-001 records them as
+outstanding at Gate A rather than as satisfied, and Gate A stays runnable at its own prerequisites
+(UDG-003 + UDG-004) because §5's preamble forbids a navigation dependency inside the gate. The deferral is
+a debt, not an exemption: neither row can ever PASS on a substrate where `pathCandidates == 0`, which is
+this one, and the artefacts say so in those words.
+
+**OD-2 — W-10's impairment source is written down.** The §5 preamble now states that Phase 2's populations
+come from a bounded application-layer impairment in the harness, that a Phase 2 PASS is not a network-loss
+measurement, and that the production inequalities are UDG-SPIKE-001's. UDG-SPIKE-001 additionally has to
+record whether its own runner can produce network-layer impairment at all, so a future reader can tell a
+gate that declined the test from one that failed it. GA-11's cells were amended in the same pass.
+
+**OD-3 — GA-13 has two limbs.** Replay every retained authority row; account separately, with captured
+transport evidence, for evictions that produced no authority rows; keep the two verdicts apart; report what
+remains unverified. The revised verdict applies only after P-3 passed, which it did (§17).
+
+**OD-4 — `M` and `P` are named.** The server's canonical-to-replica mapping is `M`; its metrics and patch
+publication are the **observable part of** `P`; successful navigation-result publication is outstanding
+under UDG-007 and AC-6's overall verdict stays qualified until the governing criterion reflects the split.
+
+**OD-5 — nothing moved.** AC-15 stays PASS under the accepted H1 reading, H2 stays deferred, and the
+retained bundle and inventory bytes are untouched. Optional P-2b stays off the batch.
+
+What did **not** move, and was not allowed to: `protocol-v1`, the dependency set, `apps/server/src/**`,
+`authority/**`, or the frozen input hash. `configHash` is still
+`2743a9a047ce7264833af88e8bd2f8aeea970a45e306a348e1fe0654191bec7a` and `pnpm-lock.yaml` is unchanged.
+
+---
+
+## 17. The P-batch executed — what each artefact establishes, and what it refuses to
+
+Executed in the approved order **P-3 → P-1 → P-2 → P-4**, wired into the capture plan as **P-5**, at
+`16d356d48ce89805c77146f07b470029f9c8afb8`. A second commit follows it, `8db422628b8f582a82429407702dbcc5dbd3ca74`,
+and it exists because CI found two experiments that were measuring themselves rather than the property.
+
+### P-3 — `abuse-results.json → retiredOffender`: two verdicts, four named residues
+
+`replayVerdict` states the mechanism: a journalled disposition exists only for a dequeue, a frame evicted
+from the transport buffer is retired before it is represented, so the evicted frames have no authority row
+and there is nothing for a replay to replay. `transportVerdict` carries what the retained bytes do
+establish — the retirement floor and why it is a floor and not a total, the seat that both lost frames and
+closed, the close code and elapsed window, and an instrument check that the compliant neighbours in the
+same room show represented, consumed streams.
+
+Four items are carried as **unverified**, each with a reason: the identity of each evicted stamp (the
+buffer reports a count and §3.1 gives no reason at the pre-buffer boundary, so `missingStamps` is a
+superset and mapping count to stamps is not recoverable); whether the acknowledgement advanced over retired
+frames (`consumedCount` is the SDK's own counter and no surface withholds it, so the equality with
+`retiredUnrepresented` is reported as a measured coincidence); whether the retirement *caused* the closure
+or coincided with it; and why that run's collided stamps collided.
+
+`journal-replay.json` gained the two coverage classes this needs — `authority-negative-window-verified`
+for the compliant control, whose nothing-arrived window is now recomputed from the rows, and
+`authority-absence-accounted` for the offender, which is **never** counted as a replay
+(`authorityAbsenceCountedAsReplays: 0`). Its `ga13` block keeps the limbs apart: seven rooms replayed and
+equal, eight positive windows recomputed from rows plus one negative window plus one accounted absence,
+`remainingGaps: []`, verdict `pass`. `authorityWindowGaps` is empty **because the evidence closed it**, and
+`tests/system/udg-003-phase-2/runtime.test.ts` pins that distinction — the offender still carries its own
+replayed window, the four residues are asserted by name, and a future run that loses one of them fails the
+suite instead of quietly improving the verdict.
+
+GA-13 itself moves to **PASS under the OD-3 reading**, with the four residues published beside it. The
+bundle headline stays red regardless, because GA-10 remains FAIL and GA-11 is not evaluated here.
+
+### P-1 — `input-reasons.json`: AC-3e's five names, each with a source or an absence
+
+| AC-3e reason | disposition | count | why absent, where absent |
+|---|---|---|---|
+| overflow | `refused:overflow` | 0 | reachable and counted; nothing reached the authority overflow path in this population |
+| superseded | `refused:superseded` | 0 | stage C purges observations a committed discrete decision made inadmissible, and this substrate commits none — no route candidate is ever constructed |
+| epoch | `refused:epoch` | 8 | all `EPOCH_MISMATCH`, the F-1 shape |
+| structural | `refused:structural` | 0 | a malformed payload is refused by the pinned schema layer before UDG rules see it, so it cannot reach an authority disposition |
+| rateLimited | — (signal, not disposition) | 1 | the rate closure closes the seat; it does not disposition the frame |
+
+`rateLimited` is asserted *not* to be a disposition, the journal recount stays inside the core counters
+(`consumed` 369 core against 356 recounted, the difference being frames still in flight at read time),
+`journalDropped: 0`, and the table is non-empty. The two high-water marks are finally labelled as the two
+queues they are: the **authority** queue (`continuousHighWater` 1, `discreteHighWater` 0, `cacheDepth` 0)
+against the **transport** buffer GA-1 and GA-11 actually argue about (per-seat, `maxDepthEver` 17 on the
+offender seat, 0 on most). `laterOwners` names UDG-007 for the 8/entity and 64/room discrete bounds and
+UDG-SPIKE-001 for the eviction consequence at production values.
+
+### P-2 — `transport-impairment.json`: the layer, the label, and the discriminator
+
+`tests/support/client-harness/impairment.mjs` wraps `room.connection.transport.send` outbound and
+`room.connection.events.onmessage` inbound, per seat, after the join — the pinned SDK's own paths, cited to
+`Room.mjs:126-127`, `Connection.mjs:36`, `WebSocketTransport.mjs:79`. No proxy (a relay would need `ws`,
+which pnpm does not expose to `apps/server`), no new dependency, no production change. Four seats: unarmed
+baseline, imposed delay with inbound jitter, named withheld deliveries, patch stall.
+
+Every seat carries `tcpLossModelled: false`. The discriminator is published as data rather than as a
+claim: withheld deliveries are never consumed **while later deliveries keep arriving**, and an out-of-order
+hole is unreachable over a single ordered TCP stream, which head-of-line-blocks until retransmission. The
+`loss` population names its withheld stamps `[3, 7, 12, 18]`, all unrecovered at the end, with 32 later
+deliveries consumed around the hole. The stall row records that the room consumed 30 frames while the seat
+was told nothing, and says the client-side deadline that would act on that is UDG-008's production
+behaviour. `doesNotEstablish` refuses TCP loss, both GA-11 inequalities, a GA-6/GA-7 verdict and a network
+path; `gateAOwns` names the three things UDG-SPIKE-001 keeps.
+
+`layerFindings` carries two results that cost time and are therefore recorded rather than deleted. Jitter
+on the **outbound** path reorders deliveries, and the pinned protocol carries the association epoch on the
+stream's first frame, so a reordered stream is journalled `refused:epoch` with `epoch: 0` — 31 of 40 frames
+in the first version. The layer now delays outbound and jitters only the delivery direction, and
+`noFrameArrivedWithoutAnAssociationEpoch` is the control that proves this run is not that run. Second, the
+send-to-journalled-arrival figure is **tick-quantised**: an arrival is journalled by the next consuming
+tick, so `delay + (boundary − phase)` is *identical* with and without the delay whenever the delay does not
+cross a boundary. The first delay control compared those medians and so passed or failed on tick phase. It
+is replaced by the client-observed difference, asserted alongside the layer's own applied-delay accounting,
+and the quantised figure is still published with its definition attached.
+
+### P-4 — `stage-sequence.json`: `M` measured, the observable half of `P` measured, the results half left open
+
+`M` is checked against the authority's own record for a valid stream, and against the protocol's own
+`PLAYER_FIELDS` in a headless control built on the accepted AC-1 recipe: the row matches `toReplica`,
+mutating the mapped state cannot move the row, and re-publishing restores a row that something else edited,
+which makes the mapping the only writer. The refusal control is the pair the owner asked for — the
+watermark advances and 24 refused dispositions are journalled while five movement fields do not move. The
+per-entity negative is a departed entity: its mapping stops while its neighbours keep advancing, and its
+row is **expected to remain**, because retirement is not deletion (ADR-0003 §4.3). A join the hash gate
+closed is reported separately as "nothing was created", because there is no identifier to point at.
+
+`M ≠ P` is proved over a withheld-patch window **with the stream running**: the room advanced 6 resolutions
+while that seat advanced 0, and caught up to equality when the window opened. Cadence is asserted
+comparatively — the median interval sits nearer `statePatchIntervalMs` (100 ms) than
+`simulationStepSeconds` (50 ms), observed 101 ms — and `publicationCadenceIsNotTickPaced` keeps the tick as
+the alternative hypothesis. Then the limit: `resultsHalf.status = outstanding`, `owner = UDG-007`,
+`resultsAccepted = 0`, and `ac6Verdict = qualified-pending-owner`, because AC-6 as written asks for the
+whole sequence and the governing criterion has not been amended to split it.
+
+### P-5 — the batch is gated, and older bundles say so
+
+`PHASE_2_VECTOR_FILES` moves 24 → 27 (`transport-impairment.json`, `input-reasons.json`,
+`stage-sequence.json`), two capture steps join the plan among the room producers, and the contract test
+asserts the count, the names and the order. Finding E1 applies again verbatim: bundles captured before
+`16d356d4` do not contain these files and fail the requirement when re-verified, and none of them has been
+rewritten.
+
+### CI's two findings, kept because they are the useful part
+
+Run `43523832137` failed UDG-001's bundle at `16d356d4` — `pnpm test` runs the Phase 2 runtime suite, and
+`stage-sequence.ts` exited 2 on the hosted runner. Because the scripts now write their false checks to
+stderr, the retained log named the check: `withheldProvesMappingPrecedesPublication`. The window had been
+**sleeping**, which stopped the seat's sends, so the authority had nothing new to resolve and the samples
+came back equal. The fix is structural, not a wider threshold: sample across a live stream and assert the
+pair of deltas. The same commit gives the loopback floor a measured allowance — whatever lateness this
+run's own unarmed seat measured against the declared patch interval — so a busy hosted box moves the bound
+instead of turning the artefact red, and a runner slow enough to invalidate the imposed figures still gets
+caught.
+
+### Verdict table after the batch
+
+| Criterion | Status | Basis |
+|---|---|---|
+| GA-1 | measured | abuse population, burst `B = 8` record |
+| GA-2 / GA-3 | measured, wording per OD-3 | loss and closure attribute one seat; the identity residue is carried, not absorbed |
+| GA-4 | measured | epoch refusals journalled, disposition published |
+| GA-6a / GA-6b / GA-7 | not run | needs a withheld publication; P-2b stays deferred by OD-5 |
+| GA-9 | measured | projection isolation, solo against population |
+| GA-10 | measured | zero effect for the refusal control, `effectCount: 0` everywhere |
+| **GA-10a / GA-10b** | **outstanding — UDG-007** | required at UDG-007 acceptance; never passable on `pathCandidates == 0` |
+| **GA-11** | **not run** | populations recorded with `tcpLossModelled: false`; neither inequality evaluated; UDG-SPIKE-001 owns both |
+| **GA-13** | **PASS under OD-3** | replay limb and attribution limb kept apart; four residues published |
+| GA-12 / PE-1 … PE-5 | not passed | unchanged, and unaffected by this batch |
+| AC-3b / AC-3c / AC-3d / AC-3e | measured | `input-reasons.json`, the displacement audit, the replay |
+| **AC-6** | **PARTIAL, qualified-pending-owner** | `M` and the observable half of `P` measured; results half outstanding under UDG-007 |
+| AC-15 | PASS under H1 | OD-5; H2 deferred |
+| **Gate A** | **Not Run** | UDG-SPIKE-001; PR-14 remains substrate only |
+
+Bundle `{{BUNDLE}}`, CI run `{{CI_RUN}}`, verification: `{{VERIFY}}`.
+
+Records commit for this section: pending. Phase 2 remains **In Review**; the owner keeps acceptance.

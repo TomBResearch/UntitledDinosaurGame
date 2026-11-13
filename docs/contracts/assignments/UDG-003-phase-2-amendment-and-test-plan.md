@@ -1,12 +1,19 @@
 # UDG-003 Phase 2 — amendment and test plan for the remaining decisions
 
-> **Status: proposal, for owner review. Nothing in this file has been applied.** No governing document has been
-> edited, no test line has been written for any item below, and Phase 2 remains **In Review** at implementation
-> head `cfc49664f3cb8dca95ddfa86bcae82e0fdc8a94c` with records at `8606547af1edca1e88e5088c73a104c976a48613`.
-> **Gate A stays Not Run. Dedupe-triggered closure stays disabled (`dedupeClosureEnabled: false`). D4 stays
-> undesignated. AC-15 stays PASS under the approved H1 reading, H2 stays deferred.**
+> **Status: APPROVED AND APPLIED (owner, 2026-11-13, sixth sitting).** This file is kept as written so the
+> reasoning behind the rulings stays readable, but its header state is superseded: the clauses below were
+> applied at `f0b2adb8` (three ledgered digests moved), the batch was executed at
+> `16d356d48ce89805c77146f07b470029f9c8afb8` with the corrections CI forced at
+> `8db422628b8f582a82429407702dbcc5dbd3ca74`, and the running account is now §16 and §17 of
+> [UDG-003-phase-2-evidence-matrix.md](UDG-003-phase-2-evidence-matrix.md). Read "proposed" below as
+> "accepted", and read §17 for what each item actually measured — including the two experiments here that
+> were wrong and were replaced.
 >
-> Every quoted clause below was read from the file named, at the current head. Every measured number was read
+> What did not change, in the original words or the new ones: **Phase 2 remains In Review.** **Gate A stays
+> Not Run. Dedupe-triggered closure stays disabled (`dedupeClosureEnabled: false`). D4 stays undesignated.
+> AC-15 stays PASS under the approved H1 reading, H2 stays deferred,** and P-2b stays off the batch.
+>
+> Every quoted clause below was read from the file named, at the then-current head. Every measured number was read
 > from a retained bundle: the batch-T bundle
 > `/workspace/udg-evidence/ci-run-43458461044/UDG-003-2026-11-13T16-09-49-380Z-cfc49664` or the OD-10 bundle
 > `/workspace/udg-evidence/ci-run-43481796058/UDG-003-2026-11-13T18-30-09-607Z-a9116e03`. Where a claim is

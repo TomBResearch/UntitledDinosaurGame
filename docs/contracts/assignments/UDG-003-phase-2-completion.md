@@ -519,3 +519,51 @@ production source, `authority/**`, the dependency set, the protocol, `configHash
 `2743a9a047ce7264833af88e8bd2f8aeea970a45e306a348e1fe0654191bec7a`, `dedupeClosureEnabled: false`, Gate A
 **Not Run**, D4 undesignated, GA-10 and GA-11 FAIL, GA-12 and PE-1…PE-5 NOT PASSED, AC-6 PARTIAL. Phase 2
 acceptance stays with the owner.
+
+---
+
+## 17. The amendments applied and the P-batch executed (2026-11-13, sixth sitting)
+
+The owner accepted the §16 plan with five rulings — OD-1 keep the measured zero-effect half here and move
+GA-10a/GA-10b to UDG-007 acceptance; OD-2 approve W-10's amended form and the bounded impairment layer,
+labelled; OD-3 separate the replay and transport verdicts and keep what the bytes cannot settle unverified;
+OD-4 accept the server's canonical-to-replica mapping as `M` and record the navigation-result half as
+outstanding under UDG-007; OD-5 leave AC-15 PASS under H1 and defer H2 and P-2b — and approved the batch
+**P-3 → P-1 → P-2 → P-4 → P-5**.
+
+**Chain.** `f0b2adb8` applied the clauses (three ledgered digests moved, sixty-five tracked).
+`16d356d48ce89805c77146f07b470029f9c8afb8` is the batch. `8db422628b8f582a82429407702dbcc5dbd3ca74` corrects
+two experiments that CI caught measuring themselves. Records follow at `{{RECORDS}}`, with CI run
+`{{CI_RUN}}` and bundle `{{BUNDLE}}` verified as `{{VERIFY}}`.
+
+**What the batch added to the record.** A criterion split that names its owner (GA-10a/GA-10b at UDG-007,
+GA-11 and both production inequalities at UDG-SPIKE-001, the client-side deadline at UDG-008). An artefact
+for each of the four work items, each with failing controls rather than narrative. A coverage rule with two
+new classes, one of which — `authority-absence-accounted` — exists specifically so that an absence can be
+reported without being promoted into a replay. And four residues on GA-13 that stay unverified because the
+retained bytes do not settle them, pinned by name in the runtime suite so that losing one is a test failure
+rather than an improvement.
+
+**What the batch changed about how it was written.** Two of its own experiments were wrong in ways that
+only a slower machine showed: a withhold window that slept and therefore stalled the input it was meant to
+observe, and a delay control built on a tick-quantised figure that passed or failed on where the send
+landed relative to a tick boundary. Both are now stated as the property rather than as a millisecond band,
+and both scripts write their false checks and their numbers to stderr, because a retained log that says
+only `exit 2` is not evidence of anything.
+
+**Decisions closed.** OD-1, OD-2, OD-3, OD-4, OD-5, OD-8, OD-9, OD-10.
+
+**What is still owed, and by whom.**
+
+| Owed | Owner | Note |
+|---|---|---|
+| GA-10a, GA-10b | UDG-007 acceptance | outstanding, never passable here |
+| Both GA-11 inequalities, production values, runner-capability note | UDG-SPIKE-001 (Gate A) | Phase 2 records populations only |
+| Discrete queue limits 8/entity and 64/room | UDG-007 | needs discrete traffic that does not exist here |
+| Eviction consequence at production envelope | UDG-SPIKE-001 | §5 rule 7 keeps values provisional |
+| Results half of `P`; AC-6 to a whole-sequence verdict | UDG-007, then the owner | AC-6 is PARTIAL and `qualified-pending-owner` |
+| GA-6a/6b, GA-7 (withheld publication) | Gate A, or P-2b if the owner reopens it | deferred by OD-5 |
+| GA-12, PE-1 … PE-5 | unchanged | not passed |
+| D4, dedupe-triggered closure, Gate A | owner / UDG-SPIKE-001 | open, disabled, Not Run |
+
+Phase 2 remains **In Review**. Nothing in this sitting accepted, closed or gated it.

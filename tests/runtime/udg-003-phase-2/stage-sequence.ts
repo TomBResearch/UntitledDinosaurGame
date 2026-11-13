@@ -109,6 +109,17 @@ interface RoomInstance {
   journal(): { rows: readonly Record<string, unknown>[] };
 }
 
+/** Poll a settlement condition, and keep the elapsed figure either way. A fixed sleep is a bet on the
+ * runner; this is a measurement with a bound that the artefact has to report. */
+async function settleUntil(condition: () => boolean, boundMs: number, stepMs = 250): Promise<{ settled: boolean; elapsedMs: number }> {
+  const startedAt = performance.now();
+  while (performance.now() - startedAt <= boundMs) {
+    if (condition()) return { settled: true, elapsedMs: Math.round(performance.now() - startedAt) };
+    await sleep(stepMs);
+  }
+  return { settled: false, elapsedMs: Math.round(performance.now() - startedAt) };
+}
+
 const median = (values: readonly number[]): number | null => {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
@@ -185,8 +196,14 @@ async function main(): Promise<void> {
   const withheldEpoch = await waitForIssuedEpoch(withheld.room);
   const departed = await connectSeatById<ProbeRegionState>(stack, server.endpoint, roomId, identity, RegionSchema as never);
   const departedEpoch = await waitForIssuedEpoch(departed.room);
-  let departedRowAtLeave: number | null = null;
-  let neighbourRowAtLeave: number | null = null;
+  // Sampled AFTER the leave has settled, not at the instant `leave()` is called. The first version read
+  // the pair immediately before awaiting the leave, and on a hosted runner a frame that was already in
+  // flight landed afterwards: the departed row moved a little, and the artefact called a real property
+  // false. In-flight work is part of the world, so the baseline is taken once the room has stopped
+  // draining, and anything that moves the row after THAT would be mapping a retired entity.
+  let departedRowAfterLeave: number | null = null;
+  let neighbourRowAfterLeave: number | null = null;
+  let departedSampling: Promise<void> = Promise.resolve();
 
   /** The client's own patch arrivals, per seat — that is `P` as the seat can observe it. */
   const arrivals = new Map<string, number[]>();
@@ -277,9 +294,14 @@ async function main(): Promise<void> {
         // It leaves mid-window on an ordinary close. The row itself stays for the rejoin window by design
         // (ADR-0003 §4.3: retirement is not deletion), so what has to stop is the *mapping*: the room
         // publishes the entities the authority still holds, and this one is retired on leave.
-        departedRowAtLeave = serverRowFor(departedKey)?.resolvedThrough ?? null;
-        neighbourRowAtLeave = serverRowFor(compliantKey)?.resolvedThrough ?? null;
         await departed.room.leave(false).catch(() => undefined);
+        // Sampled in parallel, so the paced stream never pauses: a 400 ms sleep here would have shifted
+        // the withheld-window sample past the window and broken a different check.
+        departedSampling = (async () => {
+          await sleep(400);
+          departedRowAfterLeave = serverRowFor(departedKey)?.resolvedThrough ?? null;
+          neighbourRowAfterLeave = serverRowFor(compliantKey)?.resolvedThrough ?? null;
+        })();
       }
       else {
         stampAndSend(departed.handle as never, frame(departedEpoch));
@@ -288,7 +310,22 @@ async function main(): Promise<void> {
     }
   })();
   await streaming;
-  await sleep(1_500);
+  // Wait for the seat to have been TOLD, not for a wall-clock guess. The room publishes every
+  // statePatchIntervalMs, so the seat catches up on its own; polling until its row equals the authority's
+  // — and publishing how long that took — is a real settlement check, where `sleep(1_500)` was a bet on
+  // the runner that a hosted box is entitled to lose. The bound is 12 s and it is an assertion, not a
+  // formality: the equality either arrives inside it or the check goes false and the elapsed figure goes
+  // into the artefact with the failure.
+  const settled = await settleUntil(() => {
+    const client = compliant.room.state.players?.get(compliantKey);
+    const server = serverRowFor(compliantKey);
+    return client !== undefined
+      && server !== null
+      && client.inputResolvedThrough === server.resolvedThrough
+      && client.inputRetiredUnrepresented === server.retired
+      && client.effectCount === server.effects
+      && client.sessionEpoch === server.epoch;
+  }, 12_000);
 
   // ── 6. per entity: a departed seat stops being mapped and published, and a never-created entity
   //        is never mapped at all ───────────────────────────────────────────────────────────────
@@ -311,6 +348,7 @@ async function main(): Promise<void> {
     refusedCreateOutcome = 'the hash gate closed the join: no entity, therefore nothing to map or publish';
   }
 
+  await departedSampling;
   const rows = roomNow()?.journal().rows ?? [];
   const evidence = roomNow()?.evidence() ?? {};
   const seatsEvidence = (evidence['seats'] ?? []) as readonly { entityId: string; effectCount: number }[];
@@ -441,12 +479,18 @@ async function main(): Promise<void> {
   })();
 
   // ── 4 and 5: M is not P, and P is not the tick ──────────────────────────────────────────────
-  const withheldClientNow = withheld.room.state.players?.get(withheldKey)?.inputResolvedThrough ?? -1;
-  const withheldServerNow = serverRowFor(withheldKey)?.resolvedThrough ?? -1;
+  // Read below, after the settlement poll rather than here: the poll is the wait, and a figure taken
+  // before it would be a snapshot of the moment the window closed.
   const patchGaps = (arrivals.get(compliantKey) ?? []).slice(1)
     .map((atMs, index) => atMs - (arrivals.get(compliantKey)?.[index] ?? atMs));
   const patchMedianMs = median(patchGaps);
   const withheldLog = resolvedThroughLog.get(withheldKey) ?? [];
+  // The same settlement, for the seat whose patches were withheld: after release its row has to arrive at
+  // the authority's value, and the wait is polled rather than guessed.
+  const caughtUp = await settleUntil(() => (withheld.room.state.players?.get(withheldKey)?.inputResolvedThrough ?? -1)
+    === (serverRowFor(withheldKey)?.resolvedThrough ?? -2), 12_000);
+  const withheldClientNow = withheld.room.state.players?.get(withheldKey)?.inputResolvedThrough ?? -1;
+  const withheldServerNow = serverRowFor(withheldKey)?.resolvedThrough ?? -1;
   const caughtUpAfterRelease = withheldClientNow === withheldServerNow && withheldClientNow > 0;
 
   const checks = {
@@ -462,7 +506,7 @@ async function main(): Promise<void> {
       && midStall.value.midAtMs > 0
       && midStall.value.serverAtMid - midStall.value.serverAtOpen >= 2
       && midStall.value.clientAtMid === midStall.value.clientAtOpen,
-    clientCaughtUpWhenPublicationResumed: caughtUpAfterRelease,
+    clientCaughtUpWhenPublicationResumed: caughtUpAfterRelease && caughtUp.settled,
     // Stated comparatively, because an absolute millisecond band is a claim about the runner. What the
     // criterion asserts is which knob the cadence follows: the intervals have to sit nearer the declared
     // patch interval than the simulation step, and they have to be plainly too slow to be tick-paced. A
@@ -472,10 +516,10 @@ async function main(): Promise<void> {
       && Math.abs(patchMedianMs - patchIntervalMs) < Math.abs(patchMedianMs - stepMs),
     publicationCadenceIsNotTickPaced: patchMedianMs !== null
       && patchMedianMs >= stepMs * 1.5,
-    departedEntityStopsBeingMappedWhileNeighboursContinue: departedRowAtLeave !== null
-      && neighbourRowAtLeave !== null
-      && (serverRowFor(departedKey)?.resolvedThrough ?? -1) === departedRowAtLeave
-      && (serverRowFor(compliantKey)?.resolvedThrough ?? -1) > neighbourRowAtLeave,
+    departedEntityStopsBeingMappedWhileNeighboursContinue: departedRowAfterLeave !== null
+      && neighbourRowAfterLeave !== null
+      && (serverRowFor(departedKey)?.resolvedThrough ?? -1) === departedRowAfterLeave
+      && (serverRowFor(compliantKey)?.resolvedThrough ?? -1) > neighbourRowAfterLeave,
     refusedCreateProducedNoEntityToMap: refusedCreateEntityId === null
       && refusedCreateOutcome.startsWith('the hash gate closed'),
     resultsHalfIsNotClaimedAsPublished: seatsEvidence.every((seat) => seat.effectCount === 0),
@@ -503,6 +547,8 @@ async function main(): Promise<void> {
     mappingStageM: {
       compliantSeat: {
         entityId: compliantKey,
+        settledAfterMs: settled.elapsedMs,
+        settledWithinBound: settled.settled,
         epoch: compliantEpoch,
         clientRow: clientCompliantRow === undefined ? null : {
           inputResolvedThrough: clientCompliantRow.inputResolvedThrough,
@@ -543,10 +589,11 @@ async function main(): Promise<void> {
       perEntityNegative: {
         departed: {
           entityId: departedKey,
-          resolvedThroughAtLeave: departedRowAtLeave,
-          resolvedThroughAfterDeparture: serverRowFor(departedKey)?.resolvedThrough ?? null,
-          neighbourResolvedThroughAtLeave: neighbourRowAtLeave,
-          neighbourResolvedThroughAfterDeparture: serverRowFor(compliantKey)?.resolvedThrough ?? null,
+          resolvedThroughAfterLeave: departedRowAfterLeave,
+          resolvedThroughAtEnd: serverRowFor(departedKey)?.resolvedThrough ?? null,
+          neighbourResolvedThroughAfterLeave: neighbourRowAfterLeave,
+          neighbourResolvedThroughAtEnd: serverRowFor(compliantKey)?.resolvedThrough ?? null,
+          samplingNote: 'the baseline is taken 400 ms after the leave resolved, so work already in flight is inside the baseline rather than mistaken for post-retirement mapping',
           rowStillReplicated: serverRowFor(departedKey) !== null,
           reading: 'the departed entity stopped being mapped while its neighbours kept advancing, which is what makes this a per-entity discipline rather than a room-wide one; the row itself is expected to remain, because retirement is not deletion (ADR-0003 §4.3)',
         },
@@ -577,6 +624,7 @@ async function main(): Promise<void> {
       methodNote: 'the stream keeps running while the window is shut. The first version slept inside the window instead, which stopped the sends: the authority had nothing new to resolve, the two samples came back equal, and the artefact was measuring its own pause. A withhold experiment that halts the input measures nothing, so the pair of deltas is now taken across a live stream.',
         midWindow: midStall.value,
         afterRelease: {
+          caughtUpAfterMs: caughtUp.elapsedMs,
           clientResolvedThrough: withheldClientNow,
           serverResolvedThrough: withheldServerNow,
           caughtUp: caughtUpAfterRelease,

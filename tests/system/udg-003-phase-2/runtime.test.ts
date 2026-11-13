@@ -520,7 +520,7 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
       mappingStageM: {
         byValueControl: { ran: boolean; canonicalFieldsMatch: boolean; mutatingTheMappedStateMovedTheRow: boolean; mappingIsTheOnlyWriter: boolean };
         refusalControl: { watermarkAdvanced: boolean; movementFieldsUnchanged: boolean; refusedRowsJournalled: number };
-        perEntityNegative: { departed: { resolvedThroughAtLeave: number | null; resolvedThroughAfterDeparture: number | null } };
+        perEntityNegative: { departed: { resolvedThroughAfterLeave: number | null; resolvedThroughAtEnd: number | null } };
       };
       publicationStageP: {
         observableAtSeat: { medianIntervalMs: number | null; declaredIntervalMs: number; tickIntervalMs: number };
@@ -543,8 +543,8 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
 
     // M is not P: the departed entity stopped being mapped while its neighbours kept advancing.
     const departed = stages.mappingStageM.perEntityNegative.departed;
-    expect(departed.resolvedThroughAtLeave).not.toBeNull();
-    expect(departed.resolvedThroughAfterDeparture).toBe(departed.resolvedThroughAtLeave);
+    expect(departed.resolvedThroughAfterLeave).not.toBeNull();
+    expect(departed.resolvedThroughAtEnd).toBe(departed.resolvedThroughAfterLeave);
 
     // P's cadence is the declared knob, and measurably not the tick.
     const seat = stages.publicationStageP.observableAtSeat;
