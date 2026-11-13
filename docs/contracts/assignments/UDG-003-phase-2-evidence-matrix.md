@@ -960,6 +960,11 @@ and `offenders-never-touch-the-compliant-population` (the whole offending period
 nothing — "nothing happened to them afterwards" is a claim about an empty frame set too, and pretending that
 window contained their frames would have asserted over an empty range).
 
+The population also grew, which is why the replay's scenario census reads **19** where §10 read 17: T-2 and
+T-3 each added a journalled scenario (`per-tick-displacement-stays-bounded-across-the-population`,
+`b8-burst-then-idle-retires-nothing-and-resynchronises-nothing`), so the replayed count moved 11 → 12 and the
+window-attributable count 2 → 3 by the window work above. Nothing left the census; two scenarios joined it.
+
 One number space, stated once so nobody joins it wrongly: a `tick` row's `consumed` field is stage Q's
 **arrival ordinal**, numbered room-wide, and is compared against the rows and never against wire stamps; the
 wire-stamp join lives in the accounting module.
