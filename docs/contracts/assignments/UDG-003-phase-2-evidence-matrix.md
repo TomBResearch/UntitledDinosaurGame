@@ -412,6 +412,12 @@ plan-relative. That is the next section.
 | same `cf349874` UDG-003 bundle, verified from this batch's tree | `cf34987…` | `9d1372a…` | **FAIL, 7 issues** (§9.2) |
 | this batch's three bundles | `9d1372a…` | `9d1372a…` | **PASS, 0 issues** each |
 
+Reproducible: the three capture-era verifiers are detached worktrees at
+`artifacts/h1-5d77c612`, `artifacts/h1-17ade43b` and `artifacts/h1-cf34987` (each `pnpm install
+--frozen-lockfile` then `pnpm --dir tools/checks build`, then `evidence.js verify --run <retained bundle>`
+from inside the worktree). Full capture/verifier commits: `5d77c6125e1c3a8035ae5c0cb5d115e91f008c9c`,
+`17ade43be0a64935cb2e06be02ebbe9756f6eb6f`, `cf34987445f737d21285b8b1f5d6b650f85873b5`.
+
 The reading AC-15's last half-sentence can actually carry, and which §7 E1 asked the owner to bless:
 **every retained bundle verifies against the capture plan of its own commit**, which is what "still verifies"
 means for a plan-relative gate. Read as "verifies against whatever the current tree demands", AC-15 has

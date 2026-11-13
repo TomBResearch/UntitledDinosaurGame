@@ -254,7 +254,8 @@ proposal, and no line of it has been written.**
 
 **What this batch did not touch, deliberately:** both GA-10 `Δ == 1` halves remain **FAIL** (OD-1);
 GA-11 remains **FAIL** and W-10's RTT/jitter/loss populations remain unproduced (OD-2) — **R-4**, the seeded
-client-side socket-impairment population, is approved as a proposal in the matrix and **not started**; GA-1,
+client-side socket-impairment population, stays a **proposal the owner has not approved**, and no line of it
+is written here; GA-1,
 GA-5a/5b, GA-7, GA-9 remain PARTIAL; AC-1 and AC-3c remain FAIL; AC-6 remains PARTIAL (OD-4); `dedupeClosureEnabled`
 stays `false` in hashed config; **D4 stays undesignated**; **Gate A stays Not Run**; `stackCompatibility`
 stays **not-established**; no dependency was added (`pnpm-lock.yaml` is unchanged across this batch) and
