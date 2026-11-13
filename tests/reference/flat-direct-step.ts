@@ -443,12 +443,17 @@ async function main(): Promise<void> {
     'utf8',
   );
 
-  process.stderr.write(
-    `[reference] ${verdict} — ${String(reference.length)} ticks, ${referenceMetresFromRows.toFixed(6)} m from rows `
+  // stdout, not stderr: the capture runner records each stream separately and refuses an EMPTY stdout
+  // record, because a step that reported nothing is a step whose run nobody can attribute. The first CI
+  // attempt at this step wrote its only line to stderr and the bundle was refused for it.
+  const summary = `[reference] ${verdict} — ${String(reference.length)} ticks, ${referenceMetresFromRows.toFixed(6)} m from rows `
     + `(product ${settingsProduct.toFixed(6)}), per-tick max ${perTickMax.toFixed(9)} of bound ${bound.toFixed(6)}, `
-    + `controls ${String(controls.filter((control) => control.detected === control.expectedDetected).length)}/${String(controls.length)}\n`,
-  );
-  if (verdict !== 'pass') process.exitCode = 2;
+    + `controls ${String(controls.filter((control) => control.detected === control.expectedDetected).length)}/${String(controls.length)}`;
+  process.stdout.write(`${summary}\n`);
+  if (verdict !== 'pass') {
+    process.exitCode = 2;
+    process.stderr.write(`[reference][fail] ${summary}\n`);
+  }
 }
 
 await main();

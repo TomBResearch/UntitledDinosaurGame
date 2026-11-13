@@ -666,7 +666,11 @@ async function main(): Promise<void> {
       )}\n`,
       'utf8',
     );
-    process.stderr.write(`[isolation] ${verdict} — projection equality ${String(projectionSequencesEqual)}, observer trace ${String(observerTraceIdentical)}, failures ${String(failures.length)}\n`);
+    // stdout, not stderr — see the note in tests/reference/flat-direct-step.ts: the capture runner
+    // refuses an empty stdout record, and a step that says nothing on stdout is a step nobody can read.
+    const summary = `[isolation] ${verdict} — projection equality ${String(projectionSequencesEqual)}, observer trace ${String(observerTraceIdentical)}, failures ${String(failures.length)}`;
+    process.stdout.write(`${summary}\n`);
+    if (verdict !== 'pass') process.stderr.write(`[isolation][fail] ${summary}\n`);
     if (verdict !== 'pass') process.exitCode = 2;
   } finally {
     await Promise.race([server.close().catch(() => undefined), sleep(4_000)]);

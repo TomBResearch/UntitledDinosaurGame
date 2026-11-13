@@ -758,7 +758,17 @@ not claim the windows partition the journal — ticks are room-wide, so windows 
 * **R-4** (impairment population) and **H2** (plan identity in `report.json`) remain **proposals with no
   line written**. Acceptance remains the owner's alone.
 
-### 10.10 The pending artefact-list move, stated so it can be refused knowingly
+### 10.10 The artefact-list move, approved as OD-9 and executed in §11
+
+> **Status, 2026-11-13.** The owner approved this list (OD-9) and AC-1's home (OD-8). It is implemented
+> in §11, in the shape written above: six artefacts, 18 → 24, per-seat depth as extra rows of
+> `buffer-depth.csv`, projection evidence kept in one file. Two numbers in the table above were overtaken by
+> the implementation and are corrected there rather than silently here: `burst-b8.json` proves the burst by
+> the room's post-drain depth series rather than by a stamp list alone, and the `projection-isolation.json`
+> row's "all-refusal window" became an explicit initial-state / payload / eligibility equivalence check,
+> because a comparison window can be equivalent and still not be comparable. The disclosure in the last
+> paragraph stands and is restated with the new bundle in §11.6.
+
 
 T-1…T-4 would add, in the shape recommended (merged where one artefact can carry both sides of a
 comparison, so the list grows as little as the claims allow):
