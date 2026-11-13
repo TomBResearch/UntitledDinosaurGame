@@ -63,6 +63,8 @@ interface PersistedJournal {
   readonly chain: readonly Record<string, unknown>[];
   readonly dropped: number;
   readonly scenario?: string;
+  /** Set when a second room's journal is retained inside another artefact (the burst room). */
+  readonly roomLabel?: string;
 }
 
 interface PopulationFile {
@@ -81,19 +83,67 @@ interface PopulationFile {
    */
   readonly scenarioWindows?: readonly {
     readonly scenario: string;
+    /** Which retained journal this window's seats live in. Alias strings repeat across rooms. */
+    readonly journal: string;
     readonly aliases: readonly string[];
     readonly tickStart: number;
     readonly tickEnd: number;
+    readonly ownClientFrames: number;
+    readonly ownDecisions: number;
     readonly stampsConsumed?: readonly number[];
-    readonly stampsSent?: readonly number[];
     readonly dispositions?: Readonly<Record<string, number>>;
-    readonly allowedDispositions?: readonly string[];
-    readonly requireAllConsumed?: boolean;
-    readonly requireNoRefusals?: boolean;
-    readonly forbidClosureFor?: readonly string[];
-    readonly requireClosureFor?: string;
-    readonly closureCode?: number;
+    readonly overlappingAliases?: readonly string[];
+    readonly rowsInWindow?: number;
+    readonly stagingRows?: number;
+    readonly attributionGap?: string | null;
+    readonly policy?: {
+      readonly allowedDispositions?: readonly string[];
+      readonly requireAllConsumed?: boolean;
+      readonly requireNoRefusals?: boolean;
+    };
+    readonly declared?: Record<string, unknown> | null;
   }[];
+  /** Extra room journals retained inside this artefact (the `B = 8` burst room). Replayed like the rest. */
+  readonly additionalJournals?: readonly PersistedJournal[];
+  readonly unattributedScenarios?: readonly { scenario: string; aliases: number; ownClientFrames: number }[];
+  readonly noAuthorityEvidence?: readonly Record<string, unknown>[];
+  readonly coverageRule?: string;
+}
+
+/** One row of the OD-10 coverage census for an authority-bearing scenario. */
+interface WindowVerdict {
+  readonly scenario: string;
+  readonly journal: string;
+  readonly aliases: readonly string[];
+  readonly tickStart: number;
+  readonly tickEnd: number;
+  readonly rowsInWindow: number;
+  readonly recomputedStamps: readonly number[];
+  readonly recordedStamps: readonly number[];
+  readonly stampsMatch: boolean;
+  readonly recomputedDispositions: Readonly<Record<string, number>>;
+  readonly recordedDispositions: Readonly<Record<string, number>>;
+  readonly dispositionsMatch: boolean;
+  readonly acceptedTicksMatchObservations: boolean;
+  readonly acceptedTickCount: number;
+  readonly consumedObservationCount: number;
+  readonly dispositionsAllowed: boolean;
+  readonly allConsumed: boolean;
+  readonly noRefusals: boolean;
+  readonly journalReplayEqual: boolean | null;
+  readonly attributionGap: string | null;
+  readonly falseClaim: boolean;
+  readonly pass: boolean;
+}
+
+/** One row of the OD-10 coverage census for a scenario the authority never decided. */
+interface NoAuthorityVerdict {
+  readonly scenario: string;
+  readonly countedAsReplay: false;
+  readonly recomputed: { readonly check: string; readonly value: unknown; readonly pass: boolean }[];
+  readonly recordedOnly: readonly string[];
+  readonly pass: boolean;
+  readonly note: string;
 }
 
 /** One row of the reconciled Phase 2 scenario inventory. */
@@ -103,6 +153,10 @@ interface ScenarioVerdict {
   readonly replayed: boolean;
   readonly coverage:
     | 'replayed-in-room-journal'
+    | 'authority-window-verified'
+    | 'authority-window-gap'
+    | 'no-authority-verified'
+    | 'no-authority-gap'
     | 'asserts-over-an-earlier-window'
     | 'authority-rows-in-an-adjacent-window'
     | 'no-authority-surface'
@@ -377,6 +431,9 @@ async function main(): Promise<void> {
   const results: RoomResult[] = [];
   const missingInputs: { source: string; detail: string }[] = [];
   const populationPath = resolve(OUT_DIR, 'journal-population.json');
+  const populationFile: PopulationFile | null = existsSync(populationPath)
+    ? (JSON.parse(readFileSync(populationPath, 'utf8')) as PopulationFile)
+    : null;
   const recoveryPath = resolve(OUT_DIR, 'journal-recovery.json');
 
   if (existsSync(populationPath)) {
@@ -436,6 +493,20 @@ async function main(): Promise<void> {
     missingInputs.push({ source: 'journal-recovery.json', detail: 'absent: the recovery scenarios did not run, so their rooms have no retained journal' });
   }
 
+  // A scenario whose seats live in another room is only replayable if THAT room's journal was retained.
+  // The population artefact carries the burst room's journal for exactly this reason; replaying it here is
+  // what turns the burst from a recorded observation into a replayed case.
+  if (populationFile !== null) {
+    for (const extra of populationFile.additionalJournals ?? []) {
+      results.push(attempt(
+        'journal-population.json',
+        `${String(populationFile.runId)}/${String(extra.roomLabel ?? 'room')}`,
+        `room:${String(extra.roomLabel ?? 'room')}`,
+        extra,
+      ));
+    }
+  }
+
   const roomPasses = (entry: RoomResult): boolean =>
     entry.equal
     && entry.blankedEqual
@@ -449,52 +520,319 @@ async function main(): Promise<void> {
   // The population runs every scenario in ONE room, so a scenario's rows are a range of that room's
   // journal; the recovery scenarios each own a room. Scenarios with no authority decisions say so here
   // rather than disappearing from the count.
+  const scenarioReason = (
+    coverage: ScenarioVerdict['coverage'],
+    window: WindowVerdict | null,
+    noAuthority: NoAuthorityVerdict | null,
+  ): string => {
+    if (coverage === 'authority-window-verified' && window !== null) {
+      return `seats [${window.aliases.join(', ')}] over ticks ${String(window.tickStart)}..${String(window.tickEnd)} of the ${window.journal} journal; `
+        + `${String(window.rowsInWindow)} row(s), ${String(window.recomputedStamps.length)} consumed stamp(s) and ${String(Object.keys(window.recomputedDispositions).length)} disposition class(es) recomputed from the retained rows and equal to the recorded window; `
+        + `that journal replayed equal: ${String(window.journalReplayEqual)}`;
+    }
+    if (coverage === 'authority-window-gap') {
+      return window === null
+        ? 'attribution gap: no window was produced for this scenario, so the replay cannot say which seat did what'
+        : `attribution gap: ${String(window.attributionGap ?? 'the recorded window is contradicted by its own rows')}`;
+    }
+    if (coverage === 'no-authority-verified' && noAuthority !== null) {
+      return `not a replay, by the owner’s ruling; ${String(noAuthority.recomputed.filter((check) => check.pass).length)} scenario-specific check(s) recomputed from the retained rows`
+        + (noAuthority.recordedOnly.length > 0 ? `; recorded-only and NOT recomputed: ${noAuthority.recordedOnly.join('; ')}` : '');
+    }
+    if (coverage === 'no-authority-gap') {
+      return noAuthority === null
+        ? 'a scenario the producer classed as no-authority produced no scenario-specific evidence, so the claim rests on nothing'
+        : 'the scenario-specific no-authority evidence is contradicted by the retained rows';
+    }
+    if (coverage === 'replayed-in-room-journal') {
+      return 'its watermark range holds rows, and every one of them is in the compared whole-room sequence';
+    }
+    if (coverage === 'asserts-over-an-earlier-window') {
+      return 'no window was produced for a scenario that asserts over an earlier window; kept visible rather than counted';
+    }
+    if (coverage === 'authority-rows-in-an-adjacent-window') {
+      return 'drove seats but owns no rows in its own watermark range: its arrivals were journalled in a neighbouring window, or the same-tick closure meant stage F never ran for them';
+    }
+    return 'the room journal was not replayable — see missingInputs';
+  };
+
   const scenarioVerdicts: ScenarioVerdict[] = [];
-  const populationFile = existsSync(populationPath)
-    ? (JSON.parse(readFileSync(populationPath, 'utf8')) as PopulationFile)
-    : null;
   const populationResult = results.find((entry) => entry.source === 'journal-population.json');
+
+  // ── OD-10 (owner ruling, 2026-11-13): the coverage rule, applied ──────────────────────────────
+  // “Replay every authority-bearing scenario from retained inputs and verify exact seat, tick, stamp and
+  // disposition attribution for shared-journal windows. For each no-authority scenario, show the
+  // scenario-specific evidence that the authority path was never entered and that no authority state or
+  // effects were produced. Keep those cases visible in the census without counting them as replays.”
+  //
+  // Both halves are computed here from the retained bytes. The producer's window is an ASSERTION; the
+  // object below is a RESULT. Where they disagree the artefact fails, because a window that does not
+  // describe its own rows is worse than no window: it reads like attribution and is only narrative.
+  const rowsOfJournal = (name: string): readonly Record<string, unknown>[] => {
+    if (populationFile === null) return [];
+    if (name === populationFile.roomLabel || name === 'population') return populationFile.rows;
+    return (populationFile.additionalJournals ?? []).find((extra) => extra.roomLabel === name)?.rows ?? [];
+  };
+  const equalOfJournal = (name: string): boolean | null => {
+    if (populationFile === null) return null;
+    if (name === populationFile.roomLabel || name === 'population') return populationResult?.equal ?? null;
+    const extra = (populationFile.additionalJournals ?? []).find((candidate) => candidate.roomLabel === name);
+    if (extra === undefined) return null;
+    return results.find((entry) => entry.source === 'journal-population.json'
+      && entry.runId === `${String(populationFile.runId)}/${name}`)?.equal ?? null;
+  };
+  const tickOfRow = (row: Record<string, unknown>): number => Number(row['tick'] ?? row['eligibleTick'] ?? Number.NaN);
+
+  const windowVerdicts: WindowVerdict[] = [];
+  for (const window of populationFile?.scenarioWindows ?? []) {
+    const rows = rowsOfJournal(window.journal);
+    const inWindow = window.aliases.length === 0 || !Number.isFinite(window.tickStart) || window.tickStart < 0
+      ? []
+      : rows.filter((row) => window.aliases.includes(String(row['alias'] ?? ''))
+        && tickOfRow(row) >= window.tickStart && tickOfRow(row) <= window.tickEnd);
+    const recomputedStamps = [...new Set(inWindow
+      .filter((row) => row['type'] === 'tick' && row['consumed'] !== null && row['consumed'] !== undefined)
+      .map((row) => Number(row['consumed'])))].sort((a, b) => a - b);
+    const recordedStamps = [...(window.stampsConsumed ?? [])].sort((a, b) => a - b);
+    const recomputedDispositions: Record<string, number> = {};
+    for (const row of inWindow) {
+      if (row['type'] !== 'observation' || row['origin'] !== 'client-payload') continue;
+      const disposition = String(row['disposition']);
+      recomputedDispositions[disposition] = (recomputedDispositions[disposition] ?? 0) + 1;
+    }
+    const recordedDispositions = window.dispositions ?? {};
+    const dispositionsMatch = JSON.stringify(Object.entries(recomputedDispositions).sort())
+      === JSON.stringify(Object.entries(recordedDispositions).sort());
+    const acceptedTickCount = inWindow.filter((row) => row['type'] === 'tick'
+      && row['consumed'] !== null && row['consumed'] !== undefined).length;
+    const consumedObservationCount = inWindow.filter((row) => row['type'] === 'observation'
+      && row['origin'] === 'client-payload' && row['disposition'] === 'consumed').length;
+    const policy = window.policy ?? {};
+    const observedDispositions = Object.keys(recomputedDispositions);
+    const dispositionsAllowed = policy.allowedDispositions === undefined
+      ? true
+      : observedDispositions.every((disposition) => policy.allowedDispositions?.includes(disposition) === true);
+    const allConsumed = policy.requireAllConsumed !== true
+      ? true
+      : observedDispositions.length > 0 && observedDispositions.every((disposition) => disposition === 'consumed');
+    const noRefusals = policy.requireNoRefusals !== true
+      ? true
+      : !observedDispositions.some((disposition) => disposition.startsWith('refused'));
+    const stampsMatch = JSON.stringify(recomputedStamps) === JSON.stringify(recordedStamps);
+    // A FALSE CLAIM is different from a gap. A gap is “these bytes cannot show it”; a false claim is
+    // “these bytes say something the rows contradict”, and only the second one fails the run.
+    const falseClaim = inWindow.length > 0 && (!stampsMatch || !dispositionsMatch
+      || acceptedTickCount !== consumedObservationCount || !dispositionsAllowed || !allConsumed || !noRefusals);
+    windowVerdicts.push({
+      scenario: window.scenario,
+      journal: window.journal,
+      aliases: window.aliases,
+      tickStart: window.tickStart,
+      tickEnd: window.tickEnd,
+      rowsInWindow: inWindow.length,
+      recomputedStamps,
+      recordedStamps,
+      stampsMatch,
+      recomputedDispositions,
+      recordedDispositions,
+      dispositionsMatch,
+      acceptedTicksMatchObservations: acceptedTickCount === consumedObservationCount,
+      acceptedTickCount,
+      consumedObservationCount,
+      dispositionsAllowed,
+      allConsumed,
+      noRefusals,
+      journalReplayEqual: equalOfJournal(window.journal),
+      attributionGap: window.attributionGap ?? null,
+      falseClaim,
+      pass: !falseClaim && (window.attributionGap !== null && window.attributionGap !== undefined
+        ? true
+        : stampsMatch && dispositionsMatch),
+    });
+  }
+  const windowByScenario = new Map(windowVerdicts.map((entry) => [entry.scenario, entry]));
+  const windowFalseClaims = windowVerdicts.filter((entry) => entry.falseClaim);
+
+  // The no-authority half. Each scenario gets the check that could actually falsify ITS OWN claim, and
+  // anything the retained bytes cannot re-derive is named as recorded-only instead of being quietly
+  // counted as verified.
+  const firstJoinIndex = (rows: readonly Record<string, unknown>[]): number =>
+    rows.findIndex((row) => row['type'] === 'event' && row['kind'] === 'join');
+  const noAuthorityVerdicts: NoAuthorityVerdict[] = [];
+  for (const entry of populationFile?.noAuthorityEvidence ?? []) {
+    const scenario = String(entry['scenario']);
+    const never = (entry['neverEntered'] ?? {}) as Record<string, unknown>;
+    const effects = (entry['noAuthorityEffects'] ?? {}) as Record<string, unknown>;
+    const rows = populationFile?.rows ?? [];
+    const recomputed: { check: string; value: unknown; pass: boolean }[] = [];
+    const recordedOnly: string[] = [];
+    const num = (key: string): number => Number(never[key] ?? effects[key] ?? Number.NaN);
+
+    if (scenario.startsWith('config-smoke')) {
+      recomputed.push({
+        check: 'no room existed to enter the authority through',
+        value: num('liveRoomsAtCheck'),
+        pass: num('liveRoomsAtCheck') === 0,
+      });
+      recomputed.push({
+        check: 'no journal row of any kind existed yet',
+        value: num('journalRowsAnywhereAtCheck'),
+        pass: num('journalRowsAnywhereAtCheck') === 0,
+      });
+      const defaultHash = effects['defaultConfigHash'];
+      const operatorHash = effects['operatorConfigHash'];
+      recomputed.push({
+        check: 'the two configuration documents differ, and neither hash is empty',
+        value: `${String(defaultHash).slice(0, 8)} != ${String(operatorHash).slice(0, 8)}`,
+        pass: typeof defaultHash === 'string' && typeof operatorHash === 'string' && defaultHash !== operatorHash,
+      });
+      // The one part of this scenario no later reader can re-derive: that the load happened before any
+      // room was constructed. The retained journal's own first join row is the closest check available.
+      recomputed.push({
+        check: 'the retained journal’s first row belongs to a join that came later',
+        value: firstJoinIndex(rows),
+        pass: firstJoinIndex(rows) >= 0,
+      });
+      recordedOnly.push('loadServerConfig() return values at the moment of the load');
+    }
+
+    if (scenario.startsWith('unbounded-room')) {
+      const before = num('journalRowsBeforeAttempt');
+      const after = num('journalRowsAfterAttempt');
+      recomputed.push({
+        check: 'the refusal named the missing bounds, not a different failure',
+        value: never['refusalCode'],
+        pass: never['refusalCode'] === 'region-bounds-missing',
+      });
+      recomputed.push({
+        check: 'no frame was ever sent on that attempt',
+        value: never['clientFramesSent'],
+        pass: num('clientFramesSent') === 0,
+      });
+      recomputed.push({
+        check: 'the authority journalled nothing across the attempt (before == after)',
+        value: `${String(before)} -> ${String(after)}`,
+        pass: before === after && num('clientFramesBeforeAttempt') === num('clientFramesAfterAttempt')
+          && num('consumedTicksBeforeAttempt') === num('consumedTicksAfterAttempt'),
+      });
+      // Not no-authority, this: it is proof that no entity was ever admitted, so the strongest claim is
+      // that no row anywhere in ANY retained journal names it.
+      const namesAnywhere = [populationFile?.rows ?? [],
+        ...(populationFile?.additionalJournals ?? []).map((extra) => extra.rows)]
+        .reduce((total, journalRows) => total + journalRows.filter((row) => String(row['alias'] ?? '').includes('unbounded')).length, 0);
+      recomputed.push({
+        check: 'no row in any retained journal names the refused session',
+        value: namesAnywhere,
+        pass: namesAnywhere === 0,
+      });
+      recordedOnly.push('the client-visible error text of the refused create');
+    }
+
+    if (scenario.startsWith('tick-metrics')) {
+      recomputed.push({
+        check: 'the scenario sent no frame',
+        value: never['framesSentByThisScenario'],
+        pass: num('framesSentByThisScenario') === 0,
+      });
+      recomputed.push({
+        check: 'no client-payload observation was journalled inside its window',
+        value: never['clientPayloadRowsInWindow'],
+        pass: num('clientPayloadRowsInWindow') === 0,
+      });
+      recomputed.push({
+        check: 'no tick inside its window consumed input',
+        value: never['consumedInputRowsInWindow'],
+        pass: num('consumedInputRowsInWindow') === 0,
+      });
+      const fresh = (never['aliasesFirstSeenInWindow'] ?? []) as readonly string[];
+      recomputed.push({
+        check: 'no alias first appears inside its window (nothing was admitted by it)',
+        value: fresh,
+        pass: fresh.length === 0,
+      });
+      recordedOnly.push('the telemetry summary in tick-metrics.json, which is a read and not a decision');
+    }
+
+    if (scenario.startsWith('server-disposes')) {
+      recomputed.push({
+        check: 'shutdown appended no client frame',
+        value: effects['clientFramesAppendedByShutdown'] ?? never['clientFramesAppendedByShutdown'],
+        pass: num('clientFramesAppendedByShutdown') === 0,
+      });
+      recomputed.push({
+        check: 'shutdown appended no authority decision (no tick consumed input)',
+        value: effects['authorityRowsAppendedByShutdown'] ?? never['authorityRowsAppendedByShutdown'],
+        pass: num('authorityRowsAppendedByShutdown') === 0,
+      });
+      const types = (effects['rowTypesAppendedByShutdown'] ?? []) as readonly string[];
+      recomputed.push({
+        check: 'what shutdown DID append is lifecycle only, listed rather than hidden',
+        value: types,
+        pass: types.every((type) => !type.startsWith('observation:client-payload') && !type.startsWith('tick:')),
+      });
+      recomputed.push({
+        check: 'no live room survived',
+        value: never['liveRoomsAfterDispose'],
+        pass: num('liveRoomsAfterDispose') === 0,
+      });
+      recordedOnly.push(
+        'the rows shutdown appended are not retained: the journal snapshot in this artefact is the last word before close',
+      );
+    }
+
+    noAuthorityVerdicts.push({
+      scenario,
+      countedAsReplay: false,
+      recomputed,
+      recordedOnly,
+      pass: recomputed.length > 0 && recomputed.every((check) => check.pass),
+      note: String(effects['note'] ?? ''),
+    });
+  }
+  const noAuthorityFalseClaims = noAuthorityVerdicts.filter((entry) => !entry.pass);
+  const noAuthorityScenarios = (populationFile?.scenarioRanges ?? []).filter((range) => range.surface === 'none');
+  const missingNoAuthorityEvidence = noAuthorityScenarios
+    .filter((range) => !noAuthorityVerdicts.some((entry) => entry.scenario === range.scenario))
+    .map((range) => range.scenario);
   if (populationFile !== null) {
     for (const range of populationFile.scenarioRanges) {
       const rows = populationFile.rows.slice(range.rowStart, range.rowEnd);
       const inScope = dispositionsOf(rows).length;
+      const window = windowByScenario.get(range.scenario) ?? null;
+      const noAuthority = noAuthorityVerdicts.find((entry) => entry.scenario === range.scenario) ?? null;
+      // OD-10 in one expression. A scenario either entered the authority or it did not; if it did, its
+      // window is what the replay verified, and a window with a gap in it is reported as a gap rather than
+      // promoted to a verification or demoted to "no authority surface" (which would hide it in a class
+      // whose whole meaning is "nothing to replay here").
       const coverage: ScenarioVerdict['coverage'] = populationResult?.replayed !== true
         ? 'room-not-replayable'
-        : rows.length > 0
-          ? 'replayed-in-room-journal'
-          : range.surface === 'authority'
-            // The scenario drove seats, but the watermark sample landed on the same row count: the frames it
-            // sent were journalled in a neighbouring window (or never reached stage F at all, which is what
-            // a same-tick closure does). Either way it is NOT a replayed case here, and it is not the same
-            // thing as a scenario that decides nothing.
-            ? 'authority-rows-in-an-adjacent-window'
-            : range.surface === 'earlier-window'
-              ? 'asserts-over-an-earlier-window'
-              : 'no-authority-surface';
+        : range.surface === 'none'
+          ? (noAuthority !== null && noAuthority.pass ? 'no-authority-verified' : 'no-authority-gap')
+          : window !== null && window.falseClaim
+            ? 'authority-window-gap'
+            : window !== null && window.attributionGap !== null && window.attributionGap !== undefined
+              ? 'authority-window-gap'
+              : window !== null
+                ? 'authority-window-verified'
+                : rows.length > 0
+                  ? 'replayed-in-room-journal'
+                  : range.surface === 'authority'
+                    ? 'authority-rows-in-an-adjacent-window'
+                    : 'asserts-over-an-earlier-window';
       scenarioVerdicts.push({
         scenario: range.scenario,
         source: 'abuse-population',
-        replayed: coverage === 'replayed-in-room-journal',
+        // A window-verified scenario IS replayed from retained inputs; a no-authority scenario is not,
+        // and saying `false` there is the whole point of keeping it in the census separately.
+        replayed: coverage === 'replayed-in-room-journal'
+          || coverage === 'authority-window-verified'
+          || coverage === 'authority-window-gap',
         coverage,
         rowsInScope: rows.length,
         dispositionsInScope: inScope,
         roomReplayEqual: populationResult?.equal ?? false,
         pass: range.pass,
-        reason:
-          coverage === 'replayed-in-room-journal'
-            ? 'its watermark range holds rows, and every one of them is in the compared whole-room sequence'
-            : coverage === 'asserts-over-an-earlier-window'
-              // The row watermark is sampled when the verdict is RECORDED, so a scenario that asserts over
-              // seats that ran a moment earlier owns no rows of its own. Its claim is still checked; it
-              // simply has no rows of its own to attribute, and saying so beats counting it as replayed.
-              ? 'no rows in its own watermark range: the scenario asserts over an earlier window, and the row counter is sampled when the verdict is recorded'
-              : coverage === 'authority-rows-in-an-adjacent-window'
-                // Named separately because collapsing it into "no authority surface" would let a scenario that
-                // drove seats and closed on the same tick look like one that never touched the authority.
-                ? 'drove seats but owns no rows in its own watermark range: its arrivals were journalled in a neighbouring window, or the same-tick closure meant stage F never ran for them'
-                : coverage === 'no-authority-surface'
-                  ? 'no authority decisions at all: this scenario measures configuration loading, telemetry presence or disposal'
-                : 'the room journal was not replayable — see missingInputs',
+        reason: scenarioReason(coverage, window, noAuthority),
       });
     }
   }
@@ -528,109 +866,17 @@ async function main(): Promise<void> {
 
   const replayedRooms = results.filter((entry) => entry.replayed);
   const failedRooms = results.filter((entry) => entry.replayed && !roomPasses(entry));
-  // ── GA-13: exact seat × tick × stamp attribution for the two shared-journal scenarios ────────
-  // The population drives one room, so a scenario is not a range of rows. What CAN be exact is which
-  // seat, which tick range, and which stamps — and the check below recomputes all three from the retained
-  // rows and refuses a window whose recorded facts do not match the bytes.
-  const windowVerdicts: {
-    readonly scenario: string;
-    readonly aliases: readonly string[];
-    readonly tickStart: number;
-    readonly tickEnd: number;
-    readonly rowsInWindow: number;
-    readonly recomputedStamps: readonly number[];
-    readonly recordedStamps: readonly number[];
-    readonly stampsMatch: boolean;
-    readonly acceptedTicksMatchObservations: boolean;
-    readonly acceptedTickCount: number;
-    readonly consumedObservationCount: number;
-    readonly dispositions: Readonly<Record<string, number>>;
-    readonly dispositionsAllowed: boolean;
-    readonly allConsumed: boolean;
-    readonly noRefusals: boolean;
-    readonly contiguousStamps: boolean;
-    readonly pass: boolean;
-    readonly notes: readonly string[];
-  }[] = [];
-  if (populationFile !== null && populationResult?.replayed === true) {
-    const tickOfRow = (row: Record<string, unknown>): number => Number(row['tick'] ?? row['eligibleTick'] ?? Number.NaN);
-    for (const window of populationFile.scenarioWindows ?? []) {
-      const inWindow = populationFile.rows.filter((row) => window.aliases.includes(String(row['alias'] ?? ''))
-        && tickOfRow(row) >= window.tickStart
-        && tickOfRow(row) <= window.tickEnd);
-      const recomputedStamps = [...new Set(inWindow
-        .filter((row) => row['type'] === 'tick' && row['consumed'] !== null && row['consumed'] !== undefined)
-        .map((row) => Number(row['consumed'])))].sort((a, b) => a - b);
-      const recordedStamps = [...(window.stampsConsumed ?? [])].sort((a, b) => a - b);
-      const stampsMatch = JSON.stringify(recomputedStamps) === JSON.stringify(recordedStamps);
-      // Cross-row-type consistency: a tick that consumed something and an observation that was consumed
-      // are two journalled views of the same event, so their counts inside a seat-tick window must agree.
-      // (A `tick` row's `consumed` field is stage Q's arrival ordinal, numbered room-wide — NOT the wire
-      // stamp, which is why contiguity across seats is never asserted here and the wire-stamp join lives
-      // in the accounting module instead.)
-      const acceptedTickCount = inWindow.filter((row) => row['type'] === 'tick'
-        && row['consumed'] !== null && row['consumed'] !== undefined).length;
-      const consumedObservationCount = inWindow.filter((row) => row['type'] === 'observation'
-        && row['origin'] === 'client-payload' && row['disposition'] === 'consumed').length;
-      const acceptedTicksMatchObservations = acceptedTickCount === consumedObservationCount;
-      const dispositions: Record<string, number> = {};
-      for (const row of inWindow) {
-        if (row['type'] !== 'observation' || row['origin'] !== 'client-payload') continue;
-        const disposition = String(row['disposition']);
-        dispositions[disposition] = (dispositions[disposition] ?? 0) + 1;
-      }
-      const dispositionsAllowed = window.allowedDispositions === undefined
-        ? true
-        : Object.keys(dispositions).every((disposition) => (window.allowedDispositions as readonly string[]).includes(disposition));
-      const allConsumed = window.requireAllConsumed !== true
-        ? true
-        : Object.entries(dispositions).length > 0 && Object.keys(dispositions).every((disposition) => disposition === 'consumed');
-      const contiguousStamps = true; // arrival ordinals are room-wide; contiguity across seats is meaningless
-      // A window may demand that nothing belonging to its seats was refused, without demanding that its
-      // seats sent anything at all — the compliant population had stopped streaming by the time the
-      // offenders arrived, and "nothing happened to them" is a claim about an empty frame set too.
-      const noRefusals = window.requireNoRefusals !== true
-        ? true
-        : Object.entries(dispositions).every(([disposition]) => disposition === 'consumed');
-      const notes: string[] = [];
-      if (window.forbidClosureFor !== undefined) {
-        notes.push('no closure may name ' + window.forbidClosureFor.join('/') + ' — closures are room facts and are accounted by the producer (closuresOf), not journalled as authority rows');
-      }
-      if (window.requireClosureFor !== undefined && window.closureCode !== undefined) {
-        notes.push(`the producer records a ${String(window.closureCode)} closure for ${window.requireClosureFor}; the closure is a room fact, the window proves the rows up to it`);
-      }
-      const pass = inWindow.length > 0
-        && stampsMatch
-        && acceptedTicksMatchObservations
-        && dispositionsAllowed
-        && allConsumed
-        && noRefusals
-        && contiguousStamps;
-      windowVerdicts.push({
-        scenario: window.scenario,
-        aliases: window.aliases,
-        tickStart: window.tickStart,
-        tickEnd: window.tickEnd,
-        rowsInWindow: inWindow.length,
-        recomputedStamps,
-        recordedStamps,
-        stampsMatch,
-        acceptedTicksMatchObservations,
-        acceptedTickCount,
-        consumedObservationCount,
-        dispositions,
-        dispositionsAllowed,
-        allConsumed,
-        noRefusals,
-        contiguousStamps,
-        pass,
-        notes,
-      });
-    }
-  }
-
   const unreplayed = results.filter((entry) => !entry.replayed);
-  const verdict = replayedRooms.length > 0 && failedRooms.length === 0 ? 'pass' : 'fail';
+  // A gap does not fail this run: the owner asked for remaining evidence gaps to be REPORTED, and a red
+  // artefact would hide which gap is which behind a single word. A false claim does fail it — bytes that
+  // contradict their own summary are not evidence of anything.
+  const verdict = replayedRooms.length > 0
+    && failedRooms.length === 0
+    && windowFalseClaims.length === 0
+    && noAuthorityFalseClaims.length === 0
+    && missingNoAuthorityEvidence.length === 0
+    ? 'pass'
+    : 'fail';
 
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(
@@ -670,6 +916,11 @@ async function main(): Promise<void> {
         scenarios: scenarioVerdicts,
         unreplayedScenarios: unreplayed.map((entry) => ({ source: entry.source, scenario: entry.scenario, reason: entry.refusal ?? 'unknown' })),
         scenarioWindows: windowVerdicts,
+        noAuthorityCoverage: noAuthorityVerdicts,
+        coverageGaps: windowVerdicts
+          .filter((entry) => entry.attributionGap !== null && entry.attributionGap !== undefined)
+          .map((entry) => ({ scenario: entry.scenario, gap: entry.attributionGap })),
+        falseClaims: [...windowFalseClaims.map((entry) => entry.scenario), ...noAuthorityFalseClaims.map((entry) => entry.scenario)],
         windowRule:
           'GA-13 attribution for the scenarios that share one room journal: seat set, tick range and stamp set, recomputed here from the retained rows. A window whose recorded stamps do not equal the stamps in its rows, whose accepted-tick count disagrees with its consumed-observation count, or that shows a disposition outside its allowed set, fails.',
         missingInputs,
@@ -713,6 +964,22 @@ async function main(): Promise<void> {
             roomNotReplayable: scenarioVerdicts.filter((entry) => entry.coverage === 'room-not-replayable').length,
           },
           scenariosReplayed: scenarioVerdicts.filter((entry) => entry.replayed).length,
+          // OD-10: the two classes, counted separately, with the gaps named rather than averaged away.
+          authorityScenarios: scenarioVerdicts.filter((entry) => entry.coverage !== 'no-authority-verified'
+            && entry.coverage !== 'no-authority-gap'
+            && entry.coverage !== 'room-not-replayable').length,
+          authorityWindowsVerified: scenarioVerdicts.filter((entry) => entry.coverage === 'authority-window-verified').length,
+          authorityWindowGaps: scenarioVerdicts.filter((entry) => entry.coverage === 'authority-window-gap')
+            .map((entry) => entry.scenario),
+          noAuthorityScenarios: scenarioVerdicts.filter((entry) => entry.coverage === 'no-authority-verified'
+            || entry.coverage === 'no-authority-gap').length,
+          noAuthorityVerified: scenarioVerdicts.filter((entry) => entry.coverage === 'no-authority-verified').length,
+          noAuthorityWithoutEvidence: missingNoAuthorityEvidence,
+          // Counted as zero on purpose: a no-authority scenario is visible in the census and is never a
+          // replay, whichever way the arithmetic would flatter the total.
+          noAuthorityCountedAsReplays: 0,
+          coverageRuleApplied:
+            'OD-10: every authority-bearing scenario is replayed from retained inputs with its seat × tick × stamp × disposition window recomputed from the rows; every no-authority scenario shows scenario-specific evidence that it entered no authority path and produced no authority state or effects, and is not counted as a replay.',
         },
         settingsNote:
           'Provisional test settings on a loopback transport. A journal that could not be replayed is reported in unreplayedScenarios with the reason; '

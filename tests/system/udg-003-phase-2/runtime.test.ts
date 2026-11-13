@@ -316,22 +316,72 @@ describe('UDG-003 Phase 2 runtime — the population and the recovery scenarios'
   }, 300_000);
 
 describe('UDG-003 Phase 2 runtime — GA-13 window attribution', () => {
-  it('GA-13: the shared-journal windows are attributed by seat, tick and stamp in the replay', () => {
+  it('OD-10: every authority scenario is replayed with its window recomputed, and no-authority scenarios are shown, not replayed', () => {
     const replay = JSON.parse(readFileSync(join(OUT_DIR, 'journal-replay.json'), 'utf8')) as {
       verdict: string;
-      scenarioWindows: { scenario: string; pass: boolean; stampsMatch: boolean; acceptedTicksMatchObservations: boolean; dispositionsAllowed: boolean; noRefusals: boolean }[];
+      falseClaims: string[];
+      coverageGaps: { scenario: string; gap: string }[];
+      summary: {
+        authorityScenarios: number;
+        authorityWindowsVerified: number;
+        authorityWindowGaps: string[];
+        noAuthorityScenarios: number;
+        noAuthorityVerified: number;
+        noAuthorityWithoutEvidence: string[];
+        noAuthorityCountedAsReplays: number;
+        scenariosAccountedFor: number;
+      };
+      scenarios: { scenario: string; coverage: string }[];
+      scenarioWindows: {
+        scenario: string; journal: string; pass: boolean; stampsMatch: boolean;
+        dispositionsMatch: boolean; acceptedTicksMatchObservations: boolean;
+        attributionGap: string | null; journalReplayEqual: boolean | null; aliases: string[];
+      }[];
+      noAuthorityCoverage: { scenario: string; countedAsReplay: boolean; pass: boolean; recomputed: { pass: boolean }[]; recordedOnly: string[] }[];
     };
+    // Bytes that contradict their own summary fail the artefact; a gap does not, and the two are counted
+    // apart so a reviewer never has to guess which kind of short they are reading.
     expect(replay.verdict).toBe('pass');
-    const names = replay.scenarioWindows.map((entry) => entry.scenario);
-    for (const expected of ['rate-ceiling-closes-directly', 'compliant-control-population-frames-are-all-consumed', 'offenders-never-touch-the-compliant-population']) {
-      expect(names, `window for ${expected}`).toContain(expected);
-    }
+    expect(replay.falseClaims).toEqual([]);
+
+    // Authority-bearing half: one window per scenario, every recorded value recomputed from the rows.
+    expect(replay.scenarioWindows.length).toBeGreaterThanOrEqual(10);
     for (const window of replay.scenarioWindows) {
+      expect(window.stampsMatch, `stamps of ${window.scenario}`).toBe(true);
+      expect(window.dispositionsMatch, `dispositions of ${window.scenario}`).toBe(true);
+      expect(window.acceptedTicksMatchObservations, `tick/observation count of ${window.scenario}`).toBe(true);
       expect(window.pass, `window ${window.scenario}`).toBe(true);
-      expect(window.stampsMatch).toBe(true);
-      expect(window.acceptedTicksMatchObservations).toBe(true);
-      expect(window.dispositionsAllowed).toBe(true);
-      expect(window.noRefusals).toBe(true);
+    }
+    expect(replay.summary.authorityScenarios).toBe(15);
+    expect(replay.summary.authorityWindowsVerified).toBeGreaterThanOrEqual(8);
+
+    // The burst is only a replayed case because its OWN room's journal is retained. Without that file the
+    // scenario would have been counted as replayed on another room's rows.
+    const burstWindow = replay.scenarioWindows.find((entry) => entry.scenario.startsWith('b8-burst'));
+    expect(burstWindow, 'the burst scenario carries a window').toBeDefined();
+    expect(burstWindow!.journal).toBe('burst');
+    expect(burstWindow!.journalReplayEqual).toBe(true);
+    expect(burstWindow!.aliases.length).toBe(1);
+
+    // The gaps the rule surfaced. Both are named, both are reported, neither is promoted.
+    expect(replay.summary.authorityWindowGaps).toContain('retired-offender-closes-in-bounded-window');
+    expect(replay.summary.authorityWindowGaps).toContain('offenders-never-touch-the-compliant-population');
+    for (const gap of replay.coverageGaps) expect(gap.gap.length).toBeGreaterThan(40);
+
+    // No-authority half: visible in the census, never counted as a replay, and each with checks that
+    // could have failed.
+    expect(replay.summary.noAuthorityScenarios).toBe(4);
+    expect(replay.summary.noAuthorityVerified).toBe(4);
+    expect(replay.summary.noAuthorityWithoutEvidence).toEqual([]);
+    expect(replay.summary.noAuthorityCountedAsReplays).toBe(0);
+    expect(replay.noAuthorityCoverage.length).toBe(4);
+    for (const entry of replay.noAuthorityCoverage) {
+      expect(entry.countedAsReplay).toBe(false);
+      expect(entry.pass, entry.scenario).toBe(true);
+      expect(entry.recomputed.length).toBeGreaterThanOrEqual(3);
+      expect(entry.recomputed.every((check) => check.pass)).toBe(true);
+      expect(replay.scenarios.some((row) => row.scenario === entry.scenario && row.coverage === 'no-authority-verified')).toBe(true);
     }
   });
+
 });

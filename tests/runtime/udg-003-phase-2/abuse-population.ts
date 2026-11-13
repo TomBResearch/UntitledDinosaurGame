@@ -116,9 +116,30 @@ const results: {
   pass: boolean;
 }[] = [];
 
+// ── OD-10 (owner ruling, 2026-11-13): the two coverage classes and what each must show ──────────
+// Authority-bearing scenarios are replayed from the retained rows and their seat × tick × stamp
+// attribution is verified. No-authority scenarios are NOT replayed and must not be counted as replays;
+// instead each one shows scenario-specific evidence that the authority path was never entered by it and
+// that it produced no authority state or effects. Both classes stay visible in the census, so a scenario
+// cannot improve the odds by being reclassified.
+//
+// `inline` here means "measured at the moment, because it cannot be re-derived later": at config-smoke
+// time there is no room to read a journal from, and a refused create leaves no rows behind precisely
+// because nothing was ever admitted.
+const noAuthorityInline: Record<string, unknown>[] = [];
+
 const stage = (name: string): void => {
   process.stderr.write(`[abuse][stage] ${String(Math.round(performance.now()))}ms ${name}\n`);
 };
+
+/**
+ * The seats a scenario owns, by entity id. OD-10 (owner ruling 2026-11-13) requires attribution by seat,
+ * and the staging ranges below cannot supply it: a frame sent at the end of one scenario is journalled
+ * when the room next ticks, which can be after the scenario has already recorded its verdict. Measured,
+ * not suspected — the retiring offender's client frames landed in the FOLLOWING scenario's range. So the
+ * producer states the seats it used, and attribution is computed from those seats over the whole journal.
+ */
+const scenarioSeats = new Map<string, string[]>();
 
 const record = (
   scenario: string,
@@ -126,7 +147,9 @@ const record = (
   observed: Record<string, unknown>,
   pass: boolean,
   surface: ScenarioRange['surface'] = 'authority',
+  seats: readonly Seat[] = [],
 ): void => {
+  if (seats.length > 0) scenarioSeats.set(scenario, seats.map((seat) => seat.entityId));
   results.push({ scenario, expectation, observed, pass });
   // Every scenario of the population runs in ONE shared room, so its journal is one continuous record.
   // `record` is called at the END of a scenario, so the row counter read here is that scenario's end and
@@ -235,6 +258,31 @@ async function main(): Promise<void> {
   const RegionSchema = schemaMod['RegionSchema'];
   const withConfigOverrides = configMod['withConfigOverrides'] as (c: unknown, o: unknown) => Record<string, unknown>;
   const computeConfigHash = configMod['computeConfigHash'] as (c: unknown) => string;
+
+  /**
+   * The room's authority surface, read as one number so that a before/after delta means exactly one
+   * thing: rooms in existence, journalled rows, client frames the intake saw, and ticks that consumed
+   * input. OD-10 needs this because a no-authority scenario's claim is a NEGATIVE, and a negative is
+   * only evidence when the same instrument would have counted it had it happened.
+   */
+  const authoritySurface = (): { rooms: number; journalRows: number; clientFrames: number; consumedTicks: number } => {
+    const live = RegionRoom.liveRooms().filter((candidate) => candidate.evidence()['refused'] !== true);
+    let journalRows = 0;
+    let clientFrames = 0;
+    let consumedTicks = 0;
+    for (const candidate of live) {
+      const instance = candidate as unknown as RoomInstance;
+      const rows = instance.journal().rows;
+      journalRows += rows.length;
+      clientFrames += rows.filter((row) => row['type'] === 'observation' && row['origin'] === 'client-payload').length;
+      consumedTicks += instance.tickRecords.filter((tickRecord) => tickRecord.consumed.length > 0).length;
+    }
+    return { rooms: live.length, journalRows, clientFrames, consumedTicks };
+  };
+  // The population room, kept by reference so the disposal scenario can still read its journal after the
+  // registry has let it go: an object the harness still holds is not a live room, and the distinction is
+  // exactly what that scenario has to show.
+  let populationRoomRef: RoomInstance | null = null;
   const regionHash = configMod['regionHash'] as (c: unknown) => string;
 
   const bounds = { x: { min: -50, max: 50 }, y: { min: -5, max: 20 }, z: { min: -50, max: 50 } };
@@ -379,17 +427,20 @@ async function main(): Promise<void> {
     const bounded = rooms.find((candidate) => candidate.evidence()['refused'] !== true);
     const instance = bounded ?? rooms[0];
     if (instance === undefined) throw new Error('no live RegionRoom to read evidence from');
+    populationRoomRef = instance;
     return instance as RoomInstance;
   };
 
   try {
     stage('config-smoke');
+    const surfaceBeforeAnyRoom = authoritySurface();
     // ── Config smoke (W-11): the startup gate every real boot passes through ────────────────────
     const loadServerConfig = serverConfigMod['loadServerConfig'] as (o: Record<string, unknown>) => Record<string, unknown>;
     const defaults = loadServerConfig({});
     const defaultLoaded = defaults['loaded'] as { config?: Record<string, unknown> } | undefined;
     const defaultRegion = defaultLoaded?.config?.['region'] as Record<string, unknown> | undefined;
     const operatorLoad = loadServerConfig({ overrides: deploymentOverrides });
+    const defaultsDocument = defaultLoaded?.config ?? null;
     record(
       'config-smoke-defaults-load-unbounded-and-the-room-refuses-to-boot',
       'loadServerConfig loads defaults (a valid document whose region simply has no bounds), and a RegionRoom registered without operator bounds is refused at create: bounds come from the region asset, never from a client or a default',
@@ -401,6 +452,23 @@ async function main(): Promise<void> {
       defaults['ok'] === true && defaultRegion?.['bounds'] === null && operatorLoad['ok'] === true,
       'none',
     );
+    noAuthorityInline.push({
+      scenario: 'config-smoke-defaults-load-unbounded-and-the-room-refuses-to-boot',
+      // The strongest form this scenario has, and the only honest one: at the moment it decided, there
+      // was no room in existence to enter an authority path through.
+      neverEntered: {
+        liveRoomsAtCheck: surfaceBeforeAnyRoom.rooms,
+        journalRowsAnywhereAtCheck: surfaceBeforeAnyRoom.journalRows,
+        clientFramesAnywhereAtCheck: surfaceBeforeAnyRoom.clientFrames,
+        consumedTicksAnywhereAtCheck: surfaceBeforeAnyRoom.consumedTicks,
+        seatsJoinedAtCheck: 0,
+      },
+      noAuthorityEffects: {
+        note: 'nothing was seated, so nothing could be decided; the two configuration documents differ exactly where the bounds are',
+        defaultConfigHash: computeConfigHash(defaultRegion === undefined ? null : defaultsDocument),
+        operatorConfigHash: computeConfigHash((operatorLoad['loaded'] as { config: unknown } | undefined)?.config ?? null),
+      },
+    });
 
     stage('unbounded');
     // The live half of the same fact: a room registered without bounds must refuse the seat, and
@@ -410,6 +478,8 @@ async function main(): Promise<void> {
     // `gracefullyShutdown` is global to the in-process matchmaker, so a second harness server would
     // take the first one down with it. The unbounded room type therefore rides the same server.
     let unboundedRefusal = '';
+    const surfaceBeforeUnbounded = authoritySurface();
+    const roomsBeforeUnbounded = RegionRoom.liveRooms().length;
     try {
       await withTimeout(connectSeat(stack, server.endpoint, 'unbounded', identity, RegionSchema), 5_000, 'unbounded create');
       unboundedRefusal = 'the seat joined an unbounded room — the gate failed open';
@@ -423,6 +493,31 @@ async function main(): Promise<void> {
       unboundedRefusal.includes('region-bounds-missing'),
       'none',
     );
+    {
+      const surfaceAfterUnbounded = authoritySurface();
+      noAuthorityInline.push({
+        scenario: 'unbounded-room-refuses-the-seat',
+        neverEntered: {
+          refusalCode: 'region-bounds-missing',
+          clientFramesSent: 0,
+          // The create was refused, so the session that tried never existed on the server at all: no
+          // alias, no row, no entity. Rows naming it are counted below over the whole journal.
+          roomsBeforeAttempt: roomsBeforeUnbounded,
+          roomsAfterAttempt: RegionRoom.liveRooms().length,
+          journalRowsBeforeAttempt: surfaceBeforeUnbounded.journalRows,
+          journalRowsAfterAttempt: surfaceAfterUnbounded.journalRows,
+          clientFramesBeforeAttempt: surfaceBeforeUnbounded.clientFrames,
+          clientFramesAfterAttempt: surfaceAfterUnbounded.clientFrames,
+          consumedTicksBeforeAttempt: surfaceBeforeUnbounded.consumedTicks,
+          consumedTicksAfterAttempt: surfaceAfterUnbounded.consumedTicks,
+        },
+        noAuthorityEffects: {
+          framesSentDelta: surfaceAfterUnbounded.clientFrames - surfaceBeforeUnbounded.clientFrames,
+          consumedTickDelta: surfaceAfterUnbounded.consumedTicks - surfaceBeforeUnbounded.consumedTicks,
+          note: 'the refusal happened at create-time validation, before the intake adapter could see a frame',
+        },
+      });
+    }
 
     stage('control');
     // ── Compliant control population ────────────────────────────────────────────────────────────
@@ -498,6 +593,8 @@ async function main(): Promise<void> {
       )
         && consumedEverywhere.every((didConsume) => didConsume)
         && (closuresOf() ?? []).length === 0,
+      'authority',
+      controls,
     );
 
     stage('epoch-control');
@@ -553,6 +650,8 @@ async function main(): Promise<void> {
         && Math.abs(correctAccounting.movedMeters - stepMeters * 8) < 1e-9
         // The reason F-1 hid: the pre-T-0 check passes for a stream that never reached the authority.
         && wrongWatermark === 8,
+      'authority',
+      [epochCorrectSeat, epochWrongSeat],
     );
 
     stage('pressure');
@@ -648,6 +747,8 @@ async function main(): Promise<void> {
         && pressureFinal.allSentStampsConsumed
         && pressureFinal.pairingConsistent
         && pressureDrained,
+      'authority',
+      [pressureSeat],
     );
 
     stage('idle');
@@ -686,6 +787,8 @@ async function main(): Promise<void> {
         && idleAccounting.allSentStampsConsumed
         && idleAccounting.pairingConsistent
         && idleConsumed,
+      'authority',
+      [idleSeat],
     );
 
     stage('rate');
@@ -768,6 +871,8 @@ async function main(): Promise<void> {
       'With frames still queued at close, the consumed count does not move across the closure window — the retirement total stays retirement-only and serverQueuedAtClose stays a diagnostic',
       { w9QueuedAtClose, w9ConsumedAtClose, w9ConsumedImmediately, w9ConsumedLater, w9Drain, w9AccessorReleased },
       w9QueuedAtClose > 0 && (w9Drain === 0 || w9AccessorReleased),
+      'authority',
+      [rateSeat],
     );
     record(
       'rate-ceiling-closes-directly',
@@ -789,6 +894,7 @@ async function main(): Promise<void> {
         // this limb the scenario could be closed for an epoch mismatch and still report 4101 honestly.
         && windowAccounting(rateSeat).stampsRefused === 0,
       'earlier-window',
+      [rateSeat],
     );
 
     stage('offender');
@@ -849,6 +955,8 @@ async function main(): Promise<void> {
         && closure?.code === closeCodes['INPUT_RETIRED_UNREPRESENTED']
         && closeElapsedMs <= (envelope['closureMaxMs'] as number) + 1_500
         && windowAccounting(offender).stampsRefused === 0,
+      'authority',
+      [offender],
     );
     // ── Compliant neighbours survived every offender ────────────────────────────────────────────
     const survivors = controls.map((seat) => {
@@ -877,6 +985,7 @@ async function main(): Promise<void> {
           && Math.abs(row.movedMeters - row.expectedMeters) < 1e-9,
       ),
       'earlier-window',
+      controls,
     );
 
     stage('burst');
@@ -1046,6 +1155,11 @@ async function main(): Promise<void> {
         && burstSignals.length === 0
         && burstClosures.length === 0
         && maxDepthSeen < 32,
+      // The burst seat is in a room of its own (its identity and configuration are its own), so its
+      // attribution is computed over ITS journal, retained alongside this one, and not over the shared
+      // room's rows — which is the difference between a window and a coincidence.
+      'authority',
+      [burstSeat],
     );
     // The burst room is emptied so shutdown does not wait on a room the population no longer needs.
     await burstSeat.room.leave(true).catch(() => undefined);
@@ -1173,6 +1287,7 @@ async function main(): Promise<void> {
       },
       displacementAudit.passed,
       'earlier-window',
+      [...controls, epochCorrectSeat, epochWrongSeat, pressureSeat, idleSeat, rateSeat, offender],
     );
 
     // ── buffer-depth.csv: per-tick aggregate PLUS per-seat rows (OD-9) ─────────────────────────
@@ -1229,6 +1344,22 @@ async function main(): Promise<void> {
     // finished when the rows were read. The prologue is part of the record because the accepted replay
     // refuses a journal it cannot bind to a configuration; rows without a prologue are bytes, not evidence.
     const exportedJournal = room().journal();
+    // The `B = 8` burst seat lives in a room of its own, so its authority decisions were journalled in a
+    // journal this bundle did not previously retain — which made the burst the one authority scenario that
+    // could not be replayed from retained bytes. It is retained here, in this same artefact, rather than as
+    // a seventeenth file: the owner accepted a 24-artefact list, and a second journal is not a new claim.
+    const burstRoomInstance = RegionRoom.liveRooms()
+      .map((candidate) => candidate as unknown as RoomInstance)
+      .find((candidate) => candidate.journal().rows.some((row) => row['entityId'] === burstSeat.entityId));
+    const burstJournal = burstRoomInstance === undefined ? null : {
+      roomLabel: 'burst',
+      configDocument: burstRoomInstance.liveConfig() ?? null,
+      prologue: burstRoomInstance.journalPrologue() ?? null,
+      rows: burstRoomInstance.journal().rows,
+      chain: burstRoomInstance.journal().chain,
+      dropped: burstRoomInstance.journal().dropped,
+    };
+    const burstRows: readonly Record<string, unknown>[] = burstJournal?.rows ?? [];
     // ── GA-13: exact seat × tick windows for the two scenarios that share this one journal ─────
     // The population drives one room, so a scenario is not a slice of ROWS (the row ranges are watermarks
     // between verdicts and overlap by construction). What IS exact is attribution: which seat, which tick
@@ -1268,7 +1399,169 @@ async function main(): Promise<void> {
       && row['origin'] === 'client-payload'
       && controlAliases.includes(String(row['alias'] ?? '')));
     const controlFrameTicks = controlFrameRows.map(tickOfRow);
-    const windows = [
+    // ── OD-10: seat × tick × stamp attribution for EVERY scenario of this journal set ───────────
+    // The staging ranges in `scenarioRanges` are watermarks between verdicts, and they were measured to
+    // be unreliable as attribution: the retiring offender's client frames are journalled after it records
+    // its verdict, which puts them in the FOLLOWING scenario's range. So the window is computed from the
+    // seats each scenario declared it used, over the whole journal of the room those seats live in, and
+    // the staging range is reported beside it as a cross-check rather than as the answer.
+    const rowsArray = exportedJournal.rows;
+    type JournalRows = readonly Record<string, unknown>[];
+    const aliasIn = (rows: JournalRows, entityId: string): string | null => {
+      const row = rows.find((candidate) => candidate['entityId'] === entityId && candidate['alias'] !== undefined);
+      return row === undefined ? null : String(row['alias']);
+    };
+    const rowsWithAlias = (rows: JournalRows, alias: string): JournalRows => rows.filter((row) => row['alias'] === alias);
+    const tickIn = (row: Record<string, unknown>): number => Number(row['tick'] ?? row['eligibleTick'] ?? Number.NaN);
+    // A window is always (journal, alias set, tick range). Alias strings are per-room counters, so the SAME
+    // alias names different entities in different rooms — measured here, not theorised: the burst room's
+    // seat is `client-01` and so is one seat of the shared room. A window quoted without its journal is
+    // ambiguous, and an attribution helper that ignored the journal would silently join two entities.
+    const windowIn = (rows: JournalRows, aliases: readonly string[], tickStart: number, tickEnd: number): JournalRows =>
+      rows.filter((row) => aliases.includes(String(row['alias'] ?? ''))
+        && tickIn(row) >= tickStart && tickIn(row) <= tickEnd);
+    /** The rows that ARE an authority decision: a journalled client frame, or a tick that consumed input. */
+    const decisionRows = (rows: JournalRows, aliases: readonly string[]): JournalRows => rows.filter((row) => {
+      const alias = String(row['alias'] ?? row['entityId'] ?? '');
+      if (!aliases.includes(alias)) return false;
+      if (row['type'] === 'observation') return row['origin'] === 'client-payload';
+      if (row['type'] === 'tick') return row['consumed'] !== null && row['consumed'] !== undefined;
+      return false;
+    });
+
+    /** Which journal each authority scenario's seats live in. One scenario, one room, one answer. */
+    const journalOfScenario: Record<string, string> = {
+      'b8-burst-then-idle-retires-nothing-and-resynchronises-nothing': 'burst',
+    };
+
+    // A scenario whose claim covers a SUB-range of its seats' life declares the bounds; every other window
+    // is simply the whole span of the seats it owns, which is what "this scenario's rows" means.
+    const windowBounds: Record<string, readonly [number, number]> = {
+      'offenders-never-touch-the-compliant-population': [offenderArrivalTick, populationEndTick],
+    };
+
+    interface ScenarioWindow {
+      readonly scenario: string;
+      readonly journal: string;
+      readonly aliases: readonly string[];
+      readonly tickStart: number;
+      readonly tickEnd: number;
+      readonly ownClientFrames: number;
+      readonly stampsConsumed: readonly number[];
+      readonly dispositions: Readonly<Record<string, number>>;
+      readonly ownDecisions: number;
+      readonly attributionGap: string | null;
+      readonly overlappingAliases: readonly string[];
+      readonly aliasRowsWholeJournal: number;
+      readonly aliasTickSpan: readonly number[];
+      readonly rowsInWindow: number;
+      readonly stagingRows: number;
+      readonly stagingRangeCoversWindow: boolean;
+      readonly windowInsideStagingRange: boolean;
+    }
+
+    // A gap, stated by the scenario that has it. The retiring offender has no journalled decision of its
+    // own because the frames it cared about were never represented to the authority at all — that IS the
+    // scenario. Pretending its window replayed would be the same mistake as reading a watermark and
+    // calling it consumption.
+    const knownAttributionGaps: Record<string, string> = {
+      'retired-offender-closes-in-bounded-window':
+        'the burst overflows the buffer, and an evicted frame is retired BEFORE it is represented: it never reaches the accessor, so no observation row exists for it and no tick consumed it. The retirement is a room fact (seat evidence `retiredUnrepresented`, close-path-accounting.json), reported as a recorded input the replay cannot recompute.',
+      'offenders-never-touch-the-compliant-population':
+        'the compliant seats had stopped streaming before the offenders arrived, so the window this claim needs contains no client frame of theirs by construction; what the window verifies is the ABSENCE of refusals and closures for those seats across the offending period',
+    };
+
+    const ownerOfAlias = new Map<string, string[]>();
+    for (const [scenario, entityIds] of scenarioSeats) {
+      for (const entityId of entityIds) {
+        const alias = aliasIn(rowsArray, entityId) ?? aliasIn(burstRows, entityId);
+        if (alias === null) continue;
+        ownerOfAlias.set(alias, [...(ownerOfAlias.get(alias) ?? []), scenario]);
+      }
+    }
+
+    const scenarioWindowsBase: ScenarioWindow[] = scenarioRanges
+      .filter((range) => range.surface !== 'none')
+      .map((range) => {
+        const which = journalOfScenario[range.scenario] ?? 'population';
+        const rows = which === 'burst' ? burstRows : rowsArray;
+        const entityIds = scenarioSeats.get(range.scenario) ?? [];
+        const aliases = [...new Set(entityIds
+          .map((entityId) => aliasIn(rows, entityId))
+          .filter((alias): alias is string => alias !== null))].sort();
+        // The tick range comes from the scenario's OWN authority decisions — frames it put on the wire and
+        // ticks that consumed input for its seats — not from every row carrying its alias. Every seated
+        // entity has a state row on every tick of the run, so a range taken from those would be the whole
+        // run for every scenario, which attributes nothing.
+        const decisions = decisionRows(rows, aliases);
+        const decisionTicks = decisions.map(tickIn).filter((tick) => Number.isFinite(tick));
+        const ownRows = aliases.flatMap((alias) => [...rowsWithAlias(rows, alias)]);
+        const ownTickSpan = ownRows.map(tickIn).filter((tick) => Number.isFinite(tick));
+        const bounds = windowBounds[range.scenario];
+        const tickStart = bounds !== undefined && bounds[0] >= 0
+          ? bounds[0]
+          : decisionTicks.length > 0 ? Math.min(...decisionTicks) : -1;
+        const tickEnd = bounds !== undefined && bounds[1] !== -1
+          ? bounds[1]
+          : decisionTicks.length > 0 ? Math.max(...decisionTicks) : -1;
+        const inWindow = aliases.length === 0 || tickStart < 0
+          ? []
+          : windowIn(rows, aliases, tickStart, tickEnd);
+        const ownFrames = inWindow.filter((row) => row['type'] === 'observation' && row['origin'] === 'client-payload');
+        // Interleaving, measured rather than assumed: how many rows inside this window's TICK range belong
+        // to seats another scenario declared. A long window over a busy room overlaps other scenarios, and
+        // the artefact should say that instead of implying exclusivity it does not have.
+        const otherAliases = new Set<string>();
+        for (const [otherScenario, otherEntities] of scenarioSeats) {
+          if (otherScenario === range.scenario) continue;
+          for (const entityId of otherEntities) {
+            const alias = aliasIn(rows, entityId);
+            if (alias !== null) otherAliases.add(alias);
+          }
+        }
+        const overlappingAliases = [...new Set(rows
+          .filter((row) => tickIn(row) >= tickStart && tickIn(row) <= tickEnd && tickStart >= 0)
+          .map((row) => String(row['alias'] ?? ''))
+          .filter((alias) => alias !== '' && otherAliases.has(alias)))].sort();
+        // Cross-check against the staging range, honestly in both directions: the window is what the
+        // replay verifies, and the staging range is reported as what it is — a watermark.
+        const staged = rowsArray.slice(range.rowStart, range.rowEnd);
+        const windowRowsPresent = inWindow.filter((row) => rowsArray.indexOf(row) >= 0);
+        const insideStaging = windowRowsPresent.filter((row) => {
+          const index = rowsArray.indexOf(row);
+          return index >= range.rowStart && index < range.rowEnd;
+        }).length;
+        return {
+          scenario: range.scenario,
+          journal: which,
+          aliases,
+          tickStart,
+          tickEnd,
+          ownClientFrames: ownFrames.length,
+          ownDecisions: inWindow.filter((row) => row['type'] === 'observation'
+            ? row['origin'] === 'client-payload'
+            : row['type'] === 'tick' && row['consumed'] !== null && row['consumed'] !== undefined).length,
+          stampsConsumed: stampsConsumedIn(inWindow),
+          dispositions: dispositionsIn(inWindow),
+          overlappingAliases,
+          rowsInWindow: inWindow.length,
+          aliasRowsWholeJournal: ownRows.length,
+          aliasTickSpan: ownTickSpan.length > 0 ? [Math.min(...ownTickSpan), Math.max(...ownTickSpan)] : [],
+          stagingRows: staged.length,
+          stagingRangeCoversWindow: windowRowsPresent.length > 0 && insideStaging === windowRowsPresent.length,
+          windowInsideStagingRange: insideStaging === windowRowsPresent.length,
+          attributionGap: knownAttributionGaps[range.scenario]
+            ?? (ownFrames.length === 0 && inWindow.length === 0
+              ? 'no journalled authority decision belongs to the seats this scenario declared'
+              : null),
+        };
+      });
+
+    const unattributedScenarios = scenarioWindowsBase
+      .filter((window) => window.aliases.length === 0 || window.ownClientFrames === 0)
+      .map((window) => ({ scenario: window.scenario, aliases: window.aliases.length, ownClientFrames: window.ownClientFrames }));
+
+    const declaredWindows = [
       {
         scenario: 'rate-ceiling-closes-directly',
         // One seat, from its first journalled row to the tick the ceiling closed it on.
@@ -1291,7 +1584,9 @@ async function main(): Promise<void> {
           'seat × tick window over the shared journal. The replay re-derives every row of this window from the retained rows and refuses a window that contains a foreign seat’s client frames, a stamp the scenario never sent, or a disposition outside the allowed set.',
       },
       {
-        scenario: 'compliant-control-population-frames-are-all-consumed',
+        scenario: 'compliant-control-population',
+        // The control seats streamed BEFORE the offenders arrived, so their frames need their own window;
+        // pretending the offending period contains them would have the artefact assert over an empty range.
         aliases: controlAliases,
         tickStart: controlFrameTicks.length > 0 ? Math.min(...controlFrameTicks) : -1,
         tickEnd: controlFrameTicks.length > 0 ? Math.max(...controlFrameTicks) : -1,
@@ -1322,7 +1617,79 @@ async function main(): Promise<void> {
           'the compliant seats’ own rows across the whole offending period: the accepted-tick count must equal the consumed-observation count, no row of theirs may be a refusal, and no closure may name any of these aliases. The control seats had stopped streaming before the offenders arrived, so this window deliberately requires NO client frames of its own — it is the "nothing happened to them afterwards" half. The "every frame they did send was consumed" half is the window ABOVE.',
       },
     ];
-    const scenarioWindows = windows;
+    const policyByScenario: Record<string, Record<string, unknown>> = {
+      'compliant-control-population': { requireAllConsumed: true, requireNoRefusals: true },
+      'wrong-epoch-stream-fails-the-compliant-assertion': {
+        // This scenario's whole claim is that the wrong-epoch stream is REFUSED, so a refusal here is the
+        // expected disposition and its absence would be the defect.
+        allowedDispositions: ['refused:epoch', 'consumed'],
+      },
+      'rate-ceiling-closes-directly': {
+        allowedDispositions: ['consumed', 'dropped:queue-overflow', 'dropped:lifecycle', 'refused:rate-ceiling'],
+      },
+      'retired-offender-closes-in-bounded-window': {
+        allowedDispositions: ['consumed', 'dropped:queue-overflow', 'dropped:lifecycle'],
+      },
+      'pressure-throttles-and-never-closes': {
+        allowedDispositions: ['consumed', 'dropped:queue-overflow', 'dropped:lifecycle'],
+      },
+      'offenders-never-touch-the-compliant-population': { requireNoRefusals: true },
+      'per-tick-displacement-stays-bounded-across-the-population': { requireNoRefusals: false },
+    };
+    // One entry per authority scenario: the declared window where the scenario has a claim about a
+    // specific seat-and-time range, the derived window otherwise. `derived` travels either way, so the
+    // cross-check between the two is in the bytes rather than in a footnote.
+    const declaredByScenario = new Map(declaredWindows.map((entry) => [entry.scenario, entry]));
+    const scenarioWindows = scenarioWindowsBase.map((window) => ({
+      ...window,
+      // The declared window is the producer's narrative window for the scenario — the seat-and-time range
+      // it meant when it made its claim, with the extra context (wire stamps, the closure it expects) that
+      // a derived window cannot supply. The derived window above is what the replay verifies.
+      declared: declaredByScenario.get(window.scenario) ?? null,
+      policy: policyByScenario[window.scenario] ?? {},
+    }));
+
+    // ── OD-10: the no-authority half ────────────────────────────────────────────────────────────
+    // Each of these four scenarios must show, in its own terms, that it entered no authority path and
+    // produced no authority state or effects. A blank "no authority surface" flag is not that evidence.
+    const noAuthorityFromJournal = (() => {
+      const metricsRange = scenarioRanges.find((range) => range.scenario === 'tick-metrics-present');
+      if (metricsRange === undefined) return [];
+      const staged = rowsArray.slice(metricsRange.rowStart, metricsRange.rowEnd);
+      const aliasesBefore = new Set(rowsArray.slice(0, metricsRange.rowStart)
+        .map((row) => String(row['alias'] ?? ''))
+        .filter((alias) => alias !== ''));
+      const newAliases = [...new Set(staged.map((row) => String(row['alias'] ?? ''))
+        .filter((alias) => alias !== '' && !aliasesBefore.has(alias)))];
+      const frames = staged.filter((row) => row['type'] === 'observation' && row['origin'] === 'client-payload');
+      const consumedRows = staged.filter((row) => row['type'] === 'tick' && row['consumed'] !== null && row['consumed'] !== undefined);
+      return [{
+        scenario: 'tick-metrics-present',
+        neverEntered: {
+          // Reading telemetry sends no frame and seats no one: the scenario's own action count is zero,
+          // and the rows below are the room's doing (ticks already in flight), counted here rather than
+          // quietly omitted from the window.
+          framesSentByThisScenario: 0,
+          clientPayloadRowsInWindow: frames.length,
+          consumedInputRowsInWindow: consumedRows.length,
+          aliasesFirstSeenInWindow: newAliases,
+          newAliasesInWindow: newAliases.length,
+        },
+        noAuthorityEffects: {
+          note:
+            'the room keeps ticking while telemetry is read, so its no-input ticks appear in the window; what this scenario contributed is zero frames, zero seats and zero new aliases, and a first-seen alias inside the window would prove otherwise',
+        },
+      }];
+    })();
+    const noAuthorityEvidence = [...noAuthorityInline, ...noAuthorityFromJournal];
+
+    // What the export saw, so the disposal scenario can be measured as a DELTA over it rather than as an
+    // assertion about a room that no longer exists.
+    const rowsAtExport = exportedJournal.rows.length;
+    const chainLengthAtExport = exportedJournal.chain.length;
+    const chainLastTickAtExport = exportedJournal.chain.length > 0
+      ? Number((exportedJournal.chain[exportedJournal.chain.length - 1] as { tick?: number }).tick ?? -1)
+      : -1;
     const journalSnapshot = {
       configDocument: room().liveConfig() ?? null,
       prologue: room().journalPrologue() ?? null,
@@ -1353,6 +1720,13 @@ async function main(): Promise<void> {
           // scenario stood when it made its claim.
           scenarioRanges,
           scenarioWindows,
+          noAuthorityEvidence,
+          unattributedScenarios,
+          additionalJournals: burstJournal === null ? [] : [burstJournal],
+          windowRule:
+            'A window is the seats a scenario declared it used, over the whole journal of the room those seats live in, cut at the tick range those seats appear in. The staging row ranges are reported beside them as a cross-check only: they are watermarks between verdicts, and a frame sent at the end of a scenario is journalled on the room’s next tick, which can be after the scenario recorded.',
+          coverageRule:
+            'OD-10 (owner ruling 2026-11-13): authority-bearing scenarios replay from these retained rows with their seat × tick × stamp attribution verified; no-authority scenarios are not replayed and are not counted as replays, and each carries scenario-specific evidence that it entered no authority path and produced no authority state or effects. Both classes stay visible in the census.',
           settingsNote:
             'Provisional test settings on a loopback transport. Rows and chain are the authority’s own journalled decisions; '
             + 'retirement, gap naming, close codes, close observations and the effect ledger are transport and room facts and are '
@@ -1367,7 +1741,57 @@ async function main(): Promise<void> {
     // `gracefullyShutdown` waits for rooms to empty, and a RegionRoom has `autoDispose = false` by
     // design — the harness must not inherit that wait, or the process outlives its own evidence.
     await Promise.race([server.close(), sleep(4_000)]);
-    record('server-disposes-cleanly', 'The harness server disposes without leaving a live room behind', { liveRoomsAfterDispose: RegionRoom.liveRooms().length }, true, 'none');
+    {
+      // The room object outlives its registration (`autoDispose = false` by design), which is what makes
+      // this measurable: read the journal the retained instance still holds and ask what shutdown appended.
+      // Read through a widening cast: the reference is assigned inside `room()`, which TypeScript's
+      // flow analysis does not credit at this point, and the alternative is to lie about the type.
+      const retained: RoomInstance | null = populationRoomRef as RoomInstance | null;
+      const afterDispose = retained !== null ? retained.journal() : null;
+      const appended = afterDispose !== null ? afterDispose.rows.slice(rowsAtExport) : [];
+      const appendedAuthority = appended.filter((row) => row['type'] === 'tick'
+        && row['consumed'] !== null && row['consumed'] !== undefined);
+      const appendedFrames = appended.filter((row) => row['type'] === 'observation'
+        && row['origin'] === 'client-payload');
+      const liveAfter = RegionRoom.liveRooms().length;
+      record(
+        'server-disposes-cleanly',
+        'The harness server disposes without leaving a live room behind, and shutdown decides nothing on the way out',
+        {
+          liveRoomsAfterDispose: liveAfter,
+          rowsAppendedByShutdown: appended.length,
+          rowTypesAppendedByShutdown: [...new Set(appended.map((row) => `${String(row['type'])}:${String(row['kind'] ?? row['eventKind'] ?? '')}`))],
+          clientFramesAppendedByShutdown: appendedFrames.length,
+          authorityRowsAppendedByShutdown: appendedAuthority.length,
+          chainLengthAtExport,
+          chainLengthAfterShutdown: afterDispose?.chain.length ?? -1,
+          chainLastTickAtExport,
+          chainLastTickAfterShutdown: (afterDispose !== null && afterDispose.chain.length > 0)
+            ? Number((afterDispose.chain[afterDispose.chain.length - 1] as { tick?: number }).tick ?? -1)
+            : -1,
+        },
+        liveAfter === 0 && appendedFrames.length === 0 && appendedAuthority.length === 0,
+        'none',
+      );
+      noAuthorityEvidence.push({
+        scenario: 'server-disposes-cleanly',
+        neverEntered: {
+          clientFramesAppendedByShutdown: appendedFrames.length,
+          authorityRowsAppendedByShutdown: appendedAuthority.length,
+          liveRoomsAfterDispose: liveAfter,
+        },
+        noAuthorityEffects: {
+          rowsAppendedByShutdown: appended.length,
+          rowTypesAppendedByShutdown: [...new Set(appended.map((row) => `${String(row['type'])}:${String(row['kind'] ?? row['eventKind'] ?? '')}`))],
+          chainLastTickAtExport,
+          chainLastTickAfterShutdown: (afterDispose !== null && afterDispose.chain.length > 0)
+            ? Number((afterDispose.chain[afterDispose.chain.length - 1] as { tick?: number }).tick ?? -1)
+            : -1,
+          note:
+            'shutdown may journal lifecycle events and it may close the tick chain; what it must not do is admit a frame or step an entity on the way out, and those two counts are the claim',
+        },
+      });
+    }
     writeJournalRecord();
   } finally {
     // Evidence first, shutdown second: the pinned shutdown can end the process.
