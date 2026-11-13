@@ -1,5 +1,10 @@
 # UDG-003 Phase 2 — the §9 evidence matrix, and the two reconciliations it forces
 
+> **2026-11-13**: §9 records the approved repair batch at `9d1372a91474d416cbd8c24d6d9849fa6388e936` —
+> journal replay for GA-13/AC-3d/AC-20, the R-2 and R-3 record corrections, and the H1 historical
+> verification. §1–§8 below stay as written: they are the record of the `cf34987` submission, and this batch
+> does not edit history.
+>
 > Review basis for the Phase 2 submission. Submitted implementation SHA
 > `cf34987445f737d21285b8b1f5d6b650f85873b5`; assignment version pinned at handoff
 > `17ade43be0a64935cb2e06be02ebbe9756f6eb6f`; baseline `8716b8c6e3c4a3f005fe260eebf5569bb02201dd`.
@@ -261,3 +266,171 @@ change or a client):
 7. **OD-7 — acceptance.** Nothing in this file records or implies acceptance. Dedupe-triggered
    closure remains **disabled** in hashed config, **D4 remains undesignated**, Gate A remains **Not
    Run**, `stackCompatibility` remains **not-established**, and Phase 3 remains **unassigned**.
+
+## 9. The repair batch of 2026-11-13 — what closed, what moved, and what did not
+
+**Supersede rule, stated before anything else.** §1–§8 describe the submission at
+`cf34987445f737d21285b8b1f5d6b650f85873b5` and are left exactly as written; that is the record of what was
+submitted, and history keeps its own value (readiness rule R-1). This section is the record of the approved
+first repair batch, head `9d1372a91474d416cbd8c24d6d9849fa6388e936`. Where a row here disagrees with §3,
+§3.1 or §6, this section is the later record; those sections remain the submission's account of `cf34987`.
+
+| item | value |
+| --- | --- |
+| batch head | `9d1372a91474d416cbd8c24d6d9849fa6388e936` (`9d1372a`), on `2233d83` (R-1/R-2/R-3) plus the two CI-found fixes |
+| CI run | [43408391171](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43408391171), head `9d1372a`, conclusion `success` |
+| retained directory | `/workspace/udg-evidence/ci-run-43408391171/` (a **new** run directory; `ci-run-43263252706/` was not written to) |
+| retained UDG-003 bundle | `/workspace/udg-evidence/ci-run-43408391171/UDG-003-2026-11-13T10-28-48-335Z-9d1372a9` |
+| verification from the retained copy | `PASS` / **0 issues** for all three bundles (`UDG-001-…-9d1372a9`, `UDG-002-…-9d1372a9`, `UDG-003-…-9d1372a9`) |
+| vector gates on the retained bytes | `PASS phase-1 vectors: 15 artefact(s)` · `PASS phase-2 vectors: **18** artefact(s)` |
+| bundle identity | `status PASS`, `phase phase-2`, `measurementsScope phase-1`, `workingTreeDirty false`, 177 hashed files |
+| earlier retained bytes | 350 of 350 files under `ci-run-43263252706/` match the pre-batch `sha256` snapshot in `/tmp/retained-before-cf34987.sha256`; `inventory-v3.json`/`inventory-v4.json` unmodified; the inventory chain is **not** extended here (rule R-5) |
+
+### 9.1 R-2 (option A) and R-3 — the two record defects, closed
+
+* **D1 closed without relabelling anything.** The measurement file `measurements/UDG-003.json` is Phase 1's
+  and still says `phase-1`; relabelling it would have rewritten an accepted artefact. What was wrong was the
+  *threshold*, which asked a Phase 2 suite to write a file only the Phase 1 suite writes. The tool now
+  records and gates the **pair**: `report.json.phase = "phase-2"` (the bundle) with
+  `report.json.measurementsScope = "phase-1"` (the measurement file), enforced by
+  `EVIDENCE-PHASE-SCOPE-MISMATCH`, and a contract assertion pins both halves so a future change cannot move
+  one alone. The retained bundle's `report.json` carries `measurementsScope phase-1` (§9 table above).
+* **D2 closed with measurements, not prose.** `Room.setFixedTimestep(step, tickRate, opts)` takes a tick
+  **rate in Hz**, verified against the pinned `@colyseus/core@0.18.27` declaration and four measured runs:
+  `20` → 19.50 Hz, omitted second argument → 59.51 Hz, `50` → 49.53 Hz, `1000` → 999.26 Hz. The API map has
+  the row now, the room passes `network.tickRate`, and a contract assertion re-reads the pinned declaration
+  and refuses both a signature change and the interval reading reappearing. The row also records what the
+  wrong reading cost: a room ticking at ~55 Hz, draining inputs faster than the envelope's λ, which is why
+  queue depth looked impossible to observe.
+
+### 9.2 R-1 — GA-13, AC-3d and AC-20: a room journal replayed by a process that never saw the room
+
+GA-13's verb was **replay**. Phase 2 wrote room journals, hashed them and gated them, and no process ever
+read one back. That is what this closes. `tests/runtime/udg-003-phase-2/journal-replay.ts` starts as a fresh
+Node process, starts no server, opens no socket, imports no `@colyseus/*` package, and reads only the bytes
+retained in the bundle: `vectors-phase-2/journal-population.json`,
+`vectors-phase-2/journal-recovery.json` and the journal carried inside `probes/PR-14.probe-result.json`. It
+calls the accepted `replayRun` from `apps/server/dist/authority/replay.js` and compares, in order,
+**dispositions**, **canonical state digests** and **per-tick chain hashes through the tip**, plus a
+disposition histogram and the tip as secondary checks. Comparison is ordered, because a set comparison would
+let an out-of-order replay pass.
+
+Every journal read from the retained bundle at `9d1372a`:
+
+| journal | rows | chain | dig. blanked | tampered prologue | integrity issues | distinct state digests | wrong-stepper control | edited disposition | changed tip hash |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `journal-population.json` (11 seats, one room) | 3681 | 221 | equal | refused | 0 | 860 | detected | detected | detected |
+| `probes/PR-14.probe-result.json` | 202 | 38 | equal | refused | 0 | 44 | detected | detected | detected |
+| recovery · `same-delivery-pairing-on-the-wire` | 607 | 150 | equal | refused | 0 | 150 | detected | detected | detected |
+| recovery · `client-deadline-fires-with-zero-deliveries-and-the-record-recovers` | 521 | 142 | equal | refused | 0 | 128 | detected | detected | detected |
+| recovery · `episode-deadline-closes-the-client-at-4000ms` | 17 | 120 | equal | refused | 0 | 3 | *no committed motion* | detected | detected |
+| recovery · `two-actual-rejoins-per-rolling-window-and-the-third-is-refused` | 77 | 28 | equal | refused | 0 | 16 | *no committed motion* | detected | detected |
+
+All six replayed to the **same** dispositions, canonical state and chain tip as recorded. The three negative
+controls are there because an equal sign is only evidence if it can be made false: a stepper integrating
+1.5×, an edited first disposition, a tip hash changed by one character. Two recovery rooms report the
+stepper control as *not applicable — no committed motion*: their entity never moved, so no digest in them
+depends on how far the stepper integrates, and claiming `detected` there would make the control look
+stronger than it is.
+
+Scenario reconciliation, which is the number the review asked for rather than a coverage percentage:
+**16 scenarios accounted for, 10 replayed inside a room journal, 6 not** — and the six are named with the
+reason in `journal-replay.json` rather than dropped from the denominator.
+
+| scenario | source | coverage | rows in scope | dispositions |
+| --- | --- | --- | --- | --- |
+| `config-smoke-defaults-load-unbounded-and-the-room-refuses-to-boot` | population | no authority surface | 0 | 0 |
+| `unbounded-room-refuses-the-seat` | population | no authority surface | 0 | 0 |
+| `compliant-control-population` | population | replayed | 966 | 183 |
+| `pressure-throttles-and-never-closes` | population | replayed | 558 | 13 |
+| `silent-after-clean-stream-closes-nothing` | population | replayed | 1327 | 6 |
+| `w9-close-path-does-not-drain-into-consumed` | population | replayed | 696 | 8 |
+| `rate-ceiling-closes-directly` | population | asserts over an earlier window of the same journal | 0 (its rows are inside the compared sequence, not inside its own watermark range) | 0 |
+| `retired-offender-closes-in-bounded-window` | population | replayed | 130 | 4 |
+| `offenders-never-touch-the-compliant-population` | population | asserts over an earlier window | 0 | 0 |
+| `tick-metrics-present` | population | no authority surface | 0 | 0 |
+| `server-disposes-cleanly` | population | no authority surface | 0 | 0 |
+| `same-delivery-pairing-on-the-wire` | recovery | replayed, own room journal | 663 | 6 |
+| `client-deadline-fires-with-zero-deliveries-and-the-record-recovers` | recovery | replayed, own room journal | 585 | 7 |
+| `episode-deadline-closes-the-client-at-4000ms` | recovery | replayed, own room journal | 17 | 4 |
+| `two-actual-rejoins-per-rolling-window-and-the-third-is-refused` | recovery | replayed, own room journal | 73 | 10 |
+| `pr14-gate-a-substrate` | probe | replayed from the bytes inside its own result | 194 | 20 |
+
+**Transport inputs are not credited to replay.** The artefact carries the split as data
+(`recordedNotRecomputed` / `recomputedByReplay`), because ADR-0003 §3.1 attributes eviction to the enqueue
+attempt — a property of the socket and the buffer, not of the transition function:
+
+| recorded, never recomputed | why |
+| --- | --- |
+| `retiredUnrepresented` | the queue-drain arithmetic is transport-side |
+| gap naming (`inputGapStart`/`inputGapEnd`) | a gap exists because a stamp was never dequeued |
+| close code and the closure window | the room owns both; the transition function owns neither |
+| `serverQueuedAtClose`, `consumedCountAtClose` | buffer occupancy at a wall-clock instant |
+| `effectCount`, `lastAppliedRequestId` | the committed identity is re-derived; the ledger's room-side fields are not |
+| the `resolvedThrough` watermark's arithmetic | it advances over *dequeued* contiguous stamps |
+
+| recomputed by replay, and therefore compared | source |
+| --- | --- |
+| disposition and reason per arrival | the same validated input on the same state (ADR-0002 §4) |
+| per-tick canonical state digest | the state reducer over the accepted inputs |
+| per-tick chain hash and the chain tip | the hash chain itself, `prevHash` forward |
+| watermark and throttle-latch transitions | the consequence mapping over recorded dispositions |
+| committed identity and its outcome | the committed record — GA-5a's idempotence limb |
+| lifecycle decision and epoch issue | the lifecycle rule under the same configuration |
+
+**Verdicts after R-1.**
+
+| criterion | was | now | why not further |
+| --- | --- | --- | --- |
+| **GA-13** evidence integrity | **FAIL** — nothing replayed | **PARTIAL** | every journal with an authority surface replays to identical dispositions, canonical state and tip, from retained bytes, in a fresh process, with the gate shown able to fail. It is not PASS because GA-13 says *every scenario*: four scenarios have no authority surface at all (configuration loading, telemetry presence, disposal) and two assert over a window of the journal their own watermark does not bound |
+| **AC-3d** replay equivalence | PASS (core) / **FAIL** (Phase 2) | **PASS** for the Phase 2 journals, with the transport half out of scope by construction | replay reproduces state and decisions; retirement, gaps and closure are §3.1 transport facts and are compared as *recorded*, never claimed as recomputed |
+| **AC-20** replay sufficiency | PASS (core) / **FAIL** (room journal) | **PASS** with two named limits | the journal is sufficient: nothing else was needed to reproduce tip equality. The named limits are ticks whose rows were produced after the seat closed (no authority decision to record) and the sink's own retention counter, which is reported (`dropped = 0` in all six, or no tip claim is made) |
+
+Two defects in this batch were found by CI and not locally, and they belong in the record: run
+[43404420159](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43404420159) failed at
+`2233d83` because the Phase 2 step re-ran PR-14 without an invocation id and wrote **unattributed** bytes
+over the contract suite's attributed result (`PROBE-INVOCATION-MISMATCH`) — the replay now reads the
+attributed file by an explicitly named `UDG_PR14_RESULT` path, and a contract assertion refuses the re-run
+reappearing — and because the replay wrote its verdict only to stderr, leaving an empty stdout log the
+capture refuses (`EVIDENCE-FILE-EMPTY`). Both are fixed on `9d1372a`.
+
+The Phase 2 required-file list moved **15 → 18**. Measured consequence, exactly as §7 E1 predicted:
+re-verifying the retained `cf349874` bundle with the verifier at `9d1372a` now returns **7 issues** — three
+`EVIDENCE-FILE-MISSING`, three `EVIDENCE-VECTORS-FILE-UNLISTED` for the journal artefacts that run did not
+produce, and one `EVIDENCE-COMMAND-MISSING` (`phase-2-journal-replay was never run`). The retained bytes are
+not at fault and were not touched; the plan in the tree moved, and AC-15's last half-sentence is
+plan-relative. That is the next section.
+
+### 9.3 H1 — historical bundles verified with the verifier of their own capture
+
+| bundle | its capture commit | verifier commit used | result |
+| --- | --- | --- | --- |
+| `ci-run-43010353106/UDG-003-2026-11-11T11-20-26-111Z-5d77c612` (accepted Phase 1) | `5d77c612…` | `5d77c612…` (detached worktree, frozen-lockfile install, `tools/checks` built there) | **PASS, 0 issues** |
+| `ci-run-43119389477/UDG-003-2026-11-11T23-28-12-047Z-17ade43b` (handoff) | `17ade43b…` | `17ade43b…` | **PASS, 0 issues** |
+| `ci-run-43263252706/UDG-003-2026-11-12T16-59-54-817Z-cf349874` (Phase 2 submission) | `cf34987…` | `cf34987…` | **PASS, 0 issues** |
+| same run's `UDG-001-…-cf349874` and `UDG-002-…-cf349874` | `cf34987…` | `cf34987…` | **PASS, 0 issues** each |
+| same `cf349874` UDG-003 bundle, verified from this batch's tree | `cf34987…` | `9d1372a…` | **FAIL, 7 issues** (§9.2) |
+| this batch's three bundles | `9d1372a…` | `9d1372a…` | **PASS, 0 issues** each |
+
+The reading AC-15's last half-sentence can actually carry, and which §7 E1 asked the owner to bless:
+**every retained bundle verifies against the capture plan of its own commit**, which is what "still verifies"
+means for a plan-relative gate. Read as "verifies against whatever the current tree demands", AC-15 has
+never been true for any task whose requirement list moved, and the accepted Phase 1 bundle failed it before
+this phase began. **OD-5 (H1) is offered on that basis. H2 — recording the plan's identity inside
+`report.json` and committing an append-only plan history so `verify` can be run outside a worktree — remains
+a proposal, unexercised.**
+
+### 9.4 Carried forward, unchanged, and not closed by this batch
+
+| item | state | note |
+| --- | --- | --- |
+| **GA-10** both `Δ == 1` halves | **FAIL** | M0 refuses every discrete command until routes exist (UDG-007), and §4.4 forbids Phase 2 from building them; §9 still demands the evidence. **OD-1 stands** |
+| **GA-11**, and with it **W-10**'s RTT/jitter/loss populations | **FAIL** | no impairment path exists; the inequalities are still evaluated on provisional values. **OD-2 stands**; R-4 (a seeded client-side socket-impairment population, no dependency-set change, loopback only, GA-11 FAIL → PARTIAL at best) is **still a proposal, unapproved and unstarted** |
+| GA-1, GA-5a, GA-5b, GA-7, GA-9 | PARTIAL | unchanged by this batch; the clauses each half depends on are named in §3 and none of them moved |
+| AC-1, AC-3c | FAIL | unchanged: no 200-tick 40 m reference trace, no displacement bound re-asserted over the abuse population |
+| AC-6 | PARTIAL | the measured stage sequence is still `F…X`; **OD-4 stands** |
+| GA-12 / PE-1…PE-5 | NOT PASSED | `dedupeClosureEnabled` remains `false` in hashed config; no strand-closure branch exists in emitted room code |
+| Gate A | **Not Run** | PR-14 remains substrate evidence with `stackCompatibility: not-established` and its "not the formal Gate A" claim, asserted in contract |
+| D4 | **undesignated** | nothing here provisions storage; the inventory chain is not extended |
+| R-5/H2, `tools/checks` plan-identity mechanism | proposal | needs an owner grant before any line of it is written |
+| Acceptance | owner's alone | nothing in this file records or implies it |

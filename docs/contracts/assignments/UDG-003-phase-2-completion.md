@@ -212,3 +212,58 @@ bundles of run 43263252706 verify PASS, 0 issues from the retained copies. Nothi
 edited to change a colour. Nothing in that file moves a status upward:
 dedupe-triggered closure stays disabled, D4 stays undesignated, Gate A stays Not Run, and acceptance
 stays with the owner.
+
+## 8. The repair batch of 2026-11-13 — what it closed, at which head, and what it left exactly as hard
+
+Phase 2 remains **In Review**, now carried at head `9d1372a91474d416cbd8c24d6d9849fa6388e936`; the
+submission at `cf34987445f737d21285b8b1f5d6b650f85873b5` and its retained bundle under
+`ci-run-43263252706/` are untouched (350 of 350 files re-hashed against the pre-batch snapshot). CI run
+[43408391171](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43408391171) is
+`success` on the new head, and its evidence is retained in a **new** run directory,
+`/workspace/udg-evidence/ci-run-43408391171/`, whose UDG-003 bundle
+`UDG-003-2026-11-13T10-28-48-335Z-9d1372a9` verifies **PASS, 0 issues** from the retained copy alongside
+UDG-001 and UDG-002 (`report.json`: `phase phase-2`, `measurementsScope phase-1`, 177 hashed files). The
+Phase 2 vector gate now reports **18** artefacts listed, hashed and attributable; Phase 1 still reports 15.
+
+**R-1 closed the replay gap** (§6 item 1 of the matrix, GA-13, AC-3d, AC-20). The room's journal is now
+replayed by a fresh process that starts no server and imports no `@colyseus/*` package, from bytes retained
+in the bundle, against the three comparisons GA-13 names: dispositions, canonical state, per-tick chain
+hashes through the tip. Six journals, six equal replays, six digest-blanked replays equal, six tampered
+prologues refused, zero integrity issues, three negative controls per journal (a 1.5× stepper, an edited
+disposition, a changed tip hash) so the equal sign is demonstrably falsifiable. Six of sixteen scenarios are
+**not** replayed and are named with their reason: four have no authority surface at all (configuration
+loading, telemetry, disposal) and two assert over a window their own watermark does not bound. That is why
+**GA-13 is PARTIAL, not PASS** — the criterion says *every scenario*, and this record is not going to spend
+a status on a denominator it quietly shrank. Transport-side facts (`retiredUnrepresented`, gap naming, close
+code and window, `serverQueuedAtClose`) are recorded, never claimed as recomputed; §3.1 attributes eviction
+to the enqueue attempt, and crediting the authority with the message-loss model is the conflation that clause
+exists to prevent.
+
+**R-2 (option A) and R-3 closed the two record defects** (D1, D2) as corrections, not as re-writes: the
+Phase 1 measurement file keeps its `phase-1` label and the tool now gates the *pair* of labels
+(`report.json.measurementsScope`), and `Room.setFixedTimestep` has an API-map row stating — with the pinned
+declaration and four measured tick rates — that its second argument is a rate in Hz.
+
+**H1 ran**, and it is the honest shape of AC-15's last half-sentence: historical bundles were verified with
+the verifier built from **their own capture commit** (worktrees at `5d77c612`, `17ade43b`, `cf34987`), all
+**PASS, 0 issues**, while the same `cf349874` bundle verified from this batch's tree returns **7 issues** —
+three files missing, three unlisted, one command never run — because the Phase 2 required-file list moved
+15 → 18. The plan moved; the retained bytes did not. **OD-5 is offered as (a): record the capture-plan
+reading.** **H2 — a committed plan identity so `verify` need not be run from a worktree — is still a
+proposal, and no line of it has been written.**
+
+**What this batch did not touch, deliberately:** both GA-10 `Δ == 1` halves remain **FAIL** (OD-1);
+GA-11 remains **FAIL** and W-10's RTT/jitter/loss populations remain unproduced (OD-2) — **R-4**, the seeded
+client-side socket-impairment population, is approved as a proposal in the matrix and **not started**; GA-1,
+GA-5a/5b, GA-7, GA-9 remain PARTIAL; AC-1 and AC-3c remain FAIL; AC-6 remains PARTIAL (OD-4); `dedupeClosureEnabled`
+stays `false` in hashed config; **D4 stays undesignated**; **Gate A stays Not Run**; `stackCompatibility`
+stays **not-established**; no dependency was added (`pnpm-lock.yaml` is unchanged across this batch) and
+nothing under `authority/**` was edited — the prologue R-1 needed was already public inside the accepted
+core, which is the only reason the room could hand it over at all.
+
+Two defects in the batch were caught by CI rather than locally, and they are recorded because a submission
+that mentions only its own green is worth less than one that mentions its own red: the Phase 2 step re-ran
+PR-14 without an invocation id and overwrote attributed probe bytes (`PROBE-INVOCATION-MISMATCH`, run
+43404420159), and the replay's verdict went only to stderr, leaving an empty stdout log the capture refuses
+(`EVIDENCE-FILE-EMPTY`). Both fixed on `9d1372a`, both now pinned by contract assertions so they cannot
+quietly come back.
