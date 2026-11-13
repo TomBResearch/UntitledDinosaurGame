@@ -1241,3 +1241,48 @@ carries `additionalJournals: [burst: 58 rows]`, and the disposal evidence lists 
 Local, at this commit: typecheck, lint, boundaries, fixtures, dependencies, checksums green; full suite
 **28 files / 568 tests**; contracts UDG-003 105/105; runtime suite 10/10; population 14/14; recovery 4/4;
 PR-14 27 checks; replay 7/7 journals equal.
+
+---
+
+## 15. The amendment and test plan for the remaining decisions (proposal, unapplied)
+
+§14 answered OD-1…OD-4 with a recommendation each. The owner then gave a decision for every one of them and
+asked for the amendment text and the smallest test batch those decisions imply. That document is
+**[UDG-003-phase-2-amendment-and-test-plan.md](UDG-003-phase-2-amendment-and-test-plan.md)**, and it is a
+**proposal**: at the time of writing no governing clause has been edited, no ledgered digest has moved, and not
+one line of P-1…P-4 has been written. Phase 2 remains In Review, Gate A Not Run, dedupe closure disabled, D4
+open, AC-15 PASS under H1 with H2 deferred.
+
+What it adds to the record, in one line each:
+
+* **OD-1** — the dependency chain is the argument, not the effort: UDG-SPIKE-001 (Gate A) requires **UDG-003 and
+  UDG-004 only**, UDG-007 requires UDG-SPIKE-002 and P08, and UDG-008 explicitly permits a navigation test
+  double until 007 is Verified. GA-10 as written therefore asks Gate A for something its own prerequisites
+  cannot supply; the plan splits the row into GA-10 / GA-10a / GA-10b and names the three places the two
+  `Δ == 1` halves become required.
+* **OD-2** — the impairment layer's seam is measured on the pinned SDK (`Room` creates `connection`, assigns
+  `events.onmessage`, `Connection` holds `transport`), and a proxy would need `ws`, which is **not resolvable**
+  from `apps/server` under pnpm's strict layout — so the wrapper is the only route that does not change the
+  dependency set. The plan records that **network-layer loss is not producible** on the pinned hosted runner and
+  specifies the head-of-line-blocking discriminator that keeps a withheld delivery from being reported as TCP
+  packet loss.
+* **OD-3 / GA-13** — AC-3e's table is buildable from the four sources already retained, and the plan records the
+  two facts it exposes: the authority queue's high water never exceeded **1** while the transport-side depth
+  reached **8** (different queues, and the current headline does not label them), and `discreteHighWater` is
+  **0** in every retained room, which is the evidence for mapping the discrete limits to UDG-007. The approved
+  retired-offender rule becomes two explicit verdicts — replay and transport — with **four** items named as
+  unverified, including the per-stamp identity of the thirty evicted frames and the temptation to read
+  `consumedCountAtClose == retiredUnrepresented` as an acknowledgement over retired frames.
+* **OD-4** — `M` and `P` are quoted from Phase 1 §0.1 (`M` maps canonical state to the replica, `P` publishes
+  results, metrics, flush, and both are Phase 2 work), located in `state/map-player.ts` and the room's
+  publish-in-the-consuming-tick at `statePatchIntervalMs`, split honestly at `P`'s results half, and given six
+  assertions each with a failing control. AC-6 stays **PARTIAL** until the batch runs *and* the owner rules on
+  the definition.
+* **OD-5** — nothing owed: AC-15 PASS under the carried-forward H1 reading, H2 deferred, and the plan's only
+  `tools/checks` edit (artefact list, capture order) is the change §8.2.1 already scopes.
+
+The batch is **P-1…P-5**: three artefacts (24 → **27**), two new CI steps, zero production source, zero
+dependency and zero hash change, ordered P-3 → P-1 → P-2 → P-4 because P-4's decisive control needs P-2's
+withhold. What it does not close is listed in the plan and is not small: GA-10a/b (UDG-007), GA-1's production
+envelope and GA-11's inequalities (Gate A), AC-3b's discrete half (UDG-007), GA-12 and PE-1…PE-5 (NOT PASSED,
+reported).

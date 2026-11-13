@@ -485,3 +485,37 @@ Gate A stays **Not Run**; GA-10 and GA-11 stay FAIL; AC-6 stays PARTIAL; GA-12 a
 (reported). Evidence work only, in `tests/**`: no production source changed in this sitting. Local: full suite
 28 files / 568 tests, contracts UDG-003 105/105, runtime 10/10, population 14/14, recovery 4/4, PR-14 27
 checks, replay 7/7. Whole-store digest before the download against after: 0 changed, 0 removed, 363 added.
+
+## 16. Decision record and test plan for what remains (2026-11-13, fifth sitting) — proposal only
+
+Phase 2 remains **In Review**. The owner answered OD-1…OD-5 and authorised the decision record and test plan,
+not the implementation. The record is
+**[UDG-003-phase-2-amendment-and-test-plan.md](UDG-003-phase-2-amendment-and-test-plan.md)**: proposed clause
+text for ADR-0003 §5 (GA-10 split into GA-10 / GA-10a / GA-10b, the Gate A pass paragraph amended so Gate A can
+run at its own prerequisites, §5's preamble and the GA-11 row scoped to named impairment sources), for
+UDG-007's acceptance section (both `Δ == 1` halves plus the discrete queue limits, which Phase 2 measured as
+`discreteHighWater 0` because no discrete traffic exists), for UDG-SPIKE-001's Gate A acceptance section (the
+two inequalities evaluated on measured values), for assignment W-10 (the word "loss" scoped to what the harness
+can honestly do), for assignment §9, and for AC-6 if the owner moves `M`/`P` rather than accepting the room's
+mapping as those stages.
+
+**Nothing in it has been applied.** No governing file has been edited, no ledgered digest has moved, and no P-batch
+test line exists. Two ledgered digests (`docs/adr/0003-…-policy.md`, `docs/contracts/UDG-007.md`,
+`docs/contracts/UDG-SPIKE-001.md`) will move when — and only when — the owner approves and applies them, and the
+assignment edit at the `17ade43b`-pinned version must be disclosed for the same reason §8.2.1's was.
+
+Facts the sitting measured rather than assumed, all recorded in the plan: the Gate A prerequisite chain
+(UDG-SPIKE-001 requires UDG-003 and UDG-004 only) is what makes GA-10 un-runnable as written; `ws` is not
+resolvable from `apps/server` under the pinned strict layout, so an impairment proxy would be a dependency
+change and a per-seat wrapper around the SDK's own `connection.transport` / `connection.events` is not; network
+loss needs `NET_ADMIN` the hosted runner does not grant, so the harness layer's drops must be labelled as
+withheld deliveries with the head-of-line-blocking discriminator recorded; the authority queue's high water (max
+**1**) and the transport queue's depth (max **8**) are different queues; `P`'s "results" half has nothing to
+publish because every retained seat reports `effectCount: 0`.
+
+**Batch offered for approval, in order P-3 → P-1 → P-2 → P-4** (+ P-5 records): artefacts 24 → **27**, two new
+CI capture steps writing their summaries to **stdout**, contract-test count 24 → 27, and no change to
+production source, `authority/**`, the dependency set, the protocol, `configHash`
+`2743a9a047ce7264833af88e8bd2f8aeea970a45e306a348e1fe0654191bec7a`, `dedupeClosureEnabled: false`, Gate A
+**Not Run**, D4 undesignated, GA-10 and GA-11 FAIL, GA-12 and PE-1…PE-5 NOT PASSED, AC-6 PARTIAL. Phase 2
+acceptance stays with the owner.
