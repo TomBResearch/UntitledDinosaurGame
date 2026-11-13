@@ -436,3 +436,52 @@ manifest unchanged; no protocol surface change; `configHash` stays
 or transition code changed. `dedupeClosureEnabled` stays `false`; GA-10 stays FAIL; R-4 and H2 remain
 unimplemented proposals; OD-1…OD-5, OD-7 and OD-10 remain the owner's to decide. OD-6, OD-8 and OD-9 are
 closed.
+
+## 15. OD-10 applied (2026-11-13, fourth sitting) — coverage rule, gaps reported, no promotion
+
+Phase 2 remains **In Review**, and the owner's acceptance of the T-0b…T-4 batch (`cfc49664`, CI 43458461044)
+came with one ruling attached and executed here: **OD-10**. Implementation head
+`a9116e0359e77905a0712702f249a561e7954d5e`, CI
+[43481796058](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43481796058) **success**,
+retained at `/workspace/udg-evidence/ci-run-43481796058/UDG-003-2026-11-13T18-30-09-607Z-a9116e03`
+(`report.json` sha256 `cf0adb64bd38f8b404935fef31a7dd3386c90105e033ef515ea0797a34a869e4`,
+manifest sha256 `a735a96d8129b3717667885133f0b19903cbb0296d53995dded97eab6641b3a7`, 187 hashed files, all three
+bundles of the run `PASS, 0 issues`, phase-2 gate 24 artefacts). No artefact-list change: the burst room's
+journal went into `journal-population.json` as `additionalJournals`, not into a twenty-fifth file.
+
+**What the rule required, and what was done.** Every authority-bearing scenario replayed from retained inputs
+with its seat × tick × stamp × disposition window **recomputed** from the rows by the replay rather than
+trusted from the producer; every no-authority scenario given scenario-specific evidence that it entered no
+authority path and produced no authority state or effects, kept visible in the census and counted as **zero**
+replays. Result: 7 journals replayed, 19 scenarios accounted for, 15 authority (8 with a verified window, 2
+with a named gap, 5 from single-scenario journals), 4 no-authority (4 verified, 0 without evidence,
+`noAuthorityCountedAsReplays: 0`), `falseClaims: []`.
+
+**What applying it found.** Three things the previous census could not see: staging row ranges are not
+attribution (the retiring offender's frames are journalled in the *next* scenario's range); alias strings are
+per-room counters and collide across rooms, so a window without its journal silently joins two entities; and
+the `B = 8` burst was being counted as "replayed in the room journal" while its own room's journal was not
+retained at all. All three are now impossible to overlook: windows carry their journal, ranges cross-check
+with the disagreement counted, and the burst replays from its own 58 rows.
+
+**Gaps reported, not promoted.** `retired-offender-closes-in-bounded-window` cannot be replay-attributed
+because an evicted frame is retired before it is ever represented, so there is no row for it;
+`offenders-never-touch-the-compliant-population` has no frame of its own in its window by construction and is
+verified for the absence of refusals and closures instead. **GA-13 stays PARTIAL** on the first of those:
+fourteen of fifteen authority scenarios are attributed exactly, and the owner, not this batch, decides whether
+"a frame never represented has nothing to replay" completes the criterion.
+
+**A gap is not a false claim.** The artefact fails on bytes that contradict their own summary and reports gaps
+as gaps, because a single red word would hide which short is which.
+
+**Still pending after this sitting:** implementation scope generally, dedupe-triggered closure, D4, and Phase 2
+acceptance — none of which this sitting touched. **OD-6, OD-8, OD-9, OD-10** are closed; **OD-1…OD-5** are
+answered in matrix §13–§14 with a recommendation each and await the owner's ruling.
+
+**Invariants.** `apps/server/src/authority/**` unchanged since `96d3df6`; `pnpm-lock.yaml` and the package
+manifests unchanged; no protocol change; `configHash` stays
+`2743a9a047ce7264833af88e8bd2f8aeea970a45e306a348e1fe0654191bec7a`; `dedupeClosureEnabled` stays `false`;
+Gate A stays **Not Run**; GA-10 and GA-11 stay FAIL; AC-6 stays PARTIAL; GA-12 and PE-1…PE-5 stay NOT PASSED
+(reported). Evidence work only, in `tests/**`: no production source changed in this sitting. Local: full suite
+28 files / 568 tests, contracts UDG-003 105/105, runtime 10/10, population 14/14, recovery 4/4, PR-14 27
+checks, replay 7/7. Whole-store digest before the download against after: 0 changed, 0 removed, 363 added.

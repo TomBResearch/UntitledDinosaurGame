@@ -1,5 +1,11 @@
 # UDG-003 Phase 2 — the §9 evidence matrix, and the two reconciliations it forces
 
+> **2026-11-13, later sittings**: §10 records T-0 and the H1 sweep, §11 records T-0b and T-1…T-4 accepted at
+> `cfc49664` (CI 43458461044), §12 applies the owner's **OD-10** coverage rule at `a9116e03` (CI 43481796058),
+> §13 states what still remains of **OD-5** after the H1 carry-forward, and §14 answers **OD-1…OD-4** with the
+> governing clause, the missing evidence and a recommendation for each. §1–§8 below stay as written: they are
+> the record of the `cf34987` submission, and nothing later silently re-cuts them.
+>
 > **2026-11-13**: §9 records the approved repair batch at `9d1372a91474d416cbd8c24d6d9849fa6388e936` —
 > journal replay for GA-13/AC-3d/AC-20, the R-2 and R-3 record corrections, and the H1 historical
 > verification. §1–§8 below stay as written: they are the record of the `cf34987` submission, and this batch
@@ -1066,3 +1072,172 @@ Measured, from the retained copies and this tree:
 * **Nothing earlier moved.** A full-store digest of `/workspace/udg-evidence/` before the download (7 808
   files) against after: **0 changed, 0 removed**, 363 files added, all of them inside the new
   `ci-run-43458461044/` directory.
+
+## 12. OD-10 applied — the coverage rule, the gaps it found, and what it refused to promote
+
+> Owner ruling, 2026-11-13, at the acceptance of the T-0b…T-4 batch (`cfc49664`, CI 43458461044):
+> *"Replay every authority-bearing scenario from retained inputs and verify exact seat, tick, stamp and
+> disposition attribution for shared-journal windows. For each no-authority scenario, show the
+> scenario-specific evidence that the authority path was never entered and that no authority state or effects
+> were produced. Keep those cases visible in the census without counting them as replays. Apply this rule to
+> the 19 scenarios and report any remaining evidence gap."*
+>
+> Implementation ``a9116e0359e77905a0712702f249a561e7954d5e``, CI [43481796058](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43481796058)
+> `**success**`, retained bundle ``/workspace/udg-evidence/ci-run-43481796058/UDG-003-2026-11-13T18-30-09-607Z-a9116e03``. Phase 2 remains **In Review**; no artefact-list change — the
+> list stays at **24**, because the extra journal this rule needed went into an artefact the list already
+> names rather than into a twenty-fifth file.
+
+### 12.1 The rule, as implemented
+
+| class | count | what the artefact now does |
+| --- | --- | --- |
+| authority-bearing | **15** | the room journal is replayed in a fresh process, **and** the scenario's own seat × tick window is re-derived from the retained rows: stamps, dispositions, and the accepted-tick ↔ consumed-observation interlock. A recorded value the rows contradict is a `falseClaim` and fails the artefact. |
+| no-authority | **4** | **not** replayed, **never** counted as a replay, and each carries checks that could have failed *it* (§12.4). Fields the retained bytes cannot re-derive are listed as `recordedOnly` instead of being counted as verified. |
+
+Journals replayed: **7** — the population room, the four recovery rooms, PR-14's room, and the `B = 8` burst
+room, whose journal is now retained inside `journal-population.json` under `additionalJournals`.
+
+### 12.2 Three things the rule found, none of which was visible from the previous census
+
+* **A staging row range is not an attribution.** The retiring offender's client frames are journalled *after*
+  it records its verdict, so they land inside the **following** scenario's watermark range. The ranges are
+  still published — now as a cross-check with the disagreement counted (`stagingRangeCoversWindow`,
+  `rowsOutsideStagingRange`) rather than as the answer.
+* **Alias strings are per-room counters, and they collide.** `client-01` names a seat of the shared room *and*
+  the seat of the burst room. Measured directly: an early version of the window helper that ignored which
+  journal it was reading reported **6 of 8** burst stamps and joined two different entities into one "seat".
+  A window is therefore `(journal, aliases, tick range)` or it is nothing, and the artefact says so in
+  `windowRule`.
+* **`B = 8` was counted as replayed on the strength of a room it never sat in.** The burst seat joins its own
+  room (its identity and configuration are its own), and that room's journal was never retained. The scenario
+  is now replayed from its own bytes: 8 frames, 8 stamps, ticks 2..9, one journal, equal on all three
+  comparisons.
+
+### 12.3 The remaining evidence gap, stated as a gap
+
+| scenario | why its own frames cannot be replayed | what is evidenced instead |
+| --- | --- | --- |
+| `retired-offender-closes-in-bounded-window` | a 64-frame burst into a 32-frame buffer retires the evicted frames **before they are represented**: they never reach the accessor, so no `observation` row exists for them and no tick consumed them. There is nothing in the journal to replay — the eviction is precisely the scenario. | the room's own seat evidence (`retiredUnrepresented`) and `close-path-accounting.json`, reported as recorded inputs the replay names rather than recomputes; the window around the closure period is still recomputed and still matches |
+| `offenders-never-touch-the-compliant-population` | the compliant seats had stopped streaming before the offenders arrived, so the window its claim needs contains no client frame of theirs **by construction** | the window is verified for what it can show — no refusal and no closure naming those aliases across the offending period — and the "every frame they did send was consumed" half is carried by `compliant-control-population`'s window (180 stamps, all consumed) |
+
+The first is a limit of the substrate, not of the evidence plan, and **GA-13 stays PARTIAL** on its account:
+fourteen of fifteen authority scenarios are now replayed with exact attribution, and the fifteenth cannot be.
+Converting it to PASS needs an owner ruling that a frame which was never represented has nothing to replay —
+which is a defensible reading of "every scenario replays" — or a probe that retires frames along a path that
+journals them. This batch does not make that ruling and does not reclassify the row.
+
+### 12.4 The no-authority four, each with the check that could have failed it
+
+| scenario | recomputed from the retained rows | named as recorded-only |
+| --- | --- | --- |
+| `config-smoke-defaults-load-unbounded-and-the-room-refuses-to-boot` | no room existed (`liveRoomsAtCheck 0`); no journal row of any kind existed (0); `defaultConfigHash 2743a9a0…` ≠ `operatorConfigHash`; the retained journal's first join came later | the `loadServerConfig()` return values at the moment of the load |
+| `unbounded-room-refuses-the-seat` | refusal named `region-bounds-missing`; `clientFramesSent 0`; journalled rows, client frames and consumed ticks identical before and after the attempt; **no row in any retained journal names the refused session** | the client-visible error text |
+| `tick-metrics-present` | the scenario sent no frame; no `client-payload` observation inside its window; no tick in its window consumed input; no alias first appears there | the telemetry summary itself, which is a read and not a decision |
+| `server-disposes-cleanly` | shutdown appended no client frame and no authority decision; **no live room survived**; and the 56 rows shutdown *did* append are listed by type (`event:leave`, `observation:control`, `event:expiry`, `state`, `meta`) rather than tidied out of the artefact | the appended rows themselves are not retained: the journal snapshot is the last word before close |
+
+Two honest wrinkles that the table does not hide: `observation:control … consumed` rows appear in the
+shutdown list — they are `server-lifecycle` control observations (a leave being represented), not
+client-payload frames, and the check distinguishes origin, not the word "observation"; and "the load happened
+before any room existed" is a fact about a moment no later reader can revisit, so the strongest available
+re-check is that the retained journal's first join postdates it.
+
+### 12.5 Census, and the verdicts the rule moves
+
+| | before OD-10 | after |
+| --- | --- | --- |
+| scenarios accounted for | 19 | **19** |
+| authority-bearing | 15 (12 "replayed in room journal", 3 "asserts over an earlier window") | **15 = 8 + 2 + 5**: **8** carry a recomputed, verified window; **2** carry a named gap (§12.3) while their room is still replayed equal; **5** replay from a journal that belongs to one scenario alone (4 recovery rooms + PR-14) |
+| no-authority | 4, flagged `noAuthoritySurface`, no evidence | **4 verified by scenario-specific checks, 0 counted as replays, 0 without evidence** |
+| journals replayed | 6 | **7** |
+| false claims | not a concept | **0** (`falseClaims: []`) |
+| **GA-13** | PARTIAL | **PARTIAL** — one scenario unreplayable by construction (§12.3), the rest attributed exactly. OD-10 answered the *coverage* question; it did not manufacture the missing bytes. |
+| AC-3d, AC-20 | PASS | PASS (unchanged: 7/7 journals equal on dispositions, canonical state and chain tip; blanked-digest tip equal; tampered prologue refused; negative controls bite) |
+
+Nothing else moved. GA-10 stays FAIL, GA-11/W-10 stay FAIL, AC-6 stays PARTIAL, GA-12 and PE-1…PE-5 stay
+NOT PASSED (reported), Gate A stays **Not Run**, D4 stays undesignated, `dedupeClosureEnabled` stays `false`.
+
+### 12.6 The census's own arithmetic, kept honest
+
+`noAuthorityCountedAsReplays` is a field that can only ever read `0`, and it is in the artefact precisely
+because it can only ever read `0`: the temptation OD-10 exists to remove is the one where a run of 15 replays
+plus 4 non-replays is reported as "19/19 covered". It is 15 replays and 4 negatively-evidenced cases, and the
+artefact now refuses to add them together.
+
+## 13. OD-5 after the H1 carry-forward — the clause, and the one decision left
+
+The clause AC-15 actually is, verbatim, from the acceptance-criteria table the Phase 2 assignment inherits
+(`docs/contracts/assignments/UDG-003-readiness-proposal.md`, AC-15):
+
+> | AC-15 | root commands green locally **and** in CI on the pushed submitted commit; both bundles verify
+> `PASS`; the UDG-001 and UDG-002 suites pass at the new head and every retained bundle still verifies (§5) |
+
+and the "(§5)" it cites is the rule it was drawn from (`docs/contracts/assignments/UDG-003-phase-0.md` §5,
+rule 6):
+
+> **Existing regressions stay green.** UDG-001 and UDG-002 remain Verified: their suites pass at the new head,
+> **every retained bundle still verifies**, and no recorded byte or digest is rewritten.
+
+**What the owner's H1 approval decides, and what it does not.** H1 decides the *reading of "still verifies"*:
+a bundle verifies with the verifier of its own capture commit, because `evidence verify` is plan-relative — it
+checks a bundle against the plan in the tree it is run from. Under that reading AC-15 is **PASS**, measured
+over 151 bundles (§10.5).
+
+**What still refers to a separate capture-plan interpretation.** Nothing about the verdict. The residue is a
+question about the *tool*, and it is OD-5's option (b), recorded as **H2** and still unimplemented: AC-15's
+half-clause is a standing property over a store, and as long as the plan lives only in the working tree, the
+property is not machine-checkable from a single checkout — a plain `evidence verify` over an older bundle from
+a newer tree returns FAIL, measured at **14 issues** for `ci-run-43435990922` in §11.10 (6 `EVIDENCE-FILE-MISSING`,
+6 `EVIDENCE-VECTORS-FILE-UNLISTED`, 2 `EVIDENCE-COMMAND-MISSING`). H2 would record the capture plan's identity
+inside the bundle and have `verify` consult it, so "still verifies" is checkable without knowing which commit
+to stand on.
+
+So the decision that remains is exactly one: **adopt H2 or accept that the store's integrity property is
+verified by method rather than by tool.** It needs `tools/checks/**`, which is implementation scope, which the
+owner has kept pending. AC-15's status does not wait on it. Two clerical points travel with it, and neither is
+a verdict: AC-15 says "both bundles" from the two-task era and this phase publishes three; and the H1 reading
+is presently recorded only in this matrix and the completion record — if the owner wants it to bind future
+phases, it belongs in the readiness proposal's AC-15 row, which is a contract edit and therefore also the
+owner's to make.
+
+## 14. OD-1 … OD-4 — decision table, as requested
+
+Every row cites the governing clause, names the missing evidence, and recommends one of two things: finish it
+inside Phase 2, or amend the assignment to name the later task that owns it.
+
+| decision | governing clause, verbatim where it matters | the evidence that is missing | recommendation |
+| --- | --- | --- | --- |
+| **OD-1** GA-10's two `Δ == 1` halves | ADR-0003 §5 GA-10: *"effect ledger `Δ == 1` per committed identity, `Δ == 0` for an abandoned identity, `Δ == 1` for a deliberate reissue under a new identity"*, failing on *"an epoch change accepted as the proof"*. §9: *"A criterion with a missing, unverifiable or non-replayable artefact is FAIL, not 'not run.'"* §4.4: `apps/server/src/authority/**`, navigation and assets are *"not granted … UDG-005/006/007"* | Both halves, not one. **Committed-identity `Δ == 1`:** no identity can commit — every runtime `effectCount` is `0` and PR-14 counts `refused:navigation 1` because no route exists (`measurements/UDG-003.json`: `NAVIGATION_BUSY`, `pathCandidates 0`). **Deliberate-reissue-under-new-identity `Δ == 1`:** same substrate, same refusal; the reissue half additionally needs a committable identity to reissue *as*, which is a UDG-007 route/entity, not a harness trick. The `Δ == 0` halves are measured and pass. | **Amend, do not finish.** The enabling work is named by §4.4 as UDG-005/006/007, and Phase 2 is forbidden both from building it and from touching `authority/**` to fake it. Amend §9 to read *"GA-10 is measured to the limit of the substrate in Phase 2; the `Δ == 1` halves are Gate A rows owned by UDG-007's navigation intake, and Phase 2's obligation is the `Δ == 0` halves plus the disclosed refusal"* — and keep GA-10 **FAIL** in this phase's matrix until that amendment exists. What must not happen is a PASS obtained by accepting an epoch change as the proof, which is the criterion's own named failure. |
+| **OD-2** GA-11 / W-10 | ADR-0003 §5 GA-11: *"the jitter/overrun and round-trip populations are recorded; `B + J·λ + stall ≤ bufferMaxSize` is evaluated on measured values; `clientSnapshotDeadlineMs ≥ 4 × patch interval + 2 × measured p99 RTT` is evaluated; production values recorded beside the provisional ones"*, failing on *"leaving either inequality unevaluated"*. **D-P2-5**: *"formal execution in UDG-SPIKE-001; Phase 2 reports measured criteria and keeps Gate A Not Run"*. §5 rule 7: *"Production tuning remains Gate A's job (GA-11)"*. **W-10**: *"Adversarial populations: RTT, jitter, loss, mid-tick arrival, reconnect, offender runs and the compliant control population GA-12 requires"* | Distinguish the two things the same word covers. **Phase 2 owes, and does not have:** the *populations* W-10 names — a **round-trip (RTT) distribution**, a **jitter** population, a **loss** population, each recorded as measured data, plus per-tick arrival-phase records under those impairments. Current state: offender runs ✓, compliant controls ✓, reconnect ✓, mid-tick arrival ✓ at the authority boundary, **RTT ✗, jitter ✗, loss ✗** — the pinned stack offers loopback only, with no impairment path. **Gate A owns, and Phase 2 must not fake:** evaluating the two inequalities on those measured values and recording production numbers beside provisional ones. | **Split it, in the assignment, in two sentences.** (1) Keep the *populations* in Phase 2 (they are W-10's words) as a bounded item: a test-only impairment harness on the loopback transport that yields an RTT/jitter/loss population with no dependency change — measurable, and it does not touch `authority/**` or the pins. (2) Amend §9/GA-11 to state that **evaluating** the inequalities and choosing production values is UDG-SPIKE-001's, so GA-11 stops being simultaneously assigned and forbidden. Until (1) lands, W-10 is reported **incomplete** and GA-11 **FAIL** — which is what §5's preamble requires, not a pessimism. If the owner would rather not extend Phase 2 at all, then (1) must move by amendment too, and W-10's three deliverables must be named in UDG-SPIKE-001 rather than left as a clause conflict. |
+| **OD-3** the no-clause gaps | §5 preamble: *"an item not completed is reported incomplete, with the reason"*; §9's FAIL rule; **no clause** is cited by any of these — none needs a client, a pin change or a dependency | After the repair batches, §6's list is down to: **(a)** AC-3b's discrete half — `buffer-depth.csv` reports client-frame depth (peak 8 of 32) and per-seat rows, but no high-water marks for *queued discrete operations* (64/room, 8/entity), because no discrete traffic is sent on this substrate (the same `NAVIGATION_BUSY` wall as OD-1); **(b)** AC-3e's reporting shape — reasons are journalled, but `abuse-results.json` has no per-reason drop/refusal table (`overflow`, `superseded`, `epoch`, `structural`, `rateLimited`) and no `rateLimited` label, and `tick-metrics.json` is a summary rather than AC-3e's per-tick rows; **(c)** GA-1's remaining half — eviction consequences under *production* envelope values, which is GA-11's population; **(d)** the OD-10 gap at §12.3 (`retired-offender` is not replay-attributable because eviction precedes representation); **(e)** AC-11's api-map accuracy row beyond the R-3 correction | **Finish (b) in Phase 2; amend for (a), (c) and (d); (e) is already closed.** (b) is pure reporting shape over data the room already produces — a per-reason table and per-tick rows from `metricsSamples`, no new substrate, and it is the item a reviewer reaches for when a refusal needs a name. (a) and (c) are gated on discrete traffic and measured production values, i.e. on the same UDG-007/Gate A dependencies as OD-1 and OD-2, and should be *named* there by amendment instead of sitting in Phase 2 as a permanent FAIL. (d) is a substrate property the owner can rule on in one line (§12.3). (e) was closed by R-3; it stays listed here only so the closure is visible. |
+| **OD-4** AC-6's `M`/`P` stages | AC-6 (readiness proposal): *"the stage sequence F, L, Q, S, A, C, R, X, **M, P** holds for every executed 5.5 case and every recorded eligibility-changing arrival permutation"* | The measured stage order on executed ticks is `[F, L, Q, S, A, C, R, X]` (`measurements/UDG-003.json` `stageOrder`, plus Phase 1's stage-order vectors). **`M` and `P` are not authority stages in this build at all**: replica-side application and publication happen inside the transport's own schema-patch pipeline, and **no artefact asserts that pipeline as satisfying `M`/`P`** — so the missing evidence is not a longer run, it is a definition the record has never connected to a measurement. Phase 1 disclosed their absence while its own threshold prose expected them "as Phase 2", and no Phase 2 work item names them. | **Rule first, then one of two small actions — this one is not a dependency question.** If the owner accepts the transport pipeline as `M`/`P`, Phase 2 can finish it: an assertion over the schema-patch path in the existing harness, test-only, no `authority/**` change. If the owner does not, **amend AC-6** to name the later task that owns the replica/publish stage (UDG-008's client side is the honest candidate) and stop scoring Phase 2 against a stage its own §4.4 forbids it from building. What must not happen is AC-6 being carried as PASS on the strength of a pipeline nobody asserted. |
+
+### 14.1 What these four recommendations have in common
+
+All four missing-evidence sets reduce to one substrate fact and one scope fact. The substrate fact is that no
+discrete effect can commit on M0 (OD-1, OD-4, and half of OD-3); the scope fact is that the *measurement* of
+production behaviour belongs to Gate A while the *populations* were assigned to Phase 2 (OD-2, and the other
+half of OD-3). Neither is resolved by more evidence work in Phase 2 beyond the one item recommended for
+finishing (AC-3e's reporting shape), which is why the recommendation for the rest is an amendment naming a
+later task rather than a promise in this phase's record.
+
+### 12.7 Measured facts of the run that applied the rule
+
+Retained bundle `UDG-003-2026-11-13T18-30-09-607Z-a9116e03` — `report.json` sha256
+`cf0adb64bd38f8b404935fef31a7dd3386c90105e033ef515ea0797a34a869e4` (`status PASS`, `workingTreeDirty false`,
+187 hashed files), `vectors-phase-2/vectors-manifest.json` sha256
+`a735a96d8129b3717667885133f0b19903cbb0296d53995dded97eab6641b3a7`. All three bundles of the run verify
+`PASS (0 issues)` from the retained copies; the phase-2 gate reads `PASS phase-2 vectors: 24 artefact(s) listed,
+hashed and attributable` and phase 1 still reads 15. The whole-store digest before the download against after:
+**0 changed, 0 removed, 363 added**, all inside `ci-run-43481796058/`.
+
+From the bundle's own `journal-replay.json`: `verdict pass`, `falseClaims []`, **7 journals replayed**;
+`authorityScenarios 15`, `authorityWindowsVerified 8`, `authorityWindowGaps` naming the two of §12.3,
+`noAuthorityScenarios 4`, `noAuthorityVerified 4`, `noAuthorityWithoutEvidence []`,
+`noAuthorityCountedAsReplays 0`, `scenariosAccountedFor 19`. Window ranges as recomputed: controls 6..65
+(180 frames consumed), wrong-epoch 71..80, pressure 91..250 (160 frames), silent 260..265, w9 and rate-ceiling
+329..333, displacement 6..333 (357 frames), burst 2..9 in the **burst** journal (8 frames). `journal-population.json`
+carries `additionalJournals: [burst: 58 rows]`, and the disposal evidence lists `rowsAppendedByShutdown 56` by type.
+
+Local, at this commit: typecheck, lint, boundaries, fixtures, dependencies, checksums green; full suite
+**28 files / 568 tests**; contracts UDG-003 105/105; runtime suite 10/10; population 14/14; recovery 4/4;
+PR-14 27 checks; replay 7/7 journals equal.
