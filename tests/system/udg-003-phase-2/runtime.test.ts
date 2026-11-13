@@ -111,6 +111,127 @@ describe('UDG-003 Phase 2 runtime — the population and the recovery scenarios'
   }, 300_000);
 });
 
+  // ── T-0b … T-4: the repair batch's own assertions ─────────────────────────────────────────────
+  it('T-0b: every recovery seat waits for its epoch binding and its accepted input is asserted', () => {
+    const harness = JSON.parse(readFileSync(join(OUT_DIR, 'recovery-harness.json'), 'utf8')) as {
+      verdict: string;
+      scenarios: { name: string; observed: Record<string, unknown> }[];
+    };
+    expect(harness.verdict).toBe('pass');
+    const byName = new Map(harness.scenarios.map((entry) => [entry.name, entry.observed]));
+
+    // The three scenarios that need accepted input each carry a stream record: the stamps they sent,
+    // the dispositions the authority journalled, and the metres that follows. Before T-0b the recovery
+    // rooms had 4, 2, 0 and 0 accepted frames; a refusal advances the watermark all the same, which is
+    // exactly why the claim has to be about dispositions.
+    for (const name of [
+      'same-delivery-pairing-on-the-wire',
+      'client-deadline-fires-with-zero-deliveries-and-the-record-recovers',
+      'episode-deadline-closes-the-client-at-4000ms',
+    ]) {
+      const stream = byName.get(name)?.['stream'] as Record<string, unknown>;
+      expect(stream, `${name} carries a stream record`).toBeDefined();
+      expect(stream['allSentStampsConsumed'], `${name} had every stamp consumed`).toBe(true);
+      expect(stream['stampsRefused']).toBe(0);
+      expect((stream['journal'] as Record<string, unknown>)['allClientFramesConsumed']).toBe(true);
+      expect(Number(stream['movedMeters'])).toBeGreaterThan(0);
+    }
+
+    // The allowance scenario spans stamp domains, so its claim is per-domain and measured while each
+    // room was still live. Nothing here pretends a disposed domain leaves rows behind.
+    const allowance = byName.get('two-actual-rejoins-per-rolling-window-and-the-third-is-refused')!;
+    const domains = allowance['rejoinStreams'] as { epoch: number; accepted: boolean }[];
+    expect(domains.length).toBe(2);
+    expect(domains.every((domain) => domain.accepted)).toBe(true);
+    expect(new Set(domains.map((domain) => domain.epoch)).size).toBe(2);
+  });
+
+  it('T-1: AC-1 derives 40 m from the trace rows, with both tolerance controls', () => {
+    runScript('tests/reference/flat-direct-step.ts');
+    const trace = JSON.parse(readFileSync(join(OUT_DIR, 'reference-trace.json'), 'utf8')) as {
+      verdict: string;
+      checks: Record<string, unknown>;
+      controls: { name: string; expectedDetected: boolean; detected: boolean }[];
+    };
+    expect(trace.verdict).toBe('pass');
+    expect(trace.checks['referenceTickCount']).toBe(200);
+    expect(Math.abs(Number(trace.checks['referenceMetresFromRows']) - 40)).toBeLessThanOrEqual(1e-6);
+    expect(trace.checks['ac1WithinTolerance']).toBe(true);
+    expect(trace.checks['deterministicAcrossRuns']).toBe(true);
+    expect(trace.controls.every((control) => control.detected === control.expectedDetected)).toBe(true);
+    // The pair the owner asked for specifically: a displacement inside 1e-6 must NOT be reported and one
+    // beyond it must be.
+    expect(trace.controls.some((c) => c.name === 'within-tolerance-displacement-is-not-reported' && c.expectedDetected === false && c.detected === false)).toBe(true);
+    expect(trace.controls.some((c) => c.name === 'beyond-tolerance-displacement-is-reported' && c.expectedDetected === true && c.detected === true)).toBe(true);
+
+    // The summary is recomputable from the rows it names, so a summary that disagrees with its own trace
+    // cannot survive review — or this test.
+    const rows = readFileSync(join(OUT_DIR, 'ticks.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { resolvedDisplacement: number });
+    expect(rows.length).toBe(200);
+    expect(Math.abs(rows.reduce((total, row) => total + row.resolvedDisplacement, 0) - Number(trace.checks['referenceMetresFromRows']))).toBeLessThanOrEqual(1e-9);
+    const inputs = readFileSync(join(OUT_DIR, 'inputs.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { disposition: string });
+    expect(inputs.every((entry) => entry.disposition === 'consumed')).toBe(true);
+  }, 300_000);
+
+  it('T-2 and T-3: AC-3c holds per tick over the population, and the B=8 burst proves its queue', () => {
+    // The population run in this same file wrote both artefacts; re-running it here would double a
+    // minute of runtime for no additional claim.
+    const audit = JSON.parse(readFileSync(join(OUT_DIR, 'displacement-bound.json'), 'utf8')) as {
+      verdict: string;
+      classification: Record<string, number>;
+      outOfBound: unknown[];
+      travelBudget: { exceeded: boolean }[];
+      controls: { expectedDetected: boolean; detected: boolean }[];
+    };
+    expect(audit.verdict).toBe('pass');
+    expect(audit.outOfBound).toEqual([]);
+    expect(audit.travelBudget.every((row) => !row.exceeded)).toBe(true);
+    expect(audit.classification['acceptedTicks']).toBeGreaterThan(0);
+    expect(audit.controls.every((control) => control.detected === control.expectedDetected)).toBe(true);
+
+    const burst = JSON.parse(readFileSync(join(OUT_DIR, 'burst-b8.json'), 'utf8')) as {
+      passed: boolean;
+      observed: Record<string, unknown>;
+    };
+    expect(burst.passed).toBe(true);
+    // The proof is arithmetic on the room's own post-drain record: 7 remaining after a one-frame drain
+    // means 8 were there, and the unbroken run proves nothing arrived in between.
+    expect(burst.observed['subtractionProof']).toBe(true);
+    expect(burst.observed['postDrainDepthSeries']).toEqual([7, 6, 5, 4, 3, 2, 1, 0]);
+    expect(burst.observed['distinctStampCount']).toBe(8);
+    expect(burst.observed['consecutiveDrain']).toBe(true);
+    expect(burst.observed['retiredUnrepresented']).toBe(0);
+    expect(burst.observed['watermarkReachedHighestStamp']).toBe(true);
+    expect(burst.observed['signalsForThisSeat']).toEqual([]);
+    expect(burst.observed['closuresForThisSeat']).toEqual([]);
+    expect(Number(burst.observed['maxDepthSeen'])).toBeLessThan(32);
+
+    // Per-seat depth rows in the file that already carried the aggregate (OD-9: no new artefact).
+    const csv = readFileSync(join(OUT_DIR, 'buffer-depth.csv'), 'utf8').trim().split('\n');
+    expect(csv[0]).toBe('tick,entityId,maxDepth,consumedCount,signalCount,closureCount,source');
+    expect(csv.some((line) => line.split(',')[1] !== 'all')).toBe(true);
+  });
+
+  it('T-4: the compliant projection is identical solo and among offenders, and ordinals are checked separately', () => {
+    runScript('tests/runtime/udg-003-phase-2/projection-isolation.ts');
+    const isolation = JSON.parse(readFileSync(join(OUT_DIR, 'projection-isolation.json'), 'utf8')) as {
+      verdict: string;
+      checks: Record<string, boolean>;
+      design: { roomCensus: { distinctRooms: number; neighbours: Record<string, boolean> } };
+      failures: string[];
+    };
+    expect(isolation.failures).toEqual([]);
+    expect(isolation.verdict).toBe('pass');
+    expect(isolation.checks['projectionSequencesEqual']).toBe(true);
+    expect(isolation.checks['observerTraceIdentical']).toBe(true);
+    expect(isolation.checks['everyExpectedStampConsumedInBothRuns']).toBe(true);
+    expect(isolation.checks['equivalentEligibility']).toBe(true);
+    expect(isolation.checks['populationOrdinalAhead']).toBe(true);
+    // A population comparison is only a population comparison if the seats shared a room.
+    expect(isolation.design.roomCensus.distinctRooms).toBe(4);
+    expect(Object.values(isolation.design.roomCensus.neighbours).every(Boolean)).toBe(true);
+  }, 300_000);
+
   it('re-runs PR-14 so the replay reads a journal this commit produced (R-1)', () => {
     // The probe's journal travels inside its own result file. Replaying a result left over from an earlier
     // commit would be replaying a room this commit never ran, so the suite runs the probe here first.
@@ -194,3 +315,23 @@ describe('UDG-003 Phase 2 runtime — the population and the recovery scenarios'
     expect(replay.missingInputs).toEqual([]);
   }, 300_000);
 
+describe('UDG-003 Phase 2 runtime — GA-13 window attribution', () => {
+  it('GA-13: the shared-journal windows are attributed by seat, tick and stamp in the replay', () => {
+    const replay = JSON.parse(readFileSync(join(OUT_DIR, 'journal-replay.json'), 'utf8')) as {
+      verdict: string;
+      scenarioWindows: { scenario: string; pass: boolean; stampsMatch: boolean; acceptedTicksMatchObservations: boolean; dispositionsAllowed: boolean; noRefusals: boolean }[];
+    };
+    expect(replay.verdict).toBe('pass');
+    const names = replay.scenarioWindows.map((entry) => entry.scenario);
+    for (const expected of ['rate-ceiling-closes-directly', 'compliant-control-population-frames-are-all-consumed', 'offenders-never-touch-the-compliant-population']) {
+      expect(names, `window for ${expected}`).toContain(expected);
+    }
+    for (const window of replay.scenarioWindows) {
+      expect(window.pass, `window ${window.scenario}`).toBe(true);
+      expect(window.stampsMatch).toBe(true);
+      expect(window.acceptedTicksMatchObservations).toBe(true);
+      expect(window.dispositionsAllowed).toBe(true);
+      expect(window.noRefusals).toBe(true);
+    }
+  });
+});

@@ -16,7 +16,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -736,6 +737,33 @@ describe('UDG-003 Phase 2 vectors — the manifest names the whole set (§8.2.1)
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { files: { name: string }[]; phase: string };
     expect(manifest.phase).toBe('phase-2');
     expect(manifest.files.map((entry) => entry.name).sort()).toEqual([...PHASE_2_VECTOR_FILES].sort());
+  });
+
+  it('gates a CSV by bytes, so the per-seat depth rows cannot be parsed away (OD-9)', () => {
+    // Per-seat queue depth went into `buffer-depth.csv` rather than a new JSON artefact, on the stated
+    // condition that nothing parses that file. This test IS that condition, in two parts.
+    const directory = mkdtempSync(join(tmpdir(), 'udg-003-csv-'));
+    const aggregate = [
+      'tick,entityId,maxDepth,consumedCount,signalCount,closureCount,source',
+      '10,all,3,9,0,0,room-tick-record',
+      '',
+    ].join('\n');
+    const withSeat = aggregate + '10,entity-offender,11,9,1,0,room-telemetry-window\n';
+    writeFileSync(join(directory, 'buffer-depth.csv'), aggregate, 'utf8');
+    const first = createHash('sha256').update(readFileSync(join(directory, 'buffer-depth.csv'))).digest('hex');
+    writeFileSync(join(directory, 'buffer-depth.csv'), withSeat, 'utf8');
+    const second = createHash('sha256').update(readFileSync(join(directory, 'buffer-depth.csv'))).digest('hex');
+
+    // (1) The gate hashes bytes, and a per-seat row CHANGES those bytes. A row the gate were to ignore
+    // would have to be a row some parser stripped first; there is no parser, and the digest moving is
+    // the proof that the seat-level evidence is inside what is attested.
+    expect(first).toHaveLength(64);
+    expect(second).not.toBe(first);
+    expect(() => JSON.parse(withSeat)).toThrow();
+
+    // (2) The CSV is in the same list as every JSON artefact, so the rule that already refuses a
+    // directory missing `abuse-results.json` refuses one missing this file — no separate, softer path.
+    expect(PHASE_2_VECTOR_FILES).toContain('buffer-depth.csv');
   });
 });
 

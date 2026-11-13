@@ -628,6 +628,11 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
       })),
       closeObservations: this.closeObservations,
       metrics: this.metrics.summary(),
+      // The ring-buffered samples behind that summary (T-2, OD-9). Read-only telemetry: the per-seat
+      // depths the room already records each tick, exposed so per-seat evidence does not have to be
+      // inferred from the aggregate. The window is bounded by TickMetrics' own limit, which is the
+      // limitation the evidence names rather than one it implies.
+      metricsSamples: this.metrics.samples(),
       lastTick: this.#lastTickRecord,
       reconnections: this.#sessions.outcomes(),
       startedAtMs: this.#startedAtMs,

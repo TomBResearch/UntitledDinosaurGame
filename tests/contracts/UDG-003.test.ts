@@ -1887,8 +1887,10 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     expect(plan).toContain("'phase-2-journal-replay'");
     expect(plan).toContain("UDG_PR14_RESULT: 'artifacts/probes/PR-14.probe-result.json'");
     const phase2Order = [
+      'phase-2-reference-trace',
       'phase-2-abuse-population',
       'phase-2-recovery-scenarios',
+      'phase-2-isolation-comparison',
       'phase-2-journal-replay',
       'phase-2-vectors',
       'phase-2-vectors-verify',
@@ -1929,7 +1931,10 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     const gate = literalList(evidenceSource, 'PHASE_2_VECTOR_FILES: readonly string[] = [');
     // 15 as submitted, plus the three R-1 artefacts: the two retained journals and the replay verdict.
     // A replay claim whose inputs are not required files is a claim about bytes nobody gated.
-    expect(gate).toHaveLength(18);
+    // 18 Phase 2 artefacts became 24 under OD-9: AC-1's trace trio, the AC-3c displacement audit, the
+    // GA-1 `B = 8` burst record and the GA-9/AC-7 isolation comparison. The count is asserted because the
+    // gate's whole force is that a listed file which is absent fails the bundle.
+    expect(gate).toHaveLength(24);
     for (const name of ['journal-population.json', 'journal-recovery.json', 'journal-replay.json']) {
       expect(gate, `the Phase 2 requirement must name ${name}`).toContain(name);
     }
@@ -2036,8 +2041,10 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     );
     expect(phase2Step, 'the Phase 2 record step exists').toContain('set -euo pipefail');
     const phase2Order = [
+      'node tests/reference/flat-direct-step.ts',
       'node tests/runtime/udg-003-phase-2/abuse-population.ts',
       'node tests/runtime/udg-003-phase-2/recovery-scenarios.ts',
+      'node tests/runtime/udg-003-phase-2/projection-isolation.ts',
       'UDG_PR14_RESULT=artifacts/probes/PR-14.probe-result.json node tests/runtime/udg-003-phase-2/journal-replay.ts',
       'pnpm exec vitest run tests/unit/udg-003-phase-2/vectors.test.ts',
       'node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-2 --expect-phase phase-2',
@@ -2635,7 +2642,13 @@ describe('UDG-003 Phase 2 — T-0: a compliant seat stamps the epoch the room is
   it('verifies consumption against the stamps sent, not against the watermark', () => {
     expect(population).toContain('allSentStampsConsumed');
     expect(population).toContain('sentStamps');
-    expect(population).toContain('tickRecord.consumed');
+    // The per-tick join itself lives in the accounting module both the population and the recovery
+    // scenarios drive, so the guard follows it there: `consumed` must be read from the TICK record. An
+    // observation row carries a `consumed` disposition string, and reading that instead is how a
+    // refusal gets counted as a success.
+    const accounting = readUtf8(join('tests', 'support', 'authority', 'accounting.ts'));
+    expect(accounting).toContain('TickRecord.consumed');
+    expect(population).toContain('streamAccounting(');
     // The compliant scenarios are closed against the accounting, so a future edit cannot restore the
     // old claim by reading a row field again: these substrings are the pass conditions themselves.
     expect(population).toContain('row.allSentStampsConsumed === true');

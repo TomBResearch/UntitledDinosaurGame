@@ -136,8 +136,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # AC-1's 200-tick reference trace first: it is the movement baseline the rest of the phase's
+          # numeric claims are read against, and it is pure simulation, so it also fails fast if the
+          # authority output this workflow just built cannot be driven at all.
+          node tests/reference/flat-direct-step.ts
           node tests/runtime/udg-003-phase-2/abuse-population.ts
           node tests/runtime/udg-003-phase-2/recovery-scenarios.ts
+          # GA-9 + AC-7: solo vs population projections and the malformed-message isolation check.
+          node tests/runtime/udg-003-phase-2/projection-isolation.ts
           # The replay reads PR-14's journal out of its probe result, and the path is named rather than
           # searched: an earlier draft re-ran the probe here, and CI refused, because the re-run wrote
           # unattributed bytes over the contract suite's attributed PR-14 result. The suite's own run on

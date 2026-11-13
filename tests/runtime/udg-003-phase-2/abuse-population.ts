@@ -37,6 +37,8 @@ import {
   type RegisteredHandler,
   type SdkRoom,
 } from '../../support/client-harness/transport.mjs';
+import { flattenConsumed, streamAccounting, type StreamAccounting } from '../../support/authority/accounting.ts';
+import { computeDisplacementBounds } from '../../support/authority/displacement-bound.ts';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
 const OUT_DIR =
@@ -183,28 +185,13 @@ interface Seat {
 }
 
 /** What the room did with one seat's sent stamps, read back from the room's own records. */
-interface WindowAccounting {
-  readonly stampsSent: number;
-  /** Dequeued AND accepted: the stamp's own journalled disposition is `consumed`. */
-  readonly stampsConsumed: number;
-  readonly stampsRefused: number;
-  readonly stampsDroppedAtClose: number;
-  readonly missingStamps: readonly number[];
-  readonly duplicateStamps: readonly number[];
-  /**
-   * The room records a dequeue on the tick it drains, BEFORE the screen's verdict, so a dequeued stamp
-   * is not yet an accepted one. The two are joined by FIFO order per seat; a mismatch in their counts
-   * means the pairing itself broke, and the accounting refuses to claim anything in that case.
-   */
-  readonly pairingConsistent: boolean;
-  readonly collidedStamps: number;
-  readonly movedMeters: number;
-  /**
-   * The compliant-stream assertion. True only when EVERY stamp this seat sent was consumed exactly
-   * once and nothing was refused — the property the watermark was previously being asked to prove.
-   */
-  readonly allSentStampsConsumed: boolean;
-}
+/**
+ * The shared accounting record. It lives in `tests/support/authority/accounting.ts` because the
+ * recovery, burst and projection scripts have to make the SAME claim from the SAME measurement, and
+ * F-1 was born from two scripts each deciding for themselves what "consumed" meant.
+ */
+type WindowAccounting = StreamAccounting;
+
 
 /** A window summary small enough to retain: the arrays that matter are the ones that are NOT empty. */
 interface WindowEvidence {
@@ -264,6 +251,20 @@ async function main(): Promise<void> {
     configHash: computeConfigHash(cfg),
     manifestHash: regionHash(cfg),
   };
+  // A second admission identity for the `B = 8` room. The hash gate compares the client's declared
+  // `configHash` against the hash of the configuration the ROOM booted with, so a seat joining a room
+  // with a different deployment must declare that deployment. This was not a theoretical worry: the
+  // first version of T-3 joined the burst room with the population's identity and the create was closed
+  // with 1008 and no reason at all — a hash-gate refusal is silent by design, which is correct for a
+  // hostile client and unhelpful for a harness that got its own deployment wrong.
+  const burstOverrides = { region: { bounds } };
+  const burstCfg = withConfigOverrides(configMod['DEFAULT_SERVER_CONFIG'], burstOverrides);
+  const burstIdentity = {
+    protocolVersion: burstCfg['protocolVersion'] as string,
+    configHash: computeConfigHash(burstCfg),
+    manifestHash: regionHash(burstCfg),
+  };
+
   const envelope = cfg['input'] as Record<string, unknown>;
   const closeCodes = envelope['closeCodes'] as Record<string, number>;
 
@@ -277,6 +278,16 @@ async function main(): Promise<void> {
     }),
     // The refusal scenario's counterexample: the same room class with no operator bounds at all.
     unbounded: defineOperatorRegionRoom({ runId: 'udg-003-unbounded' }),
+    // T-3 (GA-1): the literal `B = 8` burst. Its own room, so the room's own per-tick depth record has
+    // exactly one seat in it and a depth reading cannot be another seat's. The envelope is the hashed
+    // default (capacity 32, pressure line 32 - 8 = 24), which is what GA-1's row assumes: eight queued
+    // frames sit under the pressure line, so the burst must produce no throttle and no closure.
+    burst: defineOperatorRegionRoom({
+      config: burstOverrides,
+      runId: 'udg-003-burst-b8',
+      journalRetention: 8_000,
+      regionProvenance: 'test-only-synthetic',
+    }),
   });
 
   const closuresOf = (): readonly { entityId: string; code: number }[] =>
@@ -321,63 +332,40 @@ async function main(): Promise<void> {
   };
 
   /** The stamps the room consumed for one seat, per tick, from the room's own tick records. */
-  const consumedStampsOf = (entityId: string): number[] =>
-    room()
-      .tickRecords.flatMap((tickRecord) => tickRecord.consumed.filter((entry) => entry.entityId === entityId).map((entry) => entry.seq));
+  /**
+   * Compare what a seat sent with what the room consumed and represented. Every input here is a fact the
+   * harness or the room recorded about this seat; none of it is inferred from a watermark, which is the
+   * whole point: a refusal advances `inputResolvedThrough` and must not advance this claim.
+   */
+  const consumedOf = (): ReturnType<typeof flattenConsumed> => flattenConsumed(room().tickRecords);
+
+  /**
+   * The room whose journal contains this entity. The population drives one shared room, but T-3's `B = 8`
+   * burst runs in a second room of its own, so "the room" is no longer a safe phrase and a room is now
+   * found by the rows it wrote rather than by position in a list.
+   */
+  const roomHolding = (entityId: string): RoomInstance => {
+    for (const candidate of RegionRoom.liveRooms()) {
+      const instance = candidate as unknown as RoomInstance;
+      if (instance.journal().rows.some((row) => row['entityId'] === entityId)) return instance;
+    }
+    throw new Error(`no live room journals the entity ${entityId}`);
+  };
 
   /**
    * Compare what a seat sent with what the room consumed and represented. Every input here is a fact the
    * harness or the room recorded about this seat; none of it is inferred from a watermark, which is the
    * whole point: a refusal advances `inputResolvedThrough` and must not advance this claim.
    */
-  const windowAccounting = (seat: Seat, fromTick = 0): WindowAccounting => {
-    const dequeued = consumedStampsOf(seat.entityId);
-    // The authority's own journalled dispositions for THIS seat's client frames, in arrival order.
-    // `kind: 'direct'` with `origin: 'client-payload'` is the boundary: the rows the server writes for
-    // join/leave are dispositions too, and counting them as client frames would inflate every claim here.
-    const dispositions = room()
-      .journal()
-      .rows
-      .filter((row) => row['type'] === 'observation' && row['entityId'] === seat.entityId && row['kind'] === 'direct' && row['origin'] === 'client-payload')
-      .map((row) => String(row['disposition'] ?? 'unknown'));
-    const pairingConsistent = dequeued.length === dispositions.length;
-    // FIFO pairing: one drain produces exactly one disposition row, so index n of the drained stamps is
-    // index n of the disposition rows. Without the count check the pairing would silently mis-attribute
-    // a stamp to a neighbouring frame's verdict the moment the two sequences drifted.
-    const accepted = new Map<number, number>();
-    let refused = 0;
-    let dropped = 0;
-    dequeued.forEach((stamp, index) => {
-      const disposition = dispositions[index] ?? 'unpaired';
-      if (disposition === 'consumed') accepted.set(stamp, (accepted.get(stamp) ?? 0) + 1);
-      else if (disposition.startsWith('refused')) refused += 1;
-      else if (disposition.startsWith('dropped')) dropped += 1;
-    });
-    const missing = seat.sentStamps.filter((stamp) => (accepted.get(stamp) ?? 0) === 0);
-    const duplicates = [...accepted.entries()].filter(([, count]) => count > 1).map(([stamp]) => stamp);
-    const movedMeters = room()
-      .journal()
-      .rows.filter((row) => row['type'] === 'tick' && row['entityId'] === seat.entityId && Number(row['tick']) >= fromTick)
-      .reduce((total, row) => total + (Number(row['resolvedDisplacement']) || 0), 0);
-    return {
-      stampsSent: seat.sentStamps.length,
-      stampsConsumed: accepted.size,
-      stampsRefused: refused,
-      stampsDroppedAtClose: dropped,
-      missingStamps: missing,
-      duplicateStamps: duplicates,
-      pairingConsistent,
+  const windowAccounting = (seat: Seat, fromTick = 0): WindowAccounting =>
+    streamAccounting({
+      journalRows: room().journal().rows,
+      consumed: consumedOf(),
+      entityId: seat.entityId,
+      sentStamps: seat.sentStamps,
       collidedStamps: seat.collidedStamps,
-      movedMeters,
-      allSentStampsConsumed:
-        pairingConsistent
-          && seat.collidedStamps === 0
-          && missing.length === 0
-          && duplicates.length === 0
-          && refused === 0
-          && dropped === 0,
-    };
-  };
+      fromTick,
+    });
 
   /** Wait until every stamp the seat sent has been consumed, or the budget runs out and the claim fails honestly. */
   const waitForConsumption = (seat: Seat, budgetMs: number): Promise<boolean> =>
@@ -891,6 +879,205 @@ async function main(): Promise<void> {
       'earlier-window',
     );
 
+    stage('burst');
+    // ── GA-1: the literal `B = 8` burst, then idle (T-3) ──────────────────────────────────────
+    // ADR-003 §5's row is "compliant sender, B = 8 burst then idle", passing on "retiredUnrepresented == 0;
+    // depth < 32 throughout; inputResolvedThrough reaches the highest stamp at rest; zero resynchronisations",
+    // and failing on "any retirement or resynchronisation; a legal burst that evicts (fails the envelope, not
+    // the client)". Taking that literally needs one thing the rest of this script never needed: proof that all
+    // EIGHT stamps were in the queue at the same time BEFORE the first dequeue. Sampling depth after the fact
+    // cannot show it, because the room drains one frame per tick and a 20 Hz tick is 50 ms — about the time
+    // eight loopback frames take to arrive, so the depth peak could be 8 or could be 3 and the trace would
+    // look the same.
+    //
+    // The fix is a controlled DRAIN boundary, not a simulated queue: this room runs at `tickRate: 2`, which
+    // `CONFIG_BOUNDS.tickRate` (1..100) permits and which `validateNetworkConfig` accepts because the step is
+    // given as its exact derivation (0.5 s). Admission, screening, the FIFO accessor and the one-frame-per-tick
+    // drain rule are all unchanged — the interval between drains is simply long enough to observe.
+    const burstSeat = await seated(
+      () => connectSeat<ProbeRegionState>(stack, server.endpoint, 'burst', burstIdentity, RegionSchema),
+      'B=8 burst seat',
+    );
+    const burstRoom = roomHolding(burstSeat.entityId);
+    const burstAccounting = (): StreamAccounting => streamAccounting({
+      journalRows: burstRoom.journal().rows,
+      consumed: flattenConsumed(burstRoom.tickRecords),
+      entityId: burstSeat.entityId,
+      sentStamps: burstSeat.sentStamps,
+      collidedStamps: burstSeat.collidedStamps,
+    });
+    /** The server-side accessor for this seat: an in-process read of the queue the authority drains. */
+    const burstDepth = (): number => burstRoom.inputs?.get(burstSeat.entityId)?.size ?? -1;
+    const burstConsumedCount = (): number => burstRoom.inputs?.get(burstSeat.entityId)?.consumedCount ?? -1;
+    const burstTicks = (): number => Number(burstRoom.evidence()['ticks'] ?? -1);
+
+    const ticksBeforeBurst = burstTicks();
+    const burstStartedAt = performance.now();
+    const burstStamps: number[] = [];
+    const depthSamples: { readonly atMs: number; readonly depth: number; readonly ticks: number }[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      burstStamps.push(sendAs(burstSeat, {
+        generation: 1,
+        directIntent: { kind: 'continuous', drive: 1, strafing: 0, vertical: 0 },
+        moveX: 0,
+        moveZ: 1,
+      }));
+      // The harness is in-process, so this is the SERVER's accessor size, read microseconds after the
+      // send returned. It is still not proof on its own: the frame has to cross the socket before the
+      // queue grows, which is why the loop below waits for eight PRESENT frames rather than trusting
+      // eight SENT ones.
+      depthSamples.push({ atMs: Math.round(performance.now() - burstStartedAt), depth: burstDepth(), ticks: burstTicks() });
+    }
+
+    // Direct co-presence, if the harness wins the race: an in-process read of the server's own accessor
+    // showing eight frames queued and NOTHING dequeued. Corroboration, not the proof - see below.
+    let queuedTogether: { readonly depth: number; readonly consumedCount: number; readonly ticks: number; readonly atMs: number } | null = null;
+    const watchDeadline = performance.now() + 200;
+    while (performance.now() < watchDeadline) {
+      const depth = burstDepth();
+      const ticksNow = burstTicks();
+      depthSamples.push({ atMs: Math.round(performance.now() - burstStartedAt), depth, ticks: ticksNow });
+      if (depth === 8 && burstConsumedCount() === 0) {
+        queuedTogether = { depth, consumedCount: 0, ticks: ticksNow, atMs: Math.round(performance.now() - burstStartedAt) };
+        break;
+      }
+      if (depth > 8) break; // impossible with a capacity of 32 against a sender of eight; the guard says so
+      await new Promise<void>((resolveFrame) => { setImmediate(resolveFrame); });
+    }
+
+    // THE PROOF, from the room's own record rather than from a race. `RoomTickRecord.maxDepth` and
+    // `TickSample.depths` are read AFTER the drain (`observation.sizeAfter`), and the drain takes exactly
+    // one frame per seat per tick. So a post-drain depth of 7 on a tick that consumed one of this seat's
+    // stamps means EIGHT were present when that drain began - and the descending run 7,6,5,4,3,2,1,0 across
+    // eight consecutive consuming ticks means nothing arrived in between and all eight were there before
+    // the first dequeue. Arithmetic, not sampling: had the tick boundary split the burst, the sequence
+    // would not be that run and this scenario would fail instead of asserting.
+    interface SeatSampleView { readonly tick: number; readonly depths: readonly { readonly entityId: string; readonly size: number }[] }
+    const burstDepthSeries = (): { tick: number; size: number }[] =>
+      ((burstRoom.evidence()['metricsSamples'] ?? []) as readonly SeatSampleView[])
+        .map((sample) => ({ tick: sample.tick, size: sample.depths.find((entry) => entry.entityId === burstSeat.entityId)?.size ?? -1 }));
+    const burstExpectedSeries = [7, 6, 5, 4, 3, 2, 1, 0];
+
+    // The eight consumptions, and the at-rest half of GA-1's row.
+    const drainedEight = await until(() => burstAccounting().stampsConsumed === 8, 15_000);
+    const atRest = burstAccounting();
+    // "reaches the highest stamp at rest" is a claim about what the CLIENT can read, and the record it
+    // reads is published on the patch cadence: the drain can be journalled before the delivery that
+    // carries it lands. Waiting for the delivery is the measurement, not a fudge — the failure mode the
+    // wait rules out is a watermark that genuinely never reaches the stamp.
+    const watermarkPublished = await until(
+      () => (burstSeat.room.state.players.get(burstSeat.room.sessionId)?.inputResolvedThrough ?? 0) >= Math.max(...burstStamps),
+      4_000,
+    );
+    const depthSeries = burstDepthSeries();
+    const consumingTicks = [...atRest.consumedTicks].sort((a, b) => a - b);
+    const seriesOnConsumingTicks = consumingTicks.map((tick) => depthSeries.find((sample) => sample.tick === tick)?.size ?? -1);
+    const subtractionProof = JSON.stringify(seriesOnConsumingTicks) === JSON.stringify(burstExpectedSeries);
+    const burstRow = burstSeat.room.state.players.get(burstSeat.room.sessionId);
+    const burstSignals = burstRoom.tickRecords
+      .flatMap((tickRecord) => tickRecord.signals.filter((signal) => signal.entityId === burstSeat.entityId).map((signal) => signal.signal));
+    const burstClosures = burstRoom.tickRecords
+      .flatMap((tickRecord) => tickRecord.closures.filter((closure) => closure.entityId === burstSeat.entityId));
+    const maxDepthSeen = Math.max(0, ...depthSamples.map((sample) => sample.depth));
+    const consumedTicksAscending = [...atRest.consumedTicks].sort((a, b) => a - b);
+    const consecutiveDrain = consumedTicksAscending.every((tick, index) => index === 0 || tick === (consumedTicksAscending[index - 1] as number) + 1);
+    const distinctStamps = new Set(burstStamps);
+    // The ceiling instrument has to be shown LIVE in the same run, or "zero RATE_CEILING for the burst
+    // seat" is just an absence. The rate offender earlier in this same capture is that witness.
+    const rateScenario = results.find((entry) => entry.scenario === 'rate-ceiling-closes-directly');
+    record(
+      'b8-burst-then-idle-retires-nothing-and-resynchronises-nothing',
+      'GA-1 literally: a compliant sender puts B = 8 frames on the wire back-to-back and then goes idle. All eight distinct stamps are PROVED present in the server queue together before the first dequeue, the authority then consumes them on eight consecutive ticks, nothing retires, nothing closes, no signal fires, the watermark reaches the highest stamp at rest, and depth stays under the 32 limit throughout',
+      {
+        burstStamps,
+        distinctStamps: [...distinctStamps],
+        distinctStampCount: distinctStamps.size,
+        ticksBeforeBurst,
+        directCoPresenceObserved: queuedTogether !== null,
+        postDrainDepthSeries: seriesOnConsumingTicks,
+        expectedPostDrainSeries: burstExpectedSeries,
+        subtractionProof,
+        proofRule:
+          'depth is sampled after the drain and the drain takes one frame per seat per tick, so a post-drain 7 on a consuming tick means 8 were present when that drain began; the run 7,6,5,4,3,2,1,0 across eight consecutive consuming ticks proves all eight were queued together before the first dequeue and that nothing arrived in between',
+        queuedTogether,
+        depthSamples,
+        maxDepthSeen,
+        depthLimit: 32,
+        consumedStamps: atRest.consumedStamps,
+        consumedTicks: consumedTicksAscending,
+        consecutiveDrain,
+        stampsConsumed: atRest.stampsConsumed,
+        stampsRefused: atRest.stampsRefused,
+        pairingConsistent: atRest.pairingConsistent,
+        collidedStamps: atRest.collidedStamps,
+        watermarkAtRest: burstRow?.inputResolvedThrough ?? -1,
+        watermarkReachedHighestStamp: watermarkPublished,
+        highestStampSent: Math.max(...burstStamps),
+        retiredUnrepresented: burstRow?.inputRetiredUnrepresented ?? -1,
+        gapStart: burstRow?.inputGapStart ?? 0,
+        gapEnd: burstRow?.inputGapEnd ?? 0,
+        signalsForThisSeat: burstSignals,
+        closuresForThisSeat: burstClosures,
+        movedMeters: atRest.movedMeters,
+        ceilingInstrumentWitness: {
+          scenario: 'rate-ceiling-closes-directly',
+          pass: rateScenario?.pass ?? false,
+          observed: rateScenario?.observed ?? null,
+        },
+        // Disclosed sampling limit, stated rather than glossed: depth is read from the server's own
+        // accessor from inside the process, at every send and every 1 ms of the watch loop. The instant of
+        // ENQUEUE is still not observable from outside the queue, so "depth < 32 throughout" means at every
+        // sample named in this record, and the absence of QUEUE_PRESSURE is the per-drain witness.
+        samplingNote: 'server-side accessor reads; enqueue-instant depth is not observable from outside the queue',
+      },
+      drainedEight
+        && subtractionProof
+        && distinctStamps.size === 8
+        && atRest.stampsConsumed === 8
+        && atRest.stampsRefused === 0
+        && atRest.pairingConsistent
+        && atRest.collidedStamps === 0
+        && consecutiveDrain
+        && watermarkPublished
+        && (burstRow?.inputResolvedThrough ?? -1) === Math.max(...burstStamps)
+        && (burstRow?.inputRetiredUnrepresented ?? -1) === 0
+        && (burstRow?.inputGapStart ?? 0) === 0
+        && (burstRow?.inputGapEnd ?? 0) === 0
+        && burstSignals.length === 0
+        && burstClosures.length === 0
+        && maxDepthSeen < 32,
+    );
+    // The burst room is emptied so shutdown does not wait on a room the population no longer needs.
+    await burstSeat.room.leave(true).catch(() => undefined);
+
+    // The burst record is its own artefact (OD-9), because GA-1's row is a numeric claim with a proof
+    // attached and a reviewer should not have to dig it out of a scenario array.
+    writeFileSync(
+      resolve(OUT_DIR, 'burst-b8.json'),
+      `${JSON.stringify(
+        {
+          taskId: 'UDG-003',
+          phase: 'phase-2',
+          criterion: ['GA-1'],
+          producer: 'tests/runtime/udg-003-phase-2/abuse-population.ts',
+          statement:
+            'ADR-003 §5: compliant sender, B = 8 burst then idle - retiredUnrepresented == 0; depth < 32 throughout; inputResolvedThrough reaches the highest stamp at rest; zero resynchronisations. Failure: any retirement or resynchronisation; a legal burst that evicts (fails the envelope, not the client).',
+          envelope: {
+            queueCapacity: 32,
+            pressureLine: 24,
+            depthLimit: 32,
+            drainPerTick: 1,
+            note: 'hashed defaults, unmodified: the burst room overrides nothing but the region bounds',
+          },
+          observed: results.find((entry) => entry.scenario === 'b8-burst-then-idle-retires-nothing-and-resynchronises-nothing')?.observed ?? null,
+          passed: results.find((entry) => entry.scenario === 'b8-burst-then-idle-retires-nothing-and-resynchronises-nothing')?.pass === true,
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+
     stage('lifecycle');
     // ── Lifecycle + disposal ────────────────────────────────────────────────────────────────────
     await Promise.all(controls.map((seat) => seat.room.leave(true).catch(() => undefined)));
@@ -916,12 +1103,105 @@ async function main(): Promise<void> {
       'utf8',
     );
 
-    const bufferCsv = ['tick,maxDepth,consumedCount,signalCount,closureCount']
+    stage('displacement');
+    // ── AC-3c: bounded displacement, re-asserted per tick over THIS population (T-2) ───────────
+    // The audit lives in `tests/support/authority/displacement-bound.ts` because its controls have to be
+    // the same arithmetic a reviewer would re-run, and because per-tick bounds and per-seat travel
+    // budgets are two different claims that a single number would blur.
+    const auditSeats: readonly Seat[] = [...controls, epochCorrectSeat, epochWrongSeat, pressureSeat, idleSeat, rateSeat, offender];
+    const acceptedStampsByEntity: Record<string, number> = {};
+    for (const seat of auditSeats) acceptedStampsByEntity[seat.entityId] = windowAccounting(seat).stampsConsumed;
+    const displacementAudit = computeDisplacementBounds({
+      journalRows: room().journal().rows,
+      boundMetres: stepMeters,
+      toleranceMetres: 1e-6,
+      acceptedStampsByEntity,
+      // The wrong-epoch control seat is the honest subject of the travel-credit control: it sent frames
+      // and had none accepted, which is precisely the shape a travel budget must refuse.
+      zeroAcceptedEntity: epochWrongSeat.entityId,
+    });
+    writeFileSync(
+      resolve(OUT_DIR, 'displacement-bound.json'),
+      `${JSON.stringify(
+        {
+          taskId: 'UDG-003',
+          phase: 'phase-2',
+          criterion: ['AC-3c', 'AC-2'],
+          producer: 'tests/runtime/udg-003-phase-2/abuse-population.ts',
+          verdict: displacementAudit.passed ? 'pass' : 'fail',
+          statement:
+            'AC-3c: bounded displacement as AC-2, re-asserted per tick over the abuse population so a burst cannot buy extra travel per tick.',
+          bound: {
+            metresPerTick: displacementAudit.boundMetres,
+            toleranceMetres: displacementAudit.toleranceMetres,
+            threshold: displacementAudit.boundMetres + displacementAudit.toleranceMetres,
+            derivedFrom: 'movement.speed x network.simulationStepSeconds of the configuration this room booted with',
+          },
+          classification: displacementAudit.classification,
+          classificationRule:
+            'accepted-input = a tick row with a non-null consumed stamp; refused-input = an observation row with a refused:* disposition whose eligibleTick is that tick (GA-4 neutralises the step and journals it once); no-input = a neutral tick row with no refused observation at that tick. All three read 0 m, so the distinction is made by the authority’s own rows, never by the metres figure.',
+          maxAcceptedDisplacement: displacementAudit.maxAcceptedDisplacement,
+          outOfBound: displacementAudit.outOfBound,
+          travelBudget: displacementAudit.travelBudget,
+          travelBudgetRule:
+            'metres travelled per entity <= accepted stamps x per-tick bound + tolerance. The denominator is what the authority accepted, so a seat whose frames were all refused cannot travel any metres: F-1 violates this identity by construction.',
+          controls: displacementAudit.controls,
+          limitations: [
+            'One room, one movement relation (flat reference), provisional test settings: the bound is the relation’s, not a tuned locomotion constant.',
+            'The audit reads the population journal after the whole run, so a tick is judged against the same bound every other tick is: no per-phase thresholds are invented here.',
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+    record(
+      'per-tick-displacement-stays-bounded-across-the-population',
+      'AC-3c: every tick that resolved an accepted frame moved its entity by at most the relation’s per-tick bound plus the declared tolerance, every seat’s travelled metres fit its accepted stamps, and the four mutation controls (beyond tolerance, inside tolerance, gross overshoot, unearned travel credit) behave as stated',
+      {
+        classification: displacementAudit.classification,
+        maxAcceptedDisplacement: displacementAudit.maxAcceptedDisplacement,
+        outOfBound: displacementAudit.outOfBound,
+        seatsOverBudget: displacementAudit.travelBudget.filter((row) => row.exceeded).length,
+        controls: displacementAudit.controls.map((control) => ({
+          name: control.name,
+          expectedDetected: control.expectedDetected,
+          detected: control.detected,
+          detail: control.detail,
+        })),
+      },
+      displacementAudit.passed,
+      'earlier-window',
+    );
+
+    // ── buffer-depth.csv: per-tick aggregate PLUS per-seat rows (OD-9) ─────────────────────────
+    // The aggregate rows keep their exact previous meaning (`entityId = all`), and the per-seat rows come
+    // from the room’s own tick telemetry window. Two shapes in one file would be a trap, so both carry
+    // `entityId` and `source`, and a consumer that only wants the old view filters `entityId = all`.
+    interface TickSampleView {
+      readonly tick: number;
+      readonly depths: readonly { readonly entityId: string; readonly size: number }[];
+    }
+    const roomSampleWindow = (room().evidence()['metricsSamples'] ?? []) as readonly TickSampleView[];
+    const perSeatDepthRows = roomSampleWindow.flatMap((sample) =>
+      sample.depths.map((depth) => [String(sample.tick), depth.entityId, String(depth.size), 'room-telemetry-window'].join(',')),
+    );
+    const bufferCsv = ['tick,entityId,maxDepth,consumedCount,signalCount,closureCount,source']
       .concat(
         room().tickRecords.map((t) =>
-          [String(t.tick), String(t.maxDepth), String(t.consumed.length), String(t.signals.length), String(t.closures.length)].join(','),
+          [
+            String(t.tick),
+            'all',
+            String(t.maxDepth),
+            String(t.consumed.length),
+            String(t.signals.length),
+            String(t.closures.length),
+            'room-tick-record',
+          ].join(','),
         ),
       )
+      .concat(perSeatDepthRows)
       .join('\n');
     writeFileSync(resolve(OUT_DIR, 'buffer-depth.csv'), `${bufferCsv}\n`, 'utf8');
 
@@ -949,6 +1229,100 @@ async function main(): Promise<void> {
     // finished when the rows were read. The prologue is part of the record because the accepted replay
     // refuses a journal it cannot bind to a configuration; rows without a prologue are bytes, not evidence.
     const exportedJournal = room().journal();
+    // ── GA-13: exact seat × tick windows for the two scenarios that share this one journal ─────
+    // The population drives one room, so a scenario is not a slice of ROWS (the row ranges are watermarks
+    // between verdicts and overlap by construction). What IS exact is attribution: which seat, which tick
+    // range, which stamps. Both windows below are sampled at the moments the scenarios themselves recorded.
+    const aliasOf = (entityId: string): string | null => {
+      const row = exportedJournal.rows.find((candidate) => candidate['entityId'] === entityId && candidate['alias'] !== undefined);
+      return row === undefined ? null : String(row['alias']);
+    };
+    const tickOfRow = (row: Record<string, unknown>): number => Number(row['tick'] ?? row['eligibleTick'] ?? 0);
+    const rowsOfAlias = (alias: string): readonly Record<string, unknown>[] => exportedJournal.rows.filter((row) => row['alias'] === alias);
+    const windowFor = (aliases: readonly string[], tickStart: number, tickEnd: number): readonly Record<string, unknown>[] =>
+      exportedJournal.rows.filter((row) => aliases.includes(String(row['alias'] ?? '')) && tickOfRow(row) >= tickStart && tickOfRow(row) <= tickEnd);
+    const stampsConsumedIn = (rows: readonly Record<string, unknown>[]): number[] =>
+      [...new Set(rows.filter((row) => row['type'] === 'tick' && row['consumed'] !== null && row['consumed'] !== undefined).map((row) => Number(row['consumed'])))].sort((a, b) => a - b);
+    const dispositionsIn = (rows: readonly Record<string, unknown>[]): Record<string, number> => {
+      const tally: Record<string, number> = {};
+      for (const row of rows) {
+        if (row['type'] !== 'observation' || row['origin'] !== 'client-payload') continue;
+        const disposition = String(row['disposition']);
+        tally[disposition] = (tally[disposition] ?? 0) + 1;
+      }
+      return tally;
+    };
+
+    const rateAlias = aliasOf(rateSeat.entityId);
+    const offenderAlias = aliasOf(offender.entityId);
+    const controlAliases = controls.map((seat) => aliasOf(seat.entityId)).filter((alias): alias is string => alias !== null);
+    const rateRows = rateAlias === null ? [] : rowsOfAlias(rateAlias);
+    const rateTicks = rateRows.map(tickOfRow);
+    const closureTicks = room().tickRecords.filter((tickRecord) => tickRecord.closures.length > 0).map((tickRecord) => tickRecord.tick);
+    const offenderArrivalTick = offenderAlias === null ? 0 : Math.min(...rowsOfAlias(offenderAlias).map(tickOfRow));
+    const populationEndTick = closureTicks.length > 0 ? Math.max(...closureTicks) : 0;
+
+    // The compliant seats streamed BEFORE the offenders arrived, so their frames need their own window;
+    // pretending the offending period contains them would have the artefact assert over an empty range.
+    const controlFrameRows = exportedJournal.rows.filter((row) => row['type'] === 'observation'
+      && row['origin'] === 'client-payload'
+      && controlAliases.includes(String(row['alias'] ?? '')));
+    const controlFrameTicks = controlFrameRows.map(tickOfRow);
+    const windows = [
+      {
+        scenario: 'rate-ceiling-closes-directly',
+        // One seat, from its first journalled row to the tick the ceiling closed it on.
+        aliases: rateAlias === null ? [] : [rateAlias],
+        tickStart: rateTicks.length > 0 ? Math.min(...rateTicks) : -1,
+        tickEnd: rateTicks.length > 0 ? Math.max(...rateTicks) : -1,
+        // Stage Q arrival ordinals of the arrivals this window consumed, numbered room-wide. The WIRE
+        // stamps the seat sent are reported alongside for context; they are not the same number space,
+        // and the replay is told so rather than being allowed to compare them.
+        stampsConsumed: stampsConsumedIn(rateRows),
+        wireStampsSent: [...new Set(rateSeat.sentStamps)].sort((a, b) => a - b),
+        collidedStamps: rateSeat.collidedStamps,
+        dispositions: dispositionsIn(rateRows),
+        // What the ceiling's own closure is allowed to leave behind, by name: the frames it consumed, the
+        // frames the overflow dropped, and the frame that arrived while the seat was already closing.
+        allowedDispositions: ['consumed', 'dropped:queue-overflow', 'dropped:lifecycle', 'refused:rate-ceiling'],
+        requireClosureFor: rateAlias ?? '',
+        closureCode: 4101,
+        attribution:
+          'seat × tick window over the shared journal. The replay re-derives every row of this window from the retained rows and refuses a window that contains a foreign seat’s client frames, a stamp the scenario never sent, or a disposition outside the allowed set.',
+      },
+      {
+        scenario: 'compliant-control-population-frames-are-all-consumed',
+        aliases: controlAliases,
+        tickStart: controlFrameTicks.length > 0 ? Math.min(...controlFrameTicks) : -1,
+        tickEnd: controlFrameTicks.length > 0 ? Math.max(...controlFrameTicks) : -1,
+        stampsConsumed: stampsConsumedIn(windowFor(controlAliases,
+          controlFrameTicks.length > 0 ? Math.min(...controlFrameTicks) : -1,
+          controlFrameTicks.length > 0 ? Math.max(...controlFrameTicks) : -1)),
+        dispositions: dispositionsIn(windowFor(controlAliases,
+          controlFrameTicks.length > 0 ? Math.min(...controlFrameTicks) : -1,
+          controlFrameTicks.length > 0 ? Math.max(...controlFrameTicks) : -1)),
+        requireAllConsumed: true,
+        requireNoRefusals: true,
+        attribution:
+          'the compliant seats’ own streaming window: every client frame journalled there is `consumed`, and the accepted-tick count equals the consumed-observation count.',
+      },
+      {
+        scenario: 'offenders-never-touch-the-compliant-population',
+        aliases: controlAliases,
+        // The window is the offending period: from the first journalled row of the last offender to the
+        // last closure in the room. The compliant seats were streaming across all of it.
+        tickStart: offenderArrivalTick,
+        tickEnd: populationEndTick,
+        stampsConsumed: stampsConsumedIn(windowFor(controlAliases, offenderArrivalTick, populationEndTick)),
+        dispositions: dispositionsIn(windowFor(controlAliases, offenderArrivalTick, populationEndTick)),
+        requireAllConsumed: false,
+        requireNoRefusals: true,
+        forbidClosureFor: controlAliases,
+        attribution:
+          'the compliant seats’ own rows across the whole offending period: the accepted-tick count must equal the consumed-observation count, no row of theirs may be a refusal, and no closure may name any of these aliases. The control seats had stopped streaming before the offenders arrived, so this window deliberately requires NO client frames of its own — it is the "nothing happened to them afterwards" half. The "every frame they did send was consumed" half is the window ABOVE.',
+      },
+    ];
+    const scenarioWindows = windows;
     const journalSnapshot = {
       configDocument: room().liveConfig() ?? null,
       prologue: room().journalPrologue() ?? null,
@@ -978,6 +1352,7 @@ async function main(): Promise<void> {
           // therefore claimed for the whole room journal by the replay, and the watermark shows where each
           // scenario stood when it made its claim.
           scenarioRanges,
+          scenarioWindows,
           settingsNote:
             'Provisional test settings on a loopback transport. Rows and chain are the authority’s own journalled decisions; '
             + 'retirement, gap naming, close codes, close observations and the effect ledger are transport and room facts and are '

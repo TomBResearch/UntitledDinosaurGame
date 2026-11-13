@@ -108,6 +108,31 @@ export const stampAndSend = (handle, frame) => {
  * verify consumption against the stamps it sent, not against the watermark.
  */
 export const issuedEpoch = (room) => room.state?.players?.get(room.sessionId)?.sessionEpoch ?? 0;
+/**
+ * Wait until the seat's replica row reports the epoch the ROOM issued, and return it.
+ *
+ * `minEpoch` exists for the rejoin case: the replica row of a REJOINED seat still carries the previous
+ * domain's epoch until the new state delivery lands, so waiting for "an epoch" is no wait at all and the
+ * first frame after a rejoin is stamped with the domain the room has already retired. A caller that has
+ * just rejoined passes `previous + 1`.
+ *
+ * F-3, found by the T-0 accounting: a frame sent the moment `create()` resolves can be admitted before
+ * the authority has issued this association's epoch, and `admit` refuses exactly that case with
+ * `EPOCH_MISMATCH` ("the association has no issued epoch: the entity has neither joined nor been
+ * retained"). Measured on the pinned stack: sending immediately gives `refused:epoch`; waiting for the
+ * replica row gives `consumed`. The replica row is the right thing to wait for because it is published
+ * from authority state — a client that can READ the epoch is a client whose epoch the authority has
+ * already issued, which is the ordering the first frame needs. Every harness seat should obtain its
+ * epoch here rather than assume one.
+ */
+export const waitForIssuedEpoch = async (room, budgetMs = 4000, minEpoch = 1) => {
+    const bound = await until(() => issuedEpoch(room) >= minEpoch, budgetMs);
+    const epoch = issuedEpoch(room);
+    if (!bound || epoch < minEpoch) {
+        throw new Error('the room never published an issued epoch >= ' + String(minEpoch) + ' for this seat within ' + String(budgetMs) + ' ms');
+    }
+    return epoch;
+};
 /** Convert the transport's `ws://` endpoint to the `http://` base the SDK client expects. */
 export async function connectSeatById(stack, endpoint, roomId, joinOptions, schemaCtor) {
   const client = new stack.sdk.ClientCtor(endpoint);

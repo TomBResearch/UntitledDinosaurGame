@@ -74,6 +74,26 @@ interface PopulationFile {
   readonly chain: readonly Record<string, unknown>[];
   readonly dropped: number;
   readonly scenarioRanges: readonly { scenario: string; rowStart: number; rowEnd: number; pass: boolean; surface: 'authority' | 'earlier-window' | 'none' }[];
+  /**
+   * Exact seat × tick windows for the scenarios that share this one room journal. Row ranges are
+   * watermarks and overlap; these are attribution, and they are re-derived here from the retained rows
+   * rather than trusted from the producer.
+   */
+  readonly scenarioWindows?: readonly {
+    readonly scenario: string;
+    readonly aliases: readonly string[];
+    readonly tickStart: number;
+    readonly tickEnd: number;
+    readonly stampsConsumed?: readonly number[];
+    readonly stampsSent?: readonly number[];
+    readonly dispositions?: Readonly<Record<string, number>>;
+    readonly allowedDispositions?: readonly string[];
+    readonly requireAllConsumed?: boolean;
+    readonly requireNoRefusals?: boolean;
+    readonly forbidClosureFor?: readonly string[];
+    readonly requireClosureFor?: string;
+    readonly closureCode?: number;
+  }[];
 }
 
 /** One row of the reconciled Phase 2 scenario inventory. */
@@ -508,6 +528,107 @@ async function main(): Promise<void> {
 
   const replayedRooms = results.filter((entry) => entry.replayed);
   const failedRooms = results.filter((entry) => entry.replayed && !roomPasses(entry));
+  // ── GA-13: exact seat × tick × stamp attribution for the two shared-journal scenarios ────────
+  // The population drives one room, so a scenario is not a range of rows. What CAN be exact is which
+  // seat, which tick range, and which stamps — and the check below recomputes all three from the retained
+  // rows and refuses a window whose recorded facts do not match the bytes.
+  const windowVerdicts: {
+    readonly scenario: string;
+    readonly aliases: readonly string[];
+    readonly tickStart: number;
+    readonly tickEnd: number;
+    readonly rowsInWindow: number;
+    readonly recomputedStamps: readonly number[];
+    readonly recordedStamps: readonly number[];
+    readonly stampsMatch: boolean;
+    readonly acceptedTicksMatchObservations: boolean;
+    readonly acceptedTickCount: number;
+    readonly consumedObservationCount: number;
+    readonly dispositions: Readonly<Record<string, number>>;
+    readonly dispositionsAllowed: boolean;
+    readonly allConsumed: boolean;
+    readonly noRefusals: boolean;
+    readonly contiguousStamps: boolean;
+    readonly pass: boolean;
+    readonly notes: readonly string[];
+  }[] = [];
+  if (populationFile !== null && populationResult?.replayed === true) {
+    const tickOfRow = (row: Record<string, unknown>): number => Number(row['tick'] ?? row['eligibleTick'] ?? Number.NaN);
+    for (const window of populationFile.scenarioWindows ?? []) {
+      const inWindow = populationFile.rows.filter((row) => window.aliases.includes(String(row['alias'] ?? ''))
+        && tickOfRow(row) >= window.tickStart
+        && tickOfRow(row) <= window.tickEnd);
+      const recomputedStamps = [...new Set(inWindow
+        .filter((row) => row['type'] === 'tick' && row['consumed'] !== null && row['consumed'] !== undefined)
+        .map((row) => Number(row['consumed'])))].sort((a, b) => a - b);
+      const recordedStamps = [...(window.stampsConsumed ?? [])].sort((a, b) => a - b);
+      const stampsMatch = JSON.stringify(recomputedStamps) === JSON.stringify(recordedStamps);
+      // Cross-row-type consistency: a tick that consumed something and an observation that was consumed
+      // are two journalled views of the same event, so their counts inside a seat-tick window must agree.
+      // (A `tick` row's `consumed` field is stage Q's arrival ordinal, numbered room-wide — NOT the wire
+      // stamp, which is why contiguity across seats is never asserted here and the wire-stamp join lives
+      // in the accounting module instead.)
+      const acceptedTickCount = inWindow.filter((row) => row['type'] === 'tick'
+        && row['consumed'] !== null && row['consumed'] !== undefined).length;
+      const consumedObservationCount = inWindow.filter((row) => row['type'] === 'observation'
+        && row['origin'] === 'client-payload' && row['disposition'] === 'consumed').length;
+      const acceptedTicksMatchObservations = acceptedTickCount === consumedObservationCount;
+      const dispositions: Record<string, number> = {};
+      for (const row of inWindow) {
+        if (row['type'] !== 'observation' || row['origin'] !== 'client-payload') continue;
+        const disposition = String(row['disposition']);
+        dispositions[disposition] = (dispositions[disposition] ?? 0) + 1;
+      }
+      const dispositionsAllowed = window.allowedDispositions === undefined
+        ? true
+        : Object.keys(dispositions).every((disposition) => (window.allowedDispositions as readonly string[]).includes(disposition));
+      const allConsumed = window.requireAllConsumed !== true
+        ? true
+        : Object.entries(dispositions).length > 0 && Object.keys(dispositions).every((disposition) => disposition === 'consumed');
+      const contiguousStamps = true; // arrival ordinals are room-wide; contiguity across seats is meaningless
+      // A window may demand that nothing belonging to its seats was refused, without demanding that its
+      // seats sent anything at all — the compliant population had stopped streaming by the time the
+      // offenders arrived, and "nothing happened to them" is a claim about an empty frame set too.
+      const noRefusals = window.requireNoRefusals !== true
+        ? true
+        : Object.entries(dispositions).every(([disposition]) => disposition === 'consumed');
+      const notes: string[] = [];
+      if (window.forbidClosureFor !== undefined) {
+        notes.push('no closure may name ' + window.forbidClosureFor.join('/') + ' — closures are room facts and are accounted by the producer (closuresOf), not journalled as authority rows');
+      }
+      if (window.requireClosureFor !== undefined && window.closureCode !== undefined) {
+        notes.push(`the producer records a ${String(window.closureCode)} closure for ${window.requireClosureFor}; the closure is a room fact, the window proves the rows up to it`);
+      }
+      const pass = inWindow.length > 0
+        && stampsMatch
+        && acceptedTicksMatchObservations
+        && dispositionsAllowed
+        && allConsumed
+        && noRefusals
+        && contiguousStamps;
+      windowVerdicts.push({
+        scenario: window.scenario,
+        aliases: window.aliases,
+        tickStart: window.tickStart,
+        tickEnd: window.tickEnd,
+        rowsInWindow: inWindow.length,
+        recomputedStamps,
+        recordedStamps,
+        stampsMatch,
+        acceptedTicksMatchObservations,
+        acceptedTickCount,
+        consumedObservationCount,
+        dispositions,
+        dispositionsAllowed,
+        allConsumed,
+        noRefusals,
+        contiguousStamps,
+        pass,
+        notes,
+      });
+    }
+  }
+
   const unreplayed = results.filter((entry) => !entry.replayed);
   const verdict = replayedRooms.length > 0 && failedRooms.length === 0 ? 'pass' : 'fail';
 
@@ -548,6 +669,9 @@ async function main(): Promise<void> {
         rooms: results,
         scenarios: scenarioVerdicts,
         unreplayedScenarios: unreplayed.map((entry) => ({ source: entry.source, scenario: entry.scenario, reason: entry.refusal ?? 'unknown' })),
+        scenarioWindows: windowVerdicts,
+        windowRule:
+          'GA-13 attribution for the scenarios that share one room journal: seat set, tick range and stamp set, recomputed here from the retained rows. A window whose recorded stamps do not equal the stamps in its rows, whose accepted-tick count disagrees with its consumed-observation count, or that shows a disposition outside its allowed set, fails.',
         missingInputs,
         // Where a negative control could not bite, say so instead of leaving the reader to assume it did.
         controlLimits: results.map((entry) => ({

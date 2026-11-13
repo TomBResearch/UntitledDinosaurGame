@@ -98,6 +98,8 @@ export declare const stampAndSend: (handle: SdkInputHandle<Record<string, unknow
  * so a compliant sender stamps this value and verifies consumption against the stamps it sent.
  */
 export declare const issuedEpoch: (room: unknown) => number;
+/** Wait until the seat's replica row reports the room-issued epoch, then return it (F-3). */
+export declare const waitForIssuedEpoch: (room: unknown, budgetMs?: number, minEpoch?: number) => Promise<number>;
 /** Convert the transport's `ws://` endpoint to the `http://` base the SDK client expects. */
 export declare function connectSeatById<S = unknown>(stack: PinnedStack, endpoint: string, roomId: string, joinOptions: unknown, schemaCtor: unknown): Promise<Seat<S>>;
 export declare const httpEndpoint: (wsEndpoint: string) => string;

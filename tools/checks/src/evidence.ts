@@ -272,6 +272,16 @@ export const PHASE_2_VECTOR_FILES: readonly string[] = [
   'journal-population.json',
   'journal-recovery.json',
   'journal-replay.json',
+  // T-1…T-4 (OD-9, owner-approved): the six artefacts the revised criteria need. Each one is produced by
+  // a named script and gated by the vectors gate, which refuses a bundle that lists it and lacks it.
+  // Per-seat queue depth did NOT get its own file — it is extra rows in `buffer-depth.csv`, which is
+  // hashed as bytes by this gate and parsed by nobody (the vectors suite CSV case is that check).
+  'reference-trace.json',
+  'ticks.jsonl',
+  'inputs.jsonl',
+  'displacement-bound.json',
+  'burst-b8.json',
+  'projection-isolation.json',
 ];
 
 export const PHASE_2_LABEL = 'phase-2';
@@ -803,6 +813,14 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       // Phase 2's runtime evidence is written by its own scripts — the adversarial population and
       // the recovery scenarios — BEFORE the pure vectors suite writes the manifest that names them
       // all; order is part of the contract, and a missing runtime file fails the manifest.
+      // T-1: AC-1's reference trace. Written FIRST among the Phase 2 producers because the capture order
+      // is an argument, not a schedule: the 200-tick flat trace is the baseline every later movement
+      // claim in the bundle is read against, so it should exist before them.
+      {
+        label: 'phase-2-reference-trace',
+        argv: ['node', 'tests/reference/flat-direct-step.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
       {
         label: 'phase-2-abuse-population',
         argv: ['node', 'tests/runtime/udg-003-phase-2/abuse-population.ts'],
@@ -811,6 +829,14 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       {
         label: 'phase-2-recovery-scenarios',
         argv: ['node', 'tests/runtime/udg-003-phase-2/recovery-scenarios.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      // T-4: GA-9 + AC-7. After the population and recovery runs (whose own rooms it does not touch) and
+      // before the replay, because it writes no journal the replay consumes but it must be gated by the
+      // same manifest that names everything else.
+      {
+        label: 'phase-2-isolation-comparison',
+        argv: ['node', 'tests/runtime/udg-003-phase-2/projection-isolation.ts'],
         env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
       },
       // R-1: replay the retained journals in a process that never saw any of these rooms. It runs after
