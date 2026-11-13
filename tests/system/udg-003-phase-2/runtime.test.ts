@@ -58,10 +58,42 @@ describe('UDG-003 Phase 2 runtime — the population and the recovery scenarios'
     expect(existsSync(resultsPath), 'the population must write abuse-results.json').toBe(true);
     const results = JSON.parse(readFileSync(resultsPath, 'utf8')) as {
       verdict: string;
-      scenarios: { scenario: string; pass: boolean }[];
+      scenarios: { scenario: string; pass: boolean; observed: Record<string, unknown> }[];
     };
     expect(results.verdict).toBe('pass');
     expect(results.scenarios.filter((entry) => !entry.pass).map((entry) => entry.scenario)).toEqual([]);
+
+    // ── T-0 / F-1: the population's compliant seats are CONSUMED, not merely represented ──────────
+    const seatRows = (results.scenarios.find((entry) => entry.scenario === 'compliant-control-population')!
+      .observed['seats'] as Record<string, unknown>[]);
+    expect(seatRows.length).toBe(3);
+    for (const seat of seatRows) {
+      expect(seat['allSentStampsConsumed'], `control seat ${String(seat['sessionId'])} consumed every stamp`).toBe(true);
+      expect(seat['missingStamps']).toEqual([]);
+      expect(seat['stampsRefused']).toBe(0);
+      expect(seat['pairingConsistent']).toBe(true);
+      expect(seat['movedMeters']).toBe(seat['expectedMeters']);
+    }
+
+    // The control that makes the assertion above falsifiable: identical frames, one epoch apart. The
+    // compliant-stream check has to FAIL for the wrong-epoch seat while the old watermark check still
+    // passes for it — if either half of that flips, consumption is not what is being measured.
+    const epochControl = results.scenarios.find((entry) => entry.scenario === 'wrong-epoch-stream-fails-the-compliant-assertion');
+    expect(epochControl, 'the wrong-epoch control must run').toBeDefined();
+    const control = epochControl!.observed;
+    expect(control['compliantAssertionPassedForCorrectSeat']).toBe(true);
+    expect(control['compliantAssertionPassedForWrongSeat']).toBe(false);
+    const wrongSeat = control['wrongSeat'] as Record<string, unknown>;
+    expect(wrongSeat['stampsConsumed']).toBe(0);
+    expect(wrongSeat['stampsRefused']).toBe(8);
+    expect(wrongSeat['movedMeters']).toBe(0);
+    expect(control['watermarkWouldHaveCalledItCompliant']).toBe(true);
+
+    // An offender that is closed for the right reason: its frames were valid, so the closure can only
+    // be the rate ceiling and the retirement, never a screen refusal.
+    const rate = results.scenarios.find((entry) => entry.scenario === 'rate-ceiling-closes-directly')!;
+    expect((rate.observed['rateWindow'] as Record<string, unknown>)['stampsRefused']).toBe(0);
+
     const w9 = JSON.parse(readFileSync(join(OUT_DIR, 'close-path-accounting.json'), 'utf8')) as { measurement: Record<string, unknown> };
     expect(typeof w9.measurement['serverQueuedAtClose']).toBe('number');
   }, 300_000);

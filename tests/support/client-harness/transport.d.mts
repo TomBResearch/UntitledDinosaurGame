@@ -92,6 +92,12 @@ export interface Seat<S = unknown> {
 export declare const connectSeat: <S = unknown>(stack: PinnedStack, endpoint: string, roomName: string, joinOptions: unknown, schemaCtor: unknown) => Promise<Seat<S>>;
 /** Stamp and send one direct wire frame: `sentCount + 1`, the value the SDK will acknowledge (PR-15 S1). */
 export declare const stampAndSend: (handle: SdkInputHandle<Record<string, unknown>>, frame: Record<string, unknown>) => number;
+/**
+ * The epoch the ROOM issued for this seat, read from its own replica row (F-1). A stream stamped with
+ * any other epoch is refused by the screen while `inputResolvedThrough` still advances over the refusal,
+ * so a compliant sender stamps this value and verifies consumption against the stamps it sent.
+ */
+export declare const issuedEpoch: (room: unknown) => number;
 /** Convert the transport's `ws://` endpoint to the `http://` base the SDK client expects. */
 export declare function connectSeatById<S = unknown>(stack: PinnedStack, endpoint: string, roomId: string, joinOptions: unknown, schemaCtor: unknown): Promise<Seat<S>>;
 export declare const httpEndpoint: (wsEndpoint: string) => string;

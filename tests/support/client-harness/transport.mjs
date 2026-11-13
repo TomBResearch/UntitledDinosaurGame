@@ -95,6 +95,19 @@ export const stampAndSend = (handle, frame) => {
     Object.assign(handle.data, frame, { seq: handle.sentCount + 1 });
     return handle.send();
 };
+/**
+ * The epoch the ROOM issued for this seat, read the way a real client reads it: its own replica row
+ * (`players.get(sessionId).sessionEpoch`, published by `publishPlayer`).
+ *
+ * F-1, found by reading the retained population journal against `abuse-results.json`: the room issues a
+ * distinct monotonic epoch per join, so a harness that hard-codes an epoch sends every frame of every
+ * seat after the first into `EPOCH_MISMATCH`. The screen's refusal is still a *representation*, so
+ * `inputResolvedThrough` advances over it exactly as ADR-0003 §4 requires — which is precisely why a
+ * stream stamped with the wrong epoch looks healthy from the watermark and is not a compliant stream
+ * at all. A scenario that means "the authority consumed this frame" must stamp this value and must
+ * verify consumption against the stamps it sent, not against the watermark.
+ */
+export const issuedEpoch = (room) => room.state?.players?.get(room.sessionId)?.sessionEpoch ?? 0;
 /** Convert the transport's `ws://` endpoint to the `http://` base the SDK client expects. */
 export async function connectSeatById(stack, endpoint, roomId, joinOptions, schemaCtor) {
   const client = new stack.sdk.ClientCtor(endpoint);

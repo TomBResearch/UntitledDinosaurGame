@@ -2618,3 +2618,53 @@ describe('UDG-003 Phase 2 — W-1 applies ADR-0003 §4 byte for byte (D-P2-2)', 
     expect(applied).not.toContain('their SDK acknowledgement remains truthful');
   });
 });
+
+describe('UDG-003 Phase 2 — T-0: a compliant seat stamps the epoch the room issued (F-1)', () => {
+  const population = readUtf8(join('tests', 'runtime', 'udg-003-phase-2', 'abuse-population.ts'));
+  const harness = readUtf8(join('tests', 'support', 'client-harness', 'transport.mjs'));
+  const harnessTypes = readUtf8(join('tests', 'support', 'client-harness', 'transport.d.mts'));
+
+  it('stamps no epoch literal anywhere in the population script', () => {
+    // F-1 was a literal. `sessionEpoch: 1` on every frame of every seat is what made every seat after
+    // the first in the shared room a stream of EPOCH_MISMATCH refusals that the watermark reported as
+    // success. The value has to come from the room, so it must not be written here at all.
+    expect(population).not.toMatch(/sessionEpoch:\s*-?\d/);
+    expect(population).toContain('issuedEpoch(');
+  });
+
+  it('verifies consumption against the stamps sent, not against the watermark', () => {
+    expect(population).toContain('allSentStampsConsumed');
+    expect(population).toContain('sentStamps');
+    expect(population).toContain('tickRecord.consumed');
+    // The compliant scenarios are closed against the accounting, so a future edit cannot restore the
+    // old claim by reading a row field again: these substrings are the pass conditions themselves.
+    expect(population).toContain('row.allSentStampsConsumed === true');
+    expect(population).toContain('pressureFinal.allSentStampsConsumed');
+    expect(population).toContain('idleAccounting.allSentStampsConsumed');
+    expect(population).toContain('stampsRefused');
+  });
+
+  it('ships the wrong-epoch control that fails the compliant-stream assertion', () => {
+    expect(population).toContain("'wrong-epoch-stream-fails-the-compliant-assertion'");
+    // The control's whole point is recorded, not implied: the same predicate has to be true for the
+    // correct epoch and false for epoch+1, and the artefact has to state that the watermark says
+    // "healthy" for both.
+    expect(population).toContain('compliantAssertionPassedForCorrectSeat');
+    expect(population).toContain('compliantAssertionPassedForWrongSeat');
+    expect(population).toContain('watermarkWouldHaveCalledItCompliant');
+    expect(population).toContain('wrongAccounting.allSentStampsConsumed === false');
+  });
+
+  it('teaches the harness to read the issued epoch where a client reads it', () => {
+    expect(harness).toContain('export const issuedEpoch');
+    expect(harness).toContain('players?.get(room.sessionId)');
+    expect(harness).toContain('F-1');
+    expect(harnessTypes).toContain('export declare const issuedEpoch');
+  });
+
+  it('keeps the refusal-shaped evidence of the pre-T-0 run named in the record', () => {
+    // The disclosure travels with the artefact that replaces the one that hid it.
+    expect(population).toContain('F-1');
+    expect(population).toContain('EPOCH_MISMATCH');
+  });
+});

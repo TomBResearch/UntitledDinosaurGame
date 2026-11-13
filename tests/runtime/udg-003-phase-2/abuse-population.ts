@@ -28,6 +28,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import {
   connectSeat,
   connectSeatById,
+  issuedEpoch,
   loadPinnedStack,
   sleep,
   startHarnessServer,
@@ -155,6 +156,83 @@ process.on('unhandledRejection', (reason: unknown) => {
 const rowOf = (room: SdkRoom<ProbeRegionState>): PlayerRow | undefined =>
   room.state.players.get(room.sessionId);
 
+/**
+ * A seat as the HARNESS knows it, which is not the same as the room knowing it (F-1).
+ *
+ * `epoch` is the epoch the room issued and replicated to this seat, and `sentStamps` is every wire
+ * stamp this seat actually put on the wire. Those two together are what makes a consumption claim
+ * checkable: the earlier version of this script stamped a literal `1` on every frame of every seat,
+ * so every seat after the first in the shared room streamed into `EPOCH_MISMATCH` while its watermark
+ * advanced over the refusals exactly as ADR-0003 §4 requires it to. Nothing downstream could tell a
+ * consumed stream from a refused one, because nothing recorded which stamps had been sent.
+ */
+interface Seat {
+  readonly room: SdkRoom<ProbeRegionState>;
+  readonly entityId: string;
+  /** The epoch the room issued for THIS seat. Frames carrying any other value are screened. */
+  epoch: number;
+  /** Every wire stamp sent from this seat, in send order, as the harness stamped it. */
+  sentStamps: number[];
+  /**
+   * Sends whose pre-computed stamp had already been used. The SDK advances its own send counter, and
+   * PR-15 S1 measured that a stamp equals `send()`'s acknowledgement only while stamps and sends
+   * correspond 1:1 — an unpaced burst can break that. Counting collisions here keeps the per-stamp
+   * claim honest: where the stamps are not well defined, the claim is refused rather than guessed.
+   */
+  collidedStamps: number;
+}
+
+/** What the room did with one seat's sent stamps, read back from the room's own records. */
+interface WindowAccounting {
+  readonly stampsSent: number;
+  /** Dequeued AND accepted: the stamp's own journalled disposition is `consumed`. */
+  readonly stampsConsumed: number;
+  readonly stampsRefused: number;
+  readonly stampsDroppedAtClose: number;
+  readonly missingStamps: readonly number[];
+  readonly duplicateStamps: readonly number[];
+  /**
+   * The room records a dequeue on the tick it drains, BEFORE the screen's verdict, so a dequeued stamp
+   * is not yet an accepted one. The two are joined by FIFO order per seat; a mismatch in their counts
+   * means the pairing itself broke, and the accounting refuses to claim anything in that case.
+   */
+  readonly pairingConsistent: boolean;
+  readonly collidedStamps: number;
+  readonly movedMeters: number;
+  /**
+   * The compliant-stream assertion. True only when EVERY stamp this seat sent was consumed exactly
+   * once and nothing was refused — the property the watermark was previously being asked to prove.
+   */
+  readonly allSentStampsConsumed: boolean;
+}
+
+/** A window summary small enough to retain: the arrays that matter are the ones that are NOT empty. */
+interface WindowEvidence {
+  readonly stampsSent: number;
+  readonly stampsConsumed: number;
+  readonly stampsRefused: number;
+  readonly stampsDroppedAtClose: number;
+  readonly missingStamps: readonly number[];
+  readonly duplicateStamps: readonly number[];
+  readonly pairingConsistent: boolean;
+  readonly collidedStamps: number;
+  readonly movedMeters: number;
+  readonly allSentStampsConsumed: boolean;
+}
+
+const windowEvidence = (accounting: WindowAccounting): WindowEvidence => ({
+  stampsSent: accounting.stampsSent,
+  stampsConsumed: accounting.stampsConsumed,
+  stampsRefused: accounting.stampsRefused,
+  stampsDroppedAtClose: accounting.stampsDroppedAtClose,
+  missingStamps: accounting.missingStamps,
+  duplicateStamps: accounting.duplicateStamps,
+  pairingConsistent: accounting.pairingConsistent,
+  collidedStamps: accounting.collidedStamps,
+  movedMeters: Number(accounting.movedMeters.toFixed(9)),
+  allSentStampsConsumed: accounting.allSentStampsConsumed,
+});
+
 async function main(): Promise<void> {
   // The output directory is created BEFORE the first artefact, not before the last one. The local
   // default directory pre-existed from earlier runs and hid this; a fresh capture environment does
@@ -212,6 +290,98 @@ async function main(): Promise<void> {
       return journalCursor;
     }
   };
+
+  // ── Seats, epochs and consumption (T-0, F-1) ──────────────────────────────────────────────────
+  // Per-tick horizontal travel of the flat relation, read from the hashed configuration rather than
+  // written here: it is the number the consumption claim is converted into metres with.
+  const stepMeters = ((cfg['movement'] as Record<string, unknown>)['speed'] as number)
+    * ((cfg['network'] as Record<string, unknown>)['simulationStepSeconds'] as number);
+
+  /** Join a seat and wait until the room's issued epoch has reached this client's replica. */
+  const seated = async (join: () => Promise<{ room: SdkRoom<ProbeRegionState> }>, label: string): Promise<Seat> => {
+    const joined = await withTimeout(join(), 8_000, label);
+    const sawEpoch = await until(() => issuedEpoch(joined.room) > 0, 5_000);
+    const epoch = issuedEpoch(joined.room);
+    if (!sawEpoch || epoch <= 0) throw new Error(`${label}: the room's issued epoch never reached the replica`);
+    return { room: joined.room, entityId: joined.room.sessionId, epoch, sentStamps: [], collidedStamps: 0 };
+  };
+
+  /**
+   * Send one frame from a seat with the epoch the ROOM issued for it, recording the stamp that went on
+   * the wire. `epochOverride` exists for exactly one caller: the wrong-epoch control, whose whole purpose
+   * is to send a frame no compliant client would send and show that the consumption check notices.
+   */
+  const sendAs = (seat: Seat, frame: Record<string, unknown>, epochOverride?: number): number => {
+    const handle = seat.room.input<Record<string, unknown>>();
+    const stamp = handle.sentCount + 1;
+    if (seat.sentStamps.includes(stamp)) seat.collidedStamps += 1;
+    seat.sentStamps.push(stamp);
+    stampAndSend(handle, { ...frame, sessionEpoch: epochOverride ?? seat.epoch });
+    return stamp;
+  };
+
+  /** The stamps the room consumed for one seat, per tick, from the room's own tick records. */
+  const consumedStampsOf = (entityId: string): number[] =>
+    room()
+      .tickRecords.flatMap((tickRecord) => tickRecord.consumed.filter((entry) => entry.entityId === entityId).map((entry) => entry.seq));
+
+  /**
+   * Compare what a seat sent with what the room consumed and represented. Every input here is a fact the
+   * harness or the room recorded about this seat; none of it is inferred from a watermark, which is the
+   * whole point: a refusal advances `inputResolvedThrough` and must not advance this claim.
+   */
+  const windowAccounting = (seat: Seat, fromTick = 0): WindowAccounting => {
+    const dequeued = consumedStampsOf(seat.entityId);
+    // The authority's own journalled dispositions for THIS seat's client frames, in arrival order.
+    // `kind: 'direct'` with `origin: 'client-payload'` is the boundary: the rows the server writes for
+    // join/leave are dispositions too, and counting them as client frames would inflate every claim here.
+    const dispositions = room()
+      .journal()
+      .rows
+      .filter((row) => row['type'] === 'observation' && row['entityId'] === seat.entityId && row['kind'] === 'direct' && row['origin'] === 'client-payload')
+      .map((row) => String(row['disposition'] ?? 'unknown'));
+    const pairingConsistent = dequeued.length === dispositions.length;
+    // FIFO pairing: one drain produces exactly one disposition row, so index n of the drained stamps is
+    // index n of the disposition rows. Without the count check the pairing would silently mis-attribute
+    // a stamp to a neighbouring frame's verdict the moment the two sequences drifted.
+    const accepted = new Map<number, number>();
+    let refused = 0;
+    let dropped = 0;
+    dequeued.forEach((stamp, index) => {
+      const disposition = dispositions[index] ?? 'unpaired';
+      if (disposition === 'consumed') accepted.set(stamp, (accepted.get(stamp) ?? 0) + 1);
+      else if (disposition.startsWith('refused')) refused += 1;
+      else if (disposition.startsWith('dropped')) dropped += 1;
+    });
+    const missing = seat.sentStamps.filter((stamp) => (accepted.get(stamp) ?? 0) === 0);
+    const duplicates = [...accepted.entries()].filter(([, count]) => count > 1).map(([stamp]) => stamp);
+    const movedMeters = room()
+      .journal()
+      .rows.filter((row) => row['type'] === 'tick' && row['entityId'] === seat.entityId && Number(row['tick']) >= fromTick)
+      .reduce((total, row) => total + (Number(row['resolvedDisplacement']) || 0), 0);
+    return {
+      stampsSent: seat.sentStamps.length,
+      stampsConsumed: accepted.size,
+      stampsRefused: refused,
+      stampsDroppedAtClose: dropped,
+      missingStamps: missing,
+      duplicateStamps: duplicates,
+      pairingConsistent,
+      collidedStamps: seat.collidedStamps,
+      movedMeters,
+      allSentStampsConsumed:
+        pairingConsistent
+          && seat.collidedStamps === 0
+          && missing.length === 0
+          && duplicates.length === 0
+          && refused === 0
+          && dropped === 0,
+    };
+  };
+
+  /** Wait until every stamp the seat sent has been consumed, or the budget runs out and the claim fails honestly. */
+  const waitForConsumption = (seat: Seat, budgetMs: number): Promise<boolean> =>
+    until(() => windowAccounting(seat).missingStamps.length === 0, budgetMs);
 
   const room = (): RoomInstance => {
     // The bounded room is the only RegionRoom that survives construction here (the unbounded type
@@ -273,114 +443,234 @@ async function main(): Promise<void> {
     // "the neighbours" vacuous. (Live-measured: `liveRoomCount 6`.) A population shares ONE room, so
     // the first seat creates and the rest join that room by id; this is also what GA-12's control
     // population means: offenders and controls in the same replicated world.
-    const firstSeat = await withTimeout(
-      connectSeat<ProbeRegionState>(stack, server.endpoint, 'region', identity, RegionSchema),
-      8_000,
+    const firstSeat = await seated(
+      () => connectSeat<ProbeRegionState>(stack, server.endpoint, 'region', identity, RegionSchema),
       'control seat 0',
     );
     const sharedRoomId = firstSeat.room.roomId;
-    const controls: { room: SdkRoom<ProbeRegionState>; sent: number }[] = [{ room: firstSeat.room, sent: 0 }];
+    const controls: Seat[] = [firstSeat];
     for (let i = 1; i < 3; i += 1) {
-      const seat = await withTimeout(
-        connectSeatById<ProbeRegionState>(stack, server.endpoint, sharedRoomId, identity, RegionSchema),
-        8_000,
-        `control seat ${String(i)}`,
+      controls.push(
+        await seated(
+          () => connectSeatById<ProbeRegionState>(stack, server.endpoint, sharedRoomId, identity, RegionSchema),
+          `control seat ${String(i)}`,
+        ),
       );
-      controls.push({ room: seat.room, sent: 0 });
     }
     const controlTicks = 60;
     for (let tick = 0; tick < controlTicks; tick += 1) {
       for (const seat of controls) {
-        stampAndSend(seat.room.input<Record<string, unknown>>(), {
-          sessionEpoch: 1,
+        sendAs(seat, {
           generation: 1,
           directIntent: { kind: 'continuous', drive: 1, strafing: 0, vertical: 0 },
           moveX: 0,
           moveZ: 1,
         });
-        seat.sent += 1;
       }
       await sleep(50);
     }
     // Let the last in-flight frames land before reading the rows: the room consumes at most one
     // observation per entity per tick, so the final stamp resolves on the tick after the final send.
     const settled = await until(
-      () => controls.every((seat) => (rowOf(seat.room)?.inputResolvedThrough ?? 0) >= seat.sent),
+      () => controls.every((seat) => (rowOf(seat.room)?.inputResolvedThrough ?? 0) >= seat.sentStamps.length),
       4_000,
     );
+    const consumedEverywhere = await Promise.all(controls.map((seat) => waitForConsumption(seat, 4_000)));
     const controlRows = controls.map((seat) => {
       const row = rowOf(seat.room);
+      const accounting = windowAccounting(seat);
       return {
         sessionId: seat.room.sessionId,
-        sent: seat.sent,
+        epoch: seat.epoch,
+        sent: seat.sentStamps.length,
         resolvedThrough: row?.inputResolvedThrough ?? -1,
         retired: row?.inputRetiredUnrepresented ?? -1,
         gaps: row !== undefined && row.inputGapStart !== 0 ? `${String(row.inputGapStart)}..${String(row.inputGapEnd)}` : null,
+        expectedMeters: Number((stepMeters * seat.sentStamps.length).toFixed(9)),
+        ...windowEvidence(accounting),
       };
     });
     const evidenceAfterControls = room().evidence();
     record(
       'compliant-control-population',
-      'GA-12 control: three seats at one frame per tick for three seconds resolve everything they send, retire nothing, and close nothing',
+      'GA-12 control: three seats at one frame per tick for three seconds resolve everything they send, retire nothing, and close nothing — and, after F-1, “resolve” means the room consumed every stamp the seat sent and the entity moved that many flat steps, not that the watermark reached N',
       {
         settled,
         seats: controlRows,
         closures: (closuresOf() ?? []).length,
         throttled: (evidenceAfterControls['seats'] as { throttled: boolean }[]).filter((s) => s.throttled).length,
       },
-      controlRows.every((row) => row.retired === 0 && row.gaps === null && row.resolvedThrough === row.sent)
+      controlRows.every(
+        (row) => row.retired === 0
+          && row.gaps === null
+          && row.resolvedThrough === row.sent
+          && row.allSentStampsConsumed === true
+          && row.pairingConsistent === true
+          && Math.abs(row.movedMeters - row.expectedMeters) < 1e-9,
+      )
+        && consumedEverywhere.every((didConsume) => didConsume)
         && (closuresOf() ?? []).length === 0,
+    );
+
+    stage('epoch-control');
+    // ── F-1's own control: identical frames, one epoch apart, one check that can tell them apart ─────
+    // This scenario exists because the submitted population measured the wrong thing. The room issues a
+    // distinct epoch per join, a refusal IS a representation (ADR-0003 §4), and so a stream stamped with
+    // somebody else's epoch shows `inputResolvedThrough == sent` while not one frame reached the
+    // authority. Here two seats send byte-identical frames eight ticks apart in epoch only: the check
+    // that must pass for one must fail for the other, and the artefact must show that the OLD check —
+    // the watermark — reports both as healthy.
+    const epochFrame = {
+      generation: 1,
+      directIntent: { kind: 'continuous', drive: 1, strafing: 0, vertical: 0 },
+      moveX: 0,
+      moveZ: 1,
+    };
+    const epochCorrectSeat = await seated(
+      () => connectSeatById<ProbeRegionState>(stack, server.endpoint, sharedRoomId, identity, RegionSchema),
+      'epoch-correct seat',
+    );
+    const epochWrongSeat = await seated(
+      () => connectSeatById<ProbeRegionState>(stack, server.endpoint, sharedRoomId, identity, RegionSchema),
+      'epoch-wrong seat',
+    );
+    const wrongEpochSent = epochWrongSeat.epoch + 1;
+    for (let i = 0; i < 8; i += 1) {
+      sendAs(epochCorrectSeat, epochFrame);
+      sendAs(epochWrongSeat, epochFrame, wrongEpochSent);
+      await sleep(60);
+    }
+    const correctConsumed = await waitForConsumption(epochCorrectSeat, 4_000);
+    await sleep(400);
+    const correctAccounting = windowAccounting(epochCorrectSeat);
+    const wrongAccounting = windowAccounting(epochWrongSeat);
+    const wrongWatermark = rowOf(epochWrongSeat.room)?.inputResolvedThrough ?? -1;
+    record(
+      'wrong-epoch-stream-fails-the-compliant-assertion',
+      'F-1 control: eight frames identical to the compliant seat’s except that they carry the epoch the room did NOT issue must FAIL the same allSentStampsConsumed check the compliant seat passes — refused on every stamp, consumed on none, entity unmoved — while the watermark reads both seats as fully resolved',
+      {
+        correctSeat: { issuedEpoch: epochCorrectSeat.epoch, ...windowEvidence(correctAccounting), expectedMeters: Number((stepMeters * 8).toFixed(9)) },
+        wrongSeat: { issuedEpoch: epochWrongSeat.epoch, epochSent: wrongEpochSent, ...windowEvidence(wrongAccounting), expectedMetersIfConsumed: Number((stepMeters * 8).toFixed(9)) },
+        compliantAssertionPassedForCorrectSeat: correctAccounting.allSentStampsConsumed,
+        compliantAssertionPassedForWrongSeat: wrongAccounting.allSentStampsConsumed,
+        watermarkOnWrongSeat: wrongWatermark,
+        watermarkWouldHaveCalledItCompliant: wrongWatermark === 8,
+        correctStreamConsumedEveryStamp: correctConsumed,
+      },
+      correctAccounting.allSentStampsConsumed
+        && wrongAccounting.allSentStampsConsumed === false
+        && wrongAccounting.stampsRefused === 8
+        && wrongAccounting.stampsConsumed === 0
+        && Math.abs(wrongAccounting.movedMeters) < 1e-12
+        && Math.abs(correctAccounting.movedMeters - stepMeters * 8) < 1e-9
+        // The reason F-1 hid: the pre-T-0 check passes for a stream that never reached the authority.
+        && wrongWatermark === 8,
     );
 
     stage('pressure');
     // ── Pressure seat: throttle, never close ────────────────────────────────────────────────────
-    const pressureSeat = await withTimeout(connectSeatById<ProbeRegionState>(stack, server.endpoint, sharedRoomId, identity, RegionSchema), 8_000, 'pressure seat');
+    const pressureSeat = await seated(
+      () => connectSeatById<ProbeRegionState>(stack, server.endpoint, sharedRoomId, identity, RegionSchema),
+      'pressure seat',
+    );
     const pressureEntityBefore = (room().evidence()['seats'] as { entityId: string }[]).length;
-    // 12 frames inside ~180 ms: enough depth to cross the (declared, overridden) pressure line
-    // while the window is still too short for the rate measurement to have a span to speak of.
-    for (let i = 1; i <= 12; i += 1) {
-      stampAndSend(pressureSeat.room.input<Record<string, unknown>>(), {
-        sessionEpoch: 1,
+    // The pressure seat has to arrive INSIDE the legal band, and T-0 is what exposed that it did not:
+    // 12 frames at 15 ms is an ~800/s arrival rate, and the only reason the pre-T-0 run was not closed
+    // for it is that the room never looked at that seat's stream at all. The band is narrow and it is
+    // arithmetic, not vibes:
+    //   drain      = inputRatePerTick × tickRate = 1 × 20 = 20 frames/s (one observation per entity per tick)
+    //   pressure   = bufferMaxSize − bufferPressureMargin = 32 − 24 = 8 frames of depth
+    //   ceiling    = rateCeilingMessagesPerSecond = 30 frames/s (this deployment's declared override)
+    // so arrivals must sit strictly between 20/s and 30/s. At 42 ms per frame the seat arrives at
+    // ~23.8/s: deep enough to cross the pressure line after ~2 s of accumulation (growth ≈ 3.8/s), and
+    // 20 % under the ceiling it must not trip. The numbers below are what the artefact reports them
+    // against, so a future retune that puts arrivals outside the band fails here rather than
+    // silently closing the seat for the wrong consequence.
+    const pressurePacingMs = 42;
+    // 160 frames, not 12 and not 64. Measured: the drain takes 20/s and a paced send lands at ~22/s,
+    // so depth grows at about 1.7-2/s and the line at 8 is crossed after ~4 s INSIDE the band. The
+    // first T-0 construction (64 frames) stopped at depth 5 and the artefact said so; that failure is
+    // why the scenario now runs long enough for its own arithmetic to be true.
+    const pressureFrames = 160;
+    const drainPerSecond = ((envelope['inputRatePerTick'] as number) ?? 1) * ((cfg['network'] as Record<string, unknown>)['tickRate'] as number);
+    const arrivalRate = 1_000 / pressurePacingMs;
+    // Depth is sampled every frame from the server's own accessor, so the artefact can say what the
+    // queue actually held instead of what the pacing arithmetic predicted it should hold: the first
+    // T-0 run of this construction reached the seat's 64th stamp with a queue the pressure line never
+    // saw, and the only honest way to find out why is to watch the number.
+    let pressurePeakDepth = 0;
+    const pressureSendStart = Date.now();
+    for (let i = 1; i <= pressureFrames; i += 1) {
+      sendAs(pressureSeat, {
         generation: 1,
         directIntent: { kind: 'continuous', drive: 0, strafing: 0, vertical: 0 },
         moveX: 0,
         moveZ: 0,
       });
-      await sleep(15);
+      const depthNow = room().inputs?.get(pressureSeat.entityId)?.size ?? 0;
+      pressurePeakDepth = Math.max(pressurePeakDepth, depthNow);
+      await sleep(pressurePacingMs);
     }
+    const pressureSendMs = Date.now() - pressureSendStart;
     const pressureWatched = await until(() => {
-      const seats = room().evidence()['seats'] as { throttled: boolean; retiredUnrepresented: number }[];
-      return seats.some((s) => s.throttled) || seats.every((s) => s.retiredUnrepresented === 0);
-    }, 4_000);
+      const seats = room().evidence()['seats'] as { throttled: boolean; retiredUnrepresented: number; closing: boolean }[];
+      return seats.some((s) => s.throttled) || seats.some((s) => s.closing) || seats.length === 0;
+    }, 6_000);
     await sleep(1_500);
     const seatsAfterPressure = room().evidence()['seats'] as { throttled: boolean; retiredUnrepresented: number; closing: boolean }[];
     const pressureRow = rowOf(pressureSeat.room);
+    const pressureDrained = await waitForConsumption(pressureSeat, 12_000);
+    const pressureFinal = windowAccounting(pressureSeat);
     record(
       'pressure-throttles-and-never-closes',
-      'QUEUE_PRESSURE (depth >= 32 − 8) latches the throttle only: no closure, no retirement, seat stays open and resolves its queue afterwards',
+      'QUEUE_PRESSURE (depth >= 32 − 8) latches the throttle only: no closure, no retirement, and the seat consumes every stamp it sent once the queue drains',
       {
         pressureWatched,
         throttledSeen: seatsAfterPressure.some((s) => s.throttled),
         anyClosing: seatsAfterPressure.some((s) => s.closing),
         closuresTotal: closuresOf().length,
         retired: pressureRow?.inputRetiredUnrepresented ?? -1,
-        pressureStillSeated: (room().evidence()['seats'] as unknown[]).length > pressureEntityBefore,
+        pressureStillSeated: (room().evidence()['seats'] as { entityId: string }[]).some((seat) => seat.entityId === pressureSeat.entityId),
+        seatsAtPressureStart: pressureEntityBefore,
+        // The band the construction had to be built inside, stated so the claim can be checked.
+        construction: {
+          framesSent: pressureFrames,
+          pacingMs: pressurePacingMs,
+          sendElapsedMs: pressureSendMs,
+          measuredArrivalPerSecond: Number(((pressureFrames / Math.max(pressureSendMs, 1)) * 1_000).toFixed(2)),
+          peakDepthSampledFromServer: pressurePeakDepth,
+          pressureLine: (envelope['bufferMaxSize'] as number) - (envelope['bufferPressureMargin'] as number),
+          arrivalPerSecond: Number(arrivalRate.toFixed(2)),
+          drainPerSecond: drainPerSecond,
+          rateCeilingPerSecond: envelope['rateCeilingMessagesPerSecond'],
+          insideBand: arrivalRate > drainPerSecond && arrivalRate < (envelope['rateCeilingMessagesPerSecond'] as number),
+        },
+        drained: pressureDrained,
+        // The pressure seat's frames are valid, so depth is the only thing it ever did wrong: a
+        // refusal here would mean the scenario was throttling for the wrong reason.
+        window: windowEvidence(pressureFinal),
         // Attribution, not optimism: when this scenario flakes the record must already say WHICH
         // closure happened with WHICH code, instead of leaving the review to guess.
         closureLedger: closuresOf(),
       },
       closuresOf().length === 0
         && (pressureRow?.inputRetiredUnrepresented ?? -1) === 0
-        && !seatsAfterPressure.some((s) => s.closing),
+        && !seatsAfterPressure.some((s) => s.closing)
+        && seatsAfterPressure.some((s) => s.throttled)
+        && pressureFinal.allSentStampsConsumed
+        && pressureFinal.pairingConsistent
+        && pressureDrained,
     );
 
     stage('idle');
     // ── A silent seat after a clean stream: quiet, open, unconsequenced ─────────────────────────
-    const idleSeat = await withTimeout(connectSeatById<ProbeRegionState>(stack, server.endpoint, sharedRoomId, identity, RegionSchema), 8_000, 'idle seat');
+    const idleSeat = await seated(
+      () => connectSeatById<ProbeRegionState>(stack, server.endpoint, sharedRoomId, identity, RegionSchema),
+      'idle seat',
+    );
     const beforeIdleClosures = closuresOf().length;
     for (let i = 0; i < 5; i += 1) {
-      stampAndSend(idleSeat.room.input<Record<string, unknown>>(), {
-        sessionEpoch: 1,
+      sendAs(idleSeat, {
         generation: 1,
         directIntent: { kind: 'continuous', drive: 0, strafing: 0, vertical: 0 },
         moveX: 0,
@@ -388,32 +678,41 @@ async function main(): Promise<void> {
       });
       await sleep(60);
     }
-    await until(() => (rowOf(idleSeat.room)?.inputResolvedThrough ?? 0) >= 5, 3_000);
+    const idleConsumed = await waitForConsumption(idleSeat, 3_000);
     await sleep(3_000);
     const idleSignals = room().tickRecords.flatMap((t) => t.signals.filter((s) => s.signal === 'STRAND_SUSPECTED'));
+    const idleAccounting = windowAccounting(idleSeat);
     record(
       'silent-after-clean-stream-closes-nothing',
-      'A seat that resolves everything and then goes silent is not a strand and not any other signal’s subject: no closure, no throttle. The strand signal itself fires only with stamps beyond the watermark, which no clean stream leaves — and its arithmetic half is tested purely in the vectors suite, its never-closes half here.',
+      'A seat that has every stamp it sent consumed, and then goes silent, is not a strand and not any other signal’s subject: no closure, no throttle. “Clean” now means consumed, not merely represented — a silent stream of refusals would be a different scenario and is not this one.',
       {
         strandSignalsSeenThisRun: idleSignals.length,
         closuresRaised: closuresOf().length - beforeIdleClosures,
-        idleRowStillReadable: (rowOf(idleSeat.room)?.sessionEpoch ?? 0) === 1,
+        idleRowStillReadable: (rowOf(idleSeat.room)?.sessionEpoch ?? 0) === idleSeat.epoch,
         idleResolved: rowOf(idleSeat.room)?.inputResolvedThrough ?? -1,
+        idleEveryStampConsumed: idleAccounting.allSentStampsConsumed && idleConsumed,
+        window: windowEvidence(idleAccounting),
       },
-      closuresOf().length === beforeIdleClosures && (rowOf(idleSeat.room)?.inputRetiredUnrepresented ?? -1) === 0,
+      closuresOf().length === beforeIdleClosures
+        && (rowOf(idleSeat.room)?.inputRetiredUnrepresented ?? -1) === 0
+        && idleAccounting.allSentStampsConsumed
+        && idleAccounting.pairingConsistent
+        && idleConsumed,
     );
 
     stage('rate');
     // ── Rate offender: closes directly on rate ───────────────────────────────────────────────────
     const beforeRateClosures = closuresOf().length;
-    const rateSeat = await withTimeout(connectSeatById<ProbeRegionState>(stack, server.endpoint, sharedRoomId, identity, RegionSchema), 8_000, 'rate seat');
+    const rateSeat = await seated(
+      () => connectSeatById<ProbeRegionState>(stack, server.endpoint, sharedRoomId, identity, RegionSchema),
+      'rate seat',
+    );
     // 20 frames inside ~450 ms: ~44/s against a 30/s ceiling, and 20 < 24 so the pressure line is
     // never reached — the only consequence available to this offender is the rate ceiling itself.
     // Spread across ~400 ms so the trailing window can show a *sustained* 50/s; an unpaced burst
     // under 250 ms is the buffer scenarios' subject, not this one's.
     for (let i = 0; i < 20; i += 1) {
-      stampAndSend(rateSeat.room.input<Record<string, unknown>>(), {
-        sessionEpoch: 1,
+      sendAs(rateSeat, {
         generation: 1,
         directIntent: { kind: 'continuous', drive: 0, strafing: 0, vertical: 0 },
         moveX: 0,
@@ -492,22 +791,28 @@ async function main(): Promise<void> {
         liveRoomCount: RegionRoom.liveRooms().length,
         roomSeats: room().evidence()['seats'],
         rateSeatSession: rateSeat.room.sessionId,
+        rateWindow: windowEvidence(windowAccounting(rateSeat)),
         rateRow: rowOf(rateSeat.room) ?? null,
         retiredOnRateSeat: (room().evidence()['seats'] as { retiredUnrepresented: number }[]).every((s) => s.retiredUnrepresented === 0)
           || (rowOf(rateSeat.room)?.inputRetiredUnrepresented ?? 0) === 0,
       },
-      rateClosed && rateClosure?.code === closeCodes['INPUT_RATE_CEILING'],
+      rateClosed && rateClosure?.code === closeCodes['INPUT_RATE_CEILING']
+        // The frames this seat sent were valid: the ceiling is what closed it, not the screen. Without
+        // this limb the scenario could be closed for an epoch mismatch and still report 4101 honestly.
+        && windowAccounting(rateSeat).stampsRefused === 0,
       'earlier-window',
     );
 
     stage('offender');
     // ── Retiring offender + W-9 close-path accounting ───────────────────────────────────────────
     const beforeRetiredClosures = closuresOf().length;
-    const offender = await withTimeout(connectSeatById<ProbeRegionState>(stack, server.endpoint, sharedRoomId, identity, RegionSchema), 8_000, 'offender seat');
+    const offender = await seated(
+      () => connectSeatById<ProbeRegionState>(stack, server.endpoint, sharedRoomId, identity, RegionSchema),
+      'offender seat',
+    );
     const closeStartMs = Date.now();
     for (let i = 0; i < 64; i += 1) {
-      stampAndSend(offender.room.input<Record<string, unknown>>(), {
-        sessionEpoch: 1,
+      sendAs(offender, {
         generation: 1,
         directIntent: { kind: 'continuous', drive: 1, strafing: 0, vertical: 0 },
         moveX: 0,
@@ -521,8 +826,7 @@ async function main(): Promise<void> {
     const closeLanded = until(() => closuresOf().length > beforeRetiredClosures, 5_000);
     for (let i = 0; i < 30; i += 1) {
       if (closuresOf().length > beforeRetiredClosures) break;
-      stampAndSend(offender.room.input<Record<string, unknown>>(), {
-        sessionEpoch: 1,
+      sendAs(offender, {
         generation: 1,
         directIntent: { kind: 'continuous', drive: 1, strafing: 0, vertical: 0 },
         moveX: 0,
@@ -547,25 +851,43 @@ async function main(): Promise<void> {
         closure: closure ?? null,
         expectedCode: closeCodes['INPUT_RETIRED_UNREPRESENTED'],
         observation: offenderObservation,
+        // Retirement is eviction at the buffer, so it is indifferent to whether the frames were valid —
+        // which is exactly why this scenario has to say they were. A refusal count here would mean the
+        // offender retired for a reason the scenario did not construct.
+        window: windowEvidence(windowAccounting(offender)),
         strandSignalsAlongside: room().tickRecords.flatMap((t) => t.signals.filter((x) => x.signal === 'STRAND_SUSPECTED')).length,
       },
       retiredClosed
         && closure?.code === closeCodes['INPUT_RETIRED_UNREPRESENTED']
-        && closeElapsedMs <= (envelope['closureMaxMs'] as number) + 1_500,
+        && closeElapsedMs <= (envelope['closureMaxMs'] as number) + 1_500
+        && windowAccounting(offender).stampsRefused === 0,
     );
     // ── Compliant neighbours survived every offender ────────────────────────────────────────────
     const survivors = controls.map((seat) => {
       const row = rowOf(seat.room);
-      return { sessionId: seat.room.sessionId, retired: row?.inputRetiredUnrepresented ?? -1, epoch: row?.sessionEpoch ?? -1 };
+      return {
+        sessionId: seat.room.sessionId,
+        retired: row?.inputRetiredUnrepresented ?? -1,
+        epoch: row?.sessionEpoch ?? -1,
+        ...windowEvidence(windowAccounting(seat)),
+        expectedMeters: Number((stepMeters * seat.sentStamps.length).toFixed(9)),
+      };
     });
     record(
       'offenders-never-touch-the-compliant-population',
-      'After pressure, strand, rate and retirement offenders, every control seat is still seated, still retired-free, and still on its original epoch',
+      'After pressure, strand, rate and retirement offenders, every control seat is still seated, still retired-free, still on its own server-issued epoch, and has still had every stamp it sent consumed: an offender did not cost a compliant neighbour a step',
       { survivors, closuresTotal: closuresOf().length },
       // Epochs are per join, not per world: seats that arrived after the first carry their own
       // server-issued epoch, which is GA-3's point rather than a violation of it. What the control
-      // population must show is that no neighbour was retired, closed, or evicted by an offender.
-      survivors.every((row) => row.retired === 0 && row.epoch >= 1),
+      // population must show is that no neighbour was retired, closed, evicted OR deprived of a
+      // consumption by an offender — the last limb is the one F-1 showed was never being checked.
+      survivors.every(
+        (row) => row.retired === 0
+          && row.epoch >= 1
+          && row.allSentStampsConsumed === true
+          && row.pairingConsistent === true
+          && Math.abs(row.movedMeters - row.expectedMeters) < 1e-9,
+      ),
       'earlier-window',
     );
 
@@ -688,6 +1010,7 @@ async function main(): Promise<void> {
             'Loopback transport, one server process, one room: cross-process desynchronisation remains unmeasurable here.',
             'Every envelope number in play is a provisional test setting (D-P2-4); the rate scenario overrides only the ceiling, and records that it did.',
             'Reordering and duplicate delivery of CONTINUOUS stamps are not constructible through the SDK send path (the SDK owns the stamp); their server-side halves are measured as replay-idempotence of discrete identities.',
+            'F-1 (T-0): before this run every scenario stamped a literal sessionEpoch of 1, so every seat after the first in this shared room streamed into EPOCH_MISMATCH while its watermark advanced over the refusals. Compliant senders now stamp the epoch the room issued and each one is checked against the stamps it actually sent; the wrong-epoch control in this same room is the demonstration that the check can fail.',
           ],
           scenarios: results,
         },
