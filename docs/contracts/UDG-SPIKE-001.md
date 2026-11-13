@@ -48,3 +48,15 @@ Run root checks, pnpm test:contract -- --task UDG-SPIKE-001, pnpm test:e2e -- --
 Pass only if all required tests pass in all seeds, speed/step limits hold, elevated unobstructed p95 raw correction is below 0.15 m, forced correction converges to the matched acknowledged state within 0.000001 m in the pure flat replay check, and observer interpolation follows the accepted timeline without authoring it. Report remote interpolation delay and maximum discontinuity separately; exclude labelled correction teleports from smoothness statistics but include their raw correction in diagnostic reports.
 
 Evidence is a complete common evidence bundle plus api-map.md, schema-freeze.json, raw-corrections.csv, matched-ack-trace.jsonl, remote-render.csv and a short annotated browser recording or screenshots identifying both clients and ticks. gate-a.md must contain PASS or FAIL, thresholds, actual values, unresolved limitations, prerequisite SHAs and integration-owner decision. Failure blocks 005, 006 and all later gates. A custom predictor requires an ADR; silently replacing Colyseus primitives is prohibited.
+
+
+**GA-11 execution, and the deferred exactly-once rows.** Evaluate `B + J·λ + stall ≤ bufferMaxSize` and
+`clientSnapshotDeadlineMs ≥ 4 × patch interval + 2 × measured p99 RTT` on the recorded populations, name the
+production values beside the provisional ones, and record whether the runner provided network-layer impairment
+(`tc`/`netem` requires `NET_ADMIN`); where it did not, the loss population is re-measured with the UDG-003
+Phase 2 harness impairment layer, labelled `dropModel: "application-layer delivery loss"` with
+`tcpLossModelled: false`, and that limitation travels with every GA-11 number. **GA-10a and GA-10b are
+outstanding for any Gate A run that precedes UDG-007 verification** and are recorded as such with the owning
+task named; they do not block Gate A at its own prerequisites (UDG-003, UDG-004), and no claim covering
+successful navigation effects may be made from this gate without citing both.
+

@@ -276,8 +276,15 @@ here as adopted; not yet applied** — see §6.
 
 Evaluated on the Gate A harness defined in [ADR-P-0003 §12.1](proposals/UDG-003-d7-input-acknowledgement-policy.md) — the
 flat reference step plus real replicated state, with no dependency on locomotion, physics or navigation — over a real round
-trip with RTT, jitter and loss populations. **A criterion whose artefact is missing, unverifiable or not replayable is FAIL**,
-not "not run". Provisional values below are test settings; GA-11 re-derives production values from measurement.
+trip (the pinned transport on the run's loopback, with the baseline latency measured rather than assumed) with RTT, jitter and
+loss populations. **The impairment source of every population is named in the artefact (`network` or `harness`).** A
+harness-modelled loss population is admissible provided the bundle records `tcpLossModelled: false` with the runner reason and
+carries the head-of-line-blocking discriminator — a hole with later deliveries is evidence of a withheld application delivery
+and can never be evidence of segment loss — and Gate A additionally records whether the runner could produce network-layer
+impairment (`tc`/`netem` requires `NET_ADMIN`). Where it cannot, the loss population is recorded as harness-modelled and that
+limitation travels with the GA-11 numbers; **harness measurements establish neither TCP-loss behaviour nor production tuning.**
+**A criterion whose artefact is missing, unverifiable or not replayable is FAIL**, not "not run". Provisional values below are
+test settings; GA-11 re-derives production values from measurement.
 
 | id | criterion | PASS | FAIL |
 | --- | --- | --- | --- |
@@ -291,15 +298,24 @@ not "not run". Provisional values below are test settings; GA-11 re-derives prod
 | **GA-7** | **final publication withheld** | the server still records the loss, its counters and `serverQueuedAtClose`; the client's deadline expires inside the server's closure window, it recovers through rejoin + snapshot, and applies nothing twice | waiting for the missing patch; pruning by `lastProcessed`; blind reissue; reporting a clean reconciliation |
 | **GA-8** | same-delivery comparison | every trigger evaluation reads the acknowledgement and `inputResolvedThrough` from one delivery | any cross-delivery comparison; a trigger citing two patches |
 | **GA-9** | isolation | the compliant entity's per-entity projection `(clientSeq \| null, disposition, dx, dy, entityStateDigest)` is identical to its solo baseline; room-wide ordinals compared as growth only | a projection difference; a failure caused only by another session legitimately consuming an ordinal |
-| **GA-10** | exactly-once across an epoch change | effect ledger `Δ == 1` per committed identity, `Δ == 0` for an abandoned identity, `Δ == 1` for a deliberate reissue under a new identity | an epoch change accepted as the proof; a duplicate or lost effect |
-| **GA-11** | production settings measured and justified | the jitter/overrun and round-trip populations are recorded; `B + J·λ + stall ≤ bufferMaxSize` is evaluated on measured values; `clientSnapshotDeadlineMs ≥ 4 × patch interval + 2 × measured p99 RTT` is evaluated; production values recorded beside the provisional ones, with any change explained | asserting production values without a measured population; leaving either inequality unevaluated |
+| **GA-10** | exactly-once across an epoch change — **the half the pre-UDG-007 substrate can commit** | for every identity this substrate can commit: `Δ == 0` for an identity abandoned by an epoch change; nothing reissued across the change; ledger keys charged once per `(epoch, identity)`, cache and batch re-answers charged nothing; `effectCount` monotone per epoch; the ledger's own equality assertion replays equal. Where no discrete effect can commit, the row is measured **as zero-effect and reported as such** | a duplicate or lost effect; a re-answer charged as a new effect; an epoch change accepted as the proof; reporting a zero-effect measurement as satisfying GA-10a or GA-10b |
+| **GA-10a** | **one committed identity, exactly once** — *deferred to UDG-007 acceptance* | `Δ == 1` for a single discrete identity committed once, on a real route effect, on the accepted Gate A harness | measuring it where no effect can commit; `pathCandidates == 0` presented as `Δ == 1` |
+| **GA-10b** | **deliberate reissue under a new identity** — *deferred to UDG-007 acceptance* | the same request reissued deliberately under a new identity after an epoch change: `Δ == 1` for the reissue and `Δ == 0` for the abandoned identity | a "reissue" of an identity that never existed; a reissue counted twice or zero times; an epoch change accepted as the proof |
+| **GA-11** | production settings measured and justified | the jitter/overrun and round-trip populations are recorded; `B + J·λ + stall ≤ bufferMaxSize` is evaluated on measured values; `clientSnapshotDeadlineMs ≥ 4 × patch interval + 2 × measured p99 RTT` is evaluated; production values recorded beside the provisional ones, with any change explained; the impairment source of each population is named, and the two inequalities are evaluated only on values whose source is declared production or measured toward production | asserting production values without a measured population; leaving either inequality unevaluated; an unlabelled impairment source; a harness-modelled loss population presented as a network loss measurement; evaluating an inequality on provisional test values and calling the result production justification |
 | **GA-12** | **positive evidence for the dedupe closure signal** | PE-1…PE-5 all pass, including a zero-false-positive compliant control population and a named missing stamp; only then may the signal terminate a seat, and the run records the control size | a closure on the suspected signal; an untested control; a closure whose missing stamp is not identified; PE-3 demanded of a terminal-dedupe case, which cannot supply it |
 | **GA-13** | evidence integrity | every scenario replays to the same dispositions, canonical state and chain tip; no machine path, token or credential in any artefact; `stackCompatibility` asserted only where the numeric gates actually pass | a non-replayable artefact; an unsanitised field; a compatibility claim drawn from probe passage alone |
 
 Gate A **passes** when GA-1…GA-13 all pass together with AC-1…AC-20 and the numeric gates, on the accepted harness
 dependencies. It **fails** if any single row fails or lacks a verifiable artefact — including GA-11, where failing to measure
-is itself the failure. No row can be satisfied by a loopback probe: PR-8, PR-13 and PR-15 show that the mechanisms exist and
-where their limits are.
+is itself the failure. **GA-10a and GA-10b are not Gate A prerequisites.** They require a committed discrete effect, which
+requires the validated routes and navigation intake that [UDG-007](../contracts/UDG-007.md) owns, while this gate's
+prerequisites are UDG-003 and UDG-004 (UDG-SPIKE-001 metadata) and §5's preamble forbids a navigation dependency. Gate A — and
+any Gate A run before UDG-007 is Verified — therefore **remains runnable at its own prerequisites and passes** with GA-10a and
+GA-10b recorded as **outstanding**, each with the reason and the owning task named in the run record; both become required at
+UDG-007 acceptance and stay outstanding until measured. Marking either half PASS on a substrate where `pathCandidates == 0` is
+a failure of GA-10. Once UDG-007 is Verified, **no Gate A claim that covers successful navigation effects may be made without
+citing evidence for both GA-10a and GA-10b**, and any later Gate A re-run evaluates GA-10, GA-10a and GA-10b together. No row
+can be satisfied by a loopback probe: PR-8, PR-13 and PR-15 show that the mechanisms exist and where their limits are.
 
 ## 6. Application actions: now assigned, none performed
 

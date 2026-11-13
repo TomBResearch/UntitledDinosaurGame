@@ -112,6 +112,16 @@ What this assignment is **not**:
 written here — a commit cannot contain its own hash, and inventing one would be the worst kind of tidy record. The
 implementation baseline above is a *code* baseline; it is not the record commit and must not be quoted as one.
 
+**Amendments applied to this record (2026-11-13, owner-approved).** Two clauses moved from the version pinned at
+`17ade43be0a64935cb2e06be02ebbe9756f6eb6f`: the §5 **W-10** row (the word "loss" scoped to
+application-layer delivery loss with `tcpLossModelled: false` recorded, imposed RTT/jitter over a real WebSocket
+round trip with the loopback baseline reported separately, and an explicit statement that Phase 2 records the
+populations without evaluating the GA-11 inequalities or setting production values), and **§9**, which gained a
+GA-10-scope paragraph. Both old and new texts are quoted in
+[UDG-003-phase-2-completion.md](UDG-003-phase-2-completion.md) §17, as are the three ledgered digests that moved
+with them (`docs/adr/0003-…-policy.md`, `docs/contracts/UDG-007.md`, `docs/contracts/UDG-SPIKE-001.md`).
+Historical bundles and inventories are unaffected: an amendment to a clause never rewrites retained bytes.
+
 ## 3. Prerequisite verification
 
 | Prerequisite | Verification | Result |
@@ -199,7 +209,7 @@ incomplete, with the reason.
 | **W-7** | **Test-only** client harness implementing ADR-0003 §3.2 as amended: same-delivery comparison, `INPUT_ACK_STALLED`, the client-local deadline, stop-sending, discard-prediction, bounded rejoin, snapshot recovery, and the recorded behaviour at **each** of the three limits (500 ms deadline, 4000 ms episode deadline, two rejoins per rolling 60 s) | harness + scenario evidence + the frozen rule statement handed to UDG-008; GA-6, GA-7 |
 | **W-8** | PR-14 real-state Gate A substrate: flat reference step + real replicated `RegionSchema`/`PlayerSchema`, no locomotion, physics or navigation dependency | `PR-14` probe + registry + contract assertions; substrate for GA-1…GA-13 |
 | **W-9** | **Measure** the close-path accounting ADR-0003 §3.1 leaves unmeasured: whether frames still buffered at seat close are dropped without advancing the accessor's consumed count, and therefore whether `serverQueuedAtClose` must enter the retirement total | measurement record + the resulting rule, or an explicit statement that the question is unanswerable on these pins; GA-3, GA-7 |
-| **W-10** | Adversarial populations: RTT, jitter, loss, mid-tick arrival, reconnect, offender runs and the **compliant control population** GA-12 requires | `abuse-results.json`, `buffer-depth.csv`, `room-lifecycle.json`, per-criterion vectors; GA-2, GA-9, GA-12 |
+| **W-10** | Adversarial populations: RTT, jitter, **application-layer delivery loss** (a delivery withheld in flight on the pinned harness, with `tcpLossModelled: false` and the runner reason recorded), **imposed** RTT and jitter over a real WebSocket round trip with the loopback baseline reported separately, mid-tick arrival, reconnect, offender runs and the **compliant control population** GA-12 requires. Phase 2 records the populations; it does **not** evaluate the two GA-11 inequalities and does **not** set production values (§0 D-P2-5, §5 rule 7), and harness measurements establish neither TCP-loss behaviour nor production tuning | `abuse-results.json`, `transport-impairment.json`, `buffer-depth.csv`, `room-lifecycle.json`, per-criterion vectors; GA-2, GA-9, GA-11 (populations only), GA-12 |
 | **W-11** | Tick metrics, disposal, and a real server smoke run through the harness; CI steps and the phase evidence gate extended to Phase 2 vectors | metrics + CI + gate; GA-13 |
 | **W-12** | Produce the Phase 2 vector set: one machine-readable artefact per GA criterion touched, per reviewer correction, and per §5 item with a numeric claim, with the manifest and gate mirroring Phase 1 | `artifacts/udg-003-phase-2/` + committed digests; GA-13 |
 
@@ -319,7 +329,15 @@ Phase 2 is complete when GA-1…GA-13 of ADR-0003 §5 have **measured criterion 
 with AC-1…AC-20 and the numeric measures; when every scenario replays from its recorded journal to the same
 dispositions, canonical state and chain tip; when the D-P2-6 determination is reported with its outcome, whichever way
 it fell; and when the §6 digest discipline is satisfied with its baseline table. **A criterion with a missing,
-unverifiable or non-replayable artefact is FAIL, not "not run."**
+unverifiable or non-replayable artefact is FAIL, not "not run."
+
+**GA-10's scope at Phase 2 is the zero-effect half** (ADR-0003 §5 as amended 2026-11-13): Phase 2 reports the
+ledger's `Δ == 0` halves, the once-per-`(epoch, identity)` charging, and the substrate fact that no discrete
+effect can commit here (`pathCandidates 0`, `effectCount 0` on every retained seat). **GA-10a and GA-10b stay
+outstanding with UDG-007**; the Phase 2 FAIL is recorded with that reason and is never closed by an epoch
+change. Likewise the **discrete queue limits** (AC-3b discrete half) are outstanding with UDG-007 and the
+**production-envelope eviction consequence** (GA-1) is evaluated at Gate A, because §5 rule 7 keeps the declared
+values provisional.**
 
 Submission is **In Review** with source, tests, exact SHAs, CI links and verified bundles. Acceptance is recorded by the
 owner alone; a phase-level acceptance would still leave UDG-003 **In Progress**, because Phase 3 and the gates remain.
