@@ -23,12 +23,12 @@ const OUT_DIR =
     ? join(ROOT, 'artifacts', 'udg-003-phase-2')
     : resolve(process.cwd(), process.env['UDG_VECTORS_OUT']);
 
-const run = (argv: readonly string[], timeoutMs: number) => {
+const run = (argv: readonly string[], timeoutMs: number, extraEnv: Record<string, string> = {}) => {
   const started = spawnSync(argv[0] ?? '', argv.slice(1), {
     cwd: ROOT,
     encoding: 'utf8',
     timeout: timeoutMs,
-    env: process.env,
+    env: { ...process.env, ...extraEnv },
   });
   return {
     exitCode: started.status ?? (started.error !== undefined ? -1 : 0),
@@ -38,8 +38,8 @@ const run = (argv: readonly string[], timeoutMs: number) => {
   };
 };
 
-const runScript = (relative: string, args: readonly string[] = []): void => {
-  const executed = run([process.execPath, relative, ...args], 240_000);
+const runScript = (relative: string, args: readonly string[] = [], extraEnv: Record<string, string> = {}): void => {
+  const executed = run([process.execPath, relative, ...args], 240_000, extraEnv);
   const tail = executed.stderr.split('\n').filter((line) => line.includes('[')).slice(-6).join('\n');
   expect(executed.timedOut, `${relative} timed out`).toBe(false);
   expect(executed.exitCode, `${relative} exited ${String(executed.exitCode)}\n${tail}`).toBe(0);
@@ -113,7 +113,11 @@ describe('UDG-003 Phase 2 runtime — the population and the recovery scenarios'
   }, 300_000);
 
   it('replays every retained journal in a process that never saw a room (R-1: GA-13, AC-3d, AC-20)', () => {
-    runScript('tests/runtime/udg-003-phase-2/journal-replay.ts');
+    // Named, not searched. CI's own finding: the probe's result is attributed evidence, so the replay reads
+    // the file this suite just wrote rather than hunting for whatever copy a directory happens to hold.
+    runScript('tests/runtime/udg-003-phase-2/journal-replay.ts', [], {
+      UDG_PR14_RESULT: join(ROOT, 'artifacts', 'probes', 'PR-14.probe-result.json'),
+    });
     const replay = JSON.parse(readFileSync(join(OUT_DIR, 'journal-replay.json'), 'utf8')) as {
       verdict: string;
       rooms: {
@@ -126,8 +130,8 @@ describe('UDG-003 Phase 2 runtime — the population and the recovery scenarios'
         controls: { wrongStepper: string; editedDispositionDetected: boolean; changedChainHashDetected: boolean };
         mismatches: unknown[];
       }[];
-      scenarios: { scenario: string; replayed: boolean; coverage: string }[];
-      summary: { scenariosAccountedFor: number; scenariosReplayed: number };
+      scenarios: { scenario: string; replayed: boolean; coverage: string; reason: string }[];
+      summary: { scenariosAccountedFor: number; scenariosReplayed: number; scenariosNotReplayed: number };
       missingInputs: unknown[];
     };
     expect(replay.verdict).toBe('pass');
@@ -148,6 +152,13 @@ describe('UDG-003 Phase 2 runtime — the population and the recovery scenarios'
     expect(replay.summary.scenariosAccountedFor).toBeGreaterThanOrEqual(16);
     expect(replay.summary.scenariosReplayed).toBeGreaterThanOrEqual(10);
     expect(replay.scenarios.every((entry) => typeof entry.coverage === 'string' && entry.coverage !== '')).toBe(true);
+    // A scenario replay did not reach is not omitted: it is listed, and the listing says why.
+    const notReplayed = replay.scenarios.filter((entry) => !entry.replayed);
+    expect(notReplayed.length).toBe(replay.scenarios.length - replay.summary.scenariosReplayed);
+    for (const entry of notReplayed) {
+      expect(entry.reason.length, `${entry.scenario} is unreplayed without a reason`).toBeGreaterThan(0);
+      expect(entry.coverage).not.toBe('replayed-in-room-journal');
+    }
     expect(replay.missingInputs).toEqual([]);
   }, 300_000);
 

@@ -377,11 +377,14 @@ async function main(): Promise<void> {
   // PR-14's journal travels inside its own probe result (`probes/PR-14.probe-result.json`), which the
   // capture plan copies and report.json hashes. It is read here so the probe's room is replayed from
   // retained bytes too, rather than only inside the probe that wrote it.
-  const probeCandidates = [
-    ...(process.env['UDG_PR14_RESULT'] === undefined ? [] : [resolve(process.cwd(), process.env['UDG_PR14_RESULT'])]),
-    resolve(OUT_DIR, '../probes/PR-14.probe-result.json'),
-    resolve(ROOT, 'artifacts/probes/PR-14.probe-result.json'),
-  ];
+  // A named path is an instruction, not a hint. When the caller says where PR-14's result lives — which CI
+  // and the capture plan both do — a missing file there is reported as a missing input rather than quietly
+  // answered by a copy from some other run.
+  const namedProbeResult = process.env['UDG_PR14_RESULT'];
+  const probeCandidates =
+    namedProbeResult !== undefined
+      ? [resolve(process.cwd(), namedProbeResult)]
+      : [resolve(OUT_DIR, '../probes/PR-14.probe-result.json'), resolve(ROOT, 'artifacts/probes/PR-14.probe-result.json')];
   const probePath = probeCandidates.find((candidate) => existsSync(candidate));
   if (probePath !== undefined) {
     const probe = JSON.parse(readFileSync(probePath, 'utf8')) as {
@@ -605,10 +608,22 @@ async function main(): Promise<void> {
     tamperedRefused: results.filter((entry) => entry.tamperedPrologueRefused).length,
     controls: results.filter((entry) => entry.replayed && entry.controls.wrongStepper !== 'not-detected' && entry.controls.editedDispositionDetected && entry.controls.changedChainHashDetected).length,
     scenarios: scenarioVerdicts.length,
+    scenariosNotReplayed: scenarioVerdicts.filter((entry) => !entry.replayed).length,
     scenariosReplayed: scenarioVerdicts.filter((entry) => entry.replayed).length,
     unreplayed: unreplayed.length,
     missingInputs: missingInputs.length,
   };
+  // The capture plan keeps a stdout log per command and refuses an empty one, because an empty log is
+  // exactly what a step that produced nothing leaves behind. The verdict belongs on stdout; the per-journal
+  // detail below belongs on stderr, where the other scripts put theirs.
+  process.stdout.write(
+    `[replay] ${verdict}: ${String(counts.journals)} journal(s), ${String(counts.replayed)} replayed, ` +
+      `${String(counts.equal)} equal on all three comparisons, ${String(counts.blanked)} digest-blanked equal, ` +
+      `${String(counts.tamperedRefused)} tampered prologues refused, ${String(counts.controls)} control sets passed, ` +
+      `${String(counts.scenarios)} scenario(s) accounted for, ${String(counts.scenariosReplayed)} replayed in a room journal, ` +
+      `${String(counts.scenarios - counts.scenariosReplayed)} not replayed and each named with a reason, ` +
+      `${String(counts.unreplayed)} journal(s) this process could not attempt, ${String(counts.missingInputs)} missing input(s)\n`,
+  );
   process.stderr.write(`[replay] ${verdict} ${JSON.stringify(counts)}\n`);
   for (const entry of results) {
     process.stderr.write(

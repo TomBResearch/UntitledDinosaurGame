@@ -1881,6 +1881,20 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     expect(plan).toContain("'phase-2-vectors-verify'");
     expect(plan).toContain("'phase-2-abuse-population'");
     expect(plan).toContain("'phase-2-recovery-scenarios'");
+    // R-1: the replay is a plan step, not a suggestion, and it is ordered. The journals have to exist before
+    // the process that replays them starts, and the replay's verdict has to exist before the manifest that
+    // names it. PR-14's journal is named rather than searched, because it is attributed probe evidence.
+    expect(plan).toContain("'phase-2-journal-replay'");
+    expect(plan).toContain("UDG_PR14_RESULT: 'artifacts/probes/PR-14.probe-result.json'");
+    const phase2Order = [
+      'phase-2-abuse-population',
+      'phase-2-recovery-scenarios',
+      'phase-2-journal-replay',
+      'phase-2-vectors',
+      'phase-2-vectors-verify',
+    ].map((label) => plan.indexOf(`'${label}'`));
+    expect(phase2Order.every((index) => index >= 0), `every Phase 2 step is in the plan: ${String(phase2Order)}`).toBe(true);
+    expect([...phase2Order].sort((a, b) => a - b), `Phase 2 capture order is ${String(phase2Order)}`).toEqual(phase2Order);
     expect(evidenceSource).toContain("export const PHASE_1_LABEL = 'phase-1'");
     expect(evidenceSource).toContain("export const PHASE_2_LABEL = 'phase-2'");
     expect(evidenceSource).toContain("export const PHASE_1_MEASUREMENTS_SCOPE = 'phase-1'");
@@ -2024,8 +2038,7 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     const phase2Order = [
       'node tests/runtime/udg-003-phase-2/abuse-population.ts',
       'node tests/runtime/udg-003-phase-2/recovery-scenarios.ts',
-      'node tests/probes/pr14-gate-a.probe.ts --out artifacts/probes/PR-14.probe-result.json',
-      'node tests/runtime/udg-003-phase-2/journal-replay.ts',
+      'UDG_PR14_RESULT=artifacts/probes/PR-14.probe-result.json node tests/runtime/udg-003-phase-2/journal-replay.ts',
       'pnpm exec vitest run tests/unit/udg-003-phase-2/vectors.test.ts',
       'node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-2 --expect-phase phase-2',
     ].map((command) => phase2Step.indexOf(command));

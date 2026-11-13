@@ -813,20 +813,21 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
         argv: ['node', 'tests/runtime/udg-003-phase-2/recovery-scenarios.ts'],
         env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
       },
-      // PR-14's journal travels inside its own probe result, so the probe has to have run on THIS commit
-      // before a fresh process replays from it. The contract suite runs it too, but later in this plan;
-      // re-running it here is a minute of runner time against a replay whose inputs would otherwise be a
-      // stale directory whose room this commit never ran.
-      {
-        label: 'phase-2-pr14-journal',
-        argv: ['node', 'tests/probes/pr14-gate-a.probe.ts', '--out', 'artifacts/probes/PR-14.probe-result.json'],
-      },
       // R-1: replay the retained journals in a process that never saw any of these rooms. It runs after
       // every journal producer and before the vectors suite writes the manifest that names its verdict.
+      //
+      // PR-14's journal travels inside its own probe result, so the path is NAMED rather than guessed —
+      // CI's own finding, because a probe re-run here would have written over the contract suite's
+      // attributed result with bytes the attribution gate could not attribute to any invocation. The
+      // contract suite has already run PR-14 on this commit by the time capture starts, and the file named
+      // here is the same one this bundle copies into `probes/`.
       {
         label: 'phase-2-journal-replay',
         argv: ['node', 'tests/runtime/udg-003-phase-2/journal-replay.ts'],
-        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+        env: {
+          UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2',
+          UDG_PR14_RESULT: 'artifacts/probes/PR-14.probe-result.json',
+        },
       },
       {
         label: 'phase-2-vectors',
