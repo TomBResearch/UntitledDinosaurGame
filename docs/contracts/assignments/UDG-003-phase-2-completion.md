@@ -268,3 +268,103 @@ PR-14 without an invocation id and overwrote attributed probe bytes (`PROBE-INVO
 43404420159), and the replay's verdict went only to stderr, leaving an empty stdout log the capture refuses
 (`EVIDENCE-FILE-EMPTY`). Both fixed on `9d1372a`, both now pinned by contract assertions so they cannot
 quietly come back.
+
+## 9. T-0 and the H1 sweep (2026-11-13, second sitting) — F-1, and AC-15 closed
+
+Phase 2 remains **In Review**. This section records the second approved item, **T-0**, and the completed H1
+sweep; it adds nothing to the W ledger and moves no gate. The evidence matrix §10 carries the full account;
+what belongs in a completion record is the defect, the correction, and the two things the correction then
+found.
+
+**F-1, in one paragraph.** The room issues a new epoch per join and screens any frame that does not carry its
+seat's epoch; the harness stamped a literal `sessionEpoch: 1` on every frame; and because ADR-0003 §4 makes a
+refusal a *representation*, the refusal advanced `inputResolvedThrough` exactly as the policy demands. So the
+retained population journal for `9d1372a` — counting client frames only (`kind: 'direct'`,
+`origin: 'client-payload'`) — shows the three "compliant control" seats as **0 consumed / 60 refused**,
+59 consumed / 1 refused, and **0 consumed / 60 refused**: only the room's first seat ever had a frame accepted,
+while `abuse-results.json` reported all three as resolving everything they sent. The pressure and silent seats
+were 0/12 and 0/5 refused. Every part of that was locally correct and the conclusion was wrong, which is why
+the fix is an instrument change and not a wording change. The offenders' verdicts stood because retirement,
+throttling and rate closure are all decided before the screen.
+
+**T-0's instrument.** The harness now reads the issued epoch from the seat's own replica row (`issuedEpoch`),
+every population send stamps that value, and each seat records the stamps it actually put on the wire.
+`windowAccounting` joins the room's per-tick dequeued stamps to the authority's journalled dispositions in
+FIFO order and reports consumed / refused / dropped-at-close / missing / duplicated / pairing-consistent /
+stamp-collided / metres-moved per seat; `allSentStampsConsumed` is the only compliant-stream assertion left,
+and no watermark carries a consumption claim anywhere in the suite. Contract guards forbid a `sessionEpoch:
+<digit>` literal in the population script and name the accounting fields the pass conditions depend on.
+
+**The control that makes it falsifiable.** `wrong-epoch-stream-fails-the-compliant-assertion`: two seats,
+eight byte-identical frames each, differing only in epoch. Correct epoch → 8 consumed, 1.6 m moved, assertion
+true. Epoch + 1 → 0 consumed, 8 refused, 0 m, assertion **false** — and `watermarkWouldHaveCalledItCompliant:
+true` records that the pre-T-0 check still passed the refused seat. Measured post-T-0: control seats on
+epochs 1/2/3, 60 sent / 60 consumed / 0 refused / 12.0 m each.
+
+**Two things the honest instrument then found in scenarios that had been passing.**
+
+1. The pressure seat had been arriving at ~800 frames/s against a declared ceiling of 30/s, and had escaped
+   closure under F-1 only because the room never looked at its stream; with epochs fixed it closed with
+   `4101` on its first T-0 run. It is now constructed inside the only band the hashed envelope leaves —
+   drain λ·tickRate = 20/s < arrivals < ceiling 30/s — measured 21.85/s, peak server-side depth 14 against the
+   line at 8, throttle latched, zero closures, zero retirements, 160/160 stamps consumed. The band arithmetic
+   is written into the artefact, so a retune that leaves the band fails rather than mis-closes.
+2. Unpaced bursts collide stamps (the SDK owns its counter; PR-15 S1 already recorded that a stamp equals the
+   acknowledgement only while stamps and sends correspond 1:1). The rate and retiring-offender scenarios
+   report `collidedStamps` 11 and 6, so per-stamp claims are refused for those seats and the counter is
+   published; paced scenarios report 0.
+
+**GA-2 and GA-3 were re-read against their own assertions, as asked.** Both PASS verdicts stand: what they
+name is depth→throttle and eviction→closure arithmetic, which happens before the screen and is indifferent to
+epoch validity. What was wrong was the wording. GA-2's "seat still seated and resolving afterwards" was never
+verified and is replaced by the measured 160 consumed / 0 refused. GA-3's `consumedCountAtClose` is the
+**accessor's dequeue count**, which includes frames the screen then refused — in the new run the retiring
+offender has a nonzero dequeue count while **zero** of its stamps were accepted, a state that only the
+corrected wording can describe. W-9's numbers moved to `6` queued / `7` dequeued with the accessor
+demonstrably released at close, so its conclusion rests on the release rather than on a zero drain delta.
+
+**AC-15 → PASS under H1, with the caveat kept beside it.** The method was run over the entire store: 151
+bundle directories over 66 capture commits, each verified by the verifier built at its own commit — 144 PASS
+with 0 issues, 7 refusals, every refusal a run retained *because* it was red. The first pass covered 150 of
+151; reconciling the sweep list against a fresh scan of the store found one bundle retained under an early
+`artifact/` subdirectory layout, and it was verified the same way at its own commit. The verifier verdict and
+the captured run status are kept in **separate columns**, because they disagree in both directions: one bundle
+verifies PASS while its captured status is FAIL (the check that refuses a red captured gate did not exist at
+that commit), and two bundles captured PASS are refused by their own verifiers. The durable table is committed
+at `docs/contracts/assignments/evidence/UDG-003-h1-sweep-2026-11-13.tsv` and copied, with the raw sweep
+output, to `/workspace/udg-evidence/h1-sweep-2026-11-13/`; the sweep wrote no bundle, no `report.json` and no
+inventory.
+
+**F-2, recorded because clearing a ledger is exactly what the attribution gate exists to catch.** The H1
+worktrees were first created inside the repository's own `artifacts/` directory, and PR-0's project scan
+correctly failed on them (`outside approval: artifacts/h1-*/tsconfig.json`), leaving three `PR-0:fail`
+entries in the local probe-invocation ledger that the R-7 gate rightly refused to let a later pass retire. The
+worktrees now live at `/workspace/udg-h1-worktrees/`, outside every working tree; the local
+`artifacts/probes/` ledger was deleted and rebuilt — gitignored scratch that CI never carries, holding failures
+caused by directories this session had put in the repository, not by the commit under test.
+
+**F-3, minor, and deliberately not fixed inside this run.** Each recovery room journals exactly one
+`refused:epoch` whose frame carries `sessionEpoch: 1` while the seat's own journalled epoch is also 1 — the
+first send after `join` landed before the room had bound the seat's epoch. Counting client frames only, the
+four recovery rooms have **4, 2, 0 and 0** accepted frames, which is also why two of them still report
+`wrongStepper: not-applicable-no-committed-motion`. GA-6's measured properties are client-rule properties
+(deadline, episode, allowance) driven by deliveries, so nothing claimed there depends on acceptance; but the
+recovery harness needs the same issued-epoch wait the population now has. That is **T-0b**, listed for
+approval rather than slipped into a run whose bytes are already retained.
+
+**Verification at the T-0 head** — `c1b2f9bbe52477dc3d5a1a2325fe85a108e640ee`, CI
+[43435990922](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43435990922) **success**
+(full suite on the hosted runner), retained at
+`/workspace/udg-evidence/ci-run-43435990922/UDG-003-2026-11-13T13-50-47-729Z-c1b2f9bb`; all three bundles in
+that directory verify **PASS, 0 issues** from the retained copies, with `PASS phase-1 vectors: 15` and
+`PASS phase-2 vectors: 18`. Locally: typecheck, lint, boundaries (72 files, 0 violations), fixtures,
+dependencies and checksums green; contracts UDG-003 105/105; phase-2 vectors 9/9; runtime suite 5/5;
+population 12/12 scenarios; recovery 4/4; PR-14 27 checks; replay 6/6 journals equal on dispositions,
+canonical state and chain tip, with 17 scenarios accounted for (11 replayed, 2 window-attributable, 4 with no
+authority surface). Invariants: `apps/server/src/authority/**`, `pnpm-lock.yaml`, the package
+manifests and `packages/config/src/**` are unchanged across this batch, so `configHash`, `movementHash` and
+`regionHash` did not move; the Phase 2 artefact list stays at **18** — the T-1…T-4 proposal would move it to
+24 (25 if the projection artefact is split) and is recorded, artefact by artefact with the gate that refuses
+each one, at matrix §10.10, **pending**; `dedupeClosureEnabled` stays `false`;
+D4 stays undesignated; Gate A stays Not Run; GA-10 stays FAIL; GA-11 stays FAIL; AC-6 stays PARTIAL; AC-1 and
+AC-3c stay FAIL until T-1 and T-2 are approved.
