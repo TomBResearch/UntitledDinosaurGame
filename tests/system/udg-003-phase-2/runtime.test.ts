@@ -325,6 +325,9 @@ describe('UDG-003 Phase 2 runtime — GA-13 window attribution', () => {
         authorityScenarios: number;
         authorityWindowsVerified: number;
         authorityWindowGaps: string[];
+        authorityNegativeWindowsVerified: string[];
+        authorityAbsenceAccounted: string[];
+        authorityAbsenceCountedAsReplays: number;
         noAuthorityScenarios: number;
         noAuthorityVerified: number;
         noAuthorityWithoutEvidence: string[];
@@ -332,6 +335,13 @@ describe('UDG-003 Phase 2 runtime — GA-13 window attribution', () => {
         scenariosAccountedFor: number;
       };
       scenarios: { scenario: string; coverage: string }[];
+      ga13: {
+        verdict: string;
+        replayLimb: { roomsReplayed: number; roomsEqual: number; mismatches: unknown[]; attributionFalseClaims: unknown[]; noAuthorityFalseClaims: unknown[] };
+        attributionLimb: { remainingGaps: string[]; noAuthorityWithoutEvidence: string[]; absencesAccountedByTransportEvidence: number };
+        carriedUnverified: { item: string; why: string }[];
+        partialBecause: string[];
+      };
       scenarioWindows: {
         scenario: string; journal: string; pass: boolean; stampsMatch: boolean;
         dispositionsMatch: boolean; acceptedTicksMatchObservations: boolean;
@@ -363,10 +373,53 @@ describe('UDG-003 Phase 2 runtime — GA-13 window attribution', () => {
     expect(burstWindow!.journalReplayEqual).toBe(true);
     expect(burstWindow!.aliases.length).toBe(1);
 
-    // The gaps the rule surfaced. Both are named, both are reported, neither is promoted.
-    expect(replay.summary.authorityWindowGaps).toContain('retired-offender-closes-in-bounded-window');
-    expect(replay.summary.authorityWindowGaps).toContain('offenders-never-touch-the-compliant-population');
+    // P-3 (OD-3, owner-approved) closed both of the gaps this rule first surfaced, and it closed them with
+    // evidence rather than by deleting the requirement. The compliant control now has its negative window
+    // recomputed from the rows — nothing arrived, and the rows say so — and the retired offender's
+    // evictions, which produce no authority rows by construction, are accounted for by that room's own
+    // captured transport evidence.
+    //
+    // What must NOT happen is an absence being promoted into a replay, so the guards below are the point
+    // of the assertion rather than decoration: the offender is counted in `authorityAbsenceAccounted` and
+    // `authorityAbsenceCountedAsReplays` stays zero. The four things the transport bytes still cannot
+    // settle are listed by name, and the count is pinned: a future run that quietly drops one of them has
+    // lost an obligation rather than earned one.
+    expect(replay.summary.authorityWindowGaps).toEqual([]);
     for (const gap of replay.coverageGaps) expect(gap.gap.length).toBeGreaterThan(40);
+
+    const offender = replay.scenarioWindows.find((entry) => entry.scenario === 'retired-offender-closes-in-bounded-window');
+    expect(offender, 'the offender still carries its own replayed window: the absence account is about its evictions, not an excuse to skip it').toBeDefined();
+    expect(offender!.journalReplayEqual).toBe(true);
+    expect(replay.summary.authorityAbsenceAccounted).toEqual(['retired-offender-closes-in-bounded-window']);
+    expect(replay.summary.authorityAbsenceCountedAsReplays).toBe(0);
+    expect(replay.summary.authorityNegativeWindowsVerified).toEqual(['offenders-never-touch-the-compliant-population']);
+    expect(
+      replay.scenarios.find((row) => row.scenario === 'retired-offender-closes-in-bounded-window')?.coverage,
+    ).toBe('authority-absence-accounted');
+    expect(
+      replay.scenarios.find((row) => row.scenario === 'offenders-never-touch-the-compliant-population')?.coverage,
+    ).toBe('authority-negative-window-verified');
+
+    // GA-13 as revised: two limbs, kept apart, with the residue named instead of smoothed over.
+    expect(replay.ga13.verdict).toBe('pass');
+    expect(replay.ga13.replayLimb.mismatches).toEqual([]);
+    expect(replay.ga13.replayLimb.attributionFalseClaims).toEqual([]);
+    expect(replay.ga13.attributionLimb.remainingGaps).toEqual([]);
+    expect(replay.ga13.attributionLimb.absencesAccountedByTransportEvidence).toBe(1);
+    expect(replay.ga13.partialBecause).toEqual([]);
+    // The four residues, matched by what they are rather than by a count that could drift: the collision
+    // item names a number that belongs to the run, and pinning it here would make the test fragile about
+    // the wrong thing.
+    expect(replay.ga13.carriedUnverified.length).toBe(4);
+    expect(replay.ga13.carriedUnverified.map((entry) => entry.item)).toEqual([
+      'the identity of each evicted stamp',
+      'whether the acknowledgement advanced over retired frames',
+      'that the retirement caused this closure rather than coinciding with it',
+      expect.stringMatching(/collided stamps collided$/),
+    ]);
+    for (const entry of replay.ga13.carriedUnverified) {
+      expect(entry.why.length, `the reason for "${entry.item}" must be a reason`).toBeGreaterThan(40);
+    }
 
     // No-authority half: visible in the census, never counted as a replay, and each with checks that
     // could have failed.
@@ -382,6 +435,136 @@ describe('UDG-003 Phase 2 runtime — GA-13 window attribution', () => {
       expect(entry.recomputed.every((check) => check.pass)).toBe(true);
       expect(replay.scenarios.some((row) => row.scenario === entry.scenario && row.coverage === 'no-authority-verified')).toBe(true);
     }
+  });
+
+});
+
+describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the stage sequence (OD-4)', () => {
+  it('runs the bounded impairment layer and refuses it to claim TCP loss (W-10 as amended, GA-11)', () => {
+    runScript('tests/runtime/udg-003-phase-2/impairment-population.ts');
+    const impairment = JSON.parse(readFileSync(join(OUT_DIR, 'transport-impairment.json'), 'utf8')) as {
+      verdict: string;
+      controls: Record<string, boolean>;
+      impairmentLayer: { impairmentSource: string; seam: string; noProxyAndNoNewDependency: string };
+      seats: {
+        label: string;
+        discriminator?: { tcpLossModelled: boolean; outOfOrderHoleObserved?: boolean; whyThatRulesTcpOut?: string };
+        withheldStampsNamed?: number[];
+        withheldNeverConsumed?: boolean;
+        deliveriesAfterTheHoleConsumed?: boolean;
+        stall?: { withheldPatchWindowMs: number; framesTheRoomConsumedWhileTheSeatSawNothing: number };
+      }[];
+      populations: { loss: { withheldNeverConsumed: boolean; deliveriesAfterTheHoleConsumed: boolean }[] };
+      doesNotEstablish: string[];
+      gateAOwns: string[];
+    };
+    expect(impairment.verdict).toBe('pass');
+    // Every control the layer wrote has to be true, and the set is pinned by name: a check quietly
+    // dropped from the artefact is the same trick as a criterion quietly dropped from a clause.
+    expect(Object.values(impairment.controls).every((value) => value === true)).toBe(true);
+    expect(Object.keys(impairment.controls).length).toBeGreaterThanOrEqual(11);
+    for (const name of [
+      'baselineSeatHadNoImpairment',
+      'imposedDelayIsTheDifferenceBetweenTheSeats',
+      'noFrameArrivedWithoutAnAssociationEpoch',
+      'withheldDeliveriesAreNamedAndNeverConsumed',
+      'laterDeliveriesStillArrived',
+      'lossDidNotEscapeItsSeat',
+      'stallSeatCaughtUpAfterRelease',
+      'socketNeverBrokeAnywhere',
+    ]) {
+      expect(impairment.controls[name], `the impairment layer must assert ${name}`).toBe(true);
+    }
+
+    // The two things this batch exists to stop: calling an application-layer withhold a packet-loss
+    // measurement, and letting a deferred production inequality be read as a passed one.
+    expect(impairment.impairmentLayer.impairmentSource).toBe('harness');
+    expect(impairment.impairmentLayer.seam).toContain('transport.send');
+    expect(impairment.impairmentLayer.seam).toContain('events.onmessage');
+    expect(impairment.impairmentLayer.noProxyAndNoNewDependency).toContain('ws');
+    expect(impairment.doesNotEstablish.join(' ')).toContain('GA-11');
+    expect(impairment.gateAOwns.join(' ')).toContain('inequalities');
+
+    // Every seat carries the label, not one representative seat: a single `false` next to a table of
+    // numbers is how a claim comes back by inference.
+    expect(impairment.seats.length).toBe(4);
+    for (const seat of impairment.seats) {
+      expect(seat.discriminator?.tcpLossModelled, `${seat.label} must say loss is not modelled`).toBe(false);
+    }
+
+    // The discriminator, stated as data: named deliveries withheld and never consumed, and later frames
+    // still arriving. An out-of-order hole is unreachable over one ordered TCP stream, which is exactly
+    // why this is not a loss measurement.
+    const lossSeat = impairment.seats.find((seat) => seat.label === 'withheld-deliveries');
+    expect(lossSeat?.withheldStampsNamed?.length).toBeGreaterThan(0);
+    expect(lossSeat?.withheldNeverConsumed).toBe(true);
+    expect(lossSeat?.deliveriesAfterTheHoleConsumed).toBe(true);
+    expect(lossSeat?.discriminator?.outOfOrderHoleObserved).toBe(true);
+    expect((lossSeat?.discriminator?.whyThatRulesTcpOut ?? '').length).toBeGreaterThan(60);
+    expect(impairment.populations.loss.length).toBeGreaterThanOrEqual(1);
+    expect(impairment.populations.loss[0]?.withheldNeverConsumed).toBe(true);
+
+    // The stall row is observation, not a verdict: the room kept deciding while the seat was not told.
+    const stallSeat = impairment.seats.find((seat) => seat.label === 'delivery-stall');
+    expect((stallSeat?.stall?.withheldPatchWindowMs ?? 0)).toBeGreaterThan(0);
+    expect((stallSeat?.stall?.framesTheRoomConsumedWhileTheSeatSawNothing ?? 0)).toBeGreaterThan(0);
+  });
+
+  it('runs the stage sequence and keeps AC-6 qualified rather than overclaiming it (AC-6 under OD-4)', () => {
+    runScript('tests/runtime/udg-003-phase-2/stage-sequence.ts');
+    const stages = JSON.parse(readFileSync(join(OUT_DIR, 'stage-sequence.json'), 'utf8')) as {
+      verdict: string;
+      checks: Record<string, boolean>;
+      ac6Verdict: string;
+      definitions: { quotedFrom: string; M: string; P: string; order: string; ownerRuling: string };
+      mappingStageM: {
+        byValueControl: { ran: boolean; canonicalFieldsMatch: boolean; mutatingTheMappedStateMovedTheRow: boolean; mappingIsTheOnlyWriter: boolean };
+        refusalControl: { watermarkAdvanced: boolean; movementFieldsUnchanged: boolean; refusedRowsJournalled: number };
+        perEntityNegative: { departed: { resolvedThroughAtLeave: number | null; resolvedThroughAfterDeparture: number | null } };
+      };
+      publicationStageP: {
+        observableAtSeat: { medianIntervalMs: number | null; declaredIntervalMs: number; tickIntervalMs: number };
+        resultsHalf: { status: string; owner: string; resultsAccepted: number };
+      };
+      doesNotClaim: string[];
+    };
+    expect(stages.verdict).toBe('pass');
+    expect(Object.values(stages.checks).every((value) => value === true)).toBe(true);
+
+    // M: the mapping is by value, the mapping is the writer, and a refusal moves the watermark and the
+    // disposition but not the body.
+    expect(stages.mappingStageM.byValueControl.ran).toBe(true);
+    expect(stages.mappingStageM.byValueControl.canonicalFieldsMatch).toBe(true);
+    expect(stages.mappingStageM.byValueControl.mutatingTheMappedStateMovedTheRow).toBe(false);
+    expect(stages.mappingStageM.byValueControl.mappingIsTheOnlyWriter).toBe(true);
+    expect(stages.mappingStageM.refusalControl.watermarkAdvanced).toBe(true);
+    expect(stages.mappingStageM.refusalControl.movementFieldsUnchanged).toBe(true);
+    expect(stages.mappingStageM.refusalControl.refusedRowsJournalled).toBeGreaterThan(0);
+
+    // M is not P: the departed entity stopped being mapped while its neighbours kept advancing.
+    const departed = stages.mappingStageM.perEntityNegative.departed;
+    expect(departed.resolvedThroughAtLeave).not.toBeNull();
+    expect(departed.resolvedThroughAfterDeparture).toBe(departed.resolvedThroughAtLeave);
+
+    // P's cadence is the declared knob, and measurably not the tick.
+    const seat = stages.publicationStageP.observableAtSeat;
+    expect(seat.medianIntervalMs).not.toBeNull();
+    expect(Math.abs((seat.medianIntervalMs ?? 0) - seat.declaredIntervalMs)).toBeLessThanOrEqual(40);
+    expect(Math.abs((seat.medianIntervalMs ?? 0) - seat.tickIntervalMs)).toBeGreaterThanOrEqual(25);
+
+    // The half that cannot be measured here stays open, named, and owned. This is the assertion that
+    // stops OD-4 from being read as "AC-6 done": the artefact itself says `outstanding` and `UDG-007`.
+    expect(stages.publicationStageP.resultsHalf.status).toBe('outstanding');
+    expect(stages.publicationStageP.resultsHalf.owner).toBe('UDG-007');
+    expect(stages.publicationStageP.resultsHalf.resultsAccepted).toBe(0);
+    expect(stages.ac6Verdict).toBe('qualified-pending-owner');
+    expect(stages.doesNotClaim.join(' ')).toContain('results half');
+    // The letters are quoted from the record that defines them, not restated in whatever shape suits the
+    // run that needed them.
+    expect(stages.definitions.quotedFrom).toContain('UDG-003-phase-1');
+    expect(stages.definitions.M).toContain('map canonical state to the replica');
+    expect(stages.definitions.P).toContain('publish results, metrics, flush');
+    expect(stages.definitions.ownerRuling).toContain('OD-4');
   });
 
 });

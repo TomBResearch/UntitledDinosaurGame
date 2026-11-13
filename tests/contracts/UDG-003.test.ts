@@ -1891,6 +1891,10 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
       'phase-2-abuse-population',
       'phase-2-recovery-scenarios',
       'phase-2-isolation-comparison',
+      // The approved P-batch sits with the other room producers and ahead of the replay, which runs after
+      // every journal producer it could otherwise race.
+      'phase-2-impairment-population',
+      'phase-2-stage-sequence',
       'phase-2-journal-replay',
       'phase-2-vectors',
       'phase-2-vectors-verify',
@@ -1932,10 +1936,14 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     // 15 as submitted, plus the three R-1 artefacts: the two retained journals and the replay verdict.
     // A replay claim whose inputs are not required files is a claim about bytes nobody gated.
     // 18 Phase 2 artefacts became 24 under OD-9: AC-1's trace trio, the AC-3c displacement audit, the
-    // GA-1 `B = 8` burst record and the GA-9/AC-7 isolation comparison. The count is asserted because the
-    // gate's whole force is that a listed file which is absent fails the bundle.
-    expect(gate).toHaveLength(24);
-    for (const name of ['journal-population.json', 'journal-recovery.json', 'journal-replay.json']) {
+    // GA-1 `B = 8` burst record and the GA-9/AC-7 isolation comparison. The approved P-batch makes it 27
+    // (OD-2's impairment layer, the AC-3e reason table, OD-4's stage sequence). The count is asserted
+    // because the gate's whole force is that a listed file which is absent fails the bundle.
+    expect(gate).toHaveLength(27);
+    for (const name of [
+      'journal-population.json', 'journal-recovery.json', 'journal-replay.json',
+      'transport-impairment.json', 'input-reasons.json', 'stage-sequence.json',
+    ]) {
       expect(gate, `the Phase 2 requirement must name ${name}`).toContain(name);
     }
     // Runtime evidence is half the set; a manifest written without those files present must fail,

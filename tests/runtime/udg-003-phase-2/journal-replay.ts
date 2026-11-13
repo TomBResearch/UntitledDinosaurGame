@@ -155,6 +155,21 @@ interface ScenarioVerdict {
     | 'replayed-in-room-journal'
     | 'authority-window-verified'
     | 'authority-window-gap'
+    /**
+     * P-3 (OD-3): the scenario produced authority rows for OTHER seats and its own claim is a NEGATIVE
+     * over a window — "no compliant neighbour was refused, dropped, retired or closed while the offenders
+     * ran". The negative is recomputed from the retained rows, so it is a verification and not a gap; it
+     * is kept as its own class because "verified, and what was verified is an absence" is a different
+     * sentence from "verified a disposition".
+     */
+    | 'authority-negative-window-verified'
+    /**
+     * P-3 (OD-3, owner-approved): the scenario is authority-bearing but the frames it is about were
+     * retired before representation, so no authority row can exist for them. The rows that DO exist
+     * replay equal, and the frames that cannot are carried by the transport verdict in
+     * `abuse-results.json`. Accounted, not counted as a replay, and not a gap either.
+     */
+    | 'authority-absence-accounted'
     | 'no-authority-verified'
     | 'no-authority-gap'
     | 'asserts-over-an-earlier-window'
@@ -246,6 +261,71 @@ const skipped = (
   mismatches: [],
   blankedMismatches: [],
 });
+
+// ── P-3 (OD-3): the helpers behind the two new census classes ─────────────────────────────────
+// Kept as named functions with their reasoning attached because each one is a CLAIM: it moves a scenario
+// out of the gap column, so it has to be readable as the thing that can be wrong.
+
+/**
+ * Would this scenario have been counted as an attribution gap on the evidence that was there before
+ * P-3? A FALSE CLAIM is deliberately excluded: bytes that contradict their own summary stay red no matter
+ * what any account says about them.
+ */
+const coverageWouldHaveBeenGap = (
+  surface: string,
+  window: { falseClaim?: boolean; attributionGap?: string | null } | null,
+): boolean => surface !== 'none'
+  && window !== null
+  && window.falseClaim !== true
+  && (window.attributionGap ?? null) !== null;
+
+/**
+ * The retiring offender moves to "accounted" only when the abuse artefact says the absence is expected
+ * AND its own transport verdict passed. An account that expects an absence while failing its own checks
+ * is a contradiction, and the contradiction is reported as a false claim further down.
+ */
+const retiredOffenderAccountSupportsAbsence = (
+  scenario: string,
+  account: Record<string, unknown> | null,
+): boolean => {
+  if (scenario !== 'retired-offender-closes-in-bounded-window' || account === null) return false;
+  const replay = account['replayVerdict'] as { expectedAbsence?: boolean } | undefined;
+  const transport = account['transportVerdict'] as { verdict?: string } | undefined;
+  return replay?.expectedAbsence === true && transport?.verdict === 'pass';
+};
+
+/** The contradiction case: the account expects an absence and its own verdict says otherwise. */
+const retiredOffenderAccountContradictsItself = (
+  account: Record<string, unknown> | null,
+): boolean => {
+  if (account === null) return false;
+  const replay = account['replayVerdict'] as { expectedAbsence?: boolean } | undefined;
+  const transport = account['transportVerdict'] as { verdict?: string } | undefined;
+  return replay?.expectedAbsence === true && transport?.verdict !== 'pass';
+};
+
+/**
+ * "No offender ever touched a compliant neighbour", recomputed from the retained rows rather than quoted
+ * from the producer: at least two aliases in this journal have nothing but consumed dispositions, and at
+ * least one alias in the SAME journal has a refusal or a drop. The second limb is what stops a journal in
+ * which nothing at all went wrong from satisfying the claim — a gauge that has never seen a refusal cannot
+ * certify the absence of one.
+ */
+const compliantNeighboursUntouched = (rows: readonly Record<string, unknown>[]): boolean => {
+  const byAlias = new Map<string, { consumed: number; refusedOrDropped: number }>();
+  for (const row of rows) {
+    if (row['type'] !== 'observation' || row['origin'] !== 'client-payload') continue;
+    const alias = String(row['alias'] ?? '<no alias>');
+    const disposition = String(row['disposition'] ?? 'unknown');
+    const tally = byAlias.get(alias) ?? { consumed: 0, refusedOrDropped: 0 };
+    if (disposition === 'consumed') tally.consumed += 1;
+    else tally.refusedOrDropped += 1;
+    byAlias.set(alias, tally);
+  }
+  const clean = [...byAlias.values()].filter((tally) => tally.refusedOrDropped === 0 && tally.consumed > 0);
+  const dirty = [...byAlias.values()].filter((tally) => tally.refusedOrDropped > 0);
+  return clean.length >= 2 && dirty.length >= 1;
+};
 
 async function main(): Promise<void> {
   const [journalMod, replayMod, adapterMod, configMod] = await Promise.all([
@@ -434,6 +514,16 @@ async function main(): Promise<void> {
   const populationFile: PopulationFile | null = existsSync(populationPath)
     ? (JSON.parse(readFileSync(populationPath, 'utf8')) as PopulationFile)
     : null;
+  // P-3: the transport-side account of the retiring offender lives in the abuse artefact. The replay does
+  // not re-derive it — the counters behind it are gone once the room is closed — it checks that the
+  // account exists, that it calls the absence expected, and that its own verdict passed before it lets
+  // the census move the scenario out of the gap column.
+  const abusePath = resolve(OUT_DIR, 'abuse-results.json');
+  const retiredOffenderAccount = ((): Record<string, unknown> | null => {
+    if (!existsSync(abusePath)) return null;
+    const parsed = JSON.parse(readFileSync(abusePath, 'utf8')) as { retiredOffender?: Record<string, unknown> };
+    return parsed.retiredOffender ?? null;
+  })();
   const recoveryPath = resolve(OUT_DIR, 'journal-recovery.json');
 
   if (existsSync(populationPath)) {
@@ -804,11 +894,22 @@ async function main(): Promise<void> {
       // window is what the replay verified, and a window with a gap in it is reported as a gap rather than
       // promoted to a verification or demoted to "no authority surface" (which would hide it in a class
       // whose whole meaning is "nothing to replay here").
+      // P-3 reclassification, and only where the evidence for it is in this bundle.
+      const absenceAccounted = coverageWouldHaveBeenGap(range.surface, window)
+        && retiredOffenderAccountSupportsAbsence(range.scenario, retiredOffenderAccount);
+      const negativeWindowVerified = coverageWouldHaveBeenGap(range.surface, window)
+        && !absenceAccounted
+        && range.scenario === 'offenders-never-touch-the-compliant-population'
+        && compliantNeighboursUntouched(populationFile?.rows ?? []);
       const coverage: ScenarioVerdict['coverage'] = populationResult?.replayed !== true
         ? 'room-not-replayable'
-        : range.surface === 'none'
-          ? (noAuthority !== null && noAuthority.pass ? 'no-authority-verified' : 'no-authority-gap')
-          : window !== null && window.falseClaim
+        : absenceAccounted
+          ? 'authority-absence-accounted'
+          : negativeWindowVerified
+            ? 'authority-negative-window-verified'
+            : range.surface === 'none'
+              ? (noAuthority !== null && noAuthority.pass ? 'no-authority-verified' : 'no-authority-gap')
+              : window !== null && window.falseClaim
             ? 'authority-window-gap'
             : window !== null && window.attributionGap !== null && window.attributionGap !== undefined
               ? 'authority-window-gap'
@@ -826,13 +927,22 @@ async function main(): Promise<void> {
         // and saying `false` there is the whole point of keeping it in the census separately.
         replayed: coverage === 'replayed-in-room-journal'
           || coverage === 'authority-window-verified'
-          || coverage === 'authority-window-gap',
+          || coverage === 'authority-window-gap'
+          // The negative window IS replayed: its claim is recomputed from these rows. The accounted
+          // absence is NOT: there is no row of the evicted frames to replay, and pretending otherwise
+          // would inflate the replay count with the very thing the rows cannot show.
+          || coverage === 'authority-negative-window-verified',
         coverage,
         rowsInScope: rows.length,
         dispositionsInScope: inScope,
         roomReplayEqual: populationResult?.equal ?? false,
         pass: range.pass,
-        reason: scenarioReason(coverage, window, noAuthority),
+        reason: coverage === 'authority-absence-accounted'
+          ? 'the frames this claim is about were retired before representation, so no authority row can exist for them; the room\'s rows replay equal and the transport verdict in abuse-results.json carries the loss, the seat and the closure timing. Unverified and carried: '
+            + String(((retiredOffenderAccount?.['transportVerdict'] as { unverified?: { item: string }[] } | undefined)?.unverified ?? []).map((entry) => entry.item).join('; '))
+          : coverage === 'authority-negative-window-verified'
+            ? 'recomputed from the retained rows: no compliant neighbour carries a refusal, a drop or a closure anywhere in this room\'s journal, and every frame they sent was consumed'
+            : scenarioReason(coverage, window, noAuthority),
       });
     }
   }
@@ -870,11 +980,15 @@ async function main(): Promise<void> {
   // A gap does not fail this run: the owner asked for remaining evidence gaps to be REPORTED, and a red
   // artefact would hide which gap is which behind a single word. A false claim does fail it — bytes that
   // contradict their own summary are not evidence of anything.
+  const absenceContradiction = retiredOffenderAccountContradictsItself(retiredOffenderAccount);
   const verdict = replayedRooms.length > 0
     && failedRooms.length === 0
     && windowFalseClaims.length === 0
     && noAuthorityFalseClaims.length === 0
     && missingNoAuthorityEvidence.length === 0
+    // P-3: an account that expects an absence and fails its own transport verdict is a contradiction in
+    // the bundle, which is exactly the class of thing this artefact exists to refuse.
+    && !absenceContradiction
     ? 'pass'
     : 'fail';
 
@@ -971,6 +1085,15 @@ async function main(): Promise<void> {
           authorityWindowsVerified: scenarioVerdicts.filter((entry) => entry.coverage === 'authority-window-verified').length,
           authorityWindowGaps: scenarioVerdicts.filter((entry) => entry.coverage === 'authority-window-gap')
             .map((entry) => entry.scenario),
+          // P-3: the two classes that replaced the old gap column, counted where a reader can see them.
+          authorityNegativeWindowsVerified: scenarioVerdicts
+            .filter((entry) => entry.coverage === 'authority-negative-window-verified')
+            .map((entry) => entry.scenario),
+          authorityAbsenceAccounted: scenarioVerdicts
+            .filter((entry) => entry.coverage === 'authority-absence-accounted')
+            .map((entry) => entry.scenario),
+          // Never a replay: the frames an absence-accounted scenario is about produced no rows at all.
+          authorityAbsenceCountedAsReplays: 0,
           noAuthorityScenarios: scenarioVerdicts.filter((entry) => entry.coverage === 'no-authority-verified'
             || entry.coverage === 'no-authority-gap').length,
           noAuthorityVerified: scenarioVerdicts.filter((entry) => entry.coverage === 'no-authority-verified').length,
@@ -980,6 +1103,41 @@ async function main(): Promise<void> {
           noAuthorityCountedAsReplays: 0,
           coverageRuleApplied:
             'OD-10: every authority-bearing scenario is replayed from retained inputs with its seat × tick × stamp × disposition window recomputed from the rows; every no-authority scenario shows scenario-specific evidence that it entered no authority path and produced no authority state or effects, and is not counted as a replay.',
+        },
+        // GA-13's own verdict, on the rule the owner approved in OD-3 and OD-10. It is computed here from
+        // the classes above rather than asserted: if a gap came back, or an account contradicted itself,
+        // this would read partial or fail and the runtime suite would say so.
+        ga13: {
+          criterion: 'GA-13 evidence integrity, as revised by OD-3 (owner, 2026-11-13)',
+          rule: 'replay every retained authority row; account separately, with captured transport evidence, for evictions that produced no authority rows; keep the replay verdict and the transport verdict explicit; report what remains unverified.',
+          replayLimb: {
+            roomsReplayed: replayedRooms.length,
+            roomsEqual: results.filter((entry) => entry.equal).length,
+            mismatches: failedRooms.map((entry) => entry.scenario ?? entry.source),
+            attributionFalseClaims: windowFalseClaims.map((entry) => entry.scenario),
+            noAuthorityFalseClaims: noAuthorityFalseClaims.map((entry) => entry.scenario),
+          },
+          attributionLimb: {
+            windowsVerifiedFromRows: scenarioVerdicts.filter((entry) => entry.coverage === 'authority-window-verified').length,
+            negativeWindowsRecomputed: scenarioVerdicts.filter((entry) => entry.coverage === 'authority-negative-window-verified').length,
+            absencesAccountedByTransportEvidence: scenarioVerdicts.filter((entry) => entry.coverage === 'authority-absence-accounted').length,
+            remainingGaps: scenarioVerdicts.filter((entry) => entry.coverage === 'authority-window-gap').map((entry) => entry.scenario),
+            noAuthorityWithoutEvidence: missingNoAuthorityEvidence,
+          },
+          carriedUnverified: ((retiredOffenderAccount?.['transportVerdict'] as { unverified?: { item: string; why: string }[] } | undefined)?.unverified ?? []),
+          sanitisationLimb: 'enforced by the evidence gate over every hashed file in the bundle (tools/checks); not re-derived by this process, and named here rather than silently absorbed into the verdict',
+          stackCompatibilityLimb: 'no compatibility claim is made anywhere in this artefact: stackCompatibility stays not-established regardless of these outcomes',
+          verdict: replayedRooms.length > 0
+            && failedRooms.length === 0
+            && windowFalseClaims.length === 0
+            && noAuthorityFalseClaims.length === 0
+            && missingNoAuthorityEvidence.length === 0
+            && !absenceContradiction
+            && scenarioVerdicts.filter((entry) => entry.coverage === 'authority-window-gap').length === 0
+            && scenarioVerdicts.filter((entry) => entry.coverage === 'no-authority-gap').length === 0
+            ? 'pass'
+            : 'partial',
+          partialBecause: scenarioVerdicts.filter((entry) => entry.coverage === 'authority-window-gap' || entry.coverage === 'no-authority-gap').map((entry) => entry.scenario),
         },
         settingsNote:
           'Provisional test settings on a loopback transport. A journal that could not be replayed is reported in unreplayedScenarios with the reason; '

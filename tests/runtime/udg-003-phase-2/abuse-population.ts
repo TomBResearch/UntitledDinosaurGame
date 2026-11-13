@@ -116,6 +116,41 @@ const results: {
   pass: boolean;
 }[] = [];
 
+/**
+ * P-3 (OD-3, owner-approved 2026-11-13): the retiring offender is reported as TWO verdicts that are
+ * never merged.
+ *
+ * The approved coverage rule is: *"replay all retained authority rows; account separately for evictions
+ * that produced no authority rows using captured transport evidence. Show what the retained evidence
+ * establishes about the loss, seat attribution, and closure timing, and report anything that remains
+ * unverified. Keep the replay and transport verdicts explicit."*
+ *
+ * Two verdicts and not one, because of the mechanism itself. A frame evicted from the transport buffer is
+ * retired BEFORE it is ever represented, so it is never dequeued, and a journalled disposition exists only
+ * for a dequeue. There is nothing for a replay to replay about the loss — a property of the mechanism, not
+ * a hole in the evidence, and it has to be said that way instead of being scored as an unattributed
+ * window. The replay verdict says what the rows prove; the transport verdict says what the room's own
+ * counters prove about the frames those rows cannot contain; and the unverified list says where neither
+ * reaches.
+ */
+let retiredOffenderAccount: Record<string, unknown> | null = null;
+
+/**
+ * P-1 (AC-3e, OD-3): the per-reason reporting the criterion asks for, assembled from the counters the
+ * room and the authority ALREADY emit. No production surface was added for it: `stats()` carries the
+ * authority's own disposition totals and overflow causes, `RoomTickRecord` carries the per-tick
+ * refusals, signals and closures, the journal carries one disposition row per dequeue, and the close
+ * observations carry the buffer's retirement counts.
+ *
+ * The two depth families are kept apart on purpose. `continuousHighWater` is the AUTHORITY queue
+ * (`apps/server/src/authority/step.ts` samples `entity.continuousQueue.highWater`); the depth GA-1 and
+ * GA-11 argue about is the TRANSPORT buffer behind `TickMetrics`. Conflating them would let a headline
+ * depth of 1 stand in for a queue that held 8, and this phase has already been caught reporting one
+ * number where two instruments were reading.
+ */
+let reasonsEvidence: Record<string, unknown> | null = null;
+let reasonTable: Record<string, unknown> | null = null;
+
 // ── OD-10 (owner ruling, 2026-11-13): the two coverage classes and what each must show ──────────
 // Authority-bearing scenarios are replayed from the retained rows and their seat × tick × stamp
 // attribution is verified. No-authority scenarios are NOT replayed and must not be counted as replays;
@@ -1192,6 +1227,138 @@ async function main(): Promise<void> {
       'utf8',
     );
 
+    // ── P-3: the retiring offender, as a replay verdict and a transport verdict ───────────────
+    // Two verdicts, one mechanism, four things this evidence does NOT establish. The note on
+    // `retiredOffenderAccount` above carries the approved rule this block implements.
+    {
+      const rowsFor = (entityId: string): number => room().journal().rows.filter((row) => row['type'] === 'observation'
+        && row['entityId'] === entityId
+        && row['kind'] === 'direct'
+        && row['origin'] === 'client-payload').length;
+      const dequeuedFor = (entityId: string): number => flattenConsumed(room().tickRecords)
+        .filter((entry) => entry.entityId === entityId).length;
+      const seatRows = rowsFor(offender.entityId);
+      const seatDequeues = dequeuedFor(offender.entityId);
+      const observation = offenderObservation as Record<string, unknown>;
+      const retiredAtClose = Number(observation['retiredUnrepresented'] ?? 0);
+      const window = windowAccounting(offender);
+      const windowMs = envelope['closureWindowMs'] as number;
+      const maxMs = envelope['closureMaxMs'] as number;
+      const expectedClosureCode = closeCodes['INPUT_RETIRED_UNREPRESENTED'] as number;
+      // A compliant neighbour is the instrument check: if rows never appeared for anyone, then "this seat
+      // has no rows" would prove nothing at all.
+      const instrumentCountsRows = survivors.length > 0
+        && survivors.every((row) => row.allSentStampsConsumed === true && row.retired === 0);
+      const checks = {
+        lossObserved: retiredAtClose >= 1,
+        // The only route to a journalled disposition is a dequeue, so a row for a frame the room never
+        // dequeued is impossible. Falsifiable limb: if the room ever journalled an unrepresented frame,
+        // these two counts would disagree.
+        rowsExistOnlyForDequeues: seatRows === seatDequeues,
+        // ...and the evicted frames therefore have no authority row: nothing for a replay to replay.
+        // Stated as COUNTS, deliberately. The first version asked whether any of this seat's stamps
+        // appeared as a consumption, and it was wrong twice over: the paced tail means early stamps are
+        // legitimately consumed before retirement starts, and ADR-0003 §3.1 gives no identity at the
+        // pre-buffer boundary, so with collided stamps in the stream the question has no answer in the
+        // retained bytes. It is carried as unverified instead. What the counts do settle: enough sent
+        // frames have no row to cover the retirement, and the room dequeued no more frames than could
+        // have reached it past the evictions.
+        noAuthorityRowForAnyEvictedFrame: window.stampsSent - seatRows >= retiredAtClose && retiredAtClose >= 1,
+        noEvictedFrameWasConsumed: seatDequeues <= window.stampsSent - retiredAtClose,
+        // GA-3's attribution limb: loss and closure name one and the same seat, not the room.
+        lossAndClosureNameTheSameSeat: typeof observation['entityId'] === 'string'
+          && observation['entityId'] === offender.entityId
+          && closure?.entityId === offender.entityId,
+        closureCodeIsTheRetirementCode: (closure?.code ?? -1) === expectedClosureCode,
+        closureInsideBoundedWindow: closeElapsedMs <= maxMs + 1_500,
+        // The frames were valid: this seat retired by eviction, not by being screened.
+        offenderFramesWereValid: window.stampsRefused === 0,
+        // Exactly one closure arrived with this offender — no companion closure mistaken for it.
+        exactlyOneClosureForThisOffender: closuresOf().length - beforeRetiredClosures === 1,
+        // The gauge is live: compliant neighbours in the same room DO show represented, consumed streams.
+        instrumentCountsRepresentedStreams: instrumentCountsRows,
+      };
+      retiredOffenderAccount = {
+        rule: 'OD-3 (owner, 2026-11-13): replay all retained authority rows; account separately for evictions that produced no authority rows using captured transport evidence; show what the retained evidence establishes about the loss, seat attribution and closure timing; report anything that remains unverified; keep the replay and transport verdicts explicit.',
+        replayVerdict: {
+          verdict: 'see journal-replay.json: this room\'s rows replay equal or that artefact fails',
+          authorityRowsForThisSeat: seatRows,
+          dequeuesForThisSeat: seatDequeues,
+          authorityRowsForEvictedFrames: 0,
+          expectedAbsence: true,
+          why:
+            'a frame evicted from the transport buffer is retired before it is represented, so it is never dequeued, and a journalled disposition exists only for a dequeue. The absence of rows for the evicted frames is the mechanism, not a gap in the replay: the transport verdict carries the frames the rows cannot contain.',
+        },
+        transportVerdict: {
+          verdict: Object.values(checks).every((value) => value === true) ? 'pass' : 'fail',
+          loss: {
+            retiredUnrepresentedAtClose: retiredAtClose,
+            retiredIsAFloorNotATotal: true,
+            retiredIsAFloorBecause: 'one reading at one instant, taken while the paced tail was still arriving',
+            serverQueuedAtClose: observation['serverQueuedAtClose'] ?? null,
+            consumedCountAtClose: observation['consumedCountAtClose'] ?? null,
+            dequeuedTotal: observation['dequeuedTotal'] ?? null,
+            sampledAtMs: observation['sampledAtMs'] ?? null,
+            stampsSent: window.stampsSent,
+            distinctStampsSent: new Set(offender.sentStamps).size,
+            collidedStamps: window.collidedStamps,
+            stampsConsumedInWindow: window.stampsConsumed,
+            stampsRefusedInWindow: window.stampsRefused,
+            movedMeters: Number(window.movedMeters.toFixed(9)),
+            clientSidePairingConsistent: window.pairingConsistent,
+          },
+          seatAttribution: {
+            entityId: offender.entityId,
+            sessionId: offender.room.sessionId,
+            lossAttributedToEntity: observation['entityId'] ?? null,
+            closureAttributedToEntity: closure?.entityId ?? null,
+            roomWideCountersUsed: false,
+          },
+          closureTiming: {
+            closeElapsedMs,
+            closureWindowMs: windowMs,
+            closureMaxMs: maxMs,
+            code: closure?.code ?? -1,
+            expectedCode: expectedClosureCode,
+            residueAccounting: 'close-path-accounting.json (the W-9 measurement of queued residue at and after a closure)',
+          },
+          checks,
+          instrument: {
+            compliantNeighbours: survivors.map((row) => ({
+              sessionId: row.sessionId,
+              retired: row.retired,
+              allSentStampsConsumed: row.allSentStampsConsumed,
+            })),
+            note: 'the instrument that reports no rows for the retired seat reports represented, consumed streams for the compliant neighbours in the same room, so a zero is a measurement and not a dead gauge',
+          },
+          unverified: [
+            {
+              item: 'the identity of each evicted stamp',
+              why: 'the buffer reports a COUNT, not a list, and ADR-0003 §3.1 gives no reason at the pre-buffer boundary. missingStamps names the stamps this seat sent that never appear as a consumption, which is a superset of the retirements: mapping count to stamps is not recoverable from the retained bytes, so it is not asserted.',
+            },
+            {
+              item: 'whether the acknowledgement advanced over retired frames',
+              why: 'consumedCount is the pinned SDK\'s own counter and PR-8 found no surface that withholds or retracts it. The equality consumedCountAtClose == retiredUnrepresented is reported as a measured coincidence; calling it "acknowledged but never consumed" would be a claim about semantics the bytes do not settle.',
+            },
+            {
+              item: 'that the retirement caused this closure rather than coinciding with it',
+              why: 'the retirement and the closure are in one window on one seat, and retirement is the only candidate signal in this construction, but nothing in the retained bytes separates cause from co-incidence. The reasoning is stated; it is not a measurement.',
+            },
+            {
+              item: `why the run's ${String(window.collidedStamps)} collided stamps collided`,
+              why: 'measured and reported (an unpaced burst reusing a stamp the SDK had already acknowledged); pacing has not been shown to be the only possible cause, so the count stands with no attributed cause. The count varies run to run, which is itself the reason it is quoted from the measurement rather than from this sentence.',
+            },
+          ],
+        },
+      };
+    }
+
+    // ── P-1 (AC-3e): a snapshot of the room's own reason counters while its seats are still alive ─
+    // `stats()` is cumulative and survives disposal, but `evidence()` answers `{ refused: true }` once a
+    // room has lost its authority, and per-seat reconciliation is only meaningful while the seats exist.
+    // Taking the reading here is what lets the table be assembled after the lifecycle scenarios.
+    reasonsEvidence = room().evidence();
+
     stage('lifecycle');
     // ── Lifecycle + disposal ────────────────────────────────────────────────────────────────────
     await Promise.all(controls.map((seat) => seat.room.leave(true).catch(() => undefined)));
@@ -1792,6 +1959,211 @@ async function main(): Promise<void> {
         },
       });
     }
+    // ── P-1 (AC-3e): per-reason reporting, assembled from what the room already recorded ──────
+    reasonTable = (() => {
+      const source = reasonsEvidence ?? {};
+      const stats = (source['stats'] ?? {}) as {
+        observed?: number;
+        counters?: Record<string, number>;
+        overflowCauses?: Record<string, number>;
+        continuousHighWater?: number;
+        discreteHighWater?: number;
+        cacheDepth?: number;
+      };
+      const counters = stats['counters'] ?? {};
+      const reasonRoom: RoomInstance | null = populationRoomRef as RoomInstance | null;
+      const rows = reasonRoom?.journal().rows ?? [];
+      // One recount, from the rows, of the same dispositions the core counted. It is not expected to
+      // EQUAL the core's totals: the core counts every observed input (including discrete intentions
+      // this room never received) and the sink is bounded. It is expected to stay INSIDE them, and a
+      // sink that dropped rows says so here rather than quietly shrinking the table.
+      const rowTally: Record<string, number> = {};
+      for (const row of rows) {
+        if (row['type'] !== 'observation' || row['origin'] !== 'client-payload') continue;
+        const key = String(row['disposition'] ?? 'unknown');
+        rowTally[key] = (rowTally[key] ?? 0) + 1;
+      }
+      const sumCounters = (prefix: string): number => Object.entries(counters)
+        .reduce((total, [key, value]) => (key.startsWith(prefix) ? total + value : total), 0);
+      const signals: Record<string, number> = {};
+      const closuresByCode: Record<string, number> = {};
+      const perTickRows: Record<string, unknown>[] = [];
+      let transportRefusalsTotal = 0;
+      for (const tickRecord of (reasonRoom?.tickRecords ?? []) as readonly {
+        tick: number; consumed: readonly unknown[]; signals: readonly { entityId: string; signal: string }[];
+        closures: readonly { entityId: string; code: number }[]; refused: readonly { entityId: string; count: number }[];
+        maxDepth: number;
+      }[]) {
+        const refusedThisTick = (tickRecord.refused ?? []).reduce((total, entry) => total + entry.count, 0);
+        transportRefusalsTotal += refusedThisTick;
+        for (const entry of tickRecord.signals ?? []) signals[entry.signal] = (signals[entry.signal] ?? 0) + 1;
+        for (const entry of tickRecord.closures ?? []) {
+          closuresByCode[String(entry.code)] = (closuresByCode[String(entry.code)] ?? 0) + 1;
+        }
+        if (refusedThisTick > 0 || (tickRecord.signals ?? []).length > 0 || (tickRecord.closures ?? []).length > 0) {
+          perTickRows.push({
+            tick: tickRecord.tick,
+            refused: refusedThisTick,
+            signals: (tickRecord.signals ?? []).map((entry) => entry.signal),
+            closures: (tickRecord.closures ?? []).map((entry) => entry.code),
+            maxDepth: tickRecord.maxDepth,
+          });
+        }
+      }
+      const closeObservations = (source['closeObservations'] ?? []) as Record<string, unknown>[];
+      const retirements = closeObservations.map((observation) => ({
+        entityId: observation['entityId'] ?? null,
+        retiredUnrepresented: observation['retiredUnrepresented'] ?? null,
+        serverQueuedAtClose: observation['serverQueuedAtClose'] ?? null,
+        consumedCountAtClose: observation['consumedCountAtClose'] ?? null,
+        dequeuedTotal: observation['dequeuedTotal'] ?? null,
+      }));
+      const samples = (source['metricsSamples'] ?? []) as readonly {
+        tick: number; maxDepth: number; depths: readonly { entityId: string; size: number }[];
+      }[];
+      const perSeatTransportDepth: Record<string, number> = {};
+      for (const sample of samples) {
+        for (const depth of sample.depths ?? []) {
+          perSeatTransportDepth[depth.entityId] = Math.max(perSeatTransportDepth[depth.entityId] ?? 0, depth.size);
+        }
+      }
+      /**
+       * AC-3e's five names, each with the disposition or signal it is actually measured from. A name with
+       * no occurrence is reported as absent WITH the reason it cannot occur here, because a bare zero is
+       * how "nothing happened" masquerades as "nothing can happen".
+       */
+      const reasonRows: Record<string, unknown>[] = [
+        {
+          ac3eReason: 'overflow',
+          measuredFrom: 'authority Disposition `refused:overflow` + stats().overflowCauses + the buffer retirement counters on each close observation',
+          disposition: 'refused:overflow',
+          count: counters['refused:overflow'] ?? 0,
+          overflowCauses: stats['overflowCauses'] ?? {},
+          retirements,
+          presentInThisRun: (counters['refused:overflow'] ?? 0) > 0,
+          note:
+            'transport-buffer eviction is retired, not refused at the screen, so it has no disposition ROW: ADR-0003 §3.1 retires a frame before it is represented. The count above is the authority-side disposition; the buffer-side loss lives in `retirements` and in the P-3 transport verdict, and the two are not the same number and are not added.',
+        },
+        {
+          ac3eReason: 'superseded',
+          measuredFrom: 'authority Disposition `refused:superseded`',
+          disposition: 'refused:superseded',
+          count: counters['refused:superseded'] ?? 0,
+          presentInThisRun: (counters['refused:superseded'] ?? 0) > 0,
+          absentBecause:
+            'stage C purges observations a committed discrete decision made inadmissible, and this substrate commits none: no route candidate is ever constructed (NAVIGATION_BUSY, pathCandidates 0). The reason is unreachable here, not merely unobserved, and the discrete traffic that would produce it is UDG-007\'s.',
+        },
+        {
+          ac3eReason: 'epoch',
+          measuredFrom: 'authority Disposition `refused:epoch` (journalled with reason EPOCH_MISMATCH)',
+          disposition: 'refused:epoch',
+          count: counters['refused:epoch'] ?? 0,
+          journalledRows: rowTally['refused:epoch'] ?? 0,
+          presentInThisRun: (counters['refused:epoch'] ?? 0) > 0,
+          note: 'the wrong-epoch control in this room is what produces these; F-1 made the same disposition fire by accident across the whole population, which is why a refusal count is only evidence once its cause is named',
+        },
+        {
+          ac3eReason: 'structural',
+          measuredFrom: 'authority Disposition `refused:structural`',
+          disposition: 'refused:structural',
+          count: counters['refused:structural'] ?? 0,
+          presentInThisRun: (counters['refused:structural'] ?? 0) > 0,
+          absentBecause:
+            'this room sends no schema-invalid frame: a malformed payload is refused by the pinned schema layer BEFORE UDG rules see it, so it cannot reach an authority disposition at all. The malformed-message case is measured in projection-isolation.json (AC-7), where the claim is the absence of a crash and of any observer-visible change rather than a counted refusal.',
+        },
+        {
+          ac3eReason: 'rateLimited',
+          measuredFrom: 'the transport signal RATE_CEILING and the reserved close code, both room-side: there is NO `refused:rateLimited` Disposition in the authority',
+          disposition: null,
+          count: signals['RATE_CEILING'] ?? 0,
+          closures: closuresByCode,
+          presentInThisRun: (signals['RATE_CEILING'] ?? 0) > 0,
+          note:
+            'reported with its source named rather than dressed up as a disposition. The ceiling closes a seat; it does not refuse a frame, and inventing a disposition to make the table look complete would be the dishonesty this criterion is written against.',
+        },
+      ];
+      // Anything the authority counted that AC-3e did not name is reported too: a closed vocabulary in
+      // the artefact is only honest if it is the vocabulary the code actually has.
+      const named = new Set(reasonRows.map((row) => String(row['disposition'] ?? '')));
+      for (const [disposition, count] of Object.entries(counters)) {
+        if (named.has(disposition) || disposition === 'consumed' || disposition === 'queued') continue;
+        reasonRows.push({
+          ac3eReason: null,
+          measuredFrom: 'authority Disposition counter, not named by AC-3e but counted by the code',
+          disposition,
+          count,
+          presentInThisRun: count > 0,
+        });
+      }
+      const checks = {
+        everyAc3eNameAppearsOnce: ['overflow', 'superseded', 'epoch', 'structural', 'rateLimited']
+          .every((name) => reasonRows.filter((row) => row['ac3eReason'] === name).length === 1),
+        countsAgreeWithPresence: reasonRows.every((row) => Number(row['count'] ?? 0) > 0 ? row['presentInThisRun'] === true : true),
+        recountStaysInsideCoreCounters: (rowTally['consumed'] ?? 0) <= (counters['consumed'] ?? 0)
+          && (rowTally['refused:epoch'] ?? 0) <= sumCounters('refused:'),
+        rateLimitedIsNotADisposition: !('refused:rateLimited' in counters),
+        noJournalRowsWereDropped: (source['journalDropped'] ?? 0) === 0,
+        tableIsNotEmpty: reasonRows.length >= 5,
+      };
+      return {
+        taskId: 'UDG-003',
+        phase: 'phase-2',
+        criterion: ['AC-3e', 'AC-3b', 'AC-17', 'GA-1', 'GA-4', 'GA-11'],
+        producer: 'tests/runtime/udg-003-phase-2/abuse-population.ts',
+        statement:
+          'AC-3e: "dropped and refused frames are reported separately by reason (overflow, superseded, epoch, structural, rateLimited) in abuse-results.json and in per-tick rows." AC-3b asks for depth with high-water marks; AC-17 for the reconciliation this table is drawn against.',
+        sources: {
+          dispositionCounters: 'AuthorityCore.stats().counters — the authority\'s own per-disposition totals',
+          overflowCauses: 'AuthorityCore.stats().overflowCauses',
+          journalRows: 'observation rows with origin `client-payload` — one row per dequeue',
+          perTickRows: 'RoomTickRecord.refused / .signals / .closures — the per-tick rows AC-3e names',
+          retirements: 'close observations — the transport buffer\'s own counters, sampled once per departing seat',
+          queues: 'meta rows and stats() for the authority queue; TickMetrics samples for the transport queue',
+        },
+        reasons: reasonRows,
+        dispositionCounters: counters,
+        observedInputs: stats['observed'] ?? null,
+        queues: {
+          authorityQueue: {
+            continuousHighWater: stats['continuousHighWater'] ?? null,
+            discreteHighWater: stats['discreteHighWater'] ?? null,
+            cacheDepth: stats['cacheDepth'] ?? null,
+            meaning: 'the AUTHORITY\'s own queues: step.ts samples entity.continuousQueue.highWater and the room-wide discrete total',
+          },
+          transportQueue: {
+            maxDepthEver: (source['metrics'] as { maxDepthEver?: number } | undefined)?.maxDepthEver ?? null,
+            perSeat: perSeatTransportDepth,
+            meaning: 'the TRANSPORT buffer GA-1 and GA-11 argue about, per seat, from TickMetrics samples. It is a different queue from the one above and the two numbers are not comparable.',
+          },
+        },
+        perTickRows,
+        perTickRowCount: perTickRows.length,
+        transportRefusalsTotal,
+        journalRecount: rowTally,
+        journalDropped: source['journalDropped'] ?? null,
+        ac17: {
+          perEntityReconciliation: 'asserted by the accepted Phase 1 core suite (AC-17 reconciliation); not re-derived here, because evidence() exposes room-level counters and not per-entity balances, and no production surface was added for this report',
+          roomLevel: { observed: stats['observed'] ?? null, counters },
+        },
+        laterOwners: {
+          discreteQueueLimits: 'UDG-007 — 8/entity and 64/room discrete bounds need discrete traffic that does not exist here (discreteHighWater 0)',
+          productionEnvelopeEviction: 'UDG-SPIKE-001 (Gate A) — the eviction consequence at production values; §5 rule 7 keeps these values provisional',
+        },
+        checks,
+        verdict: Object.values(checks).every((value) => value === true) ? 'pass' : 'fail',
+        limitations: [
+          'Room-level counters cover every observed input to this room; the journal recount covers only client-payload continuous frames, so the two are compared as a bound and not as an equality.',
+          'The per-tick rows are the ticks where something was refused, signalled or closed; a tick with nothing to report is not listed, and the count field says how many rows were kept.',
+          'AC-3e also forbids asserting total travel under a burst versus a one-per-tick spread; nothing in this table asserts it.',
+        ],
+      };
+    })();
+    writeFileSync(resolve(OUT_DIR, 'input-reasons.json'), `${JSON.stringify(reasonTable, null, 2)}\n`, 'utf8');
+    process.stdout.write(
+      `[reasons] verdict ${String(reasonTable['verdict'])}; `
+      + `${String((reasonTable['reasons'] as unknown[]).length)} AC-3e reason rows; `
+      + `${String(((reasonTable['perTickRows'] as unknown[]) ?? []).length)} per-tick rows\n`,
+    );
     writeJournalRecord();
   } finally {
     // Evidence first, shutdown second: the pinned shutdown can end the process.
@@ -1803,8 +2175,16 @@ async function main(): Promise<void> {
         {
           taskId: 'UDG-003',
           phase: 'phase-2',
-          criterion: ['GA-2', 'GA-9', 'GA-12'],
-          verdict: failed.length === 0 ? 'pass' : 'fail',
+          criterion: ['GA-1', 'GA-2', 'GA-3', 'GA-9', 'GA-12', 'GA-13'],
+          verdict: failed.length === 0
+            && retiredOffenderAccount !== null
+            && ((retiredOffenderAccount['transportVerdict'] as { verdict?: string } | undefined)?.verdict ?? 'fail') === 'pass'
+            ? 'pass' : 'fail',
+          // P-3: the two verdicts the owner asked for, kept apart on the page.
+          retiredOffender: retiredOffenderAccount,
+          // AC-3e names this artefact as one of the two homes for the per-reason reporting; the same
+          // table is retained in full in `input-reasons.json`, with its per-tick rows.
+          byReason: reasonTable === null ? null : (reasonTable['reasons'] ?? null),
           limitations: [
             'Loopback transport, one server process, one room: cross-process desynchronisation remains unmeasurable here.',
             'Every envelope number in play is a provisional test setting (D-P2-4); the rate scenario overrides only the ceiling, and records that it did.',
@@ -1818,7 +2198,10 @@ async function main(): Promise<void> {
       )}\n`,
       'utf8',
     );
-    process.stderr.write(`[abuse] ${String(results.length - failed.length)}/${String(results.length)} scenarios passed\n`);
+    const accountVerdict = (retiredOffenderAccount?.['transportVerdict'] as { verdict?: string } | undefined)?.verdict ?? 'absent';
+    process.stdout.write(
+      `[abuse] ${String(results.length - failed.length)}/${String(results.length)} scenarios passed; retired-offender transport verdict ${accountVerdict}\n`,
+    );
     await Promise.race([server.close().catch(() => undefined), sleep(4_000)]);
   }
   if (results.some((entry) => !entry.pass)) process.exitCode = 2;

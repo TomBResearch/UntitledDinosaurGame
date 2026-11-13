@@ -282,6 +282,21 @@ export const PHASE_2_VECTOR_FILES: readonly string[] = [
   'displacement-bound.json',
   'burst-b8.json',
   'projection-isolation.json',
+  // The approved P-batch (OD-2 and OD-4, owner-approved 2026-11-13): 24 became 27.
+  //
+  // `transport-impairment.json` is W-10's amended form — the bounded application-layer impairment layer,
+  // with the runner's refusal to model TCP loss recorded as a fact of the artefact rather than a claim of
+  // the prose. `input-reasons.json` is the AC-3e rate/overflow/superseded table, assembled from counters
+  // the room and authority already keep. `stage-sequence.json` is AC-6 under OD-4: `M` measured, the
+  // observable half of `P` measured, and the results half left explicitly outstanding under UDG-007.
+  //
+  // A missing named file fails the bundle, which is the only kind of sentence this list can write.
+  // The disclosure in docs/contracts/assignments/UDG-003-phase-2-evidence-matrix.md (finding E1) applies
+  // again in the same words: bundles captured before this commit do not contain them and fail this
+  // requirement when re-verified, and none of them has been rewritten.
+  'transport-impairment.json',
+  'input-reasons.json',
+  'stage-sequence.json',
 ];
 
 export const PHASE_2_LABEL = 'phase-2';
@@ -837,6 +852,22 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       {
         label: 'phase-2-isolation-comparison',
         argv: ['node', 'tests/runtime/udg-003-phase-2/projection-isolation.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      // P-2 (OD-2): W-10's amended form. Runs with the other populations and writes no journal the replay
+      // consumes. It is a bounded application-layer impairment layer over the pinned SDK's own transport
+      // object, and the artefact says so, because the runner grants no NET_ADMIN and a loss claim it could
+      // not support is worse than a loss row marked not-run.
+      {
+        label: 'phase-2-impairment-population',
+        argv: ['node', 'tests/runtime/udg-003-phase-2/impairment-population.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      // P-4 (OD-4): AC-6's two stages. Last of the room producers, because it reads the room's own
+      // replica rows to show `M` ahead of `P`, and it must not be reading a room another script left open.
+      {
+        label: 'phase-2-stage-sequence',
+        argv: ['node', 'tests/runtime/udg-003-phase-2/stage-sequence.ts'],
         env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
       },
       // R-1: replay the retained journals in a process that never saw any of these rooms. It runs after
