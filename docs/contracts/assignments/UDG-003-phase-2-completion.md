@@ -213,7 +213,12 @@ edited to change a colour. Nothing in that file moves a status upward:
 dedupe-triggered closure stays disabled, D4 stays undesignated, Gate A stays Not Run, and acceptance
 stays with the owner.
 
-## 8. The repair batch of 2026-11-13 — what it closed, at which head, and what it left exactly as hard
+## 12. The repair batch of 2026-11-13 — what it closed, at which head, and what it left exactly as hard
+
+> **Renumbered 2026-11-13 (§14's commit).** This section and the one after it were added as "§8" and "§9"
+> after §11 already existed, so the file carried two of each. The text below is unchanged; only the numbers
+> moved, to 12 and 13, because a record that points at "§9" and means two different sections is not a record.
+
 
 Phase 2 remains **In Review**, now carried at head `9d1372a91474d416cbd8c24d6d9849fa6388e936`; the
 submission at `cf34987445f737d21285b8b1f5d6b650f85873b5` and its retained bundle under
@@ -269,7 +274,7 @@ PR-14 without an invocation id and overwrote attributed probe bytes (`PROBE-INVO
 (`EVIDENCE-FILE-EMPTY`). Both fixed on `9d1372a`, both now pinned by contract assertions so they cannot
 quietly come back.
 
-## 9. T-0 and the H1 sweep (2026-11-13, second sitting) — F-1, and AC-15 closed
+## 13. T-0 and the H1 sweep (2026-11-13, second sitting) — F-1, and AC-15 closed
 
 Phase 2 remains **In Review**. This section records the second approved item, **T-0**, and the completed H1
 sweep; it adds nothing to the W ledger and moves no gate. The evidence matrix §10 carries the full account;
@@ -368,3 +373,66 @@ manifests and `packages/config/src/**` are unchanged across this batch, so `conf
 each one, at matrix §10.10, **pending**; `dedupeClosureEnabled` stays `false`;
 D4 stays undesignated; Gate A stays Not Run; GA-10 stays FAIL; GA-11 stays FAIL; AC-6 stays PARTIAL; AC-1 and
 AC-3c stay FAIL until T-1 and T-2 are approved.
+
+> **Dated correction (same day, §14).** Every conditional in that last clause has since been decided and
+> executed: OD-8 and OD-9 were approved, T-0b and T-1…T-4 were implemented, the Phase 2 artefact list moved
+> **18 → 24**, and AC-1 and AC-3c moved to PASS. The paragraph above is left exactly as it read at the T-0
+> head; §14 records the move and its own invariants.
+
+## 14. T-0b and T-1…T-4 (2026-11-13, third sitting) — the criteria measure what they claim
+
+Phase 2 remains **In Review**. This sitting implemented what the owner approved after §13: **T-0b** (the
+recovery half of the F-3 fix), **T-1**, **T-2**, **T-3**, **T-4**, plus the rulings **OD-8** (AC-1's evidence
+producer lives under `tests/reference/`) and **OD-9** (six new artefacts). Matrix §11 carries the account with
+its numbers; what a completion record owes is the head, the defect class, and the invariants.
+
+**Heads.** `c7e497b6b367f2d2b95c67394abfcf612336fdd2` implemented the batch; its CI run
+[43455499702](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43455499702)
+**failed** on `EVIDENCE-FILE-EMPTY logs/phase-2-reference-trace.stdout.log` — both new capture steps wrote
+their summary to stderr, which the capture runner legitimately allows to be empty, while the record stream it
+refuses to leave blank is stdout. `cfc49664f3cb8dca95ddfa86bcae82e0fdc8a94c` obeys the rule and its run
+[43458461044](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43458461044) is **success**.
+The failed run is retained as the failure it is; no attempt was deleted and no rule was loosened.
+
+**Retained evidence.** `/workspace/udg-evidence/ci-run-43458461044/UDG-003-2026-11-13T16-09-49-380Z-cfc49664`
+— `report.json` sha256 `56a0219837a982a0745f0c822212e3537f6485c862b9c70d31453cccfb594b24`,
+`vectors-phase-2/vectors-manifest.json` sha256 `768e487308e1bb7213dee9b3c31ef2a00afaf0d644635ce645d27c9a41cd3aae`,
+187 hashed files. All three bundles of that run verify `PASS (0 issues)` from the retained copies; the phase-2
+gate reads `PASS phase-2 vectors: 24 artefact(s) listed, hashed and attributable` and phase 1 still reads 15.
+The whole-store digest taken before the download against after: 0 files changed, 0 removed, 363 added — every
+earlier bundle, including `cf34987`, `9d1372a` and `c1b2f9b`, is byte-identical to what it was.
+
+**The defect class this sitting chased, once, in one sentence.** A check that reads a *representation* of
+progress instead of the *fact* of acceptance will report success for a stream the server refused; F-1 was that
+in the abuse population, F-3/T-0b was the same in the recovery harness, and T-2's travel budget would have
+been its third instance had the denominator stayed "frames sent" rather than "stamps accepted". All three are
+now measured against journal dispositions joined to the stamps actually put on the wire, through one shared
+accounting module rather than three copies of a rule.
+
+**What each item produced, in one line each.** T-0b: every recovery seat waits for the room-issued epoch, and
+accepted input is asserted per scenario (5 / 3 / 1 stamps consumed, 0 refused; two rejoin domains each recorded
+accepted, measured while their own room was still live). T-1: `tests/reference/flat-direct-step.ts`, 200 ticks,
+Σ from the trace's own rows `40.00000000000003` m (|error| 2.842e-14), labelled reset segments excluded, 7/7
+controls. T-2: per-tick bound `0.200001` m over 355 accepted ticks (8 refused and 1 800 no-input ticks
+classified separately), 0 out-of-bound, 9 seats inside a travel budget denominated in accepted stamps, 4/4
+controls. T-3: the `B = 8` burst proven by the room's own post-drain depth series `7,6,5,4,3,2,1,0` plus direct
+co-presence at depth 8 with zero consumed, 0 retirements, watermark 8 at rest, no signal, no closure. T-4:
+projections identical solo and among offenders under asserted equivalence preconditions, observer trace
+identical byte-for-byte against a clean control, ordinals compared as growth only, 4 rooms confirmed by census.
+GA-13: three shared-journal windows verified by recomputation from the retained rows; four no-authority
+scenarios still listed and still not counted as replayed.
+
+**Verdicts moved:** AC-1 FAIL → **PASS**, AC-3c FAIL → **PASS**, AC-7 PARTIAL → **PASS**, GA-9 PARTIAL →
+**PASS**. **Unmoved:** GA-1 and GA-13 stay PARTIAL, GA-10 and GA-11/W-10 stay FAIL, AC-6 stays PARTIAL,
+GA-12 and PE-1…PE-5 stay NOT PASSED (reported), Gate A stays **Not Run**, D4 stays undesignated.
+
+**Invariants.** Local: typecheck, lint, boundaries, fixtures, dependencies, checksums (65 files, 0 changes)
+green; full suite **28 files / 568 tests** passed (was 557); contracts UDG-003 105/105, UDG-001+002 80/80;
+phase-2 vectors 10/10; runtime suite 10/10; population 14/14 scenarios; recovery 4/4; PR-14 27 checks; replay
+6/6 journals. `apps/server/src/authority/**` unchanged since `96d3df6`; `pnpm-lock.yaml` and every package
+manifest unchanged; no protocol surface change; `configHash` stays
+`2743a9a047ce7264833af88e8bd2f8aeea970a45e306a348e1fe0654191bec7a`. One server file gained five read-only lines
+(`RegionRoom.ts`) exposing the telemetry window the per-seat depth rows are read from; no admission, authority
+or transition code changed. `dedupeClosureEnabled` stays `false`; GA-10 stays FAIL; R-4 and H2 remain
+unimplemented proposals; OD-1…OD-5, OD-7 and OD-10 remain the owner's to decide. OD-6, OD-8 and OD-9 are
+closed.

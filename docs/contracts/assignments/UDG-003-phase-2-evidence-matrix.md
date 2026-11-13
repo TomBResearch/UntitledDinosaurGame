@@ -792,3 +792,272 @@ Disclosed consequence, same mechanism as §7 E1: the bundles retained at `9d1372
 **fail** `evidence verify` when re-verified from the tree that adds those files (missing-file, unlisted-file
 and missing-command issues), and H1 remains the method that verifies them correctly. Nothing in this plan
 changes `evidence verify`, and no existing check is weakened.
+
+## 11. T-0b … T-4 — the second approved repair half, and what the criteria now measure
+
+> Implementation `cfc49664f3cb8dca95ddfa86bcae82e0fdc8a94c` (CI run [43458461044](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43458461044),
+> conclusion `success`), documentation of this section in the commit that follows it. Owner approval
+> covered: **T-0b** (the recovery half of the F-3 fix), **T-1**, **T-2**, **T-3**, **T-4**, **OD-8** (AC-1's
+> evidence home) and **OD-9** (the six-artefact list). Nothing else was authorised and nothing else moved:
+> GA-10, GA-11/W-10, AC-6, dedupe-triggered closure, D4 and Gate A are at the status §10 left them.
+> **Phase 2 remains In Review.**
+
+### 11.1 T-0b — F-3 closed: a recovery seat waits for its epoch, and accepted input is asserted
+
+F-3 (§10.6) was the same disease as F-1 in a second harness: the first frame after `join` was written before
+the epoch binding reached the seat's replica, so two of the four recovery rooms had **no accepted frame at
+all**, and the watermark reported them as healthy because a refusal advances a watermark exactly like a
+consumption. The fix is the mechanism the owner approved, not a new one: `waitForIssuedEpoch(room, budgetMs,
+minEpoch)` — `issuedEpoch` plus a budget — is called before a seat's first frame in every recovery scenario,
+and `minEpoch` carries the rejoin scenario, whose replica still names the previous stamp domain.
+
+| recovery scenario | accepted input before T-0b | accepted input after |
+| --- | --- | --- |
+| `same-delivery-pairing-on-the-wire` | journalled, none asserted | `sentStamps [1..5]`, all `consumed`, 1.0 m |
+| `client-deadline-fires-with-zero-deliveries-and-the-record-recovers` | 0 accepted frames | `sentStamps [1..3]`, all `consumed`, 0.6 m |
+| `episode-deadline-closes-the-client-at-4000ms` | 0 accepted frames | `sentStamps [1]`, `consumed`, 0.2 m |
+| `two-actual-rejoins-per-rolling-window-and-the-third-is-refused` | 1 visible frame | two rejoin domains (epochs 2 and 3), each recorded `accepted: true` |
+
+Three things in that table are the point, and each of them is a way the record could have been made to look
+better than the behaviour:
+
+* **Acceptance is read from journal dispositions, never from `inputResolvedThrough`.** The assertion is
+  "every client frame this room journalled for this entity has disposition `consumed`", joined per stamp
+  against the stamps the seat actually put on the wire by the shared accounting module
+  (`tests/support/authority/accounting.ts`), which both runtime scripts now drive.
+* **The deliberately-refused cases stay refused.** The allowance scenario's third rejoin is still refused,
+  the client still closes `allowance-exhausted`, and the refusal is still the pass condition. What T-0b
+  added is the assertion that the *useful* frames — the ones that re-armed the delivery stream — were
+  accepted. A scenario that only refuses proves nothing about recovery.
+* **Per-domain acceptance is measured while the domain's room is still live.** A rejoin lands in a room the
+  SDK created, and a domain whose room has been disposed of takes its rows with it: an end-of-run audit
+  reported `roomsHoldingEntity 1` and one frame for a seat that had legitimately streamed in two domains.
+  Recording acceptance at the moment of the rejoin is the difference between "this domain's frame was
+  accepted" and "one of them was, somewhere, in a room we can still open".
+
+4/4 scenarios pass. Verdict effect: **none** — the recovery rows were already PASS, and the artefact they
+now carry is stronger evidence for a verdict that did not need rescuing.
+
+### 11.2 T-1 — AC-1, in the home OD-8 approved, with the 40 m derived rather than declared
+
+`tests/reference/flat-direct-step.ts` → `reference-trace.json`, `ticks.jsonl`, `inputs.jsonl`. It steps the
+authority core on a virtual clock with a stub scheduler — pure simulation, which is AC-1's own wording — for
+200 valid direct ticks, then 25 further ticks marked as labelled reset segments and excluded from every
+summation.
+
+The reference distance is **derived from the rows**: Σ `resolvedDisplacement` over the trace's own 200 rows =
+`40.00000000000003` m, against |Σ − 40| ≤ `2.842e-14`. The product the configuration states (`tickRate × step ×
+speed × 200`) is recorded beside it as a cross-check, not as the source — otherwise the trace proves the
+arithmetic that generated it, which is not a measurement.
+
+Controls, all of which must fail in exactly one direction (the artefact's `verdict` is `fail` if any control
+fails to be detected): dropped-tick count; `0.2000021` m per tick **is** reported as beyond tolerance;
+`0.2000008` m per tick is **not**; a slower timestep changes the trace; a refused frame moves nothing; a
+diagonal input respects the bound; reset segments are excluded. Plus a determinism re-run: the same inputs
+produce the same trace.
+
+**AC-1 moves FAIL → PASS** for the Phase 2 evidence set, under the owner's OD-8 ruling that AC-1's Phase 2
+producer lives in `tests/reference/` — a ruling the parent contract independently supports: UDG-003's own
+"Owned files" list names `tests/reference/flat-direct-step.ts` (docs/contracts/UDG-003.md, "Owned files"), so
+the file this batch created is the file the contract asked for, and the Phase 1 §10 note pointing AC-1 at
+`apps/server/reference/` was the outlier. The Phase 1 §10 note that assigned AC-1 to `apps/server/reference/` is
+a documents-level discrepancy OD-8 resolves for this phase; the Phase 3 server-side harness trace remains
+Phase 3's work and is not claimed here.
+
+### 11.3 T-2 — AC-3c, measured where AC-3c says to measure it
+
+`tests/support/authority/displacement-bound.ts`, driven by the abuse population → `displacement-bound.json`.
+The bound is `0.200001` m per accepted tick (0.2 m/tick plus tolerance) and it is applied **per tick**, which
+is what "re-asserted per tick … so a burst cannot buy extra travel per tick" demands; a total-distance check
+would pass a seat that teleported once and idled.
+
+Three tick classes are separated because the authority's own rules differ across them, and conflating them is
+how a bound gets "proved" on ticks that had no input: `355` accepted ticks, `8` refused,
+`1 800` no-input (the movement authority zeroes axes on an empty tick, so their displacement is 0 and
+they belong in neither the bound nor the budget denominator).
+
+The travel-budget identity uses **accepted stamps as the denominator**, never frames on the wire — the same
+error as F-1 one level up. Measured: `9` seats, `0` over budget, `0`
+out-of-bound ticks. Four controls: beyond tolerance, within tolerance, gross overshoot, and travel without
+accepted stamps.
+
+**AC-3c moves FAIL → PASS** for the Phase 2 abuse population, with its limit stated: the population is the
+14-room `abuse-results.json` set, all on the hashed default speed, and no discrete-command displacement is
+included (M0 refuses discrete traffic — see GA-10).
+
+### 11.4 T-3 — GA-1's `B = 8`, proven from the room's own queue record
+
+`burst-b8.json`. GA-1's row says *"compliant sender, B = 8 burst then idle"* and the submitted batch had run
+a 6-frame burst and λ-rate streams instead. Sending eight frames is the easy half; the claim to be believed
+is that all eight were in the queue **together**, before the first dequeue — a seat that dribbles them in at
+one per tick satisfies the same stamp arithmetic and proves nothing.
+
+The proof is arithmetic on the room's own post-drain record, on the real admission path, hashed default
+envelope unmodified: the per-tick depth **after** each drain reads `7, 6, 5, 4, 3, 2, 1, 0` across eight consecutive
+consuming ticks. Seven remaining after a one-frame drain means eight were present before it, and the unbroken
+run means nothing arrived in between. Direct co-presence (`maxQueueDepthObserved = 8`) is
+recorded alongside, because the subtraction proof and the direct observation should agree and the artefact
+says so. The rest of the row: `distinctStampCount 8`, all consumed, consecutive drain,
+`inputResolvedThrough` reaches the highest stamp at rest, `retiredUnrepresented 0`, zero signals, zero
+closures for that seat, depth < 32 throughout.
+
+A hazard worth recording, because it is the kind that quietly produces a green artefact: the rate ceiling
+needs a trailing-window span of ≥ 250 ms, so a burst followed by idleness registers as one arrival jump and
+**cannot** register as sustained rate. The burst room therefore runs on the hashed default envelope
+(pressure line 24) and the artefact asserts `QUEUE_PRESSURE == 0` and `RATE_CEILING == 0` for that seat —
+otherwise the artefact would be evidence about a ceiling it had accidentally tripped.
+
+**GA-1 stays PARTIAL.** What closed: the literal `B = 8` construction, and per-seat depth being separated
+from the room-wide figure (per-seat rows are now in `buffer-depth.csv`). What keeps it PARTIAL: nothing in
+Phase 2 measures a *client-side* eviction consequence, which is ADR-0003 §5's third-column hazard under
+production settings and is GA-11's missing population (§5), not a Phase 2 construction.
+
+### 11.5 T-4 — GA-9 and AC-7: equivalent inputs before identical projections
+
+`tests/runtime/udg-003-phase-2/projection-isolation.ts` → `projection-isolation.json`. Four rooms:
+GA-9 runs a compliant seat alone and a compliant seat with a noisy neighbour; AC-7 runs an observer with an
+offender sending a malformed frame and an observer with the same offender sending a valid frame.
+
+Before any projection is compared, the artefact asserts the preconditions that make the comparison mean
+anything: equivalent initial per-seat state (movement state, with the room-local `lastAuthorityTick`
+stripped — a room clock is not player state), identical input payload lists, and **eligibility measured as
+each frame's position in its own seat's stream** (`arrivalOffsetFromOwnJoin === 1`). Arrival ordinals are
+room-wide, so comparing them across rooms compares how busy two rooms were; GA-9's own failure clause says a
+difference caused only by another session legitimately consuming an ordinal is **not** a violation, so
+scoring it as one would be an instrument that fails on demand. Room-wide ordinal growth is checked
+separately, as growth, and the population room is expected to lead. Both runs must show every expected stamp
+consumed; `stateHash` equality alone would have passed a pair of rooms where one seat's frames were all
+refused.
+
+Room-wide ordinals are checked separately, and the population room's lead is asserted rather than excused.
+AC-7 compares the observer's **whole trace**, byte for byte, malformed versus clean control — AC-7 says
+"trace", so a state-hash equality would have been a weaker criterion than the one on the page. Four rooms
+confirmed by room census: `4` distinct rooms, every neighbour check `true` (a "population" run whose
+seats landed in separate rooms would compare nothing, and `connectSeat` creating a fresh room per seat is
+exactly how that happens).
+
+**GA-9 moves PARTIAL → PASS** (solo baseline exists, ordinals compared as growth only, room-wide).
+**AC-7 moves PARTIAL → PASS** (no observer-visible state change and no observer trace difference, measured
+as trace equality against a clean control).
+
+### 11.6 GA-13 — the shared-journal windows verified exactly, four no-authority checks kept explicit
+
+`journal-population.json` now carries `scenarioWindows`, and `journal-replay.ts` **recomputes** each window
+from the retained rows instead of trusting the producer's summary. A window passes only if all of these hold,
+each of them a way the attribution could have been wrong:
+
+| check | what it refuses |
+| --- | --- |
+| `stampsMatch` | a window whose recorded stamp set is not the stamp set its own rows carry |
+| `acceptedTicksMatchObservations` | a window whose accepted-tick count disagrees with its consumed-observation count — two journalled views of the same event |
+| `dispositionsAllowed` | a window showing a disposition its scenario is not allowed to produce (`dropped:lifecycle` is listed for the ceiling window, because the frame that arrived mid-closure is a fact about closing, not about the ceiling) |
+| `allConsumed` | a window in which a seat that did send frames had any frame not consumed |
+| `noRefusals` | a refusal belonging to a compliant seat's own rows |
+
+Three windows pass: `rate-ceiling-closes-directly` (one seat, exact tick range, exact arrival
+ordinals), `compliant-control-population-frames-are-all-consumed` (the control seats' own streaming window)
+and `offenders-never-touch-the-compliant-population` (the whole offending period, where the controls sent
+nothing — "nothing happened to them afterwards" is a claim about an empty frame set too, and pretending that
+window contained their frames would have asserted over an empty range).
+
+One number space, stated once so nobody joins it wrongly: a `tick` row's `consumed` field is stage Q's
+**arrival ordinal**, numbered room-wide, and is compared against the rows and never against wire stamps; the
+wire-stamp join lives in the accounting module.
+
+The four no-authority scenarios stay listed, explicit, and **not** counted as replayed:
+`config-smoke-defaults-load-unbounded-and-hashes` (both configuration documents load and hash, and the two
+hashes differ), `unbounded-room-refuses-the-seat` (the refusal is journalled and the room never acquires the
+seat), `tick-metrics-present` (samples exist and cover every seated entity) and `server-disposes-cleanly`
+(tick counter and journal row count both stable after dispose). Each is listed in `journal-replay.json` with
+`coverage: noAuthoritySurface` and `pass: true`, and none of them is counted as replayed. **GA-13 stays
+PARTIAL** pending **OD-10** — the coverage rule ("does *every scenario replays*
+include scenarios that make no authority decisions?") is the owner's to decide, and this batch does not
+decide it by re-labelling rows.
+
+### 11.7 OD-9 executed — 18 → 24, and the CSV that has no parser
+
+Six new artefacts, listed in `PHASE_2_VECTOR_FILES`, produced by two new capture commands
+(`phase-2-reference-trace`, `phase-2-isolation-comparison`) and two new CI steps, in the order the record
+states: reference trace → population → recovery → isolation → journal replay → vectors → gate.
+
+Per-seat queue depth went into `buffer-depth.csv` as extra rows rather than a new file, and the vectors suite
+now carries the test that **is** the "no consumer" condition: a per-seat row changes the bytes the gate
+hashes (`first != second`), the CSV is parsed by nobody (a parse throws), and the CSV sits in the same list as
+every JSON artefact, so the rule that already refuses a directory missing `abuse-results.json` refuses one
+missing it. Projection evidence stays in one artefact, as approved.
+
+### 11.8 Verdicts: what moved, and what did not
+
+| row | before (§10) | after | why it moved |
+| --- | --- | --- | --- |
+| **AC-1** | FAIL | **PASS** | T-1: 200 ticks, Σ from the rows = 40.00000000000003 m, reset segments excluded, OD-8's home |
+| **AC-3c** | FAIL | **PASS** | T-2: per-tick bound over 355 accepted ticks of the abuse population, budget denominator = accepted stamps |
+| **AC-7** | PARTIAL | **PASS** | T-4: observer trace compared byte-for-byte against a clean control, in the same room as the offender |
+| **GA-9** | PARTIAL | **PASS** | T-4: solo baseline exists, equivalence preconditions asserted, ordinals compared as growth only |
+| **GA-1** | PARTIAL | PARTIAL | T-3 closes the `B = 8` construction and per-seat depth; the remaining half is production-setting eviction, which is GA-11 (§5) |
+| **GA-13** | PARTIAL | PARTIAL | windows verified exactly; coverage rule is OD-10, not ours to invent |
+| recovery (GA-6, GA-8 rows) | PASS | PASS | T-0b strengthens the artefact; no verdict needed rescuing |
+| **GA-10** | FAIL | FAIL | untouched; Δ == 1 halves still unproduced (§4) |
+| **GA-11 / W-10** | FAIL | FAIL | untouched; no RTT/jitter/loss population was added (§5) |
+| **AC-6** | PARTIAL | PARTIAL | untouched (OD-4) |
+| **GA-12 / PE-1…PE-5** | NOT PASSED | NOT PASSED | `dedupeClosureEnabled: false` unchanged |
+| **Gate A** | Not Run | Not Run | UDG-SPIKE-001's; PR-14 remains substrate |
+| **D4** | undesignated | undesignated | owner's to designate |
+
+### 11.9 What this batch did not do, and what is still owed
+
+Not done, on purpose: R-4, H2, OD-1…OD-7's remaining rulings, OD-10, and the four no-authority replays.
+Not touched: `authority/**` (unchanged since `96d3df6`), the dependency set (`pnpm-lock.yaml` unchanged), the
+protocol surface, `configHash 2743a9a047ce7264833af88e8bd2f8aeea970a45e306a348e1fe0654191bec7a`, and every
+byte of every earlier retained bundle. One server file gained a read-only telemetry accessor
+(`RegionRoom.ts` +5 lines, exposing `TickMetrics.samples()` inside the evidence the room already returns); no
+authority, admission or state-transition code changed.
+
+Retained bundle of this run: `/workspace/udg-evidence/ci-run-43458461044/UDG-003-2026-11-13T16-09-49-380Z-cfc49664` — `report.json` sha256 `56a0219837a982a0745f0c822212e3537f6485c862b9c70d31453cccfb594b24`,
+`vectors-phase-2/vectors-manifest.json` sha256 `768e487308e1bb7213dee9b3c31ef2a00afaf0d644635ce645d27c9a41cd3aae`, 187 hashed files, gate output
+`PASS phase-2 vectors: 24 artefact(s) listed, hashed and attributable` (phase 1 in the same run: 15), and
+`evidence verify` from the retained copy: `PASS … (0 issue(s))`, for all three bundles of that run.
+
+The disclosure in §10.10 applies to this run's bytes in both directions, and is restated rather than
+assumed: a bundle captured **before** the list moved — everything up to `c1b2f9b`, and `c7e497b`'s refused
+attempt along with them — still fails `evidence verify` when re-verified from this tree, because this tree's plan names files that bundle never contained — finding E1, mechanism unchanged, no
+check weakened. `9d1372a`, `c1b2f9b` and every earlier bundle are untouched in `/workspace/udg-evidence/`,
+their inventories unmodified, and H1 (verify from the capture commit) remains the method that verifies them
+correctly.
+
+Decisions still owed: **OD-1** (GA-10), **OD-2** (W-10 vs D-P2-5), **OD-3** (remaining no-clause gaps),
+**OD-4** (AC-6), **OD-5** (adopting the capture-plan reading of AC-15 as policy), **OD-7** (acceptance),
+**OD-10** (GA-13 coverage), plus R-4 and H2. OD-6, OD-8 and OD-9 are closed by this batch.
+
+### 11.10 Verification facts of this run, including the attempt that was refused
+
+The batch took **two** CI runs, and the first one is in the record rather than quietly re-rolled.
+
+| run | head | outcome |
+| --- | --- | --- |
+| [43455499702](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43455499702) | `c7e497b6b367f2d2b95c67394abfcf612336fdd2` | **failure** — `EVIDENCE-FILE-EMPTY logs/phase-2-reference-trace.stdout.log`. Both new steps wrote their only summary line to stderr, and the capture runner keeps the two streams apart and refuses an empty stdout record. `c7e497b` is not withdrawn: it is the commit whose bundle the verifier correctly refused. |
+| [43458461044](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43458461044) | `cfc49664f3cb8dca95ddfa86bcae82e0fdc8a94c` | **success** — the retained bundle of this batch. Fixed by obeying the rule (`cfc4966`), not by relaxing it. |
+
+Measured, from the retained copies and this tree:
+
+* `evidence verify` — `PASS (0 issues)` for `UDG-001-…-cfc49664`, `UDG-002-…-cfc49664` and
+  `UDG-003-…-cfc49664`; `report.json` `status PASS`, `implementationSha cfc49664…`,
+  `workingTreeDirty false`, 187 hashed files.
+* vectors gates on the retained bytes: **`24`** phase-2 artefacts and 15 phase-1 artefacts listed, hashed
+  and attributable.
+* `buffer-depth.csv` in this bundle: 2 546 data rows, of which **2 168 are per-seat rows** (`entityId` named)
+  and 378 are the room-wide rows the file already carried.
+* `journal-population.json`: 9 102 rows, three `scenarioWindows`; `journal-replay.json`: 6/6 journals
+  replayed equal on dispositions, canonical state and chain tip, blanked-digest tip equal, tampered prologue
+  refused, 6/6 negative controls, and 19 scenarios accounted for — **12 replayed, 3 window-attributable,
+  4 no-authority-surface, 0 unaccounted**.
+* **E1, measured rather than asserted.** Re-verifying the *previous* batch's bundle
+  (`ci-run-43435990922/UDG-003-…-c1b2f9bb`) from this tree now returns **14 issues**: 6
+  `EVIDENCE-FILE-MISSING`, 6 `EVIDENCE-VECTORS-FILE-UNLISTED`, 2 `EVIDENCE-COMMAND-MISSING`
+  (`phase-2-reference-trace`, `phase-2-isolation-comparison` were never run in that capture, because they did
+  not exist yet). That is the disclosed consequence of OD-9 arriving exactly as §10.10 predicted, and H1 —
+  verifying a bundle with the verifier of its own capture commit — remains the method that verifies those
+  bytes correctly.
+* **Nothing earlier moved.** A full-store digest of `/workspace/udg-evidence/` before the download (7 808
+  files) against after: **0 changed, 0 removed**, 363 files added, all of them inside the new
+  `ci-run-43458461044/` directory.
