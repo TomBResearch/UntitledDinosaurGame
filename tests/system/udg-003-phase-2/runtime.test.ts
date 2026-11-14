@@ -545,7 +545,8 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
           closed: boolean;
           acceptedCodes: number[];
           closureCode: number | null;
-          serverObservation: { serverQueuedAtClose: number; consumedCountAtClose: number; dequeuedTotal: number };
+          serverObservation: { serverQueuedAtClose: number; consumedCountAtClose: number; dequeuedTotal: number; retiredUnrepresented: number };
+          seatEnvelope?: { room: string; rateCeilingMessagesPerSecond: number; why: string; configHashDiffersFromMainRoom: boolean };
           retiredAtClose: number;
           refusedFramesForThisSeat: number;
           lossSignalThatSatisfiedTheControl: string;
@@ -554,6 +555,7 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
           epochAfterRejoin: number;
           appliedRegressions: number;
           duplicateApplications: number;
+          tokenReconnectRefusalsRecorded?: string[];
         };
       };
     };
@@ -563,7 +565,19 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
       expect(ga.controls[name], `the recovery exercise must assert ${name}`).toBe(true);
     }
     expect(Object.keys(ga.controls).length).toBeGreaterThanOrEqual(13);
-    expect(ga.reconnectFailures).toEqual([]);
+    // An empty list is the right expectation everywhere EXCEPT GA-7, and the exception is the finding
+    // rather than an allowance: the SDK refuses to reconnect a session the server retired
+    // ("reconnection token invalid or expired."), which is why that case recovers through matchmaking.
+    // Asserting `[]` there would assert the two-path result away.
+    for (const failure of ga.reconnectFailures) {
+      expect(failure.case, 'only GA-7 may be refused a reconnect').toBe('GA-7');
+    }
+    const firstRefusal = ga.reconnectFailures[0];
+    if (firstRefusal !== undefined) {
+      expect(firstRefusal.message).toMatch(/token/i);
+      expect(ga.ga7.recoveryPath).toBe('matchmaking-rejoin');
+      expect((ga.ga7.tokenReconnectRefusalsRecorded ?? []).length).toBeGreaterThan(0);
+    }
 
     // The numbers behind the controls, pinned so a future run cannot satisfy a renamed control instead.
     expect(ga.envelope.clientSnapshotDeadlineMs).toBe(500);
@@ -597,6 +611,14 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
     expect(ga.ga7.publicationsReachingTheSeatAfterTheSilence).toBe(0);
     expect(ga.ga7.closed).toBe(true);
     expect(ga.ga7.acceptedCodes).toContain(ga.ga7.closureCode);
+    // GA-7 is about a retirement the seat was never told about, so the seat's room is configured so that
+    // the retirement is the only closure it can meet (run 43581033563 showed why: on the default envelope
+    // the rate ceiling and the buffer race, and a control that demands one of them is a coin toss). The
+    // difference is published rather than quietly relied on.
+    expect(ga.ga7.closureCode).toBe(4100);
+    expect(ga.ga7.retiredAtClose).toBeGreaterThanOrEqual(1);
+    expect(ga.ga7.seatEnvelope?.room).toContain('regionGa7');
+    expect(ga.ga7.seatEnvelope?.why).toContain('43581033563');
     expect(typeof ga.ga7.serverObservation.serverQueuedAtClose).toBe('number');
     expect(typeof ga.ga7.serverObservation.consumedCountAtClose).toBe('number');
     expect(typeof ga.ga7.serverObservation.dequeuedTotal).toBe('number');

@@ -172,11 +172,34 @@ async function main(): Promise<void> {
     manifestHash: regionHash(cfg),
   };
 
+  // GA-7's seat gets a room of its own whose rate ceiling is far above anything this case can send. Not
+  // for convenience: on the default envelope a 64-frame burst is simultaneously a buffer overflow and a
+  // rate breach, and which closure wins is decided by how fast the runner drains a tick. Run 43581033563
+  // lost a hosted run to exactly that — the control demanded a loss recorded by a mechanism that had
+  // already lost the race — and a criterion should not be evidenced by a coin toss inside an envelope
+  // UDG-SPIKE-001 owns anyway. With the ceiling out of the running, the closure GA-7 meets is the
+  // retirement it is about, on every runner. The difference is declared in the artefact, and the abuse
+  // population and the PR-14 probe already run per-room envelopes for the same reason.
+  const ga7RateCeiling = 500;
+  const ga7Overrides = { region: { bounds }, input: { rateCeilingMessagesPerSecond: ga7RateCeiling } };
+  const ga7Cfg = withConfigOverrides(configMod['DEFAULT_SERVER_CONFIG'], ga7Overrides);
+  const ga7Identity = {
+    protocolVersion: ga7Cfg['protocolVersion'] as string,
+    configHash: computeConfigHash(ga7Cfg),
+    manifestHash: regionHash(ga7Cfg),
+  };
+
   const stack = await loadPinnedStack(ROOT);
   const server = await startHarnessServer(ROOT, {
     region: RegionRoomModule.defineOperatorRegionRoom({
       config: deploymentOverrides,
       runId: 'udg-003-phase-2-impairment',
+      journalRetention: 20_000,
+      regionProvenance: 'test-only-synthetic',
+    }),
+    regionGa7: RegionRoomModule.defineOperatorRegionRoom({
+      config: ga7Overrides,
+      runId: 'udg-003-phase-2-impairment-ga7',
       journalRetention: 20_000,
       regionProvenance: 'test-only-synthetic',
     }),
@@ -543,8 +566,12 @@ async function main(): Promise<void> {
     lastDeliveryAtMs: number;
   }
 
-  const openExercise = async (seed: number): Promise<Exercise> => {
-    const seat = await connectSeatById<ProbeRegionState>(stack, server.endpoint, roomId, identity, RegionSchema);
+  const openExercise = async (
+    seed: number,
+    intoRoomId: string = roomId,
+    withIdentity: typeof identity = identity,
+  ): Promise<Exercise> => {
+    const seat = await connectSeatById<ProbeRegionState>(stack, server.endpoint, intoRoomId, withIdentity, RegionSchema);
     const room = seat.room;
     const epoch = await waitForIssuedEpoch(room as unknown as SdkRoom<ProbeRegionState>);
     const controller = installImpairment(room as unknown as Parameters<typeof installImpairment>[0], { seed });
@@ -956,7 +983,8 @@ async function main(): Promise<void> {
   };
 
   // ── GA-7: the final publication is withheld ──────────────────────────────────────────────────
-  const ga7 = await openExercise(404);
+  const ga7World = await connectSeat<ProbeRegionState>(stack, server.endpoint, 'regionGa7', ga7Identity, RegionSchema);
+  const ga7 = await openExercise(404, ga7World.room.roomId, ga7Identity);
   await streamAccepted(ga7, 3);
   // Attributed per entity, not by an index into every room's closure list: a closure belonging to another
   // seat would otherwise be read as this seat's, and the artefact would credit GA-7 with someone else's
@@ -1102,8 +1130,7 @@ async function main(): Promise<void> {
       // GA-7 asks of the server is that it still recorded the loss, its counters and `serverQueuedAtClose`
       // while the seat was never told, so the control names either input-loss closure and the artefact
       // publishes the code that actually arrived.
-      && (ga7Closure?.code === closeCodes['INPUT_RETIRED_UNREPRESENTED']
-        || ga7Closure?.code === closeCodes['INPUT_RATE_CEILING'])
+      && ga7Closure?.code === closeCodes['INPUT_RETIRED_UNREPRESENTED']
       && ga7LossRecorded
       && ga7Observation !== null
       && typeof ga7Observation['serverQueuedAtClose'] === 'number'
@@ -1189,8 +1216,13 @@ async function main(): Promise<void> {
       publicationsSilentlyDropped: ga7.controller.counters().inboundSilentlyDropped,
       closed: ga7Closed,
       closureCode: ga7Closure?.code ?? null,
-      acceptedCodes: [closeCodes['INPUT_RETIRED_UNREPRESENTED'], closeCodes['INPUT_RATE_CEILING']],
-      whichPathArrived: 'a burst at the provisional envelope usually trips the rate ceiling first; the criterion cares that the server recorded the loss and its counters while the seat was never told, and the code that arrived is published rather than curated',
+      acceptedCodes: [closeCodes['INPUT_RETIRED_UNREPRESENTED']],
+      seatEnvelope: {
+        room: 'regionGa7 (its own room, runId udg-003-phase-2-impairment-ga7)',
+        rateCeilingMessagesPerSecond: ga7RateCeiling,
+        why: 'the default envelope lets a 64-frame burst breach the rate ceiling and overflow the buffer at the same time, and which closure arrives depends on how fast the runner drains a tick; hosted run 43581033563 lost a control to that race. Raising the ceiling leaves the retirement path — the one GA-7 is about — as the only closure this seat can meet. Nothing else about the envelope differs, and no client-visible setting is involved',
+        configHashDiffersFromMainRoom: ga7Identity.configHash !== identity.configHash,
+      },
       closeElapsedMs: ga7CloseElapsedMs,
       closureMaxMs: closureMaxMs,
       serverObservation: ga7Observation,
@@ -1211,6 +1243,7 @@ async function main(): Promise<void> {
       sdkReconnectEpochSeen: ga7RecoveredEpoch,
       epochAfterRejoin: ga7RecoveredEpochAfterRejoin,
       noteOnTheTwoPaths: 'GA-6a recovers on its own token because the client tore the socket; GA-7 is closed by the server, whose rejoin path has already retired that session, so recovery here is a matchmaking rejoin with a fresh snapshot. UDG-008 has to implement both, and Gate A has to see both.',
+      tokenReconnectRefusalsRecorded: reconnectFailures.filter((failure) => failure.case === 'GA-7').map((failure) => failure.message),
       epochBefore: ga7.epoch,
       appliedRegressions: ga7Regressions.regressions,
       duplicateApplications: ga7Regressions.duplicates,
