@@ -51,7 +51,7 @@ import {
   type ImpairmentController,
   type ImpairmentOptions,
 } from '../../support/client-harness/impairment.mjs';
-import { RecoveryPolicy, type Delivery } from '../../support/client-harness/recovery.ts';
+import { RecoveryPolicy, type Delivery, type RecoveryEvent } from '../../support/client-harness/recovery.ts';
 import { flattenConsumed, streamAccounting } from '../../support/authority/accounting.ts';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
@@ -483,6 +483,41 @@ async function main(): Promise<void> {
   const closeObservations = (): Record<string, unknown>[] =>
     RegionRoomModule.RegionRoom.liveRooms().flatMap((candidate) => ((candidate.evidence()['closeObservations'] ?? []) as Record<string, unknown>[]));
 
+  /**
+   * The published shape of one policy event. Every field is copied by a `switch` over the discriminated
+   * union rather than by a cast, so renaming or dropping a field in `recovery.ts` stops this file
+   * compiling instead of quietly publishing `undefined` where a measurement used to be.
+   */
+  interface RecoveryEventRecord {
+    readonly atMs: number;
+    readonly type: string;
+    readonly trigger?: string;
+    readonly reason?: string;
+    readonly rungMs?: number;
+    readonly code?: number;
+    readonly rebasedTo?: number;
+    readonly viaEpochChange?: boolean;
+  }
+
+  const describeEvent = (event: RecoveryEvent): RecoveryEventRecord => {
+    const atMs = Math.round(event.atMs);
+    switch (event.type) {
+      case 'INPUT_ACK_STALLED':
+        return { atMs, type: event.type, trigger: event.trigger };
+      case 'rejoin-attempt':
+        return { atMs, type: event.type, rungMs: event.rungMs };
+      case 'allowance-refused':
+        return { atMs, type: event.type, reason: event.reason };
+      case 'recovered':
+        return { atMs, type: event.type, rebasedTo: event.rebasedTo, viaEpochChange: event.viaEpochChange };
+      case 'client-close':
+        return { atMs, type: event.type, reason: event.reason, code: event.code };
+      case 'stop-sending':
+      case 'discard-prediction':
+        return { atMs, type: event.type };
+    }
+  };
+
   interface RejoinRecord {
     readonly epochBefore: number;
     readonly epochAfter: number;
@@ -501,7 +536,7 @@ async function main(): Promise<void> {
     // `| undefined` is spelled out because `exactOptionalPropertyTypes` is on: the policy's events carry
     // these fields only for some types, and an optional property that cannot hold undefined is a lie
     // about what a lookup returns.
-    readonly events: { atMs: number; type: string; trigger?: string | undefined; reason?: string | undefined; rungMs?: number | undefined }[];
+    readonly events: RecoveryEventRecord[];
     readonly applied: { epoch: number; resolvedThrough: number }[];
     readonly deliveries: Delivery[];
     stopClock: () => void;
@@ -550,14 +585,10 @@ async function main(): Promise<void> {
         deliveries.push(delivery);
         exercise.lastDeliveryAtMs = delivery.atMs;
         applied.push({ epoch: row.sessionEpoch, resolvedThrough: row.inputResolvedThrough });
-        for (const event of policy.observe(delivery)) {
-          events.push({ atMs: Math.round(event.atMs), type: event.type, trigger: (event as { trigger?: string }).trigger, reason: (event as { reason?: string }).reason, rungMs: (event as { rungMs?: number }).rungMs });
-        }
+        for (const event of policy.observe(delivery)) events.push(describeEvent(event));
       });
     const clock = setInterval(() => {
-      for (const event of policy.tick(nowMs())) {
-        events.push({ atMs: Math.round(event.atMs), type: event.type, trigger: (event as { trigger?: string }).trigger, reason: (event as { reason?: string }).reason, rungMs: (event as { rungMs?: number }).rungMs });
-      }
+      for (const event of policy.tick(nowMs())) events.push(describeEvent(event));
     }, 10);
     exercise.stopClock = () => clearInterval(clock);
     controller.arm();
@@ -726,6 +757,203 @@ async function main(): Promise<void> {
     && ga6c.policy.snapshot().state !== 'ok';
   ga6c.stopClock();
   ga6c.controller.restore();
+
+  // ── GA-6c, the OTHER branch: the 4000 ms episode deadline expires with no fresh snapshot ─────
+  //
+  // W-7 names three limits and they are not interchangeable: the 500 ms snapshot deadline (which OPENS a
+  // recovery episode), the 4000 ms episode deadline (which CLOSES the client), and the rolling rejoin
+  // allowance (which refuses attempts). The exercise above lands on the allowance; `recovery-scenarios.ts`
+  // S3 reaches the episode deadline through an unclean tear and stops at the close event itself, so what it
+  // does not show is the three things the close has to be checked against: whether a fresh authoritative
+  // snapshot had arrived, whether the client stayed stopped afterwards, and whether any input reached the
+  // room afterwards. This case is that hole, on the silent-server construct rather than a torn socket.
+  //
+  // The discrimination is structural, not asserted: the harness lets the ladder run and then never carries
+  // an attempt out, so the allowance is never charged (`markRejoin` is the only thing that charges it) and
+  // the policy's own history contains no `allowance-refused` event. The binding constraint therefore has to
+  // be the episode deadline, and the close reason says so in the policy's words rather than in this
+  // comment's.
+  const journalledClientFrames = (entityId: string): number =>
+    RegionRoomModule.RegionRoom.liveRooms()
+      .flatMap((candidate) => candidate.journal().rows)
+      .filter((row) => row['entityId'] === entityId && row['type'] === 'observation' && row['origin'] === 'client-payload').length;
+  const journalledRefusals = (entityId: string): number =>
+    RegionRoomModule.RegionRoom.liveRooms()
+      .flatMap((candidate) => candidate.journal().rows)
+      .filter((row) => row['entityId'] === entityId && typeof row['disposition'] === 'string' && String(row['disposition']).startsWith('refused:')).length;
+  const roomTicks = (): number =>
+    RegionRoomModule.RegionRoom.liveRooms().reduce((total, candidate) => total + Number(candidate.evidence()['ticks'] ?? 0), 0);
+
+  const ep = await openExercise(505);
+  await streamAccepted(ep, 3);
+  const epFramesAtSilence = journalledClientFrames(ep.entityId);
+  const epRefusalsAtSilence = journalledRefusals(ep.entityId);
+  const epRoomTicksAtSilence = roomTicks();
+  const epDeliveriesAtSilence = ep.controller.counters().inboundDelivered;
+  const epAppliedAtSilence = ep.applied.length;
+  const epRowAtSilence = ep.room.state.players?.get(ep.entityId);
+  const epResolvedThroughAtSilence = epRowAtSilence?.inputResolvedThrough ?? -1;
+  const epEpochAtSilence = epRowAtSilence?.sessionEpoch ?? -1;
+  const epLastDeliveryBeforeSilence = ep.lastDeliveryAtMs;
+  ep.controller.silenceInbound();
+  const epStalled = await until(() => eventsOf(ep, 'INPUT_ACK_STALLED').length > 0, snapshotDeadlineMs + 2_000);
+  const epStall = eventsOf(ep, 'INPUT_ACK_STALLED')[0];
+  const epSnapshotDeadlineElapsedMs = epStall === undefined ? -1 : Math.round(epStall.atMs - epLastDeliveryBeforeSilence);
+  // Attempts come due at the ladder's rungs and the harness leaves them unexecuted: no reconnect, so no
+  // `markRejoin`, so no allowance charged. Nothing else in this case would distinguish "the deadline bound"
+  // from "the allowance ran out".
+  const epEpisodeClosed = await until(() => eventsOf(ep, 'client-close').length > 0, recoveryDeadlineMs + 4_000);
+  const epClose = eventsOf(ep, 'client-close')[0];
+  const epAttemptsBeforeClose = eventsOf(ep, 'rejoin-attempt').length;
+  const epAllowanceRefusedBeforeClose = eventsOf(ep, 'allowance-refused').length;
+  const epCountersAtClose = ep.controller.counters();
+  const epStateAtClose = ep.policy.snapshot();
+  const epCloseAgeFromEpisodeStartMs = epStall === undefined || epClose === undefined ? -1 : Math.round(epClose.atMs - epStall.atMs);
+  const epCloseAgeFromLastDeliveryMs = epClose === undefined ? -1 : Math.round(epClose.atMs - epLastDeliveryBeforeSilence);
+  await sleep(400);
+  const epAttemptsAfterClose = eventsOf(ep, 'rejoin-attempt').length - epAttemptsBeforeClose;
+  const epRecoveredAfterClose = eventsOf(ep, 'recovered').length;
+  const epSendsAfterClose = (() => {
+    let sent = 0;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      if (ep.policy.snapshot().sendingAllowed) {
+        stampAndSend(ep.seat.handle as never, { ...frame, sessionEpoch: ep.epoch });
+        sent += 1;
+      }
+    }
+    return sent;
+  })();
+  const epTransportSendsAfterClose = ep.controller.counters().sentTotal - epCountersAtClose.sentTotal;
+  await sleep(1_200);
+  const epFramesAfter = journalledClientFrames(ep.entityId);
+  const epRefusalsAfter = journalledRefusals(ep.entityId);
+  const epRoomTicksAfter = roomTicks();
+  const epCountersAfter = ep.controller.counters();
+  const epStateAfter = ep.policy.snapshot();
+  const epRowAfter = ep.room.state.players?.get(ep.entityId);
+  const epFreshSnapshotArrived = epCountersAfter.inboundDelivered !== epDeliveriesAtSilence
+    || ep.applied.length !== epAppliedAtSilence
+    || (epRowAfter?.inputResolvedThrough ?? -1) !== epResolvedThroughAtSilence;
+  // The client tears its own socket after surfacing the error — which is the last thing this case needs,
+  // because a wrapper counter sampled before the tear is what shows no server close was ever involved.
+  const epSocketClosedByClient = epCountersAfter.socketClosedDuring;
+  ep.stopClock();
+  ep.controller.restore();
+  await ep.room.leave(true).catch(() => undefined);
+
+  const epControls = {
+    episodeDeadlineExpiredWithNoFreshSnapshot: epEpisodeClosed
+      && epClose?.reason === 'episode-deadline'
+      && epCloseAgeFromEpisodeStartMs >= recoveryDeadlineMs
+      && !epFreshSnapshotArrived
+      && epCountersAfter.inboundSilentlyDropped > 0,
+    episodeDeadlineIsDistinctFromTheSnapshotDeadline: epStalled
+      && epStall?.trigger === 'deadline'
+      && epSnapshotDeadlineElapsedMs > 0
+      && epSnapshotDeadlineElapsedMs <= snapshotDeadlineMs + 150
+      && epCloseAgeFromEpisodeStartMs >= recoveryDeadlineMs
+      && recoveryDeadlineMs > snapshotDeadlineMs,
+    rollingAllowanceWasNotTheBindingConstraint: epAttemptsBeforeClose > 0
+      // The allowance is charged by actual rejoins only (D-P2-8), and none happened: the transport never
+      // reconnected, the policy's own history carries no `allowance-refused`, and the close reason is the
+      // episode's, not the window's.
+      && epCountersAtClose.reconnectEvents === 0
+      && epAllowanceRefusedBeforeClose === 0
+      && epClose?.reason === 'episode-deadline'
+      && ep.policy.history().some((event) => event.type !== 'allowance-refused'),
+    clientSurfacedItsOwnConnectionErrorAndStayedStopped: epClose?.code === closeCodes['INPUT_RECOVERY']
+      && epSocketClosedByClient === 0
+      && epStateAtClose.state === 'closed'
+      && epStateAfter.state === 'closed'
+      && !epStateAfter.sendingAllowed
+      && epAttemptsAfterClose === 0
+      && epRecoveredAfterClose === 0,
+    noInputReachedTheRoomAfterTheEpisodeClosed: epSendsAfterClose === 0
+      && epTransportSendsAfterClose === 0
+      && epFramesAfter === epFramesAtSilence
+      && epRefusalsAfter === epRefusalsAtSilence,
+    roomKeptRunningWhileTheSeatHadNoSnapshot: epRoomTicksAfter > epRoomTicksAtSilence,
+  };
+
+  const ga6cEpisodeDeadline = {
+    whichLimit: `the 4000 ms recovery EPISODE deadline (clientRecoveryDeadlineMs ${String(recoveryDeadlineMs)}), not the 500 ms snapshot deadline and not the rolling rejoin allowance`,
+    question: 'W-7: does the episode deadline expire while the seat still has no fresh authoritative snapshot, and does the client then stay stopped, surface its own connection error, and send nothing further?',
+    threeLimitsDistinguished: {
+      snapshotDeadline: {
+        value: snapshotDeadlineMs,
+        whatItDid: `fired first, at ${String(epSnapshotDeadlineElapsedMs)} ms after the last accepted delivery, as INPUT_ACK_STALLED with trigger "deadline" — it OPENS the episode; it does not close the client`,
+        closedTheClient: false,
+      },
+      rollingRejoinAllowance: {
+        value: rejoinAllowance,
+        whatItDid: `never bound: ${String(epAttemptsBeforeClose)} ladder attempts came due and none was carried out, so nothing was charged against the window and the policy emitted no "allowance-refused" event at all`,
+        closedTheClient: false,
+        contrastWithTheAllowanceCase: `the allowance branch above closed with reason "allowance-exhausted" after ${String(rejoinAllowance)} real rejoins; this one closes with "${String(epClose?.reason ?? 'none')}" and zero rejoins charged`,
+      },
+      episodeDeadline: {
+        value: recoveryDeadlineMs,
+        whatItDid: `closed the client at ${String(epCloseAgeFromEpisodeStartMs)} ms after the episode opened (${String(epCloseAgeFromLastDeliveryMs)} ms after the last accepted delivery), under INPUT_RECOVERY ${String(closeCodes['INPUT_RECOVERY'])}`,
+        closedTheClient: true,
+        reason: epClose?.reason ?? null,
+      },
+    },
+    snapshotAbsence: {
+      freshAuthoritativeSnapshotArrived: epFreshSnapshotArrived,
+      deliveriesReachingTheSeatDuringTheEpisode: epCountersAfter.inboundDelivered - epDeliveriesAtSilence,
+      publicationsSwallowedAtTheWrapper: epCountersAfter.inboundSilentlyDropped,
+      stateApplicationsDuringTheEpisode: ep.applied.length - epAppliedAtSilence,
+      resolvedThroughAtSilence: epResolvedThroughAtSilence,
+      resolvedThroughAtClose: epRowAfter?.inputResolvedThrough ?? -1,
+      epochAtSilence: epEpochAtSilence,
+      epochAtClose: epRowAfter?.sessionEpoch ?? -1,
+      rejoinsPerformedByTheHarness: 0,
+      recoveryEvents: eventsOf(ep, 'recovered').length,
+    },
+    surfacedError: {
+      event: epClose ?? null,
+      code: epClose?.code ?? null,
+      closeCodeName: 'INPUT_RECOVERY',
+      expectedCode: closeCodes['INPUT_RECOVERY'],
+      reason: epClose?.reason ?? null,
+      surfacedBy: 'the client\'s own deadline — no server event was involved',
+      serverClosedTheSeatAnywhereInThisCase: epSocketClosedByClient !== 0,
+      socketClosedDuringEpisode: epSocketClosedByClient,
+      policyStateAtClose: epStateAtClose.state,
+      policyStateAfter: epStateAfter.state,
+      note: 'what is surfaced here is the client-side error record the frozen rules define (code + reason + a terminal `closed` state). The app-visible connection error a player sees is the production client\'s, and that is UDG-008\'s machine; GA-6c accepts a surfaced error OR a recorded suspended state, and both halves of that are published rather than described.',
+    },
+    stayedStopped: {
+      sendingAllowedAtClose: epStateAtClose.sendingAllowed,
+      sendingAllowedAfter: epStateAfter.sendingAllowed,
+      predictionDiscarded: epStateAfter.predictionDiscarded,
+      ladderAttemptsAfterClose: epAttemptsAfterClose,
+      recoveriesAfterClose: epRecoveredAfterClose,
+    },
+    noFurtherInput: {
+      sendsAttemptedWhileGateWasConsulted: epSendsAfterClose,
+      transportSendsObservedAfterClose: epTransportSendsAfterClose,
+      roomJournalledClientFramesAtClose: epFramesAtSilence,
+      roomJournalledClientFramesAfter: epFramesAfter,
+      roomJournalledRefusalsAtClose: epRefusalsAtSilence,
+      roomJournalledRefusalsAfter: epRefusalsAfter,
+      whyTheServerSideCount: 'the harness\'s own gate refusing to send is a claim about the harness; the room journalling nothing more for this entity — no observation rows, no refusals — is the same claim checked on the side that would have to process them',
+    },
+    roomSide: {
+      ticksAtSilence: epRoomTicksAtSilence,
+      ticksAfter: epRoomTicksAfter,
+      keptRunning: epRoomTicksAfter > epRoomTicksAtSilence,
+    },
+    timing: {
+      episodeAgeMs: epCloseAgeFromEpisodeStartMs,
+      episodeDeadlineMs: recoveryDeadlineMs,
+      closeAfterLastDeliveryMs: epCloseAgeFromLastDeliveryMs,
+      snapshotDeadlineElapsedMs: epSnapshotDeadlineElapsedMs,
+      ladderAttemptsBeforeClose: epAttemptsBeforeClose,
+      allowanceRefusedEventsBeforeClose: epAllowanceRefusedBeforeClose,
+    },
+    events: ep.events,
+    controls: epControls,
+  };
 
   // ── GA-7: the final publication is withheld ──────────────────────────────────────────────────
   const ga7 = await openExercise(404);
@@ -930,6 +1158,7 @@ async function main(): Promise<void> {
       stillStopped: ga6cStillStopped,
       events: ga6c.events,
     },
+    ga6cEpisodeDeadline,
     ga7: {
       question: 'the final publication is withheld: does the server still record the loss and its counters, does the client act inside the closure window, and does it recover without applying anything twice?',
       seatNeverTold: ga7NeverTold,
@@ -961,6 +1190,18 @@ async function main(): Promise<void> {
       events: ga7.events,
     },
     reconnectFailures,
+    episodeDeadlineDiscrimination: {
+      closeReasonsObservedAcrossTheCases: {
+        episodeDeadline: epClose?.reason ?? null,
+        allowanceBranch: ga6cSuspended?.reason ?? null,
+        snapshotDeadlineTrigger: epStall?.trigger ?? null,
+      },
+      distinct: epClose?.reason === 'episode-deadline'
+        && ga6cSuspended?.reason === 'allowance-exhausted'
+        && epStall?.trigger === 'deadline'
+        && ga6bStall?.trigger === 'deadline',
+      note: 'three limits, three records: the 500 ms snapshot deadline appears as INPUT_ACK_STALLED/trigger "deadline" and opens the episode; the 4000 ms episode deadline appears as client-close/"episode-deadline"; the rolling allowance appears as allowance-refused + client-close/"allowance-exhausted". No case in this artefact can satisfy one of them by producing another',
+    },
     controls: ga6Ga7Controls,
   };
 
@@ -1026,6 +1267,7 @@ async function main(): Promise<void> {
     stallSeatCaughtUpAfterRelease: (stalled?.roomSide.allSentStampsConsumed ?? false) === true,
     socketNeverBrokeAnywhere: perSeat.every((entry) => entry.impairment.socketClosedDuring === 0
       && entry.impairment.reconnectEvents === 0),
+    ...epControls,
     // P-2b. The four recovery controls govern their own seats, which are opened after the four latency
     // populations have been read; `socketNeverBrokeAnywhere` therefore still means "no seat in the latency
     // populations lost its socket", which is what it always meant, and the recovery cases are asserted
@@ -1036,7 +1278,7 @@ async function main(): Promise<void> {
   const artefact = {
     taskId: 'UDG-003',
     phase: 'phase-2',
-    criterion: ['W-10', 'GA-11', 'GA-6a', 'GA-6b', 'GA-6c', 'GA-7'],
+    criterion: ['W-10', 'GA-11', 'GA-6a', 'GA-6b', 'GA-6c', 'GA-6c-episode-deadline', 'GA-7'],
     producer: 'tests/runtime/udg-003-phase-2/impairment-population.ts',
     statement:
       'W-10 as amended (OD-2): RTT, jitter, application-layer delivery loss and arrival-phase populations over a real WebSocket round trip, with the loopback baseline reported separately. Phase 2 records the populations; evaluating the two GA-11 inequalities and selecting production values belong to UDG-SPIKE-001. The `ga6Ga7` section is P-2b, reopened for the Phase 2 harness only (owner, 2026-11-14): GA-6a/6b/6c and GA-7 exercised against the live room at the declared test values, with the production client machine left in UDG-008 and the formal Gate A execution in UDG-SPIKE-001.',
@@ -1146,8 +1388,11 @@ async function main(): Promise<void> {
     + `withheld ${String(loss?.withheldStampsNamed.length ?? 0)} (never consumed: ${String(loss?.withheldNeverConsumed ?? false)}, `
     + `later arrived: ${String(loss?.deliveriesAfterTheHoleConsumed ?? false)}), `
     + `stall caught up: ${String(stalled?.roomSide.allSentStampsConsumed ?? false)}, `
-    + `GA-6a/6b/6c+GA-7 ${String(Object.values(ga6Ga7Controls).filter((value) => value === true).length)}/${String(Object.keys(ga6Ga7Controls).length)} `
+    + `recovery controls ${String(Object.values(controls).filter((value) => value === true).length)}/${String(Object.keys(controls).length)} `
+    + `(of which GA-6a/6b/6c+GA-7 ${String(Object.values(ga6Ga7Controls).filter((value) => value === true).length)}/${String(Object.keys(ga6Ga7Controls).length)}, `
+    + `GA-6c episode branch ${String(Object.values(epControls).filter((value) => value === true).length)}/${String(Object.keys(epControls).length)}) `
     + `(6b silent-server deadline: ${String(ga6Ga7Controls.ga6bDeadlineFiredWithNoServerEventAtAll)}, `
+    + `6c episode deadline ${String(epCloseAgeFromEpisodeStartMs)} ms -> ${String(epClose?.reason ?? 'none')} with ${String(epCountersAfter.inboundDelivered - epDeliveriesAtSilence)} deliveries and ${String(epFramesAfter - epFramesAtSilence)} room frames after, `
     + `7 close ${String(ga7Closure?.code ?? '-')} in ${String(ga7CloseElapsedMs)} ms, recovered epoch ${String(ga7RecoveredEpoch)}\n`,
   );
   await Promise.race([server.close().catch(() => undefined), sleep(4_000)]);

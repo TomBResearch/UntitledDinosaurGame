@@ -610,6 +610,103 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
     expect(JSON.stringify(ga)).not.toMatch(/"gateA":\s*"pass/);
   });
 
+  it('W-7: the 4000 ms episode deadline expires with no fresh snapshot, and the three limits stay distinct', () => {
+    const impairment = JSON.parse(readFileSync(join(OUT_DIR, 'transport-impairment.json'), 'utf8')) as {
+      criterion: string[];
+      ga6Ga7: {
+        episodeDeadlineDiscrimination: {
+          closeReasonsObservedAcrossTheCases: { episodeDeadline: string | null; allowanceBranch: string | null; snapshotDeadlineTrigger: string | null };
+          distinct: boolean;
+        };
+        controls: Record<string, boolean>;
+        ga6c: { suspension?: { reason?: string } | null };
+        ga6cEpisodeDeadline: {
+          whichLimit: string;
+          threeLimitsDistinguished: {
+            snapshotDeadline: { value: number; closedTheClient: boolean };
+            rollingRejoinAllowance: { value: number; closedTheClient: boolean; contrastWithTheAllowanceCase: string };
+            episodeDeadline: { value: number; closedTheClient: boolean; reason: string | null };
+          };
+          snapshotAbsence: {
+            freshAuthoritativeSnapshotArrived: boolean;
+            deliveriesReachingTheSeatDuringTheEpisode: number;
+            publicationsSwallowedAtTheWrapper: number;
+            stateApplicationsDuringTheEpisode: number;
+            resolvedThroughAtSilence: number;
+            resolvedThroughAtClose: number;
+            epochAtSilence: number;
+            epochAtClose: number;
+            recoveryEvents: number;
+          };
+          surfacedError: { code: number | null; expectedCode: number; reason: string | null; serverClosedTheSeatAnywhereInThisCase: boolean; policyStateAtClose: string; policyStateAfter: string; note: string };
+          stayedStopped: { sendingAllowedAtClose: boolean; sendingAllowedAfter: boolean; ladderAttemptsAfterClose: number; recoveriesAfterClose: number };
+          noFurtherInput: { sendsAttemptedWhileGateWasConsulted: number; transportSendsObservedAfterClose: number; roomJournalledClientFramesAtClose: number; roomJournalledClientFramesAfter: number; roomJournalledRefusalsAtClose: number; roomJournalledRefusalsAfter: number };
+          roomSide: { keptRunning: boolean };
+          timing: { episodeAgeMs: number; episodeDeadlineMs: number; snapshotDeadlineElapsedMs: number; ladderAttemptsBeforeClose: number; allowanceRefusedEventsBeforeClose: number };
+          controls: Record<string, boolean>;
+        };
+      };
+    };
+    expect(impairment.criterion).toContain('GA-6c-episode-deadline');
+    const ga = impairment.ga6Ga7;
+    const ep = ga.ga6cEpisodeDeadline;
+    for (const name of Object.keys(ep.controls)) {
+      expect(ep.controls[name], `the episode-deadline case must assert ${name}`).toBe(true);
+    }
+
+    // The deadline that closed the client is the 4000 ms episode deadline, and it closed it LATE enough to
+    // be that one: the 500 ms snapshot deadline had already fired ~4.5 s earlier and only opened the episode.
+    expect(ep.timing.episodeDeadlineMs).toBe(4000);
+    expect(ep.threeLimitsDistinguished.episodeDeadline.closedTheClient).toBe(true);
+    expect(ep.threeLimitsDistinguished.snapshotDeadline.closedTheClient).toBe(false);
+    expect(ep.threeLimitsDistinguished.rollingRejoinAllowance.closedTheClient).toBe(false);
+    expect(ep.timing.episodeAgeMs).toBeGreaterThanOrEqual(4000);
+    expect(ep.timing.snapshotDeadlineElapsedMs).toBeGreaterThan(0);
+    expect(ep.timing.snapshotDeadlineElapsedMs).toBeLessThanOrEqual(650);
+    expect(ep.surfacedError.reason).toBe('episode-deadline');
+
+    // Still no fresh authoritative snapshot at the moment of expiry: nothing arrived, nothing was applied,
+    // the watermark and the epoch did not move, and the silence is counted rather than assumed.
+    expect(ep.snapshotAbsence.freshAuthoritativeSnapshotArrived).toBe(false);
+    expect(ep.snapshotAbsence.deliveriesReachingTheSeatDuringTheEpisode).toBe(0);
+    expect(ep.snapshotAbsence.publicationsSwallowedAtTheWrapper).toBeGreaterThan(0);
+    expect(ep.snapshotAbsence.stateApplicationsDuringTheEpisode).toBe(0);
+    expect(ep.snapshotAbsence.resolvedThroughAtClose).toBe(ep.snapshotAbsence.resolvedThroughAtSilence);
+    expect(ep.snapshotAbsence.epochAtClose).toBe(ep.snapshotAbsence.epochAtSilence);
+    expect(ep.snapshotAbsence.recoveryEvents).toBe(0);
+
+    // The error is the client's own: INPUT_RECOVERY, a terminal `closed` state, no server close anywhere.
+    expect(ep.surfacedError.code).toBe(4102);
+    expect(ep.surfacedError.expectedCode).toBe(4102);
+    expect(ep.surfacedError.serverClosedTheSeatAnywhereInThisCase).toBe(false);
+    expect(ep.surfacedError.policyStateAtClose).toBe('closed');
+    expect(ep.surfacedError.policyStateAfter).toBe('closed');
+    expect(ep.stayedStopped.sendingAllowedAtClose).toBe(false);
+    expect(ep.stayedStopped.sendingAllowedAfter).toBe(false);
+    expect(ep.stayedStopped.ladderAttemptsAfterClose).toBe(0);
+    expect(ep.stayedStopped.recoveriesAfterClose).toBe(0);
+
+    // Nothing further reached the room, counted on the side that would have had to process it.
+    expect(ep.noFurtherInput.sendsAttemptedWhileGateWasConsulted).toBe(0);
+    expect(ep.noFurtherInput.transportSendsObservedAfterClose).toBe(0);
+    expect(ep.noFurtherInput.roomJournalledClientFramesAfter).toBe(ep.noFurtherInput.roomJournalledClientFramesAtClose);
+    expect(ep.noFurtherInput.roomJournalledRefusalsAfter).toBe(ep.noFurtherInput.roomJournalledRefusalsAtClose);
+    expect(ep.roomSide.keptRunning).toBe(true);
+
+    // The discrimination, pinned: this case closes on the episode deadline, the sibling case closes on the
+    // allowance, and the snapshot deadline only ever appears as the stall trigger.
+    expect(ga.episodeDeadlineDiscrimination.distinct).toBe(true);
+    expect(ga.episodeDeadlineDiscrimination.closeReasonsObservedAcrossTheCases).toEqual({
+      episodeDeadline: 'episode-deadline',
+      allowanceBranch: 'allowance-exhausted',
+      snapshotDeadlineTrigger: 'deadline',
+    });
+    expect(ep.timing.allowanceRefusedEventsBeforeClose).toBe(0);
+    expect(ep.timing.ladderAttemptsBeforeClose).toBeGreaterThan(0);
+    expect(ga.ga6c.suspension?.reason).toBe('allowance-exhausted');
+    expect(JSON.stringify(ep.surfacedError.note)).toContain('UDG-008');
+  });
+
   it('runs the stage sequence and keeps AC-6 qualified rather than overclaiming it (AC-6 under OD-4)', () => {
     runScript('tests/runtime/udg-003-phase-2/stage-sequence.ts');
     const stages = JSON.parse(readFileSync(join(OUT_DIR, 'stage-sequence.json'), 'utf8')) as {
