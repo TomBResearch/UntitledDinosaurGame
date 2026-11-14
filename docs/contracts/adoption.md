@@ -481,6 +481,12 @@ implementer recorded no acceptance at any point. The acceptance is **phase-level
 **In Progress**, Phase 3 stays unassigned, and no gate decision follows from it.
 
 ```text
+Acceptance commit and date                     569fd95968243f29b3e94ed44f62f635dd273ddd, commit date
+                                               2026-11-14T11:12:28Z; its CI 43588930108 created
+                                               2026-11-14T11:12:32Z, completed 2026-11-14T11:27:34Z, success.
+                                               This block cannot carry its own commit's hash, so the timing line
+                                               was added in the records commit that follows the acceptance
+                                               commit named above.
 Accepted implementation / reviewed submission  6e0e5cc839f3d501a26998172438ded51914335d
 Passing submission CI                          https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43584855957
                                                (success; 572 tests, 0 failures, 0 errors, 0 skipped)

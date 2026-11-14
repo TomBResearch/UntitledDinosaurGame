@@ -1904,6 +1904,14 @@ records only**. Retained bundle:
 27 artefacts, **PASS 0 issues**; `report.json` sha256 `0918b1ee77dd96fcb3933dfd1d8979fbbc09f78a9435d6fe94a2d1dbab6080bc`,
 `vectors-phase-2/vectors-manifest.json` sha256 `8c1bff2f6a332754f042fe879d4d36dd3818cabb3f82feefa7793c33a4c31551`.
 
+The acceptance commit itself is `569fd95968243f29b3e94ed44f62f635dd273ddd` (commit date 2026-11-14T11:12:28Z), CI
+[43588930108](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43588930108) created
+2026-11-14T11:12:32Z and completed 2026-11-14T11:27:34Z, **success**; its retained bundle
+`/workspace/udg-evidence/ci-run-43588930108/UDG-003-2026-11-14T11-22-55-088Z-569fd959` verifies **PASS 0 issues**
+(`report.json` sha256 `28e15a876b142346b1e3cb808b4281baa4442c26f1e95a3a2d186e5210636ddd`,
+`vectors-phase-2/vectors-manifest.json` sha256 `1bcc4c479b57fb8175101cb3a25ec7528c44cc6e41e50ba2c06ab30445f65d4c`),
+as do UDG-001 and UDG-002 at the same run.
+
 ### 21.1 The two pieces of evidence the owner asked to have cited
 
 **The four-second deadline** — `tests/runtime/udg-003-phase-2/impairment-population.ts`, artefact
@@ -1977,4 +1985,6 @@ prose in three documents plus a regenerated `checksums.json`.
 The bundles cited in this matrix were re-verified against their own manifests at acceptance, with the store as it
 stood: `6e0e5cc8` **0 issues**, `be419163` 0, `de556ed5` 0, `28c30153` 0, `25dd78b4` 0, `32d9afb5` 0, `cfc49664` **8**,
 `a9116e03` **8**, `cf349874` **29**. The three non-zero counts are the widened requirement set meeting older bundles,
-exactly as §18 recorded, and no count improved because anything was edited.
+exactly as §18 recorded, and no count improved because anything was edited. The acceptance run's own bundle is added
+to that list in §21's header, and the store check re-run after it landed still finds **0** pre-existing files
+modified outside the `ci-run-*` directories created since 2026-11-14.
