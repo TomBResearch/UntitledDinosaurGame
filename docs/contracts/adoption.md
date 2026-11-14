@@ -471,6 +471,128 @@ the items that gated assignment. **Phase 2 is assigned**: [UDG-003-phase-2.md](a
 | Still open and unchanged | **Gate A, B and C remain Not Run**; Gate A's formal run belongs to UDG-SPIKE-001; **Phase 3 unassigned**; **Part B unadopted** and the one-input rule stands; `stackCompatibility` **not-established**; **D4 undesignated**; UDG-003 **In Progress** — a phase-level acceptance of Phase 1 is not task-level `Verified` |
 | Date basis | 2026-11-11, dated by the commits carrying these records into `main`; the owner's approval message carries no independently verifiable timestamp. Same basis as the Phase 1 acceptance and the D-7 decision |
 
+## UDG-003 Phase 2 acceptance recorded 2026-11-14
+
+The project owner (`TomBResearch`), acting as integration owner and reviewer, accepted **UDG-003 Phase 2** —
+the transport substrate, the hashed input envelope and the ADR-0003 consequences — on 2026-11-14, the date the
+acceptance reached `main`. The owner's approval message carries no independently verifiable timestamp, so the
+decision is dated by its commit. Every revision was submitted **In Review** by the implementer, and the
+implementer recorded no acceptance at any point. The acceptance is **phase-level**: UDG-003 as a whole stays
+**In Progress**, Phase 3 stays unassigned, and no gate decision follows from it.
+
+```text
+Accepted implementation / reviewed submission  6e0e5cc839f3d501a26998172438ded51914335d
+Passing submission CI                          https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43584855957
+                                               (success; 572 tests, 0 failures, 0 errors, 0 skipped)
+Reviewed records at acceptance                 f0c8ccde4b086e8e243412acdfedcd04b6558043, CI 43586339612 (success)
+Retained Phase 2 bundle                        /workspace/udg-evidence/ci-run-43584855957/UDG-003-2026-11-14T10-30-54-844Z-6e0e5cc8
+                                               phase phase-2, status PASS, 27 vector artefacts,
+                                               `PASS evidence verify … (0 issue(s))`; report.json SHA-256
+                                               0918b1ee77dd96fcb3933dfd1d8979fbbc09f78a9435d6fe94a2d1dbab6080bc,
+                                               vectors-phase-2/vectors-manifest.json SHA-256
+                                               8c1bff2f6a332754f042fe879d4d36dd3818cabb3f82feefa7793c33a4c31551
+Records at acceptance                          assignments/UDG-003-phase-2-evidence-matrix.md §21 (and §16–§20),
+                                               assignments/UDG-003-phase-2-completion.md §21
+Review history                                 submitted In Review at `cf34987`; the accepted chain runs
+                                               96d3df6 → 8716b8c → c1b2f9b → cfc4966 → a9116e0 → f0b2adb (clauses
+                                               applied) → 16d356d / 8db4226 / f1e853d (P-batch and the corrections
+                                               its hosted runs forced) → 32d9afb → 25dd78b → 28c3015 → be41916 →
+                                               de556ed → 89fb92a / 2210ba6 (two failed hosted runs, retained) →
+                                               6e0e5cc, accepted. Owner rulings D-P2-1…D-P2-9 and OD-1…OD-10 are
+                                               recorded in the matrix and the completion record, not restated here.
+Cited at acceptance — the four-second deadline
+                                               Test: tests/runtime/udg-003-phase-2/impairment-population.ts,
+                                               artefact `transport-impairment.json` → `ga6Ga7.ga6cEpisodeDeadline`
+                                               (the case added for the owner's W-7 evidence check, matrix §20).
+                                               Hosted: client-close at episodeAgeMs 4002 against a declared
+                                               clientRecoveryDeadlineMs of 4000, reason "episode-deadline", code
+                                               4102 INPUT_RECOVERY, closeAfterLastDeliveryMs 4506;
+                                               freshAuthoritativeSnapshotArrived false with 0 deliveries reaching
+                                               the seat, 61 publications swallowed at the wrapper, 0 state
+                                               applications, inputResolvedThrough 2 → 2, sessionEpoch 11 → 11,
+                                               0 recovered events; socketClosedDuring 0, so the close came from the
+                                               client's own timer and no server event; sendingAllowed false at
+                                               close and after, 0 ladder attempts and 0 recoveries afterwards;
+                                               0 gate-permitted sends, 0 transport sends, room journalled client
+                                               frames 3 → 3 and refusals 0 → 0 while the room's own tick counter
+                                               went 202 → 322. The three limits are separated inside the case:
+                                               the 500 ms snapshot deadline fired at 504 ms with trigger
+                                               "deadline" and only opened the episode; 296 ladder attempts came
+                                               due and none was carried out, so 0 allowance was charged and the
+                                               policy emitted no "allowance-refused" event; the sibling GA-6c case
+                                               closes "allowance-exhausted" after two real rejoins. The earlier
+                                               scenario `episode-deadline-closes-the-client-at-4000ms` in
+                                               recovery-scenarios.ts (recovery-harness.json, episodeAgeMs 4002,
+                                               closeReason "episode-deadline", code 4102) remains retained and is
+                                               cited beside it, not replaced by it.
+Cited at acceptance — the GA-7 room-specific test override
+                                               GA-7's seat joins a room of its own, `regionGa7` (runId
+                                               udg-003-phase-2-impairment-ga7), declared by the test harness as a
+                                               per-room deployment override:
+                                               `input: { rateCeilingMessagesPerSecond: 500 }`, handed to
+                                               defineOperatorRegionRoom. Reason: on the default envelope a
+                                               64-frame burst breaches the rate ceiling and overflows the buffer
+                                               at once, and which closure arrives depends on how fast the runner
+                                               drains a tick — hosted runs 43581033563 and 43582591628 each lost
+                                               the GA-7 control to that race. With the ceiling out of the running
+                                               the only closure that seat can meet is the retirement GA-7 is
+                                               about: hosted closure 4100 INPUT_RETIRED_UNREPRESENTED, 32 frames
+                                               retired unrepresented, serverQueuedAtClose 32, consumedCountAtClose
+                                               39, closure 330 ms, client deadline 502 ms inside closureMaxMs, the
+                                               seat never told, recovery by matchmaking rejoin.
+                                               Boundaries the owner required and the records keep: this is a
+                                               harness-declared deployment value, not a change to any default,
+                                               production setting or config file; the abuse population has passed
+                                               its own per-room input overrides since `c7e497b`; the phase's
+                                               pinned configHash stays
+                                               2743a9a047ce7264833af88e8bd2f8aeea970a45e306a348e1fe0654191bec7a
+                                               for the main room and every other seat, and the artefact publishes
+                                               seatEnvelope.configHashDiffersFromMainRoom: true rather than leaving
+                                               the difference to be discovered. GA-11 still owns the production
+                                               numbers, and neither production inequality is evaluated here.
+Acceptance covers                              Phase 2 only: the real-transport room substrate and its lifecycle
+                                               wiring on the pinned stack; the hashed input envelope with its
+                                               provisional test values; the per-entity authoritative disposition
+                                               record (R-A) and its publication; overflow, retirement, throttle
+                                               and bounded seat closure with the GA-5/GA-9/GA-10 zero-effect
+                                               halves measured; AC-3b continuous, AC-3c, AC-3d, AC-3e and the
+                                               abuse population; journal-based replay with the OD-10 coverage
+                                               rule and GA-13 PASS on the two-limb reading; the W-10 impairment
+                                               populations labelled `tcpLossModelled: false`; AC-6 as amended by the owner's dated
+                                               note of 2026-11-14 — `F…X`, `M` and `P`'s publication,
+                                               with `P`'s results half carried by UDG-007; GA-6a, GA-6b, GA-6c on
+                                               both branches and GA-7 exercised in the Phase 2 test harness at the
+                                               declared test values; AC-15 PASS under the H1 reading; the 27-artefact
+                                               Phase 2 evidence set and the gate that refuses it when it lies
+Not covered                                    Phase 3, and nothing in UDG-004…UDG-008 or the spikes. Not a task-level
+                                               `Verified`. Not a production client (UDG-008), whose prediction
+                                               buffer this harness does not have and whose GA-6/GA-7 behaviour is
+                                               therefore unevidenced; not the formal Gate A execution
+                                               (UDG-SPIKE-001), which stays **Not Run**; not GA-11's two
+                                               production inequalities or production envelope values; not
+                                               GA-10a/GA-10b, the discrete queue limits or AC-6's `P` results
+                                               half, all outstanding at **UDG-007** acceptance; not GA-12 or the
+                                               PE-1…PE-5 validation set, which remain **not passed**
+Still open                                     GA-10's headline stays **FAIL** as originally written (its zero-effect half is
+                                               measured and passing under the amended ADR-0003 §5, and the
+                                               pre-amendment headline remains verbatim in the bundle that made
+                                               it); GA-11 **not run**; GA-12 and PE-1…PE-5 **not passed**;
+                                               **Gate A Not Run**; PR-14 remains substrate, not a gate decision;
+                                               `stackCompatibility` **not-established**; **D4 open** with no
+                                               backup destination designated; deduplication-triggered closure
+                                               **disabled** (`dedupeClosureEnabled: false`); four GA-13 residues
+                                               carried unverified and pinned by name in the runtime suite
+Evidence preserved                             every bundle from every submission and every failed run remains retained
+                                               and verifiable, including the seven bundles the H1 sweep documented
+                                               as refusals; no bundle byte, digest, command log or historical
+                                               inventory version was rewritten. The widening of the Phase 2
+                                               requirement set from 18 to 24 to 27 artefacts is disclosed rather
+                                               than repaired: earlier bundles fail the widened gate by count and
+                                               verify 0 issues against their own manifests — see matrix §18
+                                               (E1) and §19.3
+Authorises                                     acceptance records only. It assigns no further work and reopens no closed decision
+```
+
 ## Reviewed edition and pins for the P01 approval
 
 ```text

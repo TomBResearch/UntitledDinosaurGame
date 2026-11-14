@@ -5,8 +5,19 @@ Title: Sequenced input transport, `RegionRoom` and adapter wiring, the authorita
 retirement accounting and its consequences, the client-local recovery rules proven by a test-only harness, and the
 Gate A substrate (PR-14) — all carried on the accepted Phase 1 authority core.
 
-Status: **Ready — assigned, not started.** Assigned by the project owner on 2026-11-11; no implementation of any work
-item in §5 has begun. The implementer named in §4 works only inside the paths granted there.
+Status: **Accepted at phase level** — accepted by the project owner on 2026-11-14 at
+`6e0e5cc839f3d501a26998172438ded51914335d`, CI [43584855957](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43584855957),
+with the records reviewed at `f0c8ccde4b086e8e243412acdfedcd04b6558043` (CI
+[43586339612](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43586339612)). The acceptance covers
+this phase only: UDG-003 as a whole stays **In Progress**, Phase 3 requires separate authorisation, **Gate A remains
+Not Run**, deduplication-triggered closure remains disabled, and **D4 remains open**. The acceptance record is
+[UDG-003-phase-2-completion.md](UDG-003-phase-2-completion.md) §21 and
+[../adoption.md](../adoption.md#udg-003-phase-2-acceptance-recorded-2026-11-14).
+
+*(Dated note on this file's own history, 2026-11-14. The assignment was authored at the `17ade43b` pin and amended
+once since — at `f0b2adb8`, applying the owner's OD-1/OD-2/OD-3 rulings to W-10, §9 and §2 — which is a disclosed
+change to a pinned record and is recorded as such in matrix §16. Status lines and dated notes are the only kind of
+edit made to this file after that.)*
 
 Owner/reviewer: project owner `TomBResearch`, acting as integration owner and reviewer. The implementer authors no
 approval, records no acceptance and passes no gate.

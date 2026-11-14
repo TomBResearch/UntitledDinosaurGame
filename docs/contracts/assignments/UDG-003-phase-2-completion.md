@@ -758,3 +758,49 @@ unassigned; Phase 2 acceptance is the owner's.
 (`report.json` sha256 `0918b1ee77dd96fcb3933dfd1d8979fbbc09f78a9435d6fe94a2d1dbab6080bc`,
 `vectors-phase-2/vectors-manifest.json` sha256 `8c1bff2f6a332754f042fe879d4d36dd3818cabb3f82feefa7793c33a4c31551`).
 UDG-001 and UDG-002 verify **PASS 0 issues** at the same run.
+
+
+---
+
+## 21. Phase 2 accepted by the project owner (2026-11-14)
+
+The owner accepted **UDG-003 Phase 2** at phase level on the records of §16–§20: implementation
+`6e0e5cc839f3d501a26998172438ded51914335d`, CI
+[43584855957](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43584855957) (success; 572 tests,
+0 failures, 0 errors, 0 skipped), records reviewed at `f0c8ccde4b086e8e243412acdfedcd04b6558043` CI
+[43586339612](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43586339612). The acceptance entry
+is [../adoption.md](../adoption.md#udg-003-phase-2-acceptance-recorded-2026-11-14) and matrix §21; it **authorises
+acceptance records only** — no gate, no further assignment, nothing about Phase 3.
+
+**What was accepted.** The transport substrate and its lifecycle wiring on the pinned stack; the hashed input
+envelope at its provisional test values; the per-entity authoritative disposition record and its publication;
+overflow, retirement, throttle and bounded seat closure, with GA-5/GA-9/GA-10's zero-effect halves measured;
+AC-3b/c/d/e and the abuse population; journal-based replay under the OD-10 coverage rule with GA-13 PASS on the
+two-limb reading; the W-10 impairment populations labelled `tcpLossModelled: false`; AC-6 as amended by the owner's
+dated note — stages `F…X`, `M`, and `P`'s publication of state, metrics and flush, with `P`'s results half carried
+by UDG-007; GA-6a, GA-6b, GA-6c on both branches and GA-7 exercised in the Phase 2 harness at declared test values;
+AC-15 PASS under the H1 reading; and the 27-artefact evidence set behind a gate that refuses it when it lies.
+
+**Two citations the owner asked for, in one place each.** The four-second deadline:
+`transport-impairment.json → ga6Ga7.ga6cEpisodeDeadline` in the accepted bundle — close at 4002 ms with code 4102
+raised by the client's own timer and no server close, no fresh snapshot at all (0 deliveries, 61 publications
+swallowed, watermark and epoch unmoved), nothing further sent and nothing further journalled for that entity while
+the room kept running, and the 500 ms / 4000 ms / rolling-allowance limits separated inside one case. The GA-7
+room-specific override: GA-7's seat runs in `regionGa7` with `rateCeilingMessagesPerSecond: 500` as a
+harness-declared per-room deployment value, so the retirement is the only closure that seat can meet; the phase's
+pinned `configHash` is unchanged for every other seat and the difference is published as
+`seatEnvelope.configHashDiffersFromMainRoom: true`. Matrix §21.1 carries both in full, with the two hosted failures
+that made the override necessary.
+
+**Preserved under H1.** No bundle byte, manifest, command log, checkpoint, probe result, archive or historical
+inventory version was rewritten by this acceptance; the H1 sweep's 151-bundle verification and its seven documented
+refusals stand as captured; the pre-amendment GA-10 headline stays verbatim in the bundle that made it; the 18 → 24
+→ 27 requirement-set widening stays disclosed rather than repaired; and a filesystem check finds no pre-existing
+store file modified outside the new run directories.
+
+**Carried forward, unchanged by acceptance.** UDG-003 stays **In Progress**; Phase 3 unassigned; **Gate A Not
+Run**; deduplication-triggered closure **disabled**; **D4 open**; `stackCompatibility` not-established; GA-10 FAIL
+as originally written, GA-11 not run, GA-12 and PE-1…PE-5 not passed. Outstanding obligations move as they were:
+GA-10a, GA-10b, the discrete queue limits and AC-6's `P` results half to **UDG-007**; the production client, both
+recovery paths and the prediction buffer to **UDG-008**; GA-11's production inequalities, the envelope values and
+Gate A itself to **UDG-SPIKE-001**.

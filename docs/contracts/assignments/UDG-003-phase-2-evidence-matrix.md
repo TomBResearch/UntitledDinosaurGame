@@ -1888,3 +1888,93 @@ only there, and when it occurs GA-7 must have recovered through matchmaking.
 `2743a9a047ce7264833af88e8bd2f8aeea970a45e306a348e1fe0654191bec7a`; the artefact set stays 27, so §18's
 widening cost is unchanged and every earlier bundle still verifies with the issue counts §19 recorded. D4
 open, dedupe-triggered closure disabled, Phase 2 acceptance the owner's.
+
+---
+
+## 21. Acceptance recorded by the project owner, 2026-11-14
+
+The owner accepted Phase 2: implementation `6e0e5cc839f3d501a26998172438ded51914335d`, CI
+[43584855957](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43584855957)
+(success, 572 tests, 0 failures, 0 errors, 0 skipped), with the records reviewed at
+`f0c8ccde4b086e8e243412acdfedcd04b6558043` CI
+[43586339612](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43586339612). The acceptance entry
+is [../adoption.md](../adoption.md#udg-003-phase-2-acceptance-recorded-2026-11-14), and it **authorises acceptance
+records only**. Retained bundle:
+`/workspace/udg-evidence/ci-run-43584855957/UDG-003-2026-11-14T10-30-54-844Z-6e0e5cc8` — `phase-2`, `status: PASS`,
+27 artefacts, **PASS 0 issues**; `report.json` sha256 `0918b1ee77dd96fcb3933dfd1d8979fbbc09f78a9435d6fe94a2d1dbab6080bc`,
+`vectors-phase-2/vectors-manifest.json` sha256 `8c1bff2f6a332754f042fe879d4d36dd3818cabb3f82feefa7793c33a4c31551`.
+
+### 21.1 The two pieces of evidence the owner asked to have cited
+
+**The four-second deadline** — `tests/runtime/udg-003-phase-2/impairment-population.ts`, artefact
+`transport-impairment.json → ga6Ga7.ga6cEpisodeDeadline`, that bundle: `episodeAgeMs 4002` against a declared
+`clientRecoveryDeadlineMs` of 4000; `closeReason "episode-deadline"`, close code **4102 `INPUT_RECOVERY`**,
+`closeAfterLastDeliveryMs 4506`; `freshAuthoritativeSnapshotArrived: false` with **0** deliveries reaching the seat,
+**61** publications swallowed at the wrapper, **0** state applications, `inputResolvedThrough 2 → 2`,
+`sessionEpoch 11 → 11`, **0** recovered events; `socketClosedDuring: 0`, so the close was the client's own timer and
+no server event; `sendingAllowed false` at close and after, **0** ladder attempts and **0** recoveries after; **0**
+gate-permitted sends, **0** transport sends, room journalled client frames **3 → 3** and refusals **0 → 0** while the
+room's own tick counter went **202 → 322**. The three limits stay distinct inside the one case: the 500 ms snapshot
+deadline fired at **504 ms** with `trigger: "deadline"` and only *opened* the episode; **296** ladder attempts came
+due and **0** were carried out, so nothing was charged and `allowance-refused` never fired; the sibling GA-6c case
+closes `"allowance-exhausted"` after two real rejoins. The earlier `recovery-scenarios.ts` scenario
+`episode-deadline-closes-the-client-at-4000ms` (`recovery-harness.json`, `episodeAgeMs 4002`, `"episode-deadline"`,
+`4102`) is cited beside it and stays as captured.
+
+**The GA-7 room-specific test override** — GA-7's seat joins a room of its own, `regionGa7` (runId
+`udg-003-phase-2-impairment-ga7`), declared by the test harness as a per-room deployment override
+`input: { rateCeilingMessagesPerSecond: 500 }` handed to `defineOperatorRegionRoom`. It exists because on the default
+envelope a 64-frame burst breaches the rate ceiling and overflows the buffer at once, and which closure arrives
+depends on how fast the runner drains a tick: hosted runs `43581033563` and `43582591628` each lost the GA-7 control
+to that race. With the ceiling out of the running, the retirement GA-7 is about is the only closure that seat can
+meet — hosted **4100 `INPUT_RETIRED_UNREPRESENTED`**, **32** frames retired unrepresented,
+`serverQueuedAtClose 32`, `consumedCountAtClose 39`, closure **330 ms**, client deadline **502 ms** inside
+`closureMaxMs`, the seat never told, recovery by matchmaking rejoin. The boundaries are recorded as evidence, not as
+an aside: a harness-declared deployment value, not a change to any default, production setting or config file; the
+abuse population has passed its own per-room input overrides since `c7e497b`; the phase's pinned `configHash` stays
+`2743a9a047ce7264833af88e8bd2f8aeea970a45e306a348e1fe0654191bec7a` for the main room and every other seat; and the
+artefact publishes `seatEnvelope.configHashDiffersFromMainRoom: true` rather than leaving the difference to be
+discovered. GA-11 still owns the production numbers, and neither production inequality is evaluated here (§17.2).
+
+### 21.2 Historical bundles and inventories are preserved under H1, unchanged by acceptance
+
+Acceptance rewrote nothing. No bundle byte, `report.json`, `vectors-manifest.json`, `commands.log`, checkpoint,
+probe result, archive or historical inventory version was edited, renamed or removed; the acceptance record is new
+prose in three documents plus a regenerated `checksums.json`.
+
+- **H1 stands as the accepted reading**, and the sweep behind it is untouched: 151 bundles verified at their own
+  capture commits — 144 PASS, 7 documented refusals — as recorded in §10.5 and §13. The seven refusals stay red
+  exactly as captured.
+- **AC-15's basis is unchanged**: the H1 verification is carried forward, not re-performed, and no prior bundle was
+  re-captured to make an older run look better (§13).
+- **The requirement-set widening is still disclosed, not repaired**: Phase 2's set moved 18 → 24 → 27 artefacts as
+  the assignment and the owner's rulings required; earlier Phase 2 bundles fail the widened gate by count alone and
+  verify 0 issues against their own manifests (§18 (E1), §19.3). The same holds after acceptance.
+- **Store integrity at acceptance**: a filesystem check finds **0** pre-existing files modified outside the
+  `ci-run-*` directories created since 2026-11-14 (the same check as §20, re-run), and the store's prior run
+  directories are unread-but-untouched by this batch: nothing re-captures, re-stamps or rewrites them.
+- **The pre-amendment GA-10 headline** remains verbatim in `ci-run-43263252706/…/PR-14.probe-result.json` — FAIL as
+  originally written, with the amended zero-effect verdict recorded separately (§19.2). Acceptance does not tidy that
+  up.
+
+### 21.3 What the acceptance does not touch
+
+| Item | Status after acceptance |
+|---|---|
+| UDG-003 as a whole | **In Progress.** A phase-level acceptance is not `Verified`; Phase 3 is unassigned and needs separate authorisation |
+| Gate A | **Not Run.** PR-14 substrate only; the formal run is UDG-SPIKE-001 |
+| GA-10 / GA-11 / GA-12 / PE-1…PE-5 | FAIL as originally written / **not run** / **not passed** / **not passed** |
+| Deduplication-triggered closure | **Disabled** (`dedupeClosureEnabled: false`) |
+| D4 | **Open** — no backup destination designated |
+| `stackCompatibility` | **not-established** |
+| UDG-007 | GA-10a, GA-10b, the discrete queue limits, and AC-6's `P` results half remain acceptance obligations there |
+| UDG-008 | The production client: both recovery paths, the prediction buffer this harness lacks, GA-6/GA-7 for real |
+| UDG-SPIKE-001 | GA-11's two production inequalities, the envelope values, and Gate A itself |
+| GA-13 residues | The four named residues stay carried unverified and pinned by name in the runtime suite (§16.3) |
+
+### 21.4 Verification at acceptance
+
+The bundles cited in this matrix were re-verified against their own manifests at acceptance, with the store as it
+stood: `6e0e5cc8` **0 issues**, `be419163` 0, `de556ed5` 0, `28c30153` 0, `25dd78b4` 0, `32d9afb5` 0, `cfc49664` **8**,
+`a9116e03` **8**, `cf349874` **29**. The three non-zero counts are the widened requirement set meeting older bundles,
+exactly as §18 recorded, and no count improved because anything was edited.
