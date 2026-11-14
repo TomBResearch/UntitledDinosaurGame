@@ -81,12 +81,16 @@ export const installImpairment = (room, options = {}) => {
 
     const state = {
         armed: false,
+        silencing: false,
         sentTotal: 0,
         deliveredTotal: 0,
         droppedTotal: 0,
         droppedOrdinals: [],
         inboundTotal: 0,
         inboundDelivered: 0,
+        inboundSilentlyDropped: 0,
+        inboundSilenceStartedAtMs: null,
+        inboundSilenceMs: null,
         inboundQueuedPeak: 0,
         reconnectEvents: 0,
         socketOpenAtInstall: transport.isOpen === true,
@@ -131,6 +135,16 @@ export const installImpairment = (room, options = {}) => {
     };
 
     const deliver = (event, startedAtMs) => {
+        // GA-6b needs a server that is silent towards ONE seat while the socket stays open and the room
+        // keeps running for everyone else. A silence is not a delay and not a close, so it gets its own
+        // counter: `inboundSilentlyDropped` counts what arrived at the wrapper and was not passed on, and
+        // `inboundDelivered` stays a true count of what the seat was actually told.
+        if (state.silencing) {
+            state.inboundSilentlyDropped += 1;
+            if (state.inboundSilenceMs === null) state.inboundSilenceMs = 0;
+            state.inboundSilenceMs = Date.now() - state.inboundSilenceStartedAtMs;
+            return undefined;
+        }
         state.inboundDelivered += 1;
         state.inboundDelayMs.push(Date.now() - startedAtMs);
         state.patchArrivalsMs.push(Date.now());
@@ -186,6 +200,18 @@ export const installImpairment = (room, options = {}) => {
                 options.inboundDelayMs = held ?? 0;
             };
         },
+        /**
+         * Drop every inbound delivery from here on, with the socket left exactly as it was. Released by
+         * `resumeInbound()`, which does not replay what the silence swallowed: a withheld publication is
+         * gone, which is the whole reason GA-7 is a recovery criterion and not a buffering one.
+         */
+        silenceInbound() {
+            state.silencing = true;
+            state.inboundSilenceStartedAtMs = Date.now();
+        },
+        resumeInbound() {
+            state.silencing = false;
+        },
         counters() {
             return {
                 armed: state.armed,
@@ -195,6 +221,9 @@ export const installImpairment = (room, options = {}) => {
                 droppedOutboundOrdinals: [...state.droppedOrdinals],
                 inboundTotal: state.inboundTotal,
                 inboundDelivered: state.inboundDelivered,
+                inboundSilentlyDropped: state.inboundSilentlyDropped,
+                inboundSilenceMs: state.inboundSilenceMs,
+                silencing: state.silencing === true,
                 inboundQueuedPeak: state.inboundQueuedPeak,
                 reconnectEvents: state.reconnectEvents,
                 socketOpenAtInstall: state.socketOpenAtInstall,

@@ -535,7 +535,8 @@ async function main(): Promise<void> {
       order: 'F → L → Q → S → A → C → R → X, then M, then P',
       M: '"stage M (map canonical state to the replica)" — implemented by apps/server/src/state/map-player.ts, invoked per entity in the consuming tick',
       P: '"stage P (publish results, metrics, flush)" — the room publishes the schema rows at network.statePatchIntervalMs and flushes its telemetry; the observable half at a seat is the patch arrival',
-      ownerRuling: 'OD-4 (2026-11-13): the server\'s canonical-to-replica mapping is M, and its metrics and patch publication are the observable part of P. Successful navigation-result publication is outstanding under UDG-007, and the overall AC-6 verdict stays qualified until the governing criterion reflects the split.',
+      ownerRuling: 'OD-4 (2026-11-13), applied to the criterion on 2026-11-14: the server\'s canonical-to-replica mapping is M, and its metrics and patch publication are the observable part of P. Successful navigation-result publication is an explicit acceptance obligation of UDG-007 and stays outstanding there.',
+      amendedClause: 'AC-6 as amended (docs/contracts/assignments/UDG-003-readiness-proposal.md, dated note 2026-11-14): "Scored against UDG-003 Phase 2: F, L, Q, S, A, C, R, X on every executed tick; M = the server\'s canonical-to-replica mapping, applied per entity in the consuming tick; P = that room\'s publication of state and metrics at the declared patch interval, plus its flush. P\'s results half — a committed navigation result reaching a client — needs the navigation intake this phase is forbidden to build, and is an explicit acceptance obligation of UDG-007, outstanding there. It is neither waived nor counted here."',
     },
     settings: {
       statePatchIntervalMs: patchIntervalMs,
@@ -639,6 +640,7 @@ async function main(): Promise<void> {
         effectCountEverywhere: seatsEvidence.every((seat) => seat.effectCount === 0),
         status: 'outstanding',
         owner: 'UDG-007',
+        obligation: 'docs/contracts/UDG-007.md, "Successful navigation-result publication (AC-6, P\'s results half)": accepting UDG-007 requires a run where at least one accepted route effect reaches a client replica, its acknowledgement carries the applied record, it is attributable to the epoch and seat that produced it, and it is published exactly once',
         why: 'P is "publish results, metrics, flush". Metrics and flush are measured above. The results half needs a committed discrete effect, and none can commit on this substrate (no route candidate is ever constructed), so this artefact records the half as outstanding rather than counting the two it can see as all three.',
         relatedGateACriterion: 'GA-7 (final publication withheld) is the failure-shape half of the same duty and belongs to UDG-SPIKE-001',
       },
@@ -652,14 +654,17 @@ async function main(): Promise<void> {
     },
     checks,
     verdict: Object.values(checks).every((value) => value === true) ? 'pass' : 'fail',
-    ac6Verdict: 'qualified-pending-owner',
+    // The verdict follows the clause, not the artefact: this file changed nothing about AC-6, it only makes
+    // the split measurable. The clause changed on 2026-11-14, and until it had, the honest word was PARTIAL.
+    ac6Verdict: 'pass-for-the-stages-scored-here',
     ac6VerdictNote:
-      'This artefact establishes M and the observable half of P on the accepted reading. AC-6 as written asks for the whole sequence including P\'s results half, and the governing criterion has not been amended to reflect the split, so AC-6 stays PARTIAL here regardless of these outcomes: the owner keeps the verdict qualified until the clause names what UDG-007 owes.',
+      'AC-6 as amended on 2026-11-14 scores Phase 2 against F, L, Q, S, A, C, R, X, M and P\'s publication of state, metrics and flush; every one of those is measured in this artefact with a control that fails when the property is absent. The results half of P is an acceptance obligation of UDG-007 and is outstanding there — it is not counted here and it is not waived, and no reading of this artefact makes UDG-007\'s acceptance happen.',
     doesNotClaim: [
       'that the results half of P was published: no discrete effect commits here',
       'a per-entity mapping negative from the hash-gated join: that join produced no entity, so there is no row to point at',
       'a stage letter for anything in the transport\'s schema-patch pipeline beyond what is measured above',
-      'that AC-6 passes: see ac6VerdictNote',
+      'that AC-6 passes as a whole sequence: it passes for the stages the amended clause scores here, and the results half is outstanding at UDG-007 — see ac6VerdictNote',
+      'that this artefact amended anything: the clause was amended by the owner in the readiness proposal on 2026-11-14; this file only measures against it',
     ],
   };
 
@@ -674,7 +679,8 @@ async function main(): Promise<void> {
     `[stages] ${artefact.verdict as string}: M matches the authority record=${String(checks.mappingMatchesTheAuthoritysOwnRecord)}, `
     + `refusal moved nothing=${String(checks.refusalMovedNothing)}, `
     + `M≠P during the withheld window the room advanced ${String((midStall.value?.serverAtMid ?? 0) - (midStall.value?.serverAtOpen ?? 0))} and the seat ${String((midStall.value?.clientAtMid ?? 0) - (midStall.value?.clientAtOpen ?? 0))}, `
-    + `patch median ${String(patchMedianMs ?? '-')} ms vs declared ${String(patchIntervalMs)} ms, results half outstanding\n`,
+    + `patch median ${String(patchMedianMs ?? '-')} ms vs declared ${String(patchIntervalMs)} ms, `
+    + `AC-6 ${artefact.ac6Verdict as string} (results half outstanding at UDG-007)\n`,
   );
 
   await Promise.all([compliant, refusal, withheld, departed].map((seat) => seat.room.leave(true).catch(() => undefined)));

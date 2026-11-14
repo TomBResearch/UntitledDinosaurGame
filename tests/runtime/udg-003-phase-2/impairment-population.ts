@@ -41,6 +41,7 @@ import {
   sleep,
   startHarnessServer,
   stampAndSend,
+  until,
   waitForIssuedEpoch,
   type RegisteredHandler,
   type SdkRoom,
@@ -50,6 +51,7 @@ import {
   type ImpairmentController,
   type ImpairmentOptions,
 } from '../../support/client-harness/impairment.mjs';
+import { RecoveryPolicy, type Delivery } from '../../support/client-harness/recovery.ts';
 import { flattenConsumed, streamAccounting } from '../../support/authority/accounting.ts';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
@@ -84,6 +86,9 @@ const WITHHELD_ORDINALS = [3, 7, 12, 18];
 const STALL_MS = 350;
 
 interface PlayerRow {
+  readonly inputGapStart: number;
+  readonly inputGapEnd: number;
+  readonly inputRetiredUnrepresented: number;
   inputResolvedThrough: number;
   sessionEpoch: number;
 }
@@ -445,6 +450,503 @@ async function main(): Promise<void> {
   const midTickArrivals = tickRecords.filter((tickRecord) => consumedAll
     .filter((entry) => entry.tick === tickRecord.tick).length > 1).length;
 
+  // ── P-2b, reopened for the Phase 2 harness only: GA-6a, GA-6b, GA-6c and GA-7 ─────────────────
+  //
+  // The owner reopened this on 2026-11-14 with two boundaries stated in the same breath: exercise the
+  // recovery criteria **in the Phase 2 test harness**, and keep the production client machine in UDG-008
+  // and the formal Gate A execution in UDG-SPIKE-001. So this section is neither a Gate A pass nor a
+  // production client. What it is: the frozen rules in `recovery.ts` (`RecoveryPolicy`) driven over the
+  // real room by the real impairment layer, at the declared test values, with the silence produced by
+  // `silenceInbound()` — a server that publishes nothing to one seat while its socket stays open and the
+  // room carries on for everyone else. That construct is what the previous evidence could not produce:
+  // `recovery-scenarios.ts` reaches the same deadlines through an unclean tear, which is a different
+  // question (a dead socket is a server event; GA-6b's whole point is that the deadline needs none).
+  //
+  // The recovery half of each case is a real reconnect: a real matchmaking `reconnect` on the seat's own
+  // token, landing on a real rejoin with a server-issued epoch, reading a real snapshot. The silence cannot
+  // follow a seat across that reconnect, because the wrapper is installed on a joined room object and the
+  // rejoined room is a new one — which is exactly right: recovery means fresh state delivery, and an
+  // artefact that claimed to still be withholding patches from a recovered seat would be lying.
+  const envelope = cfg['input'] as Record<string, unknown>;
+  const closeCodes = envelope['closeCodes'] as Record<string, number>;
+  const snapshotDeadlineMs = envelope['clientSnapshotDeadlineMs'] as number;
+  const recoveryDeadlineMs = envelope['clientRecoveryDeadlineMs'] as number;
+  const rejoinAllowance = envelope['rejoinWindowAllowance'] as number;
+  const closureMaxMs = envelope['closureMaxMs'] as number;
+  const policyConfig = cfg['input'] as unknown as ConstructorParameters<typeof RecoveryPolicy>[0];
+
+  const closuresOf = (): readonly { entityId: string; code: number }[] =>
+    RegionRoomModule.RegionRoom.liveRooms().flatMap((candidate) => candidate.tickRecords.flatMap((record) => record.closures));
+  const dequeuesFor = (entityId: string): number =>
+    RegionRoomModule.RegionRoom.liveRooms()
+      .reduce((total, candidate) => total + flattenConsumed(candidate.tickRecords).filter((entry) => entry.entityId === entityId).length, 0);
+  const closeObservations = (): Record<string, unknown>[] =>
+    RegionRoomModule.RegionRoom.liveRooms().flatMap((candidate) => ((candidate.evidence()['closeObservations'] ?? []) as Record<string, unknown>[]));
+
+  interface Exercise {
+    readonly seat: Awaited<ReturnType<typeof connectSeatById>>;
+    readonly room: SdkRoom<ProbeRegionState>;
+    readonly entityId: string;
+    readonly epoch: number;
+    readonly token: string;
+    readonly controller: ImpairmentController;
+    readonly policy: RecoveryPolicy;
+    // `| undefined` is spelled out because `exactOptionalPropertyTypes` is on: the policy's events carry
+    // these fields only for some types, and an optional property that cannot hold undefined is a lie
+    // about what a lookup returns.
+    readonly events: { atMs: number; type: string; trigger?: string | undefined; reason?: string | undefined; rungMs?: number | undefined }[];
+    readonly applied: { epoch: number; resolvedThrough: number }[];
+    readonly deliveries: Delivery[];
+    stopClock: () => void;
+    lastDeliveryAtMs: number;
+  }
+
+  const openExercise = async (seed: number): Promise<Exercise> => {
+    const seat = await connectSeatById<ProbeRegionState>(stack, server.endpoint, roomId, identity, RegionSchema);
+    const room = seat.room;
+    const epoch = await waitForIssuedEpoch(room as unknown as SdkRoom<ProbeRegionState>);
+    const controller = installImpairment(room as unknown as Parameters<typeof installImpairment>[0], { seed });
+    const policy = new RecoveryPolicy(policyConfig, () => nowMs());
+    const events: Exercise['events'] = [];
+    const applied: Exercise['applied'] = [];
+    const deliveries: Delivery[] = [];
+    const exercise: Exercise = {
+      seat,
+      room,
+      entityId: room.sessionId,
+      epoch,
+      token: room.reconnectionToken,
+      controller,
+      policy,
+      events,
+      applied,
+      deliveries,
+      stopClock: () => undefined,
+      lastDeliveryAtMs: 0,
+    };
+    (room as unknown as { onStateChange(callback: (state: ProbeRegionState) => void): void })
+      .onStateChange(() => {
+        const row = room.state.players?.get(room.sessionId);
+        if (row === undefined) return;
+        const delivery: Delivery = {
+          atMs: nowMs(),
+          // R-A: the acknowledgement and the record are read from THIS delivery and no other.
+          ack: Number(seat.handle.data['lastProcessed'] ?? 0),
+          record: {
+            resolvedThrough: row.inputResolvedThrough,
+            gapStart: row.inputGapStart,
+            gapEnd: row.inputGapEnd,
+            retiredUnrepresented: row.inputRetiredUnrepresented,
+          },
+          epoch: row.sessionEpoch,
+        };
+        deliveries.push(delivery);
+        exercise.lastDeliveryAtMs = delivery.atMs;
+        applied.push({ epoch: row.sessionEpoch, resolvedThrough: row.inputResolvedThrough });
+        for (const event of policy.observe(delivery)) {
+          events.push({ atMs: Math.round(event.atMs), type: event.type, trigger: (event as { trigger?: string }).trigger, reason: (event as { reason?: string }).reason, rungMs: (event as { rungMs?: number }).rungMs });
+        }
+      });
+    const clock = setInterval(() => {
+      for (const event of policy.tick(nowMs())) {
+        events.push({ atMs: Math.round(event.atMs), type: event.type, trigger: (event as { trigger?: string }).trigger, reason: (event as { reason?: string }).reason, rungMs: (event as { rungMs?: number }).rungMs });
+      }
+    }, 10);
+    exercise.stopClock = () => clearInterval(clock);
+    controller.arm();
+    return exercise;
+  };
+
+  /** Stream a few frames and wait until the authority has actually taken them. */
+  const streamAccepted = async (exercise: Exercise, frames: number, intervalMs = 60): Promise<number> => {
+    for (let sent = 0; sent < frames; sent += 1) {
+      stampAndSend(exercise.seat.handle as never, { ...frame, sessionEpoch: exercise.epoch });
+      await sleep(intervalMs);
+    }
+    const target = exercise.applied.length;
+    // The condition is synchronous on purpose: `until` tests whatever it is handed, and an async closure
+    // returns a Promise, which is always truthy. That silent-true is the single easiest way to make a
+    // polling assertion stop asserting anything.
+    await until(() => (exercise.room.state.players?.get(exercise.room.sessionId)?.inputResolvedThrough ?? 0) >= 1, 4_000);
+    return target;
+  };
+
+  const reconnectFailures: { case: string; message: string }[] = [];
+  const eventsOf = (exercise: Exercise, type: string): Exercise['events'] => exercise.events.filter((event) => event.type === type);
+  const harnessBoundary = (criterion: string): string =>
+    `${criterion}: exercised in the UDG-003 Phase 2 test harness at the declared test values (clientSnapshotDeadlineMs ${String(snapshotDeadlineMs)} ms, clientRecoveryDeadlineMs ${String(recoveryDeadlineMs)} ms, rejoinWindowAllowance ${String(rejoinAllowance)} per rolling window, closureMaxMs ${String(closureMaxMs)} ms). The production client machine is UDG-008's; the formal Gate A execution is UDG-SPIKE-001's, and Gate A stays Not Run here.`;
+
+  // ── GA-6a: patches stop while inputs are outstanding ─────────────────────────────────────────
+  const ga6a = await openExercise(101);
+  await streamAccepted(ga6a, 3);
+  const ga6aDequeuesBeforeSilence = dequeuesFor(ga6a.entityId);
+  const ga6aLastDeliveryBeforeSilence = ga6a.lastDeliveryAtMs;
+  ga6a.controller.silenceInbound();
+  const ga6aStalled = await until(() => eventsOf(ga6a, 'INPUT_ACK_STALLED').length > 0, snapshotDeadlineMs + 2_000);
+  const ga6aStall = eventsOf(ga6a, 'INPUT_ACK_STALLED')[0];
+  // Inputs stay outstanding the whole time: the seat is still streaming, and the room is still taking it.
+  const ga6aSendsAfterExpiry = (() => {
+    let sent = 0;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (ga6a.policy.snapshot().sendingAllowed) {
+        stampAndSend(ga6a.seat.handle as never, { ...frame, sessionEpoch: ga6a.epoch });
+        sent += 1;
+      }
+    }
+    return sent;
+  })();
+  await sleep(300);
+  const ga6aAttemptedRejoin = await until(() => eventsOf(ga6a, 'rejoin-attempt').length > 0, 1_500);
+  const ga6aEpisodeStartMs = ga6aStall?.atMs ?? 0;
+  // The recovery itself: the harness stops sending (gate observed), tears the socket the way an expired
+  // client does, and reconnects on its own token.
+  await ga6a.room.leave(false).catch(() => undefined);
+  ga6a.controller.resumeInbound();
+  // Every reconnect failure is published, never swallowed: "the recovery did not happen" and "the harness
+  // could not ask for it" are different findings, and a `null` alone cannot tell them apart.
+  const ga6aRecoveredRoom = await ga6a.seat.client.reconnect<ProbeRegionState>(ga6a.token, RegionSchema)
+    .catch((error: unknown) => {
+      reconnectFailures.push({ case: 'GA-6a', message: String((error as { message?: string } | undefined)?.message ?? error) });
+      return null;
+    });
+  // The epoch is read AFTER the wait, not at the instant `reconnect` resolves. Reading it early is how a
+  // correct recovery gets reported as a failed one: the rejoined room resolves before its first patch
+  // lands, so the row is not there yet, and an assertion against that snapshot is an assertion about the
+  // order of two reads rather than about the server.
+  const ga6aRecoveredSnapshot = ga6aRecoveredRoom === null
+    ? false
+    : await until(() => (ga6aRecoveredRoom.state.players?.get(ga6aRecoveredRoom.sessionId)?.sessionEpoch ?? -1) > ga6a.epoch, 4_000);
+  const ga6aRecoveredEpoch = ga6aRecoveredRoom === null ? -1 : (ga6aRecoveredRoom.state.players?.get(ga6aRecoveredRoom.sessionId)?.sessionEpoch ?? -1);
+  const ga6aRecoveryElapsedMs = Math.round(nowMs() - ga6aEpisodeStartMs);
+  const ga6aDeadlineElapsedMs = ga6aStall === undefined ? -1 : Math.round(ga6aStall.atMs - ga6aLastDeliveryBeforeSilence);
+  const ga6aServerKeptConsuming = dequeuesFor(ga6a.entityId) > ga6aDequeuesBeforeSilence
+    || (ga6aRecoveredRoom !== null && ga6aRecoveredRoom.sessionId.length > 0);
+  ga6a.stopClock();
+  ga6a.controller.restore();
+
+  // ── GA-6b: the server neither sends nor closes; the deadline is the client's own ──────────────
+  const ga6b = await openExercise(202);
+  await streamAccepted(ga6b, 3);
+  const ga6bDeliveriesAtSilence = ga6b.controller.counters().inboundDelivered;
+  const ga6bDequeuesAtSilence = dequeuesFor(ga6b.entityId);
+  const ga6bLastDeliveryBeforeSilence = ga6b.lastDeliveryAtMs;
+  ga6b.controller.silenceInbound();
+  // Keep streaming through the silence: the point of the case is that the server is alive and silent, not
+  // dead, so the stream has to stay open and the room has to keep deciding.
+  for (let sent = 0; sent < 6; sent += 1) {
+    if (ga6b.policy.snapshot().sendingAllowed) {
+      stampAndSend(ga6b.seat.handle as never, { ...frame, sessionEpoch: ga6b.epoch });
+    }
+    await sleep(60);
+  }
+  const ga6bStalled = await until(() => eventsOf(ga6b, 'INPUT_ACK_STALLED').length > 0, snapshotDeadlineMs + 2_000);
+  const ga6bStall = eventsOf(ga6b, 'INPUT_ACK_STALLED')[0];
+  const ga6bAttemptedRejoin = await until(() => eventsOf(ga6b, 'rejoin-attempt').length > 0, 1_500);
+  const ga6bCounters = ga6b.controller.counters();
+  const ga6bServerWasAliveAndSilent = ga6bCounters.socketOpenNow === true
+    && ga6bCounters.socketClosedDuring === 0
+    && ga6bCounters.inboundSilentlyDropped > 0
+    && ga6bCounters.inboundDelivered === ga6bDeliveriesAtSilence
+    && dequeuesFor(ga6b.entityId) > ga6bDequeuesAtSilence;
+  const ga6bDeadlineElapsedMs = ga6bStall === undefined ? -1 : Math.round(ga6bStall.atMs - ga6bLastDeliveryBeforeSilence);
+  ga6b.stopClock();
+  ga6b.controller.restore();
+  await ga6b.room.leave(true).catch(() => undefined);
+
+  // ── GA-6c: the rolling rejoin allowance is spent, and the seat stays stopped ─────────────────
+  const ga6c = await openExercise(303);
+  await streamAccepted(ga6c, 2);
+  ga6c.controller.silenceInbound();
+  const ga6cRejoins: { epochBefore: number; epochAfter: number; allowanceUsed: number }[] = [];
+  let ga6cRefused = false;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const attemptSeen = await until(() => eventsOf(ga6c, 'rejoin-attempt').length > ga6cRejoins.length, 2_500);
+    if (!attemptSeen) break;
+    const allowanceUsed = eventsOf(ga6c, 'rejoin-attempt').length;
+    if (eventsOf(ga6c, 'allowance-refused').length > 0) {
+      ga6cRefused = true;
+      break;
+    }
+    const epochBefore = ga6c.epoch;
+    await ga6c.room.leave(false).catch(() => undefined);
+    const rejoined = await ga6c.seat.client.reconnect<ProbeRegionState>(ga6c.token, RegionSchema)
+      .catch((error: unknown) => {
+        reconnectFailures.push({ case: `GA-6c attempt ${String(attempt)}`, message: String((error as { message?: string } | undefined)?.message ?? error) });
+        return null;
+      });
+    if (rejoined === null) break;
+    ga6c.policy.markRejoin(nowMs());
+    ga6cRejoins.push({
+      epochBefore,
+      epochAfter: rejoined.state.players?.get(rejoined.sessionId)?.sessionEpoch ?? -1,
+      allowanceUsed,
+    });
+    // Re-attach to the rejoined room so the next episode is measured on the seat that actually exists,
+    // and silence it again: the allowance is per entity across episodes, which is only interesting if the
+    // episodes keep happening.
+    (ga6c as { room: SdkRoom<ProbeRegionState> }).room = rejoined;
+    ga6c.controller.restore();
+    const nextController = installImpairment(rejoined as unknown as Parameters<typeof installImpairment>[0], { seed: 304 + attempt });
+    nextController.arm();
+    nextController.silenceInbound();
+    (ga6c as { controller: ImpairmentController; token: string }).controller = nextController;
+    (ga6c as { token: string }).token = rejoined.reconnectionToken;
+    ga6cRefused = eventsOf(ga6c, 'allowance-refused').length > 0;
+    if (ga6cRefused) break;
+  }
+  // Decided from the event log rather than from a flag set mid-loop: the refusal and the close are the
+  // policy's own events, and the flag was a race with them.
+  const ga6cSuspended = eventsOf(ga6c, 'client-close').find((event) => event.reason === 'allowance-exhausted');
+  const ga6cRefusedAtEnd = eventsOf(ga6c, 'allowance-refused').length > 0;
+  await sleep(400);
+  const ga6cSendsAfterSuspension = (() => {
+    let sent = 0;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (ga6c.policy.snapshot().sendingAllowed) sent += 1;
+    }
+    return sent;
+  })();
+  const ga6cAppliedAfterSuspension = ga6c.applied.length;
+  await sleep(250);
+  const ga6cStillStopped = ga6cSendsAfterSuspension === 0
+    && ga6c.applied.length === ga6cAppliedAfterSuspension
+    && ga6c.policy.snapshot().state !== 'ok';
+  ga6c.stopClock();
+  ga6c.controller.restore();
+
+  // ── GA-7: the final publication is withheld ──────────────────────────────────────────────────
+  const ga7 = await openExercise(404);
+  await streamAccepted(ga7, 3);
+  const ga7ClosuresBefore = closuresOf().length;
+  const ga7LastDeliveryBeforeSilence = ga7.lastDeliveryAtMs;
+  const ga7AppliedAtSilence = ga7.applied.length;
+  const ga7DeliveriesAtSilence = ga7.controller.counters().inboundDelivered;
+  ga7.controller.silenceInbound();
+  // Sit in the silence for a couple of patch intervals BEFORE provoking the closure, so that publications
+  // exist to be withheld. Silencing and bursting in the same instant makes the artefact claim a withheld
+  // final publication that the server never got the chance to send.
+  await sleep(250);
+  // The server-side closure is the buffer's own retirement path, provoked the way the abuse population
+  // provokes it: a burst past the buffer, then a paced tail that keeps frames arriving into the window so
+  // `serverQueuedAtClose` is measured with a queue actually in it. Every publication after this point —
+  // including the last one, and the close itself — is swallowed at the seat.
+  const ga7CloseStartMs = Date.now();
+  for (let burst = 0; burst < 64; burst += 1) {
+    stampAndSend(ga7.seat.handle as never, { ...frame, sessionEpoch: ga7.epoch });
+  }
+  const ga7Stalled = await until(() => eventsOf(ga7, 'INPUT_ACK_STALLED').length > 0, snapshotDeadlineMs + 2_000);
+  const ga7Stall = eventsOf(ga7, 'INPUT_ACK_STALLED')[0];
+  let ga7Closed = closuresOf().length > ga7ClosuresBefore;
+  for (let tail = 0; tail < 30 && !ga7Closed; tail += 1) {
+    stampAndSend(ga7.seat.handle as never, { ...frame, sessionEpoch: ga7.epoch });
+    await sleep(40);
+    ga7Closed = closuresOf().length > ga7ClosuresBefore;
+  }
+  const ga7CloseElapsedMs = Date.now() - ga7CloseStartMs;
+  const ga7Closure = closuresOf()[ga7ClosuresBefore];
+  const ga7Observation = closeObservations().filter((observation) => observation['entityId'] === ga7.entityId).pop() ?? null;
+  const ga7DeadlineElapsedMs = ga7Stall === undefined ? -1 : Math.round(ga7Stall.atMs - ga7LastDeliveryBeforeSilence);
+  // "the seat was never told", measured at the seat rather than at the wrapper: no publication reached this
+  // seat's replica after the silence began, whatever the server was or was not publishing to it by then.
+  // The wrapper's own counters are published beside it, because the two cases read differently — patches
+  // swallowed during the window, versus a seat the server had already stopped publishing to — and a
+  // reader is entitled to know which of them produced the zero.
+  const ga7NeverTold = ga7.applied.length === ga7AppliedAtSilence;
+  const ga7RecoveredRoom = await ga7.seat.client.reconnect<ProbeRegionState>(ga7.token, RegionSchema)
+    .catch((error: unknown) => {
+      reconnectFailures.push({ case: 'GA-7', message: String((error as { message?: string } | undefined)?.message ?? error) });
+      return null;
+    });
+  const ga7ReconnectRestored = ga7RecoveredRoom === null
+    ? false
+    : await until(() => (ga7RecoveredRoom.state.players?.get(ga7RecoveredRoom.sessionId)?.sessionEpoch ?? -1) > ga7.epoch, 1_600);
+  const ga7RecoveredEpoch = ga7RecoveredRoom === null
+    ? -1
+    : ga7RecoveredRoom.state.players?.get(ga7RecoveredRoom.sessionId)?.sessionEpoch ?? -1;
+  // A seat the SERVER closed cannot come back on its own token: the room has already retired that session,
+  // and the rejoin path has nothing to restore. What a client does then is rejoin through matchmaking and
+  // read the snapshot it is handed — which is the second half of GA-7's "recovers through rejoin and
+  // snapshot". Both paths are recorded, because which one worked is information UDG-008 needs.
+  let ga7RejoinRoom = ga7ReconnectRestored ? ga7RecoveredRoom : null;
+  let ga7RejoinVia = ga7ReconnectRestored ? ('sdk-reconnect' as 'sdk-reconnect' | 'matchmaking-rejoin' | 'none') : 'none' as 'sdk-reconnect' | 'matchmaking-rejoin' | 'none';
+  if (!ga7ReconnectRestored) {
+    const fresh = await connectSeatById<ProbeRegionState>(stack, server.endpoint, roomId, identity, RegionSchema)
+      .then((rejoined) => (rejoined as unknown as { room: SdkRoom<ProbeRegionState>; ok: boolean }).room === undefined ? null : rejoined)
+      .catch((error: unknown) => {
+        reconnectFailures.push({ case: 'GA-7 matchmaking rejoin', message: String((error as { message?: string } | undefined)?.message ?? error) });
+        return null;
+      });
+    if (fresh !== null) {
+      const restored = await until(() => (fresh.room.state.players?.get(fresh.room.sessionId)?.sessionEpoch ?? -1) >= 1, 3_000);
+      if (restored) {
+        ga7RejoinRoom = fresh.room;
+        ga7RejoinVia = 'matchmaking-rejoin';
+      }
+    }
+  }
+  const ga7RecoveredEpochAfterRejoin = ga7RejoinRoom === null
+    ? -1
+    : ga7RejoinRoom.state.players?.get(ga7RejoinRoom.sessionId)?.sessionEpoch ?? -1;
+  const ga7RecoveredSnapshot = ga7RejoinRoom !== null && ga7RecoveredEpochAfterRejoin >= 1;
+  const ga7Recovered = ga7RecoveredSnapshot;
+  // "applies nothing twice": within one epoch the seat's applied watermark never goes backwards and never
+  // re-applies a value it had already applied. Across the rejoin the stamp domain restarts (D-P2-8), so the
+  // comparison is per epoch and the epoch change itself is what makes the boundary legal.
+  const ga7Regressions = (() => {
+    const byEpoch = new Map<number, number>();
+    let regressions = 0;
+    let duplicates = 0;
+    const seen = new Set<string>();
+    for (const entry of ga7.applied) {
+      const key = `${String(entry.epoch)}|${String(entry.resolvedThrough)}`;
+      if (seen.has(key)) duplicates += 1;
+      seen.add(key);
+      const previous = byEpoch.get(entry.epoch) ?? 0;
+      if (entry.resolvedThrough < previous) regressions += 1;
+      byEpoch.set(entry.epoch, Math.max(previous, entry.resolvedThrough));
+    }
+    return { regressions, duplicates };
+  })();
+  ga7.stopClock();
+  ga7.controller.restore();
+  await ga7.room.leave(true).catch(() => undefined);
+  await ga6a.room.leave(true).catch(() => undefined);
+  await ga6c.room.leave(true).catch(() => undefined);
+  if (ga7RejoinRoom !== null && ga7RejoinRoom !== ga7RecoveredRoom) await ga7RejoinRoom.leave(true).catch(() => undefined);
+  if (ga7RecoveredRoom !== null) await ga7RecoveredRoom.leave(true).catch(() => undefined);
+  if (ga6aRecoveredRoom !== null) await ga6aRecoveredRoom.leave(true).catch(() => undefined);
+
+  const ga6Ga7Controls = {
+    ga6aDeadlineExpiredWithNoFreshDelivery: ga6aStalled && ga6aStall?.trigger === 'deadline',
+    ga6aDeadlineMatchesTheDeclaredTestValue: ga6aDeadlineElapsedMs > 0
+      && ga6aDeadlineElapsedMs <= snapshotDeadlineMs + 150,
+    ga6aHarnessStoppedSendingAfterExpiry: ga6aSendsAfterExpiry === 0,
+    ga6aRecoveryCompletedInsideTheEpisodeBudget: ga6aRecoveredSnapshot === true
+      && ga6aRecoveredEpoch > ga6a.epoch
+      && ga6aRecoveryElapsedMs <= recoveryDeadlineMs + 1_500,
+    ga6bDeadlineFiredWithNoServerEventAtAll: ga6bStalled
+      && ga6bStall?.trigger === 'deadline'
+      && ga6bAttemptedRejoin
+      && ga6bServerWasAliveAndSilent,
+    ga6bSocketStayedOpenAndTheRoomKeptDeciding: ga6bServerWasAliveAndSilent,
+    ga6cAllowanceWasSpentAndRefused: ga6cRejoins.length >= rejoinAllowance
+      && (ga6cRefused || ga6cRefusedAtEnd)
+      && ga6cSuspended !== undefined,
+    ga6cSeatStayedStoppedAfterSuspension: ga6cStillStopped,
+    ga7ServerStillRecordedTheClosureAndItsCounters: ga7Closed
+      // A 64-frame burst at these provisional values trips the rate ceiling (4101) as often as the buffer
+      // retirement (4100), and which one arrives first is a fact about the envelope, not about GA-7. What
+      // GA-7 asks of the server is that it still recorded the loss, its counters and `serverQueuedAtClose`
+      // while the seat was never told, so the control names either input-loss closure and the artefact
+      // publishes the code that actually arrived.
+      && (ga7Closure?.code === closeCodes['INPUT_RETIRED_UNREPRESENTED']
+        || ga7Closure?.code === closeCodes['INPUT_RATE_CEILING'])
+      && ga7Observation !== null
+      && typeof ga7Observation['serverQueuedAtClose'] === 'number'
+      && typeof ga7Observation['consumedCountAtClose'] === 'number'
+      && Number(ga7Observation['retiredUnrepresented'] ?? 0) >= 1,
+    ga7ClientActedInsideTheClosureWindow: ga7Stalled
+      && ga7DeadlineElapsedMs > 0
+      && ga7DeadlineElapsedMs <= closureMaxMs
+      && ga7CloseElapsedMs <= closureMaxMs + 1_500,
+    ga7SeatWasNeverTold: ga7NeverTold,
+    ga7RecoveredThroughRejoinAndSnapshot: ga7Recovered && ga7RejoinVia !== 'none',
+    ga7NothingWasAppliedTwice: ga7Regressions.regressions === 0 && ga7Regressions.duplicates === 0,
+  };
+
+  const ga6Ga7 = {
+    why: 'P-2b, reopened by the owner on 2026-11-14 for the Phase 2 test harness only. GA-6 and GA-7 ask for a client that acts on its own timer; the recovery rules live in tests/support/client-harness/recovery.ts and are driven here over the live room by the impairment layer, at the declared test values.',
+    boundary: [
+      harnessBoundary('GA-6a/6b/6c'),
+      harnessBoundary('GA-7'),
+      'what is NOT claimed: that the production client behaves this way (UDG-008), that Gate A has run (it has not: UDG-SPIKE-001), or that the 500/4000 ms figures are production values — they are the hashed provisional values this phase runs on (D-P2-4)',
+      'the prediction limb is reported, not passed: the Phase 2 harness keeps no prediction buffer to discard, because building one would be UDG-008\'s production client. The policy\'s own discard-prediction event is observed and published; the production buffer is named as absent here',
+    ],
+    envelope: {
+      clientSnapshotDeadlineMs: snapshotDeadlineMs,
+      clientRecoveryDeadlineMs: recoveryDeadlineMs,
+      rejoinWindowAllowance: rejoinAllowance,
+      closureMaxMs: closureMaxMs,
+      retirementCloseCode: closeCodes['INPUT_RETIRED_UNREPRESENTED'],
+    },
+    ga6a: {
+      question: 'patches stop while inputs are outstanding: does the deadline expire at the declared test value, does sending stop, and does recovery finish inside the budget?',
+      stalled: ga6aStalled,
+      trigger: ga6aStall?.type === undefined ? null : ga6aStall.trigger ?? null,
+      deadlineElapsedFromLastDeliveryMs: ga6aDeadlineElapsedMs,
+      declaredDeadlineMs: snapshotDeadlineMs,
+      sendsAttemptedAfterExpiryWhileGateAllowed: ga6aSendsAfterExpiry,
+      rejoinAttempted: ga6aAttemptedRejoin,
+      recoveryElapsedFromExpiryMs: ga6aRecoveryElapsedMs,
+      recoveryBudgetMs: recoveryDeadlineMs,
+      recoveredEpoch: ga6aRecoveredEpoch,
+      epochBefore: ga6a.epoch,
+      serverKeptConsumingThisSeat: ga6aServerKeptConsuming,
+      predictionBuffer: 'absent in the Phase 2 harness; the discard event is the policy\'s own and is published in the event list',
+      events: ga6a.events,
+    },
+    ga6b: {
+      question: 'the server neither sends nor closes: does the client still recover on its own timer, with no server event to lean on?',
+      stalled: ga6bStalled,
+      trigger: ga6bStall?.type === undefined ? null : ga6bStall.trigger ?? null,
+      deadlineElapsedFromLastDeliveryMs: ga6bDeadlineElapsedMs,
+      socketOpenAtCheck: ga6bCounters.socketOpenNow,
+      socketClosedDuring: ga6bCounters.socketClosedDuring,
+      deliveriesBeforeSilence: ga6bDeliveriesAtSilence,
+      deliveriesAtCheck: ga6bCounters.inboundDelivered,
+      publicationsSilentlyDropped: ga6bCounters.inboundSilentlyDropped,
+      silenceWindowMs: ga6bCounters.inboundSilenceMs,
+      roomKeptConsumingThisSeat: ga6bServerWasAliveAndSilent,
+      rejoinAttempted: ga6bAttemptedRejoin,
+      whyThisIsNotTheDropCase: 'recovery-scenarios.ts reaches the same deadline through an unclean tear, where a dead socket is itself the server event. Here the socket never broke and the room went on consuming this seat\'s frames: the only thing that ended the silence was the client\'s own clock.',
+      events: ga6b.events,
+    },
+    ga6c: {
+      question: 'a limit is reached: is the spent rolling allowance surfaced, and does the seat then stay stopped with no prediction and no sends?',
+      actualRejoins: ga6cRejoins,
+      allowance: rejoinAllowance,
+      allowanceRefused: ga6cRefused || ga6cRefusedAtEnd,
+      suspension: ga6cSuspended ?? null,
+      policyStateAfterSuspension: ga6c.policy.snapshot().state,
+      sendsWhileGateClosedAfterSuspension: ga6cSendsAfterSuspension,
+      stateApplicationsAfterSuspension: ga6c.applied.length - ga6cAppliedAfterSuspension,
+      stillStopped: ga6cStillStopped,
+      events: ga6c.events,
+    },
+    ga7: {
+      question: 'the final publication is withheld: does the server still record the loss and its counters, does the client act inside the closure window, and does it recover without applying anything twice?',
+      seatNeverTold: ga7NeverTold,
+      publicationsReachingTheSeatAfterTheSilence: ga7.applied.length - ga7AppliedAtSilence,
+      deliveriesAtSilence: ga7DeliveriesAtSilence,
+      layerCounters: ga7.controller.counters(),
+      publicationsSwallowedDuringTheSilence: ga7.controller.counters().inboundSilentlyDropped,
+      publicationsSilentlyDropped: ga7.controller.counters().inboundSilentlyDropped,
+      closed: ga7Closed,
+      closureCode: ga7Closure?.code ?? null,
+      acceptedCodes: [closeCodes['INPUT_RETIRED_UNREPRESENTED'], closeCodes['INPUT_RATE_CEILING']],
+      whichPathArrived: 'a burst at the provisional envelope usually trips the rate ceiling first; the criterion cares that the server recorded the loss and its counters while the seat was never told, and the code that arrived is published rather than curated',
+      closeElapsedMs: ga7CloseElapsedMs,
+      closureMaxMs: closureMaxMs,
+      serverObservation: ga7Observation,
+      serverQueuedAtCloseInterpretation: 'the queue figure is published as recorded. On this path it is 0: the burst drains one frame per tick and the rate closure lands about 170 ms later, before a queue rebuilds. A non-zero queue at close is evidenced by the abuse population\'s paced offender (retirement with the buffer still full), retained in the same bundle; GA-7 asks that the figure be recorded, and it is, on both paths',
+      clientDeadlineElapsedFromLastDeliveryMs: ga7DeadlineElapsedMs,
+      recoveredThroughRejoinAndSnapshot: ga7Recovered,
+      recoveryPath: ga7RejoinVia,
+      sdkReconnectRestoredTheSeat: ga7ReconnectRestored,
+      sdkReconnectEpochSeen: ga7RecoveredEpoch,
+      epochAfterRejoin: ga7RecoveredEpochAfterRejoin,
+      noteOnTheTwoPaths: 'GA-6a recovers on its own token because the client tore the socket; GA-7 is closed by the server, whose rejoin path has already retired that session, so recovery here is a matchmaking rejoin with a fresh snapshot. UDG-008 has to implement both, and Gate A has to see both.',
+      epochBefore: ga7.epoch,
+      appliedRegressions: ga7Regressions.regressions,
+      duplicateApplications: ga7Regressions.duplicates,
+      appliedSamples: ga7.applied.slice(0, 12),
+      appliedCount: ga7.applied.length,
+      events: ga7.events,
+    },
+    reconnectFailures,
+    controls: ga6Ga7Controls,
+  };
+
   const controls = {
     baselineSeatHadNoImpairment: (baseline?.impairment.droppedTotal ?? -1) === 0
       && (baseline?.impairment.forwardDelayAppliedMs.count ?? -1) === 0,
@@ -507,16 +1009,20 @@ async function main(): Promise<void> {
     stallSeatCaughtUpAfterRelease: (stalled?.roomSide.allSentStampsConsumed ?? false) === true,
     socketNeverBrokeAnywhere: perSeat.every((entry) => entry.impairment.socketClosedDuring === 0
       && entry.impairment.reconnectEvents === 0),
-
+    // P-2b. The four recovery controls govern their own seats, which are opened after the four latency
+    // populations have been read; `socketNeverBrokeAnywhere` therefore still means "no seat in the latency
+    // populations lost its socket", which is what it always meant, and the recovery cases are asserted
+    // where they happen rather than folded into a sentence about a different set of seats.
+    ...ga6Ga7Controls,
   };
 
   const artefact = {
     taskId: 'UDG-003',
     phase: 'phase-2',
-    criterion: ['W-10', 'GA-11'],
+    criterion: ['W-10', 'GA-11', 'GA-6a', 'GA-6b', 'GA-6c', 'GA-7'],
     producer: 'tests/runtime/udg-003-phase-2/impairment-population.ts',
     statement:
-      'W-10 as amended (OD-2): RTT, jitter, application-layer delivery loss and arrival-phase populations over a real WebSocket round trip, with the loopback baseline reported separately. Phase 2 records the populations; evaluating the two GA-11 inequalities and selecting production values belong to UDG-SPIKE-001.',
+      'W-10 as amended (OD-2): RTT, jitter, application-layer delivery loss and arrival-phase populations over a real WebSocket round trip, with the loopback baseline reported separately. Phase 2 records the populations; evaluating the two GA-11 inequalities and selecting production values belong to UDG-SPIKE-001. The `ga6Ga7` section is P-2b, reopened for the Phase 2 harness only (owner, 2026-11-14): GA-6a/6b/6c and GA-7 exercised against the live room at the declared test values, with the production client machine left in UDG-008 and the formal Gate A execution in UDG-SPIKE-001.',
     impairmentLayer: {
       name: 'application-layer delivery impairment (tests/support/client-harness/impairment.mjs)',
       impairmentSource: 'harness',
@@ -534,6 +1040,7 @@ async function main(): Promise<void> {
       rule: 'arrival latencies are published only where stamps and rows pair one-for-one; a seat that does not pair publishes `arrivalPairing` with both counts instead of a number averaged over a mismatch',
       unpairedSeats: perSeat.filter((entry) => entry.sendToJournalledArrivalMs === null).map((entry) => entry.label),
     },
+    ga6Ga7,
     populations: {
       roundTrip: {
         note: 'both measures are published for every seat. Neither is a network round trip: one is one-way to the intake, the other is what a client observes and contains the tick and publish waits. The clause asks for "imposed RTT over a real WebSocket round trip with the loopback baseline reported separately", and this is that, with the names it can bear.',
@@ -594,7 +1101,7 @@ async function main(): Promise<void> {
     doesNotEstablish: [
       'TCP-loss behaviour of any kind: every drop in this run is an application-layer withheld delivery, with the head-of-line-blocking discriminator recorded beside it',
       'production tuning, or any evaluation of B + J·λ + stall ≤ bufferMaxSize or clientSnapshotDeadlineMs ≥ 4 × patch + 2 × p99 RTT (GA-11 and UDG-SPIKE-001 own both)',
-      'a GA-6 or GA-7 verdict: the stall row records what the seat observed while patches were withheld; the client-local deadline machine is production client behaviour and belongs to UDG-008',
+      'a GA-6 or GA-7 verdict at Gate A: `ga6Ga7` exercises both criteria in the Phase 2 harness at the declared test values, which is what the owner asked for on 2026-11-14, and it is evidence about the harness plus the frozen rules in tests/support/client-harness/recovery.ts — not a Gate A pass (UDG-SPIKE-001, Not Run) and not a claim that a production client behaves this way (UDG-008 owns the machine that has to do it for real, including a prediction buffer this harness does not have)',
       'a network path: RTT here is imposed over a measured loopback baseline, and that baseline is published beside it so the imposed component stays visible',
     ],
     gateAOwns: [
@@ -621,7 +1128,10 @@ async function main(): Promise<void> {
     + `client-observed p50 baseline ${String(baseline?.sendToObservedResolutionMs.p50 ?? '-')} / imposed ${String(imposed?.sendToObservedResolutionMs.p50 ?? '-')} ms, `
     + `withheld ${String(loss?.withheldStampsNamed.length ?? 0)} (never consumed: ${String(loss?.withheldNeverConsumed ?? false)}, `
     + `later arrived: ${String(loss?.deliveriesAfterTheHoleConsumed ?? false)}), `
-    + `stall caught up: ${String(stalled?.roomSide.allSentStampsConsumed ?? false)}\n`,
+    + `stall caught up: ${String(stalled?.roomSide.allSentStampsConsumed ?? false)}, `
+    + `GA-6a/6b/6c+GA-7 ${String(Object.values(ga6Ga7Controls).filter((value) => value === true).length)}/${String(Object.keys(ga6Ga7Controls).length)} `
+    + `(6b silent-server deadline: ${String(ga6Ga7Controls.ga6bDeadlineFiredWithNoServerEventAtAll)}, `
+    + `7 close ${String(ga7Closure?.code ?? '-')} in ${String(ga7CloseElapsedMs)} ms, recovered epoch ${String(ga7RecoveredEpoch)}\n`,
   );
   await Promise.race([server.close().catch(() => undefined), sleep(4_000)]);
   if (artefact.verdict !== 'pass') process.exitCode = 2;

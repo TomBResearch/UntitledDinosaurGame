@@ -510,13 +510,110 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
     expect((stallSeat?.stall?.framesTheRoomConsumedWhileTheSeatSawNothing ?? 0)).toBeGreaterThan(0);
   });
 
+  it('P-2b, reopened for the harness only, exercises GA-6a, GA-6b, GA-6c and GA-7 at the declared test values', () => {
+    const impairment = JSON.parse(readFileSync(join(OUT_DIR, 'transport-impairment.json'), 'utf8')) as {
+      criterion: string[];
+      ga6Ga7: {
+        boundary: string[];
+        envelope: { clientSnapshotDeadlineMs: number; clientRecoveryDeadlineMs: number; rejoinWindowAllowance: number; closureMaxMs: number };
+        reconnectFailures: { case: string; message: string }[];
+        controls: Record<string, boolean>;
+        ga6a: {
+          trigger: string | null;
+          deadlineElapsedFromLastDeliveryMs: number;
+          sendsAttemptedAfterExpiryWhileGateAllowed: number;
+          recoveredEpoch: number;
+          epochBefore: number;
+          predictionBuffer: string;
+        };
+        ga6b: {
+          socketOpenAtCheck: boolean;
+          socketClosedDuring: number;
+          publicationsSilentlyDropped: number;
+          deliveriesAtCheck: number;
+          deliveriesBeforeSilence: number;
+        };
+        ga6c: {
+          actualRejoins: unknown[];
+          suspension?: { reason?: string } | null;
+          sendsWhileGateClosedAfterSuspension: number;
+          stateApplicationsAfterSuspension: number;
+        };
+        ga7: {
+          publicationsSwallowedDuringTheSilence: number;
+          publicationsReachingTheSeatAfterTheSilence: number;
+          closed: boolean;
+          acceptedCodes: number[];
+          closureCode: number | null;
+          serverObservation: { serverQueuedAtClose: number; consumedCountAtClose: number };
+          clientDeadlineElapsedFromLastDeliveryMs: number;
+          recoveryPath: string;
+          epochAfterRejoin: number;
+          appliedRegressions: number;
+          duplicateApplications: number;
+        };
+      };
+    };
+    expect(impairment.criterion).toEqual(expect.arrayContaining(['GA-6a', 'GA-6b', 'GA-6c', 'GA-7']));
+    const ga = impairment.ga6Ga7;
+    for (const name of Object.keys(ga.controls)) {
+      expect(ga.controls[name], `the recovery exercise must assert ${name}`).toBe(true);
+    }
+    expect(Object.keys(ga.controls).length).toBeGreaterThanOrEqual(13);
+    expect(ga.reconnectFailures).toEqual([]);
+
+    // The numbers behind the controls, pinned so a future run cannot satisfy a renamed control instead.
+    expect(ga.envelope.clientSnapshotDeadlineMs).toBe(500);
+    expect(ga.envelope.clientRecoveryDeadlineMs).toBe(4000);
+    expect(ga.envelope.rejoinWindowAllowance).toBe(2);
+    expect(ga.ga6a.trigger).toBe('deadline');
+    expect(ga.ga6a.deadlineElapsedFromLastDeliveryMs).toBeGreaterThan(0);
+    expect(ga.ga6a.deadlineElapsedFromLastDeliveryMs).toBeLessThanOrEqual(650);
+    expect(ga.ga6a.sendsAttemptedAfterExpiryWhileGateAllowed).toBe(0);
+    expect(ga.ga6a.recoveredEpoch).toBeGreaterThan(ga.ga6a.epochBefore);
+
+    // GA-6b's whole claim is that no server event was involved; the socket is the instrument that says so.
+    expect(ga.ga6b.socketOpenAtCheck).toBe(true);
+    expect(ga.ga6b.socketClosedDuring).toBe(0);
+    expect(ga.ga6b.publicationsSilentlyDropped).toBeGreaterThan(0);
+    expect(ga.ga6b.deliveriesAtCheck).toBe(ga.ga6b.deliveriesBeforeSilence);
+
+    // GA-6c: the rolling allowance is spent on real rejoins, then refused, and the seat stays stopped.
+    expect(ga.ga6c.actualRejoins.length).toBeGreaterThanOrEqual(ga.envelope.rejoinWindowAllowance);
+    expect(ga.ga6c.suspension?.reason).toBe('allowance-exhausted');
+    expect(ga.ga6c.sendsWhileGateClosedAfterSuspension).toBe(0);
+    expect(ga.ga6c.stateApplicationsAfterSuspension).toBe(0);
+
+    // GA-7: the server recorded the loss while the seat was never told, the client acted inside the closure
+    // window, and the recovery ended with a readable snapshot.
+    expect(ga.ga7.publicationsSwallowedDuringTheSilence).toBeGreaterThan(0);
+    expect(ga.ga7.publicationsReachingTheSeatAfterTheSilence).toBe(0);
+    expect(ga.ga7.closed).toBe(true);
+    expect(ga.ga7.acceptedCodes).toContain(ga.ga7.closureCode);
+    expect(typeof ga.ga7.serverObservation.serverQueuedAtClose).toBe('number');
+    expect(typeof ga.ga7.serverObservation.consumedCountAtClose).toBe('number');
+    expect(ga.ga7.clientDeadlineElapsedFromLastDeliveryMs).toBeLessThanOrEqual(ga.envelope.closureMaxMs);
+    expect(['sdk-reconnect', 'matchmaking-rejoin']).toContain(ga.ga7.recoveryPath);
+    expect(ga.ga7.epochAfterRejoin).toBeGreaterThanOrEqual(1);
+    expect(ga.ga7.appliedRegressions).toBe(0);
+    expect(ga.ga7.duplicateApplications).toBe(0);
+
+    // The two boundaries the owner restated on reopening are asserted as the artefact's own words: this is
+    // the harness, Gate A stays Not Run, and the production client machine is UDG-008's.
+    expect(ga.boundary.join(' ')).toContain('UDG-008');
+    expect(ga.boundary.join(' ')).toContain('Not Run');
+    expect(ga.ga6a.predictionBuffer).toContain('absent');
+    expect(JSON.stringify(ga)).not.toMatch(/"gateA":\s*"pass/);
+  });
+
   it('runs the stage sequence and keeps AC-6 qualified rather than overclaiming it (AC-6 under OD-4)', () => {
     runScript('tests/runtime/udg-003-phase-2/stage-sequence.ts');
     const stages = JSON.parse(readFileSync(join(OUT_DIR, 'stage-sequence.json'), 'utf8')) as {
       verdict: string;
       checks: Record<string, boolean>;
       ac6Verdict: string;
-      definitions: { quotedFrom: string; M: string; P: string; order: string; ownerRuling: string };
+      ac6VerdictNote: string;
+      definitions: { quotedFrom: string; M: string; P: string; order: string; ownerRuling: string; amendedClause?: string };
       mappingStageM: {
         byValueControl: { ran: boolean; canonicalFieldsMatch: boolean; mutatingTheMappedStateMovedTheRow: boolean; mappingIsTheOnlyWriter: boolean };
         refusalControl: { watermarkAdvanced: boolean; movementFieldsUnchanged: boolean; refusedRowsJournalled: number };
@@ -524,7 +621,7 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
       };
       publicationStageP: {
         observableAtSeat: { medianIntervalMs: number | null; declaredIntervalMs: number; tickIntervalMs: number };
-        resultsHalf: { status: string; owner: string; resultsAccepted: number };
+        resultsHalf: { status: string; owner: string; resultsAccepted: number; obligation?: string };
       };
       doesNotClaim: string[];
     };
@@ -557,7 +654,14 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
     expect(stages.publicationStageP.resultsHalf.status).toBe('outstanding');
     expect(stages.publicationStageP.resultsHalf.owner).toBe('UDG-007');
     expect(stages.publicationStageP.resultsHalf.resultsAccepted).toBe(0);
-    expect(stages.ac6Verdict).toBe('qualified-pending-owner');
+    // The verdict moved on 2026-11-14 because the CRITERION moved, not because this artefact got more
+    // confident: the owner's OD-4 ruling was applied to AC-6, which now scores Phase 2 against F…X, M and
+    // P's publication, and carries P's results half to UDG-007 as an acceptance obligation. The two
+    // assertions either side of it are what keep that from reading as "AC-6 done".
+    expect(stages.ac6Verdict).toBe('pass-for-the-stages-scored-here');
+    expect(stages.ac6VerdictNote).toContain('outstanding');
+    expect(stages.definitions.amendedClause).toContain('acceptance obligation of UDG-007');
+    expect(stages.publicationStageP.resultsHalf.obligation).toContain('exactly once');
     expect(stages.doesNotClaim.join(' ')).toContain('results half');
     // The letters are quoted from the record that defines them, not restated in whatever shape suits the
     // run that needed them.

@@ -37,6 +37,11 @@ export interface ImpairmentCounters {
     droppedOutboundOrdinals: number[];
     inboundTotal: number;
     inboundDelivered: number;
+    /** Publications that reached the wrapper and were dropped by `silenceInbound()`. */
+    inboundSilentlyDropped: number;
+    /** How long the seat has been silenced, in ms; null when it never was. */
+    inboundSilenceMs: number | null;
+    silencing: boolean;
     inboundQueuedPeak: number;
     reconnectEvents: number;
     socketOpenAtInstall: boolean;
@@ -67,6 +72,12 @@ export interface ImpairmentController {
     disarm(): void;
     /** Withhold inbound deliveries for `ms`; returns the function that releases them. */
     withholdInbound(ms: number): () => void;
+    /**
+     * Drop every inbound delivery from here on, socket untouched — GA-6b's silent server and GA-7's
+     * withheld final publication. `resumeInbound()` does not replay what the silence swallowed.
+     */
+    silenceInbound(): void;
+    resumeInbound(): void;
     counters(): ImpairmentCounters;
     discriminator(): ImpairmentDiscriminator;
     restore(): void;
