@@ -3,9 +3,14 @@
 > Assignment: [UDG-003-phase-2.md](UDG-003-phase-2.md) (version pinned at handoff commit
 > `17ade43be0a64935cb2e06be02ebbe9756f6eb6f`, including §8.2.1, its adoption record, and the amended
 > ADR-0003). Implementation baseline: `8716b8c6e3c4a3f005fe260eebf5569bb02201dd`.
-> **Status: In Review.** Submitted by the agent implementer on 2026-11-12. No reviewer acceptance is
-> recorded here, none is implied, and nothing in this file is a gate decision. UDG-003 remains
-> **In Progress**; Phase 3 remains unassigned. Acceptance belongs to the owner.
+> **Status: Accepted at phase level by the project owner on 2026-11-14** (§21), on implementation
+> `6e0e5cc839f3d501a26998172438ded51914335d` CI 43584855957 with records at
+> `f0c8ccde4b086e8e243412acdfedcd04b6558043` CI 43586339612. It was **submitted In Review** by the agent
+> implementer on 2026-11-12 and no acceptance was recorded by the implementer at any point before the owner's;
+> §1–§20 keep the wording each sitting wrote. The acceptance covers **this phase only** and is not a gate
+> decision: UDG-003 remains **In Progress**, Phase 3 remains unassigned, **Gate A remains Not Run**,
+> deduplication-triggered closure remains disabled and **D4 remains open**. Acceptance belongs to the owner,
+> and this sitting's records authorise acceptance records only.
 
 ## 1. What Phase 2 was, in one paragraph
 

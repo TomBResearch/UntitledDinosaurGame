@@ -1,5 +1,10 @@
 # UDG-003 Phase 2 — the §9 evidence matrix, and the two reconciliations it forces
 
+> **2026-11-14, acceptance**: §21 records the project owner's **phase-level acceptance of Phase 2** at
+> `6e0e5cc8` (CI 43584855957) with these records at `f0c8ccde` (CI 43586339612), the two citations the owner
+> asked for, and the preservation of historical bundles and inventories under H1. §1–§20 keep the wording each
+> sitting wrote.
+>
 > **2026-11-13, later sittings**: §10 records T-0 and the H1 sweep, §11 records T-0b and T-1…T-4 accepted at
 > `cfc49664` (CI 43458461044), §12 applies the owner's **OD-10** coverage rule at `a9116e03` (CI 43481796058),
 > §13 states what still remains of **OD-5** after the H1 carry-forward, and §14 answers **OD-1…OD-4** with the
