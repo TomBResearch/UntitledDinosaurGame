@@ -545,7 +545,10 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
           closed: boolean;
           acceptedCodes: number[];
           closureCode: number | null;
-          serverObservation: { serverQueuedAtClose: number; consumedCountAtClose: number };
+          serverObservation: { serverQueuedAtClose: number; consumedCountAtClose: number; dequeuedTotal: number };
+          retiredAtClose: number;
+          refusedFramesForThisSeat: number;
+          lossSignalThatSatisfiedTheControl: string;
           clientDeadlineElapsedFromLastDeliveryMs: number;
           recoveryPath: string;
           epochAfterRejoin: number;
@@ -596,6 +599,12 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
     expect(ga.ga7.acceptedCodes).toContain(ga.ga7.closureCode);
     expect(typeof ga.ga7.serverObservation.serverQueuedAtClose).toBe('number');
     expect(typeof ga.ga7.serverObservation.consumedCountAtClose).toBe('number');
+    expect(typeof ga.ga7.serverObservation.dequeuedTotal).toBe('number');
+    // "the server recorded the loss" is satisfied by whatever the arriving closure actually writes —
+    // retirements when the buffer evicts, refusals when the ceiling rejects first. One named field would
+    // make the control a bet on that race; this is the part that must not be zero either way.
+    expect(ga.ga7.retiredAtClose + ga.ga7.refusedFramesForThisSeat).toBeGreaterThanOrEqual(1);
+    expect(ga.ga7.lossSignalThatSatisfiedTheControl).toMatch(/retired|refused/);
     expect(ga.ga7.clientDeadlineElapsedFromLastDeliveryMs).toBeLessThanOrEqual(ga.envelope.closureMaxMs);
     expect(['sdk-reconnect', 'matchmaking-rejoin']).toContain(ga.ga7.recoveryPath);
     expect(ga.ga7.epochAfterRejoin).toBeGreaterThanOrEqual(1);

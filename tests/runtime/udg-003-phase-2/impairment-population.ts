@@ -958,7 +958,12 @@ async function main(): Promise<void> {
   // ── GA-7: the final publication is withheld ──────────────────────────────────────────────────
   const ga7 = await openExercise(404);
   await streamAccepted(ga7, 3);
-  const ga7ClosuresBefore = closuresOf().length;
+  // Attributed per entity, not by an index into every room's closure list: a closure belonging to another
+  // seat would otherwise be read as this seat's, and the artefact would credit GA-7 with someone else's
+  // loss record.
+  const closuresFor = (entityId: string): readonly { entityId: string; code: number }[] =>
+    closuresOf().filter((closure) => closure.entityId === entityId);
+  const ga7ClosuresBefore = closuresFor(ga7.entityId).length;
   const ga7LastDeliveryBeforeSilence = ga7.lastDeliveryAtMs;
   const ga7AppliedAtSilence = ga7.applied.length;
   const ga7DeliveriesAtSilence = ga7.controller.counters().inboundDelivered;
@@ -977,15 +982,29 @@ async function main(): Promise<void> {
   }
   const ga7Stalled = await until(() => eventsOf(ga7, 'INPUT_ACK_STALLED').length > 0, snapshotDeadlineMs + 2_000);
   const ga7Stall = eventsOf(ga7, 'INPUT_ACK_STALLED')[0];
-  let ga7Closed = closuresOf().length > ga7ClosuresBefore;
-  for (let tail = 0; tail < 30 && !ga7Closed; tail += 1) {
+  let ga7Closure = closuresFor(ga7.entityId)[ga7ClosuresBefore];
+  let ga7Closed = ga7Closure !== undefined;
+  for (let tail = 0; tail < 60 && !ga7Closed; tail += 1) {
     stampAndSend(ga7.seat.handle as never, { ...frame, sessionEpoch: ga7.epoch });
     await sleep(40);
-    ga7Closed = closuresOf().length > ga7ClosuresBefore;
+    ga7Closure = closuresFor(ga7.entityId)[ga7ClosuresBefore];
+    ga7Closed = ga7Closure !== undefined;
   }
   const ga7CloseElapsedMs = Date.now() - ga7CloseStartMs;
-  const ga7Closure = closuresOf()[ga7ClosuresBefore];
   const ga7Observation = closeObservations().filter((observation) => observation['entityId'] === ga7.entityId).pop() ?? null;
+  // What the rate-ceiling path records instead of a retirement: frames this seat sent that the room refused.
+  const ga7RefusalsForSeat = RegionRoomModule.RegionRoom.liveRooms()
+    .reduce((total, candidate) => total + candidate.tickRecords
+      .flatMap((record) => record.refused)
+      .filter((entry) => entry.entityId === ga7.entityId)
+      .reduce((sum, entry) => sum + entry.count, 0), 0);
+  // A burst at these provisional values can record its loss on either mechanism, and often on both: the
+  // buffer evicts (retirements) while the ceiling closes the seat, and on a slower runner the ceiling can
+  // close it before anything is evicted (retirements 0, the loss visible only as refusals). Requiring one
+  // named field would make the control a bet on that race; requiring that SOME loss was recorded is what
+  // GA-7 actually asks, and which signal satisfied it is published rather than left implied.
+  const ga7RetiredAtClose = Number(ga7Observation?.['retiredUnrepresented'] ?? 0);
+  const ga7LossRecorded = ga7RetiredAtClose >= 1 || ga7RefusalsForSeat >= 1;
   const ga7DeadlineElapsedMs = ga7Stall === undefined ? -1 : Math.round(ga7Stall.atMs - ga7LastDeliveryBeforeSilence);
   // "the seat was never told", measured at the seat rather than at the wrapper: no publication reached this
   // seat's replica after the silence began, whatever the server was or was not publishing to it by then.
@@ -1085,10 +1104,11 @@ async function main(): Promise<void> {
       // publishes the code that actually arrived.
       && (ga7Closure?.code === closeCodes['INPUT_RETIRED_UNREPRESENTED']
         || ga7Closure?.code === closeCodes['INPUT_RATE_CEILING'])
+      && ga7LossRecorded
       && ga7Observation !== null
       && typeof ga7Observation['serverQueuedAtClose'] === 'number'
       && typeof ga7Observation['consumedCountAtClose'] === 'number'
-      && Number(ga7Observation['retiredUnrepresented'] ?? 0) >= 1,
+      && typeof ga7Observation['dequeuedTotal'] === 'number',
     ga7ClientActedInsideTheClosureWindow: ga7Stalled
       && ga7DeadlineElapsedMs > 0
       && ga7DeadlineElapsedMs <= closureMaxMs
@@ -1174,6 +1194,15 @@ async function main(): Promise<void> {
       closeElapsedMs: ga7CloseElapsedMs,
       closureMaxMs: closureMaxMs,
       serverObservation: ga7Observation,
+      retiredAtClose: ga7RetiredAtClose,
+      refusedFramesForThisSeat: ga7RefusalsForSeat,
+      lossSignalThatSatisfiedTheControl: ga7RetiredAtClose >= 1 && ga7RefusalsForSeat >= 1
+        ? `both: ${String(ga7RetiredAtClose)} frames retired unrepresented and ${String(ga7RefusalsForSeat)} refused`
+        : ga7RetiredAtClose >= 1
+          ? `retirement only: ${String(ga7RetiredAtClose)} frames retired unrepresented, 0 refused`
+          : ga7RefusalsForSeat >= 1
+            ? `refusal only: ${String(ga7RefusalsForSeat)} frames refused, 0 retired — the ceiling closed the seat before the buffer evicted`
+            : 'nothing recorded, which is what the control below refuses to pass',
       serverQueuedAtCloseInterpretation: 'the queue figure is published as recorded. On this path it is 0: the burst drains one frame per tick and the rate closure lands about 170 ms later, before a queue rebuilds. A non-zero queue at close is evidenced by the abuse population\'s paced offender (retirement with the buffer still full), retained in the same bundle; GA-7 asks that the figure be recorded, and it is, on both paths',
       clientDeadlineElapsedFromLastDeliveryMs: ga7DeadlineElapsedMs,
       recoveredThroughRejoinAndSnapshot: ga7Recovered,
@@ -1393,7 +1422,7 @@ async function main(): Promise<void> {
     + `GA-6c episode branch ${String(Object.values(epControls).filter((value) => value === true).length)}/${String(Object.keys(epControls).length)}) `
     + `(6b silent-server deadline: ${String(ga6Ga7Controls.ga6bDeadlineFiredWithNoServerEventAtAll)}, `
     + `6c episode deadline ${String(epCloseAgeFromEpisodeStartMs)} ms -> ${String(epClose?.reason ?? 'none')} with ${String(epCountersAfter.inboundDelivered - epDeliveriesAtSilence)} deliveries and ${String(epFramesAfter - epFramesAtSilence)} room frames after, `
-    + `7 close ${String(ga7Closure?.code ?? '-')} in ${String(ga7CloseElapsedMs)} ms, recovered epoch ${String(ga7RecoveredEpoch)}\n`,
+    + `7 close ${String(ga7Closure?.code ?? '-')} in ${String(ga7CloseElapsedMs)} ms (closed: ${String(ga7Closed)}, observation: ${String(ga7Observation !== null)}, retired ${String(ga7RetiredAtClose)}, refused ${String(ga7RefusalsForSeat)}, lossRecorded ${String(ga7LossRecorded)}, consumed ${String(ga7Observation?.['consumedCountAtClose'] ?? '-')}), recovered epoch ${String(ga7RecoveredEpoch)}\n`,
   );
   await Promise.race([server.close().catch(() => undefined), sleep(4_000)]);
   if (artefact.verdict !== 'pass') process.exitCode = 2;
