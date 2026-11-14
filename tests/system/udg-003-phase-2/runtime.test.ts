@@ -534,7 +534,7 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
           deliveriesBeforeSilence: number;
         };
         ga6c: {
-          actualRejoins: unknown[];
+          actualRejoins: { epochBefore: number; epochAfter: number; rowReadableAfterRejoin: boolean; allowanceUsed: number }[];
           suspension?: { reason?: string } | null;
           sendsWhileGateClosedAfterSuspension: number;
           stateApplicationsAfterSuspension: number;
@@ -580,6 +580,10 @@ describe('UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the sta
 
     // GA-6c: the rolling allowance is spent on real rejoins, then refused, and the seat stays stopped.
     expect(ga.ga6c.actualRejoins.length).toBeGreaterThanOrEqual(ga.envelope.rejoinWindowAllowance);
+    for (const rejoin of ga.ga6c.actualRejoins) {
+      expect(rejoin.rowReadableAfterRejoin, 'a rejoin counted against the allowance must land on a readable row').toBe(true);
+      expect(rejoin.epochAfter).toBeGreaterThanOrEqual(1);
+    }
     expect(ga.ga6c.suspension?.reason).toBe('allowance-exhausted');
     expect(ga.ga6c.sendsWhileGateClosedAfterSuspension).toBe(0);
     expect(ga.ga6c.stateApplicationsAfterSuspension).toBe(0);

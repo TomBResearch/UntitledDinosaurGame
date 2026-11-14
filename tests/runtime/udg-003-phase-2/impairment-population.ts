@@ -483,6 +483,13 @@ async function main(): Promise<void> {
   const closeObservations = (): Record<string, unknown>[] =>
     RegionRoomModule.RegionRoom.liveRooms().flatMap((candidate) => ((candidate.evidence()['closeObservations'] ?? []) as Record<string, unknown>[]));
 
+  interface RejoinRecord {
+    readonly epochBefore: number;
+    readonly epochAfter: number;
+    readonly rowReadableAfterRejoin: boolean;
+    readonly allowanceUsed: number;
+  }
+
   interface Exercise {
     readonly seat: Awaited<ReturnType<typeof connectSeatById>>;
     readonly room: SdkRoom<ProbeRegionState>;
@@ -657,7 +664,7 @@ async function main(): Promise<void> {
   const ga6c = await openExercise(303);
   await streamAccepted(ga6c, 2);
   ga6c.controller.silenceInbound();
-  const ga6cRejoins: { epochBefore: number; epochAfter: number; allowanceUsed: number }[] = [];
+  const ga6cRejoins: RejoinRecord[] = [];
   let ga6cRefused = false;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const attemptSeen = await until(() => eventsOf(ga6c, 'rejoin-attempt').length > ga6cRejoins.length, 2_500);
@@ -676,9 +683,15 @@ async function main(): Promise<void> {
       });
     if (rejoined === null) break;
     ga6c.policy.markRejoin(nowMs());
+    // Read the epoch the way every other epoch in this file is read: after the first patch, not at the
+    // instant `reconnect` resolves. A row that has not arrived yet is not evidence of a failed rejoin, and
+    // publishing -1 beside a claim of "two real rejoins" would be publishing a number that contradicts the
+    // sentence next to it.
+    const rowReadable = await until(() => (rejoined.state.players?.get(rejoined.sessionId)?.sessionEpoch ?? -1) >= 1, 2_000);
     ga6cRejoins.push({
       epochBefore,
       epochAfter: rejoined.state.players?.get(rejoined.sessionId)?.sessionEpoch ?? -1,
+      rowReadableAfterRejoin: rowReadable,
       allowanceUsed,
     });
     // Re-attach to the rejoined room so the next episode is measured on the seat that actually exists,
@@ -830,6 +843,9 @@ async function main(): Promise<void> {
       && ga6bServerWasAliveAndSilent,
     ga6bSocketStayedOpenAndTheRoomKeptDeciding: ga6bServerWasAliveAndSilent,
     ga6cAllowanceWasSpentAndRefused: ga6cRejoins.length >= rejoinAllowance
+      // Real rejoins, not promises: each one has to land on a row the seat can read and carry an epoch, or
+      // "spent on real rejoins" would be a phrase sitting over a table of -1s.
+      && ga6cRejoins.every((rejoin) => rejoin.rowReadableAfterRejoin && rejoin.epochAfter >= 1)
       && (ga6cRefused || ga6cRefusedAtEnd)
       && ga6cSuspended !== undefined,
     ga6cSeatStayedStoppedAfterSuspension: ga6cStillStopped,
@@ -904,6 +920,7 @@ async function main(): Promise<void> {
     ga6c: {
       question: 'a limit is reached: is the spent rolling allowance surfaced, and does the seat then stay stopped with no prediction and no sends?',
       actualRejoins: ga6cRejoins,
+      epochNote: 'epochBefore is the epoch the seat held when the episode began; epochAfter is read from the rejoined room after its first patch, because a row read at the instant reconnect resolves has not arrived and would read as absent',
       allowance: rejoinAllowance,
       allowanceRefused: ga6cRefused || ga6cRefusedAtEnd,
       suspension: ga6cSuspended ?? null,
