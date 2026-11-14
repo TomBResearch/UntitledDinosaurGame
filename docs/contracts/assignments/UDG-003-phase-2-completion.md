@@ -571,3 +571,18 @@ a retained log that says only `exit 2` is not evidence of anything.
 | D4, dedupe-triggered closure, Gate A | owner / UDG-SPIKE-001 | open, disabled, Not Run |
 
 Phase 2 remains **In Review**. Nothing in this sitting accepted, closed or gated it.
+
+---
+
+## 18. Retained (2026-11-13, sixth sitting, close)
+
+CI [43529477904](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43529477904) at head
+`32d9afb51885e696346faf67c9ece225a68a9f98`: success. The Phase 2 bundle
+`/workspace/udg-evidence/ci-run-43529477904/UDG-003-2026-11-13T23-55-04-371Z-32d9afb5/` re-verifies **PASS,
+0 issues** with 194 hashed files and 27 named artefacts; UDG-001 and UDG-002 from the same run verify PASS
+with 0 issues. Numbers, hashes, the three failed runs that produced the correct controls, and the honest
+cost of widening the requirement — every earlier Phase 2 bundle now fails it, the accepted ones included,
+with nothing rewritten — are in matrix §18.
+
+Read in this order if you are reviewing: matrix §17 (what each artefact establishes and refuses), §18 (the
+bytes), then the verdict table. Phase 2 stays **In Review**.

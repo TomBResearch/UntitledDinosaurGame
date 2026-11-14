@@ -1485,3 +1485,56 @@ kind of claim that must not be written before the run exists. §18 carries the C
 landed on, the durable path, the hashed-file count and the gate result.
 
 Phase 2 remains **In Review**; the owner keeps acceptance.
+
+---
+
+## 18. Retention addendum for the P-batch — the run, the bytes, and what the widening cost
+
+§17 left its bundle line empty. This is that line, written after the run existed.
+
+**The run.** [43529477904](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43529477904),
+branch `main`, head `32d9afb51885e696346faf67c9ece225a68a9f98`, success in 13 m 35 s. The P-batch code heads
+it carries are `16d356d4` (the batch), `8db42262` and `f1e853da` (the corrections the hosted runner forced);
+the records head is this branch's tip.
+
+**The bundle.** `/workspace/udg-evidence/ci-run-43529477904/UDG-003-2026-11-13T23-55-04-371Z-32d9afb5/`,
+re-verified with the committed gate: **PASS, 0 issues**, 194 hashed files, `phase: phase-2` paired with
+`measurementsScope: phase-1` exactly as R-2 option A requires, suite counts 570 tests / 0 failures / 0
+skipped. `report.json` sha256
+`12891749584e5d70b32ec30f9b9b6a047ca736e0bef8abe0c9ec44fadd887044`;
+`vectors-phase-2/vectors-manifest.json` sha256
+`cd31218c30a8447fb2b23bb8d07698d8959fc19689076b3f870baf3de264f827`, naming **27** artefacts. The same run's
+`UDG-001` and `UDG-002` bundles verify PASS with 0 issues.
+
+**What the hosted runner measured**, published beside the local figures rather than replacing them: the
+offender sent 71 stamps and the SDK reported 30 retired before the wire, closed in code 4100, its transport
+verdict `pass`; the AC-3e table came back `overflow 0, superseded 0, epoch 8, structural 0, rateLimited 1`
+with the transport buffer topping out at 24 on the offender seat against an authority
+`continuousHighWater` of 1 and `discreteHighWater` of 0; the impairment layer passed all 12 controls with
+`tcpLossModelled: false` on all four seats, withheld stamps `[3, 7, 12, 18]` and a stall row of 30 frames the
+room consumed while the seat saw nothing; the stage sequence passed with the room advancing 7 resolutions
+while the withheld seat advanced 0, settlement at 251 ms and catch-up at 501 ms, cadence median
+100.096 ms against a declared 100 ms, `resultsHalf: outstanding (UDG-007)` and
+`ac6Verdict: qualified-pending-owner`; `journal-replay.json` reports `ga13.verdict: pass`, 14 replays of 19
+scenarios, `authorityWindowGaps: []`, one accounted absence and the same four carried residues.
+
+**The three runs it took, named because each one is the reason a control is now correct.**
+`43523832137` failed on `withheldProvesMappingPrecedesPublication` — the window slept and stalled its own
+input. `43526033368` failed on `departedEntityStopsBeingMappedWhileNeighboursContinue` — the baseline was
+sampled before the leave had drained. `43528249939` failed for a document reason: `docs/contracts/UDG-003.md`
+had been edited into the same commit as the tests without regenerating `docs/contracts/checksums.json`, and
+the UDG-001 contract test refused the mismatch. All three retained logs are in the store, and the two
+artefact causes were readable only because the scripts now write their false checks to stderr.
+
+**What widening the requirement cost, stated plainly.** Every earlier Phase 2 bundle now fails the gate,
+because it cannot contain files its own commit never had: `cf349874` 29 issues, `9d1372a9` and `c1b2f9bb` 22,
+`c7e497b6` 9, and both accepted heads `cfc49664` and `a9116e03` **8 each** — the accepted OD-10 bundle
+included. The pinned baseline bundle `8716b8c6` fails with 40 against today's requirement set, as it has
+since the requirement set grew. None of these bytes changed; the requirement did, and finding E1 is the
+standing disclosure. The whole store re-verified after this run shows 0 changed, 0 removed and the new
+bundles added.
+
+**Everything the batch refused to conclude** is in §17's verdict table: GA-10 FAIL and its two halves
+outstanding at UDG-007, GA-11 not run with neither inequality evaluated, AC-6 PARTIAL and
+qualified-pending-owner, GA-6a/6b and GA-7 behind a deferred P-2b, Gate A Not Run, D4 open, dedupe-triggered
+closure disabled, AC-15 PASS under H1 with H2 deferred. Acceptance of Phase 2 remains the owner's act.
