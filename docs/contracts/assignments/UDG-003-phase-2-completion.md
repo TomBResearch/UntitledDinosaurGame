@@ -680,3 +680,81 @@ sense the amended clause itself assigns elsewhere: `P`'s results half (UDG-007),
 production envelope (UDG-SPIKE-001), GA-12 and PE-1…PE-5 (not passed), a production client for GA-6/GA-7
 (UDG-008), and Gate A itself (Not Run). Nothing in this sitting waives, closes or accepts any of them, and
 nothing in it accepts Phase 2.
+
+---
+
+## 20. W-7's last evidence check: the episode deadline, measured as the question asked (2026-11-14, eighth sitting)
+
+Phase 2 remains **In Review**. The owner accepted the AC-6/P-2b closeout (`be41916` / run `43539783750`,
+records `de556ed5`) and asked, for W-7, for the retained test and artefact showing the **4000 ms recovery
+episode deadline expiring while the client still lacks a fresh authoritative snapshot**, with the client
+**stopped**, a **connection error surfaced**, **no further input sent**, and the case **told apart** from the
+500 ms snapshot deadline and from exhaustion of the rolling rejoin allowance.
+
+**The honest answer was: partly, and the gap was measured rather than described.** `recovery-scenarios.ts`
+scenario **S3** `episode-deadline-closes-the-client-at-4000ms` (introduced `95e1dbd`, last revised `c7e497b`,
+asserted by name in the runtime suite) retains `episodeAgeMs 4002`, `closeReason "episode-deadline"`,
+`closeCode 4102` and a policy snapshot of `{ state: "closed", sendingAllowed: false, predictionDiscarded: true }`
+in `recovery-harness.json`. What it does not retain is the snapshot accounting (nothing counts the deliveries
+that did not arrive), any post-close check that input stopped reaching the room, a surfaced-error record that
+says the client's own clock produced it, or the three-limits-within-one-case discrimination. S3 also reaches
+the deadline through an unclean tear, where a dead socket is itself the server event.
+
+**So one case was added**, test-only, inside the existing impairment artefact — the requirement set stays at
+**27 files**. Its discrimination is structural: the ladder runs and no attempt is carried out, so the window
+is never charged and the policy never emits `allowance-refused`; therefore whatever closes this client is the
+episode deadline, and the record shows the other two mechanisms having had their turn and not bound. Hosted
+figures from run [43584855957](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43584855957)
+(`transport-impairment.json → ga6Ga7.ga6cEpisodeDeadline`, all six controls true):
+
+> `episodeAgeMs 4002` (declared 4000) · `closeAfterLastDeliveryMs 4506` · snapshot deadline fired at
+> **504 ms** with `trigger: "deadline"` · **296** ladder attempts, **0** carried out, **0** `allowance-refused`
+> · `freshAuthoritativeSnapshotArrived: false`, `deliveriesReachingTheSeatDuringTheEpisode: 0`,
+> `publicationsSwallowedAtTheWrapper: 61`, `stateApplicationsDuringTheEpisode: 0`,
+> `resolvedThrough 2 → 2`, `epoch 11 → 11`, `recoveryEvents: 0` · surfaced error **4102** with
+> `socketClosedDuring: 0` and `policyStateAfter: "closed"` · `sendingAllowed` false at close and after,
+> `ladderAttemptsAfterClose: 0` · `sendsAttemptedWhileGateWasConsulted: 0`,
+> `transportSendsObservedAfterClose: 0`, `roomJournalledClientFrames 3 → 3`, refusals `0 → 0` ·
+> `roomSide.ticks 202 → 322`
+
+The last two lines are the two the question turns on: the client's gate refusing to send is a claim about the
+harness, while the room journalling nothing further for that entity is the same claim read where the frames
+would have been processed; and the room's tick counter climbing proves the silence belongs to the seat, not to
+the server.
+
+**Two hosted failures, both in pre-existing evidence, are part of this record** — matrix §20.4 has the whole
+account. `89fb92a1…` / `43581033563` and `2210ba69…` / `43582591628` each lost
+`ga7ServerStillRecordedTheClosureAndItsCounters`, because a burst at these provisional values breaches the
+rate ceiling and overflows the buffer at once, and which closure arrives depends on how fast the runner drains
+a tick. Widening the control to accept either signal was the wrong first answer; the right one was to stop
+entering the race. GA-7's seat now runs in its own room (`regionGa7`,
+`rateCeilingMessagesPerSecond: 500`, a per-room deployment override handed to
+`defineOperatorRegionRoom` exactly as the abuse population has done since `c7e497b`), leaving the retirement
+as the only closure that seat can meet — hosted: **4100, 32 retired unrepresented,
+`serverQueuedAtClose 32`** (the buffer still full, where the old shared room had always drained it to zero
+before the ceiling closed the seat), closure 330 ms, client deadline 502 ms inside `closureMaxMs`. The
+difference is disclosed as data (`seatEnvelope`, `configHashDiffersFromMainRoom: true`); the phase's pinned
+`configHash` remains `2743a9a047ce7264833af88e8bd2f8aeea970a45e306a348e1fe0654191bec7a` for every other seat,
+and no default or production value moved.
+
+**And the two-path finding is now quoted rather than inferred.** GA-7's reconnect is refused by the SDK in
+words — `"reconnection token invalid or expired."` — published as `tokenReconnectRefusalsRecorded`, because a
+session the server retired has nothing to rejoin. The suite no longer asserts `reconnectFailures: []` as a
+blanket: refusals are allowed exactly at GA-7 and nowhere else, and there the recovery must have gone through
+matchmaking.
+
+**Owed elsewhere, unchanged by this sitting.** The production client — including both recovery paths and a
+prediction buffer this harness does not have — stays with **UDG-008**. GA-6/GA-7 at the formal envelope, both
+GA-11 inequalities and the eviction consequence at production values stay with **UDG-SPIKE-001**;
+`Gate A: Not Run`. GA-10a, GA-10b, the discrete queue limits and AC-6's `P` results half stay with **UDG-007**
+acceptance. GA-12 and PE-1…PE-5 remain not passed; D4 open; dedupe-triggered closure disabled; Phase 3
+unassigned; Phase 2 acceptance is the owner's.
+
+**Chain.** `89fb92a1ed711077377fe0a9c89fb66b2da86233` (the episode case, CI `43581033563` fail) →
+`2210ba69fa0497f58fbf6eca6f0e8d2b5461ab09` (per-entity closure attribution, CI `43582591628` fail) →
+`6e0e5cc839f3d501a26998172438ded51914335d` (GA-7's own room, CI `43584855957` **success**, 572 tests /
+0 failures) → these records. Retained bundle:
+`/workspace/udg-evidence/ci-run-43584855957/UDG-003-2026-11-14T10-30-54-844Z-6e0e5cc8`, verify **PASS 0 issues**
+(`report.json` sha256 `0918b1ee77dd96fcb3933dfd1d8979fbbc09f78a9435d6fe94a2d1dbab6080bc`,
+`vectors-phase-2/vectors-manifest.json` sha256 `8c1bff2f6a332754f042fe879d4d36dd3818cabb3f82feefa7793c33a4c31551`).
+UDG-001 and UDG-002 verify **PASS 0 issues** at the same run.

@@ -1765,3 +1765,126 @@ with the same four `carriedUnverified` residues and both gap lists empty.
 pre-existing file modified. Every earlier Phase 2 bundle still verifies against its own manifest with the
 issue count §18 recorded. Phase 2 stays **In Review**; Gate A stays **Not Run**; dedupe-triggered closure stays
 disabled; D4 stays open; acceptance stays the owner's.
+
+---
+
+## 20. W-7's remaining evidence check — the episode deadline, the missing snapshot, and the three limits kept apart (2026-11-14, eighth sitting)
+
+Phase 2 stays **In Review**. The owner accepted the AC-6/P-2b closeout at `be41916` / run `43539783750`
+(records `de556ed5`) and asked one W-7 question: where is the retained test and artefact showing that the
+**4000 ms recovery episode deadline expires while the client still lacks a fresh authoritative snapshot**,
+that the client then **stays stopped**, **surfaces a connection error** and **sends no further input** — and
+that the case is told apart from the **500 ms snapshot deadline** and from **exhaustion of the rolling rejoin
+allowance**?
+
+### 20.1 What already existed, cited exactly
+
+| Thing | Where |
+|---|---|
+| Test | `tests/runtime/udg-003-phase-2/recovery-scenarios.ts`, scenario **S3** `episode-deadline-closes-the-client-at-4000ms` — introduced at `95e1dbd` (W-11/W-12), last revised at `c7e497b`; asserted by name in `tests/system/udg-003-phase-2/runtime.test.ts` (the `recovery-harness.json` stream-record loop) |
+| Artefact field | `vectors-phase-2/recovery-harness.json` → `scenarios[]` entry of that name → `observed: { episodeClosed, closeReason, closeCode, expectedCode, episodeAgeMs, deadlineMs, attempts, spentAllowance, stream }`, retained at e.g. `ci-run-43539783750/UDG-003-2026-11-14T01-28-12-524Z-be419163` |
+| Values | `episodeAgeMs 4002` against `deadlineMs 4000`, `closeReason "episode-deadline"`, `closeCode 4102 (INPUT_RECOVERY)`, and `spentAllowance: { state: "closed", sendingAllowed: false, predictionDiscarded: true }` |
+
+That is a real result and it is cited as one: the episode deadline bounds the episode, ladder attempts do not
+extend it, and the client closes itself with no server participation.
+
+### 20.2 What the question asked for that it does not answer
+
+Four things, and the answer to the owner's question is therefore **partly — so the missing part was added**:
+
+1. **"still lacks a fresh authoritative snapshot" is not accounted.** S3 tears the socket and never
+   reconnects, so no snapshot can arrive — but nothing in the record *measures* that: there is no delivery
+   count across the episode, no watermark/epoch comparison, no counter of publications swallowed. The claim
+   was structurally true and evidentially absent.
+2. **"sends no further input" is not checked after the close.** `sendingAllowed: false` is a policy read; no
+   send is attempted-and-counted, and nothing on the room side confirms that no frame arrived.
+3. **"surfaces a connection error" is the close code in an event list**, not a surfaced record with the two
+   things GA-6c cares about — that the error came from the client's own clock and that nothing further
+   happened afterwards.
+4. **The three limits are separated across three scenarios** (S2 the 500 ms deadline, S3 the episode deadline,
+   S4/GA-6c the allowance) but not *within* one case, so nothing showed that in the episode-deadline run the
+   allowance was never the binding constraint and the snapshot deadline had already had its turn.
+
+S3 also reaches the deadline through an **unclean tear**, which makes the socket itself the event; §19's
+silent-server construct was the right place for a case whose point is that no server event is involved.
+
+### 20.3 The case added, and what it measured
+
+One case, test-only, in the existing impairment artefact — **27 artefacts, unchanged**. A seat streams three
+accepted frames, the server goes silent towards it and only it, the ladder is allowed to run, and **no attempt
+is ever carried out** — so `markRejoin` is never called, the window is never charged, and the policy's own
+history carries no `allowance-refused` event. Whatever closes this client therefore cannot be the allowance,
+and the discrimination is structural rather than asserted. Hosted run
+[43584855957](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43584855957):
+
+| Claim | Hosted observation | Control |
+|---|---|---|
+| the episode deadline expired | `client-close` at **4002 ms** after the episode opened (4506 ms after the last accepted delivery), `reason: "episode-deadline"`, code **4102** | `episodeDeadlineExpiredWithNoFreshSnapshot` |
+| …with no fresh authoritative snapshot | **0** deliveries reached the seat across the episode while **61** publications were swallowed at the wrapper; **0** state applications; `inputResolvedThrough 2 → 2`; `sessionEpoch 11 → 11`; 0 `recovered` events; 0 rejoins performed | same |
+| …and not the 500 ms deadline | `INPUT_ACK_STALLED` with `trigger: "deadline"` at **504 ms** — 3.5 s earlier, and it opened the episode instead of closing the client | `episodeDeadlineIsDistinctFromTheSnapshotDeadline` |
+| …and not the allowance | **296** ladder attempts came due, **0** were carried out, `reconnectEvents: 0`, `allowance-refused` events: **0**; the sibling GA-6c case closes `"allowance-exhausted"` after 2 real rejoins and this one `"episode-deadline"` after none | `rollingAllowanceWasNotTheBindingConstraint` |
+| it surfaces its own connection error | 4102 with `socketClosedDuring: 0` — no server close anywhere — and policy state `closed` at close and still `closed` after | `clientSurfacedItsOwnConnectionErrorAndStayedStopped` |
+| it stays stopped and sends nothing further | `sendingAllowed` false at close and after, `predictionDiscarded: true`, **0** attempts after the close, **0** recoveries; 0 gate-permitted sends, **0** transport sends observed, and the room journalled **3 client frames before and 3 after** with **0** new refusals | `noInputReachedTheRoomAfterTheEpisodeClosed` |
+| the silence is seat-local, not a server stall | the room's own tick counter went **202 → 322** across the episode | `roomKeptRunningWhileTheSeatHasNoSnapshot` |
+
+The room-side count is the part worth insisting on: the harness's gate refusing to send is a claim about the
+harness, while the room journalling nothing more for that entity — no observation rows, no refusals — is the
+same claim read where the frames would have had to be processed.
+
+### 20.4 What this question cost, and the two things it corrected
+
+It took three pushes, and both failures were defects in **pre-existing** evidence rather than in the new case
+(whose six controls passed on every one of them).
+
+**`89fb92a1…` / run `43581033563` — FAIL.** `ga7ServerStillRecordedTheClosureAndItsCounters` went red on the
+hosted runner. First reading: the control demanded a loss recorded by a *named* field according to the closure
+code — retirements for 4100, refusals for 4101 — while a burst at these provisional values records 37
+retirements **and** closes on the rate ceiling, and on a faster-closing runner can close before evicting
+anything. My first response (accept either signal) was the wrong instinct, and the next run said so.
+
+**`2210ba69…` / run `43582591628` — FAIL again, same control.** Widening a control to survive a race is not
+fixing it: GA-7 is about a *specific* closure, and an artefact that records whichever one arrived is
+describing the runner. So GA-7's seat now runs in a room of its own (`regionGa7`, `runId
+udg-003-phase-2-impairment-ga7`) with `rateCeilingMessagesPerSecond: 500` — far above anything the case can
+send — which leaves the retirement as the only closure that seat can meet. Hosted, deterministically:
+closure **4100**, **32 frames retired unrepresented**, `serverQueuedAtClose` **32** (the buffer still full at
+close, where the old shared room had always drained it to 0 before the ceiling closed the seat), closure
+330 ms, client deadline 502 ms inside `closureMaxMs`, seat never told, recovery through a matchmaking rejoin.
+The envelope difference is published in the artefact (`seatEnvelope`, naming the run that motivated it) and
+asserted in the suite, so it is a disclosed difference rather than a setting the evidence leans on silently;
+`acceptedCodes` narrows to `[4100]`.
+
+**Stated plainly, because an input value moved and input values are hashed.** The override is a per-room
+**deployment** value handed to `defineOperatorRegionRoom` by the test harness — the same device the abuse
+population already uses (`input: { rateCeilingMessagesPerSecond: 30, bufferPressureMargin: 24 }`, retained in
+every Phase 2 bundle since `c7e497b`). No config file, default or production value changed, and the phase's
+pinned `configHash` stays `2743a9a0…4191bec7a` for the main impairment room and for every other seat in this
+artefact (it is present in this run's `envelope-hashes.json`). What differs is that **GA-7's own room** joins
+under a different digest, and the artefact says so as data — `seatEnvelope.configHashDiffersFromMainRoom:
+true` — rather than leaving a reader to discover it. A reviewer who prefers the ceiling untouched should read
+that flag as the cost of the control, which is what it is: the previous shape was a coin toss, and a coin
+toss is not evidence either.
+
+**The refusal, promoted from inference to quotation.** With its own room, GA-7's reconnect attempt now fails
+with the SDK's own words — `"reconnection token invalid or expired."` — published as
+`tokenReconnectRefusalsRecorded`. §19.2's finding (a seat the server closed cannot come back on its token)
+was reasoned from an epoch that stayed absent; it is now quoted. The suite accordingly no longer asserts
+`reconnectFailures: []` as a blanket: a refusal is permitted exactly where the two-path finding lives, and
+only there, and when it occurs GA-7 must have recovered through matchmaking.
+
+### 20.5 W-7 and GA-6 against the amended wording, after this sitting
+
+| Item | Before this sitting | Now |
+|---|---|---|
+| W-7: 500 ms snapshot deadline expires with zero deliveries | evidenced (S2, `recovery-harness.json`) | unchanged, still evidenced |
+| W-7: **4000 ms episode deadline expires with no fresh snapshot, client stopped, error surfaced, no further input, three limits distinguished** | **partly** — the close itself only | **evidenced** in `transport-impairment.json → ga6Ga7.ga6cEpisodeDeadline`, six controls, hosted |
+| W-7: rolling rejoin allowance spent, then refused, seat stays stopped | evidenced (§19.2 GA-6c) | unchanged, and now quoted rather than inferred on the epoch fields |
+| GA-6a / GA-6b / GA-7 at the declared test values | evidenced | evidenced; GA-7's closure is now the retirement the clause names, with `serverQueuedAtClose` non-zero |
+| Production client for all of it | UDG-008 | UDG-008 — the harness still has no prediction buffer to discard, and that limb is still reported as absent rather than passed |
+| GA-6/GA-7 at the formal Gate A envelope | UDG-SPIKE-001 | UDG-SPIKE-001; **Gate A Not Run** |
+
+**Invariants.** Three commits, all in `tests/**`: no `apps/server/**`, `packages/**`, `authority/**`, protocol,
+`pnpm-lock.yaml` or manifest change; `configHash` stays
+`2743a9a047ce7264833af88e8bd2f8aeea970a45e306a348e1fe0654191bec7a`; the artefact set stays 27, so §18's
+widening cost is unchanged and every earlier bundle still verifies with the issue counts §19 recorded. D4
+open, dedupe-triggered closure disabled, Phase 2 acceptance the owner's.
