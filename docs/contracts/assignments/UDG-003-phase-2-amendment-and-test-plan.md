@@ -1,6 +1,7 @@
 # UDG-003 Phase 2 — amendment and test plan for the remaining decisions
 
-> **Status: APPROVED AND APPLIED (owner, 2026-11-13, sixth sitting).** This file is kept as written so the
+> **Status: APPROVED AND APPLIED (owner, 2026-11-13, sixth sitting); two items furthered on 2026-11-14,
+> seventh sitting.** This file is kept as written so the
 > reasoning behind the rulings stays readable, but its header state is superseded: the clauses below were
 > applied at `f0b2adb8` (three ledgered digests moved), the batch was executed at
 > `16d356d48ce89805c77146f07b470029f9c8afb8` with the corrections CI forced at
@@ -11,7 +12,18 @@
 >
 > What did not change, in the original words or the new ones: **Phase 2 remains In Review.** **Gate A stays
 > Not Run. Dedupe-triggered closure stays disabled (`dedupeClosureEnabled: false`). D4 stays undesignated.
-> AC-15 stays PASS under the approved H1 reading, H2 stays deferred,** and P-2b stays off the batch.
+> AC-15 stays PASS under the approved H1 reading, H2 stays deferred.
+>
+> **Superseded on two points by the seventh sitting, in the owner's own words rather than this file's.**
+> **(1) AC-6** — §5's "AC-6 stays PARTIAL until … the owner rules" resolved on the first branch: the room's
+> `map-player` + patch/metrics flush **is** `M`/`P`, the split is now written into the governing criterion at
+> [UDG-003-readiness-proposal.md](UDG-003-readiness-proposal.md) AC-6 (dated note, 2026-11-14), and
+> `P`'s results half is an explicit acceptance obligation of
+> [UDG-007.md](../UDG-007.md) ("Successful navigation-result publication"), **outstanding there**. So AC-6 is
+> PASS for `F…X`, `M` and `P`'s publication, and not closed as a whole sequence. **(2) P-2b** — reopened, for
+> the **Phase 2 test harness only**: GA-6a, GA-6b, GA-6c and GA-7 now have passing hosted controls in
+> `transport-impairment.json` at the declared test values, with the production client still UDG-008's and the
+> formal Gate A execution still UDG-SPIKE-001's. The running account for both is matrix §19 and completion §19.
 >
 > Every quoted clause below was read from the file named, at the then-current head. Every measured number was read
 > from a retained bundle: the batch-T bundle

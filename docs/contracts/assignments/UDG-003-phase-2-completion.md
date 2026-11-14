@@ -586,3 +586,97 @@ with nothing rewritten — are in matrix §18.
 
 Read in this order if you are reviewing: matrix §17 (what each artefact establishes and refuses), §18 (the
 bytes), then the verdict table. Phase 2 stays **In Review**.
+
+---
+
+## 19. The AC-6 split applied, and P-2b reopened for the harness (2026-11-14, seventh sitting)
+
+Phase 2 remains **In Review**. The owner accepted the P-batch and its 27-artefact evidence set at `32d9afb5` /
+run `43529477904`, and asked for three closings rather than a new scope: put AC-6's split into the governing
+criterion, reopen P-2b for the Phase 2 test harness alone, and reconcile the matrix against the amended
+criteria while preserving what earlier bundles already said.
+
+### 19.1 The amended clause, quoted, and the evidence that answers it
+
+From [UDG-003-readiness-proposal.md](UDG-003-readiness-proposal.md), AC-6's row — the 2026-11-11 sentence
+kept intact, the dated note appended:
+
+> *(Dated note, 2026-11-14, seventh sitting — OD-4 ruled, owner: "accept room map+flush as M/P"). Scored
+> against UDG-003 Phase 2: **F, L, Q, S, A, C, R, X** on every executed tick; **M** = the server's
+> canonical-to-replica mapping, applied per entity in the consuming tick; **P** = that room's publication of
+> state and metrics at the declared patch interval, plus its flush. **`P`'s results half** — a committed
+> navigation result reaching a client — needs the navigation intake this phase is forbidden to build, and is an
+> explicit acceptance obligation of [UDG-007](../UDG-007.md), **outstanding there**. It is neither waived nor
+> counted here: AC-6 is PASS for the stages above and the results half travels with UDG-007's acceptance, not
+> with this phase's*
+
+And from [UDG-007.md](../UDG-007.md), the obligation that half now carries, as a headed acceptance requirement
+of that task:
+
+> **Successful navigation-result publication (AC-6, `P`'s results half; deferred here from ADR-0003 §5 by the
+> owner's OD-4 ruling on 2026-11-14).** … Accepting UDG-007 therefore requires evidence that a committed
+> navigation result is **published**: a run in which at least one accepted route effect appears in the replica
+> a client receives, the acknowledgement for it carries the applied record (R-A), the effect is attributable to
+> the epoch and seat that produced it, and the same bundle shows the effect published exactly once. Until that
+> evidence exists this obligation is **outstanding** …
+
+**The evidence, quoted from the retained bundle** (`vectors-phase-2/stage-sequence.json`, hosted run
+`43537535959`): `verdict: "pass"`; `ac6Verdict: "pass-for-the-stages-scored-here"`;
+`mappingStageM.byValueControl` = row matches the authority record, mutating the mapped state moves nothing,
+the mapping is the only writer; `mappingStageM.refusalControl` = watermark advanced, movement fields unmoved,
+refused rows journalled; `perEntityNegative` = a departed entity stops being mapped while its neighbours
+advance; `publicationStageP.observableAtSeat.medianIntervalMs = 100.573` against `declaredIntervalMs = 100`
+and `tickIntervalMs = 50`; `order.evidence` = the withhold window in which the room advanced and the seat did
+not, which is what separates `M` from `P` instead of assuming it; and
+
+> `resultsHalf: { resultsAccepted: 0, status: "outstanding", owner: "UDG-007" }`
+
+`doesNotClaim` still carries *"that AC-6 passes as a whole sequence"* and now also *"that this artefact
+amended anything"* — the clause was amended by the owner, and the artefact only measures against it. Runtime
+suite: `pass-for-the-stages-scored-here` pinned as a string, the amended clause required inside the artefact,
+the obligation required to contain "exactly once", `resultsAccepted: 0` required to stay 0.
+
+### 19.2 P-2b, exercised in the harness
+
+GA-6a, GA-6b, GA-6c and GA-7 now have hosted controls passing inside `transport-impairment.json` (13 of 13),
+with the numbers in matrix §19.2: the client deadline firing at 500 ms and 503 ms on two different
+constructions, sending stopped at zero, the rolling allowance spent on two readable rejoins and then refused
+with the seat staying stopped, and a withheld-final-publication case in which three publications were
+swallowed, the server still recorded `retiredUnrepresented 37` with `consumedCountAtClose 40`, the client
+acted at 503 ms inside `closureMaxMs 1000`, and recovery ended on a readable snapshot with zero duplicate
+applications. Production client work stays **UDG-008**; the formal Gate A execution stays **UDG-SPIKE-001**;
+Gate A stays **Not Run**; the prediction limb is reported as absent rather than passed.
+
+The exercise's most useful output is not a control: **a seat the server closed cannot recover on its own
+reconnection token.** GA-6a (client-initiated tear) rejoins on its token; GA-7 (server-initiated input-loss
+closure) has to rejoin through matchmaking and read the snapshot it is handed. `recoveryPath`,
+`sdkReconnectRestoredTheSeat` and `sdkReconnectEpochSeen` are published so UDG-008 has to implement both and
+Gate A has to see both.
+
+### 19.3 What is still owed, and by whom
+
+| Owed | Owner | Note |
+|---|---|---|
+| GA-10a, GA-10b | UDG-007 acceptance | outstanding, never passable on this substrate |
+| **AC-6's `P` results half — successful navigation-result publication** | **UDG-007 acceptance** | **new this sitting; outstanding; AC-6 as a whole sequence is not closed here** |
+| Discrete queue limits 8/entity and 64/room | UDG-007 | retained `discreteHighWater` maximum is 0 |
+| Both GA-11 inequalities, production values, runner-capability note | UDG-SPIKE-001 (Gate A) | Phase 2 records populations only; neither inequality evaluated |
+| GA-6/GA-7 at the formal Gate A envelope, and a production client that does this for real | UDG-008 client, UDG-SPIKE-001 gate | harness-only today; prediction buffer named absent |
+| Eviction consequence at the production envelope | UDG-SPIKE-001 | §5 rule 7 keeps values provisional |
+| GA-12, PE-1 … PE-5 | unchanged | not passed |
+| GA-13's four residues | bytes that do not exist yet | named in matrix §19.3; pinned by name in the runtime suite |
+| D4, dedupe-triggered closure, Gate A, Phase 2 acceptance | owner / UDG-SPIKE-001 | open, disabled, Not Run, In Review |
+
+**Returned to the owner this sitting.** Implementation `28c30153c11e0bf9a0e98f8ebad78f31bdd2fa61` (AC-6 split +
+P-2b) and `be4191639a5e2ba617b45e5a1a1354fa99a49ee6` (the GA-6c epoch correction), CI runs `43537535959`
+(success) and `43539783750` (success, 571 tests / 0 failures at the head); retained bundle
+`/workspace/udg-evidence/ci-run-43537535959/UDG-003-2026-11-14T01-08-23-769Z-28c30153` (verify PASS 0 issues,
+`report.json` sha256 `75db81f142daa408e6061204439475ace94b710e3bf1d3ca49ab61776d06f1e7`,
+`vectors-phase-2/vectors-manifest.json` sha256 `97cb18b8950d9fd2074f7ff1ebfbceccfacfe964fb1e6cbf9b4a9684dbe73fdb`).
+
+**Still unmet, stated as requirements rather than as caveats.** A Phase 2 requirement is unmet only in the
+sense the amended clause itself assigns elsewhere: `P`'s results half (UDG-007), the discrete queue limits
+(UDG-007), GA-10a/GA-10b (UDG-007), GA-11's two production inequalities and the eviction consequence at the
+production envelope (UDG-SPIKE-001), GA-12 and PE-1…PE-5 (not passed), a production client for GA-6/GA-7
+(UDG-008), and Gate A itself (Not Run). Nothing in this sitting waives, closes or accepts any of them, and
+nothing in it accepts Phase 2.

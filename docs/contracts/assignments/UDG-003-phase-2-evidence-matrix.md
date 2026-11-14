@@ -1538,3 +1538,230 @@ bundles added.
 outstanding at UDG-007, GA-11 not run with neither inequality evaluated, AC-6 PARTIAL and
 qualified-pending-owner, GA-6a/6b and GA-7 behind a deferred P-2b, Gate A Not Run, D4 open, dedupe-triggered
 closure disabled, AC-15 PASS under H1 with H2 deferred. Acceptance of Phase 2 remains the owner's act.
+
+---
+
+## 19. The seventh sitting — AC-6's split applied to the clause, P-2b reopened for the harness, and the matrix reconciled against the amended criteria (2026-11-14)
+
+Three instructions, and the order they were done in matters for one of them: the AC-6 split had to land in
+the **governing criterion** before the artefact could report against it, because an artefact that anticipates
+a clause change is the same error as one that anticipates a clause pass. Phase 2 stays **In Review**; nothing
+here accepts, closes or gates it.
+
+### 19.1 AC-6 — the clause moved first, then the verdict followed it
+
+The amendment is in the readiness proposal, in the AC-6 row itself, with the 2026-11-11 wording left standing
+above it rather than overwritten. Quoted in full:
+
+> | AC-6 | the stage sequence F, L, Q, S, A, C, R, X, M, P holds for every executed 5.5 case and every
+> recorded eligibility-changing arrival permutation. *(Dated note, 2026-11-14, seventh sitting — OD-4 ruled,
+> owner: "accept room map+flush as M/P"). Scored against UDG-003 Phase 2: **F, L, Q, S, A, C, R, X** on every
+> executed tick; **M** = the server's canonical-to-replica mapping, applied per entity in the consuming tick;
+> **P** = that room's publication of state and metrics at the declared patch interval, plus its flush.
+> **`P`'s results half** — a committed navigation result reaching a client — needs the navigation intake this
+> phase is forbidden to build, and is an explicit acceptance obligation of [UDG-007](../UDG-007.md),
+> **outstanding there**. It is neither waived nor counted here: AC-6 is PASS for the stages above and the
+> results half travels with UDG-007's acceptance, not with this phase's |
+
+Two documents move with it, and neither of them is a verdict document. **UDG-007** gains a headed acceptance
+obligation — *"Successful navigation-result publication (AC-6, `P`'s results half)"* — which requires a run
+where at least one accepted route effect reaches a client replica, its acknowledgement carries the applied
+record, it is attributable to the epoch and seat that produced it, and the same bundle shows it published
+exactly once. Until that exists the obligation is **outstanding**, and UDG-007 cannot be accepted without it.
+The `stage-sequence.ts` artefact now carries the amended clause verbatim in `definitions.amendedClause` and
+reports `ac6Verdict: "pass-for-the-stages-scored-here"` with the results half still `outstanding / UDG-007`.
+
+**The verdicts under the amended clause, with the evidence that carries them** (hosted run
+[43537535959](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43537535959) at
+`28c30153c11e0bf9a0e98f8ebad78f31bdd2fa61`, bundle
+`ci-run-43537535959/UDG-003-2026-11-14T01-08-23-769Z-28c30153`, verify **PASS 0 issues**):
+
+| Part of the amended clause | Verdict | Evidence, from the retained bundle |
+|---|---|---|
+| `F, L, Q, S, A, C, R, X` on every executed tick | measured | `measurements/UDG-003.json` `stageOrder`, unchanged from §3; the stage order is asserted on executed ticks, not asserted-about |
+| `M` — canonical state mapped to the replica, per entity, in the consuming tick | measured | `stage-sequence.json`: `mappingStageM.byValueControl` (row matches the authority record; mutating the mapped state moves nothing; the mapping is the only writer), `refusalControl` (watermark advanced, 24 refused dispositions, five movement fields unmoved), `perEntityNegative` (a departed entity stops being mapped while neighbours advance) |
+| `P` — publication of state and metrics at the declared interval, plus flush | measured | `publicationStageP.observableAtSeat`: patch cadence median **100.573 ms** against a declared **100 ms**, and ≥ 25 ms away from the 50 ms step; `order` shows `X → M → P` as a bound with the withhold window separating the two stages (room advanced, seat did not). At this head the cadence re-measures at **100.222 ms** against the same declared 100 ms (§19.5); the artefact code is identical between the two runs, so both figures are quoted rather than the flattering one |
+| `P`'s results half — a committed navigation result reaching a client | **outstanding at UDG-007** | `resultsHalf: { status: "outstanding", owner: "UDG-007", resultsAccepted: 0 }`, plus the new obligation paragraph in `docs/contracts/UDG-007.md`. `effectCount` is 0 in every seat of every retained Phase 2 bundle; no route can be constructed on this substrate, so this half cannot be counted here and is not |
+
+**AC-6 moves PARTIAL → PASS for the stages the clause scores against this phase, and the criterion as a whole
+is not closed by this document**: the results half is a UDG-007 acceptance obligation, and AC-6's overall
+wording now spans two tasks by design. The runtime suite pins all of it — the verdict string, the quoted
+clause inside the artefact, `resultsAccepted: 0`, `status: outstanding`, `owner: UDG-007`, and the words
+"exactly once" inside the obligation — so a future run cannot quietly read the split as a completion.
+
+### 19.2 P-2b reopened, for the Phase 2 test harness only
+
+The owner reopened P-2b for the harness while holding both boundaries: the production client machine stays in
+**UDG-008** and the formal Gate A execution stays in **UDG-SPIKE-001**. It reuses the impairment artefact
+`transport-impairment.json` rather than adding a 28th file — the requirement set stays at **27**, so nothing
+about §18's widening cost changed — and the reuse is honest because GA-6/GA-7 were always an impairment
+question: they need a server that stops publishing to one seat.
+
+What was missing was the mechanism, not the criterion. `recovery-scenarios.ts` reaches the same deadlines
+through an **unclean tear**, where a dead socket is itself a server event; GA-6b's entire claim is that the
+deadline needs none. So `impairment.mjs` gained `silenceInbound()` / `resumeInbound()`: every inbound delivery
+to one seat is dropped while the socket stays open, the seat's deliveries stop dead, and the room goes on
+consuming that seat's frames. Counters publish `inboundSilentlyDropped`, `silencing` and the elapsed silence
+window, and resume does not replay what the silence swallowed.
+
+| Criterion | What the harness showed, hosted | Control |
+|---|---|---|
+| **GA-6a** stalled stream, outstanding inputs, deadline at the declared test value | `INPUT_ACK_STALLED` fired with `trigger: "deadline"` at **500 ms** from the last delivery (declared `clientSnapshotDeadlineMs 500`); **0** sends attempted after expiry while the gate was consulted; rejoin attempted; recovery completed **401 ms** after expiry, inside the 4000 ms episode budget, epoch **5 → 6**; the room kept consuming this seat throughout | `ga6aDeadlineExpiredWithNoFreshDelivery`, `ga6aDeadlineMatchesTheDeclaredTestValue`, `ga6aHarnessStoppedSendingAfterExpiry`, `ga6aRecoveryCompletedInsideTheEpisodeBudget` |
+| **GA-6b** the server neither sends nor closes | deadline fired at **503 ms** with the socket verified **open**, `socketClosedDuring: 0`, **7** publications silently dropped, and deliveries **unchanged** (1 → 1) while the room's dequeue count for the seat kept rising. No server event of any kind preceded the deadline | `ga6bDeadlineFiredWithNoServerEventAtAll`, `ga6bSocketStayedOpenAndTheRoomKeptDeciding` |
+| **GA-6c** a limit is reached | the rolling allowance (**2** per 60 s) was spent on two real rejoins — at this head each lands on a readable row carrying an epoch (`8 → 8`, `8 → 9`, restated in §19.5; the run first retained published `-1` beside that same claim, which is what `be41916` corrected) — then `allowance-refused`, then `client-close` with `reason: "allowance-exhausted"`; policy state `closed`; **0** sends and **0** state applications afterwards, and still zero 250 ms later | `ga6cAllowanceWasSpentAndRefused`, `ga6cSeatStayedStoppedAfterSuspension` |
+| **GA-7** the final publication is withheld | the seat was silenced for 250 ms first, so publications existed to withhold: **3** swallowed, **0** reaching the seat thereafter; the server still recorded the closure with `retiredUnrepresented 37`, `consumedCountAtClose 40`, `serverQueuedAtClose 0` (code **4101** at **201 ms** — a burst at these provisional values trips the rate ceiling before the buffer retirement; the code is published, not curated, and either input-loss closure answers what GA-7 asks of the server); the client acted at **503 ms**, inside `closureMaxMs 1000`; recovery ended on a readable snapshot at epoch **12**; **0** regressions and **0** duplicate applications | `ga7ServerStillRecordedTheClosureAndItsCounters`, `ga7ClientActedInsideTheClosureWindow`, `ga7SeatWasNeverTold`, `ga7RecoveredThroughRejoinAndSnapshot`, `ga7NothingWasAppliedTwice` |
+
+**A finding the harness bought, worth more than the controls: the two recovery paths are not
+interchangeable.** GA-6a recovers **on its own reconnection token**, because the client tore the socket and
+the room still holds the session. GA-7 cannot — the server had already retired that session, so
+`client.reconnect(token)` never restores it and recovery is a **matchmaking rejoin** with a fresh snapshot
+(epoch 11 → 12). The artefact publishes `recoveryPath`, `sdkReconnectRestoredTheSeat` and `sdkReconnectEpochSeen`
+for exactly that reason: **UDG-008 has to implement both paths, and Gate A has to see both.** A client that
+only knows the token path recovers from a stall and fails after an input-loss closure.
+
+**What this exercise is not**, stated in the artefact's own `boundary` field and asserted in the suite: not a
+Gate A pass (Gate A is UDG-SPIKE-001's and stays **Not Run**; the artefact contains no `"gateA": "pass"` and
+the test refuses one); not a production client (UDG-008's, and the **prediction limb is reported rather than
+passed** — `ga6a.predictionBuffer: "absent in the Phase 2 harness"`, because the harness has no prediction
+buffer to discard and building one would be UDG-008's client; the policy's own discard event is published);
+and not a statement that 500/4000 ms are production values (they are the hashed provisional figures this
+phase runs on, D-P2-4).
+
+**One correction after the hosted run.** `be4191639a5e2ba617b45e5a1a1354fa99a49ee6` fixes the GA-6c rejoin
+epochs: run `43537535959` passed all 13 controls while publishing `actualRejoins: [{epochAfter: -1}, …]` next
+to a sentence calling them real rejoins, which is the same mistake §17 spends a paragraph on — a row read at
+the instant `reconnect` resolves has not arrived, so it reads as absent. Each counted rejoin now waits for a
+readable row, records whether it got one, and the control refuses to count a rejoin that lands on neither.
+Local readback after the fix: `epochAfter 8` and `9`, both readable. No verdict changed; a number stopped
+contradicting its own prose.
+
+### 19.3 Reconciling the matrix against the amended criteria
+
+The governing criterion moved in three places across this sitting and the sixth (GA-10's split, W-10's
+impairment source, AC-6's stage split), so the matrix has to say which verdict belongs to which wording — and
+it must not do it by editing history.
+
+**The pre-amendment GA-10 headline is preserved, unrewritten, in the bundle that made it.** It lives in
+`probes/PR-14.probe-result.json` — retained verbatim at
+`ci-run-43263252706/UDG-003-2026-11-12T16-59-54-817Z-cf349874/probes/PR-14.probe-result.json`:
+
+> `reissue-of-a-known-identity-is-answered-not-recharged` — ok — *"answered 1, effectCount 0 (GA-10: delta 0
+> for an abandoned identity, 0 for a cache answer)"*
+
+and in the same file's scope note:
+
+> *"GA-10's Δ == 1 committed-identity half is not producible on this substrate yet: M0's rejection vocabulary
+> refuses every discrete command outright (no route can exist until UDG-007), so no identity can commit."*
+
+Those bytes are untouched. Under the **amended** ADR-0003 §5 the same measurement reads as: **GA-10 — the
+zero-effect half, measured and passing** (`Δ == 0` for an abandoned identity, `Δ == 0` for a cache answer,
+`answered 1`); **GA-10a / GA-10b — outstanding at UDG-007 acceptance**, never passable on this substrate and
+never passable on a run where `pathCandidates == 0`. The headline the owner read in the first submission
+still says FAIL-shaped things because, as written then, GA-10 was not satisfiable here; the amended clause
+does not retroactively change what was measured, it names who owes the other two halves.
+
+**The outstanding UDG-007 checks, in one list**: GA-10a (`Δ == 1` for one route effect committed once);
+GA-10b (`Δ == 1` for the same request reissued under a new identity, `Δ == 0` for an identity an epoch change
+abandoned); the discrete queue limits at 8/entity and 64/room (Phase 2's maximum retained `discreteHighWater`
+is **0** because no discrete traffic exists); and now AC-6's `P` results half — successful navigation-result
+publication, exactly once, attributable. Four checks, one owner, none of them waivable by anything in this
+bundle.
+
+**Prior bundles stay as they are, under H1.** No Phase 2 bundle was rewritten, re-captured or re-dated in this
+sitting. The store gained exactly one directory — `ci-run-43537535959`, 370 files — and a filesystem check
+after the retention shows **0 pre-existing files modified** (no file outside that directory is newer than the
+point §18 finished). Every previously retained bundle still verifies against its own committed digest manifest
+with the same issue count §18 recorded: `cf349874` **29**, `cfc49664` **8**, `a9116e03` **8**, `32d9afb5` **0**,
+`25dd78b4` **0**. The requirement set did not widen this sitting — 27 artefacts were reused, not extended — so
+the widening cost stands exactly where §18 left it, with finding E1 as the standing disclosure.
+
+**The four GA-13 residues are still visible, still unverified, still named**, quoted from the bundle this
+sitting produced (`journal-replay.json` → `ga13.carriedUnverified`), unchanged in substance since §17:
+
+1. **the identity of each evicted stamp** — the buffer reports a count, not a list, and ADR-0003 §3.1 gives no
+   reason at the pre-buffer boundary; `missingStamps` is a superset, so the mapping is not recoverable and is
+   not asserted;
+2. **whether the acknowledgement advanced over retired frames** — `consumedCount` is the SDK's own counter and
+   PR-8 found no surface that withholds it; the equality at close is reported as a measured coincidence;
+3. **that the retirement caused the closure rather than coinciding with it** — one window, one seat, one
+   candidate signal, and nothing in the bytes that separates cause from co-incidence;
+4. **why the run's collided stamps collided** — measured and reported, no attributed cause, and the count
+   varies run to run, which is why it is quoted from the measurement rather than from prose.
+
+The OD-3 two-limb verdict is unchanged in shape and re-confirms on this run: `ga13.verdict: pass` with
+`replayLimb` 7 rooms replayed / 7 equal / 0 mismatches and `attributionLimb` 8 windows verified from rows,
+1 negative window recomputed, 1 absence accounted by transport evidence,
+`ga13.attributionLimb.remainingGaps: []` and `summary.authorityWindowGaps: []` — two names for the same
+emptiness, one per reporting path, both asserted in the runtime suite.
+
+### 19.4 Where every criterion stands against the amended wording
+
+| Item | §18 | Now | Why it moved, or why it did not |
+|---|---|---|---|
+| GA-1 … GA-5, GA-9 | as §12/§17 | unchanged | nothing in this sitting touched their evidence |
+| **GA-6a / GA-6b / GA-6c** | behind a deferred P-2b | **exercised in the Phase 2 harness, controls pass**; production client behaviour still **UDG-008** | the owner reopened P-2b for the harness; `silenceInbound()` made the silent server constructible |
+| **GA-7** (withheld publication) | behind a deferred P-2b | **exercised in the harness, controls pass**; Gate A's version stays **UDG-SPIKE-001** | same; and the closure-side counters were already recorded server-side |
+| GA-10 (zero-effect half) | FAIL as written | measured and passing under the amended §5; **the pre-amendment headline stays FAIL in its own bundle** | clause split, not a new measurement |
+| GA-10a / GA-10b | UDG-007 | UDG-007, **outstanding** | unchanged; now joined by a fourth obligation |
+| GA-11 (both inequalities) | not run | **not run** | UDG-SPIKE-001 / Gate A; Phase 2 records populations only |
+| GA-12, PE-1 … PE-5 | not passed | not passed | unchanged |
+| **AC-6** | PARTIAL, `qualified-pending-owner` | **PASS for `F…X`, `M` and `P`'s publication**; results half **outstanding at UDG-007** | the criterion moved, then the verdict followed it — see §19.1 |
+| AC-3b (continuous half) / AC-3c / AC-3d / AC-3e | measured | unchanged | the discrete half remains UDG-007's |
+| AC-15 | PASS under H1 | PASS under H1; H2 deferred | unchanged; prior bundles under H1 preserved (§19.3) |
+| **Gate A** | **Not Run** | **Not Run** | UDG-SPIKE-001's, and nothing here runs it |
+| dedupe-triggered closure | disabled | disabled | `dedupeClosureEnabled: false` |
+| D4 | open / undesignated | open / undesignated | owner's designation |
+| GA-13 | PASS (two limbs) + 4 residues | PASS (two limbs) + the same 4 residues | re-confirmed, not extended |
+
+**Invariants, re-checked rather than asserted from memory.** `git diff --name-only` across this sitting's two
+commits touches only `tests/**` and `docs/contracts/**`: no `apps/server/**`, no `packages/**`, no
+`authority/**`, no protocol change, no `pnpm-lock.yaml` or manifest change. `configHash` stays
+`2743a9a047ce7264833af88e8bd2f8aeea970a45e306a348e1fe0654191bec7a` (present in this run's
+`envelope-hashes.json`). Ledgered digests: `docs/contracts/UDG-007.md` moved with its new acceptance
+obligation and `docs/contracts/checksums.json` was regenerated in the same commit (65 files tracked; the
+readiness proposal is not a ledgered file, which is why its amendment moves no digest).
+
+**Chain and retention for this sitting.**
+
+| What | Value |
+|---|---|
+| AC-6 split + P-2b exercise | `28c30153c11e0bf9a0e98f8ebad78f31bdd2fa61` |
+| its CI run | [43537535959](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43537535959) — success |
+| retained bundle | `/workspace/udg-evidence/ci-run-43537535959/UDG-003-2026-11-14T01-08-23-769Z-28c30153` — verify **PASS 0 issues**, 194 hashed files, 27 Phase 2 artefacts |
+| bundle `report.json` sha256 | `75db81f142daa408e6061204439475ace94b710e3bf1d3ca49ab61776d06f1e7` |
+| bundle `vectors-phase-2/vectors-manifest.json` sha256 | `97cb18b8950d9fd2074f7ff1ebfbceccfacfe964fb1e6cbf9b4a9684dbe73fdb` |
+| GA-6c epoch correction | `be4191639a5e2ba617b45e5a1a1354fa99a49ee6` |
+| its CI run and bundle | named in §19.5, below, because a records section cannot name a bundle that does not exist yet |
+| UDG-001 / UDG-002 at the same run | both verify **PASS 0 issues** |
+
+### 19.5 Retention for the head this sitting ends on
+
+CI [43539783750](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43539783750) at
+`be4191639a5e2ba617b45e5a1a1354fa99a49ee6` — **success**, 571 tests / 0 failures / 0 errors / 0 skipped.
+
+| Bundle | Verify | Notes |
+|---|---|---|
+| `/workspace/udg-evidence/ci-run-43539783750/UDG-003-2026-11-14T01-28-12-524Z-be419163` | **PASS 0 issues** | `report.json` sha256 `eab235e2e831908752ee8a185ddb0086f24d3e7a3626c1e7172d37ab8e1a40ca`; `vectors-phase-2/vectors-manifest.json` sha256 `a0b6175230ca59252058b0b573807d00c7fc6fa9bf3b1ee34b14e48a1185fcf7`; 27 artefacts, `status: PASS` |
+| `…/UDG-001-2026-11-14T01-22-56-231Z-be419163` | **PASS 0 issues** | UDG-001 unchanged |
+| `…/UDG-002-2026-11-14T01-25-24-595Z-be419163` | **PASS 0 issues** | UDG-002 unchanged |
+
+**The recovery figures restated at this head**, so the record quotes one bundle rather than two: GA-6a
+deadline at **501 ms** from the last delivery (declared 500), **0** sends after expiry, recovery **399 ms**
+after expiry, epoch **5 → 6**; GA-6b deadline at **509 ms** with the socket open, **0** closes, **7**
+publications silently dropped and deliveries unchanged at **1** while the room kept consuming; GA-6c two real
+rejoins (`epochAfter 8` and `9`, both `rowReadableAfterRejoin: true`), then `allowance-refused`, then
+`client-close / allowance-exhausted`, policy state `closed`, **0** sends and **0** applications after, still
+stopped; GA-7 **3** publications swallowed and **0** reaching the seat thereafter, server closure **4101** at
+**170 ms** with `retiredUnrepresented 37`, `consumedCountAtClose 40`, `serverQueuedAtClose 0`, client acting at
+**503 ms** inside `closureMaxMs 1000`, recovery by **matchmaking rejoin** to epoch **12**, `appliedRegressions 0`
+and `duplicateApplications 0`. All 13 controls true, `reconnectFailures: []`.
+
+**Unmoved at this head:** `stage-sequence.json` `verdict: pass`, `ac6Verdict: pass-for-the-stages-scored-here`,
+results half `outstanding / UDG-007`, patch median **100.222 ms**; `journal-replay.json` `ga13.verdict: pass`
+with the same four `carriedUnverified` residues and both gap lists empty.
+
+**Store state after this sitting:** 10,377 files, the previous total plus `ci-run-43537535959` (370) and
+`ci-run-43539783750` (370 → the store's two newest directories), and a filesystem check showing no
+pre-existing file modified. Every earlier Phase 2 bundle still verifies against its own manifest with the
+issue count §18 recorded. Phase 2 stays **In Review**; Gate A stays **Not Run**; dedupe-triggered closure stays
+disabled; D4 stays open; acceptance stays the owner's.
