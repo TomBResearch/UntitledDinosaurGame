@@ -504,7 +504,6 @@ describe('the camera run is evidence, or the acceptance command fails', () => {
         expect(false, `no ${CAMERA_RESULTS_FILE} in ${directory}: the bundle carries no camera evidence`).toBe(true);
       }
       record('evidence.skippedReason', `no ${CAMERA_RESULTS_FILE} in ${directory}`);
-      // eslint-disable-next-line no-console -- the point is that a developer notices, without failing their build.
       console.warn(
         `UDG-004: no camera evidence in ${directory}; run pnpm test:e2e -- --suite camera to gate it. `
         + 'Evidence capture and CI require it.',
@@ -569,6 +568,7 @@ describe('the camera run is evidence, or the acceptance command fails', () => {
     record('camera.radiusMaxMetres', Number(results.measurements['radiusMaxMetres']));
     record('camera.uiGesturesIgnored', Number(results.measurements['uiGesturesIgnored']));
     record('camera.poseWritesDuringCameraOperations', Number(results.measurements['poseWritesDuringCameraOperations']));
+    record('camera.poseWritesBeforeFreeze', Number(results.measurements['poseWritesBeforeFreeze']));
     record('camera.targetFollowErrorMetres', Number(results.measurements['targetFollowErrorMetres']));
     record('camera.presentedHeightUnits', Number(results.measurements['presentedHeightUnits']));
     record('camera.positiveArmMetres', Number(results.measurements['positiveArmMetres']));
@@ -577,6 +577,7 @@ describe('the camera run is evidence, or the acceptance command fails', () => {
   });
 
   it('gates the lifecycle and console artefacts against the same run and commit', () => {
+    if (!haveArtefacts) return;
     const results = jsonAt<CameraBrowserResults>(join(directory, CAMERA_RESULTS_FILE));
     const companionIssues = gateCompanionArtefacts(directory, {
       runId: results.runId,
@@ -592,6 +593,7 @@ describe('the camera run is evidence, or the acceptance command fails', () => {
   });
 
   it('re-hashes every retained screenshot, so a stale or rewritten PNG is a failure and not a smaller pass', () => {
+    if (!haveArtefacts) return;
     const results = jsonAt<CameraBrowserResults>(join(directory, CAMERA_RESULTS_FILE));
     for (const shot of results.screenshots) {
       const absolute = join(directory, 'browser', shot.name);

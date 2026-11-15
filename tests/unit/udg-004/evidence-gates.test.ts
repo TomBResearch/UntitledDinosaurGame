@@ -615,7 +615,15 @@ describe('E-6: what this task did not own still works', () => {
       ? readdirSync(store, { withFileTypes: true })
         .filter((entry) => entry.isDirectory() && /^UDG-00[123]-\d{4}/.test(entry.name))
         .map((entry) => join(store, entry.name))
-        .filter((directory) => existsSync(join(directory, 'report.json')))
+        // A bundle needs both its report and its checksum ledger before it is a record; and the capture running
+        // this very test is named by `UDG_EVIDENCE_OUT`, so it is excluded by name as well as by that rule. A
+        // bundle mid-write is not evidence, and skipping it now is not the same as forgiving it later — CI
+        // verifies every completed bundle in its own step regardless.
+        .filter((directory) => existsSync(join(directory, 'report.json')) && existsSync(join(directory, 'checksums.sha256')))
+        .filter((directory) => {
+          const capturing = process.env['UDG_EVIDENCE_OUT'];
+          return capturing === undefined || resolve(capturing) !== resolve(directory);
+        })
         .sort()
       : [];
     const outcomes: Record<string, string> = {};

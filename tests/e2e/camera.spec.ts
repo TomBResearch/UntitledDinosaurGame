@@ -48,7 +48,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { expect, test, type Page } from '@playwright/test';
+import { chromium, expect, test, type Page } from '@playwright/test';
 
 import type { HarnessSnapshot } from '../../apps/client/src/dev/lifecycleHarness.js';
 import type { AxisProbe, MeshPoint, ScenePick } from '../../apps/client/src/dev/sceneReadout.js';
@@ -419,6 +419,17 @@ const workingTreeDirty = (): boolean => {
  * artefact cannot keep claiming build 1254 after an upgrade changes it.
  */
 const chromiumBuildDirectory = (): string => {
+  // The executable first, the browsers directory second. Reading only `PLAYWRIGHT_BROWSERS_PATH` reported
+  // `unknown` on the GitHub runner, where the variable is legitimately unset and Playwright resolves its own
+  // default cache — and an artefact that says "unknown browser" cannot support a rendering claim, so the task
+  // suite refused it (as it must). The executable path is answered by Playwright itself, which knows where it
+  // put the build whether or not anything set an environment variable; the directory scan stays as the
+  // fallback, and as the way to name more than one installed build.
+  const fromExecutable = chromium
+    .executablePath()
+    .split('/')
+    .find((segment) => /^chromium-\d+$/.test(segment));
+  if (fromExecutable !== undefined) return fromExecutable;
   const root = process.env['PLAYWRIGHT_BROWSERS_PATH'];
   if (root === undefined || !existsSync(root)) return 'unknown';
   const builds = readdirSync(root).filter((entry) => entry.startsWith('chromium-')).sort();
@@ -830,7 +841,18 @@ test(CAMERA_CASE_NAMES[5], async ({ page }) => {
   const during = await snapshotOf(page);
   expect(during.app.renderTicks).toBe(ticksFrozen);
   expect(during.app.poseWritesByEntity).toEqual(posesFrozen);
-  measure('poseWritesDuringCameraOperations', Object.values(during.app.poseWritesByEntity).reduce((total, value) => total + value, 0));
+  // The measurement is the *change* in the per-entity pose-write counters across the frozen window, because
+  // that is the claim the plan's threshold makes. The cumulative counter was recorded here first, and it read
+  // 10 — the demo feed's own writes before the freeze — which made the artefact contradict the threshold it
+  // was cited under. A verifier can tell whether a threshold path resolves; only a named delta keeps the
+  // number and the sentence about the number in agreement.
+  const writesDuringCameraOperations = Object.keys(during.app.poseWritesByEntity).reduce(
+    (total, entityId) => total + ((during.app.poseWritesByEntity[entityId] ?? 0) - (posesFrozen[entityId] ?? 0)),
+    0,
+  );
+  expect(writesDuringCameraOperations, 'a camera operation wrote to a presented pose').toBe(0);
+  measure('poseWritesDuringCameraOperations', writesDuringCameraOperations);
+  measure('poseWritesBeforeFreeze', Object.values(posesFrozen).reduce((total, value) => total + value, 0));
   // The capsules did not move, either: the camera moved, and nothing else.
   // Both snapshots below are taken inside the same frozen window, so the comparison is between two moments in
   // which nothing but the camera was touched. Comparing against the pre-blur snapshot would have measured the
