@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.base.json",
+  "//": "Browser-suite project (UDG-004 grant G-6). tests/e2e/** was excluded from the root project by UDG-001 because that project carries no DOM library and the browser specs need one: a page.evaluate callback runs in the page, and `window`, `HTMLCanvasElement` and `PointerEvent` are where its types live. This project adds that library and nothing else: skipLibCheck stays false, inherited from tsconfig.base.json, because a new compiler-policy relaxation is not this task's to take, and UDG-003's accepted PR-0 probe audits any project that claims the ADR-0002 exception. Measured with the pinned 24.22.2 toolchain: playwright-core's declarations compile clean here once DOM is present, so the earlier skipLibCheck: true was masking nothing. Checked by `pnpm typecheck` through `typecheck:root`, so a browser spec can no longer be committed without ever having been typechecked.",
+  "compilerOptions": {
+    "noEmit": true,
+        "allowImportingTsExtensions": true,
+    "lib": [
+      "ES2024",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "node"
+    ]
+  },
+  "include": ["tests/e2e/**/*.ts"],
+  "exclude": ["node_modules", "dist", "artifacts"]
+}

@@ -20,7 +20,7 @@
  * directory is the alias REPO_ROOT, and the host name is replaced by a per-run alias.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, rmSync, writeFileSync } from 'node:fs';
 import { cpus, release, arch, platform, machine, totalmem, homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
@@ -906,6 +906,138 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       { label: 'test-contract-UDG-001', argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-001'] },
     ],
   },
+  'UDG-004': {
+    taskId: 'UDG-004',
+    /**
+     * The browser evidence is required by name, six PNGs included.
+     *
+     * `docs/contracts/UDG-004.md` §7 asks for "screenshots at orbit/zoom bounds", which is a requirement about
+     * states rather than about a count of files — so each state is named here, and CI's existing
+     * "required artefact missing or empty" step refuses a bundle that dropped one. Freshness and integrity of
+     * those bytes are gated by this task's own suites (`tests/contracts/UDG-004.test.ts` re-hashes every PNG
+     * against `browser/screenshots.json`); the shared vector-manifest schema is deliberately unchanged, per the
+     * owner's instruction on the open decision D-004-15.
+     */
+    requiredFiles: [
+      'environment.json',
+      'commands.json',
+      'junit.xml',
+      'boundary-report.json',
+      'build.log',
+      'measurements/UDG-004.json',
+      'camera-browser-results.json',
+      'lifecycle-counts.json',
+      'console-errors.json',
+      'browser/screenshots.json',
+      'browser/orbit-default.png',
+      'browser/orbit-azimuth-min.png',
+      'browser/orbit-elevation-min.png',
+      'browser/orbit-elevation-max.png',
+      'browser/zoom-min-2m.png',
+      'browser/zoom-max-20m.png',
+      'report.json',
+    ],
+    requiresMeasurements: true,
+    // Each of these must parse and name this task and this schema, so a copied or placeholder browser artefact
+    // cannot satisfy the plan.
+    identityArtefacts: [
+      'measurements/UDG-004.json',
+      'camera-browser-results.json',
+      'lifecycle-counts.json',
+      'console-errors.json',
+      'browser/screenshots.json',
+    ],
+    measurementsIntoBundle: true,
+    reportProse: {
+      profiles:
+        'No network profile applies to UDG-004: the client presents poses it is handed and owns no link, and the development socket is refused on purpose because UDG-003 owns the server. Spike runs record LAN, moderate, elevated and poor profiles with achieved RTT and jitter statistics.',
+      notApplicable: [
+        { path: 'traces/', reason: 'UDG-004 records no gameplay trace: it has no input authority, no movement controller and no tick participation. The camera and lifecycle JSON files beside this note are the behavioural trace it does produce.' },
+        { path: 'metrics/', reason: 'No frame-time or frame-budget sampling is performed by UDG-004. The contract states these screenshots prove basic behaviour, not later desktop or mobile frame-time budgets, and no claim beyond that is made here.' },
+        { path: 'decisions/', reason: 'No gate decision belongs to UDG-004. Gates A, B and C remain Not Run, stackCompatibility remains not-established, and UDG-003 Phase 3 remains unassigned.' },
+        { path: 'assets/', reason: 'The greybox is procedural: no region asset, model, texture or audio file is loaded, so there is no asset build or asset digest for this task to produce. UDG-007 owns region-greybox-001.' },
+        { path: 'probe-results/', reason: 'UDG-004 adds no third-party stack probe. Its dependencies were measured before assignment (docs/contracts/assignments/UDG-004.md §6.1) and no probe verdict changed in this task.' },
+      ],
+      summaryCiNote: {
+        noCiRun:
+          'UDG-004 stays In Review until .github/workflows/ci.yml runs green on the pushed commit and the reviewer accepts it; this summary claims no CI run of its own.',
+        ciRun:
+          'Workflow ci on the pushed commit, identified by the url field. It is a Gate A browser client pass for UDG-004 only: not a Gate A, B or C pass, not stackCompatibility, and not UDG-003 Phase 3 — those remain Not Run, not-established and unassigned respectively.',
+      },
+    },
+    // Every key here is a path into `measurements/UDG-004.json`, which is what `pnpm evidence:verify` walks
+    // when it asks whether a promised number was actually measured (EVIDENCE-THRESHOLD-UNMEASURED). The keys
+    // are dotted *paths*, not labels: the first capture of this plan named thirteen thresholds that no
+    // measurement answered, and verification was right to refuse a bundle whose suites had all gone green.
+    thresholds: {
+      'camera.cases': '=== 7 cases reported, each with status "passed", and suites.expected === 7 (a zero-case or short-case run is refused by the gate, not accepted as a smaller pass)',
+      'camera.pageErrors': '=== 0 unexplained page errors, and camera.consoleErrors === 0, with every tolerated message listed beside the reason it is tolerated',
+      'camera.handednessPicks': '>= 5 of the 5 sampled axis markers agreeing with an independently derived right-handed basis, on the render path rather than on scene metadata',
+      'camera.presentedHeightUnits': '=== 1.8 world units, matching the adopted MOVEMENT_DEFAULTS.capsuleHeight. Units are not metres here: AXIS_SCALE_METRES is 0.1, which is why the next row quotes arm lengths in units and the camera rows quote radius in metres — the two scales are named wherever they are used',
+      'camera.positiveArmMetres': '=== 3, the positive axis arm reaching 3 units to its cap, with camera.negativeArmMetres ≈ 1.2 (twice the negative arm centre offset): the handedness verdict is stated with the scale it was measured on, and the negative arm is on the negative side',
+      'camera.elevationClampLow': '=== 10 degrees at the floor and camera.elevationClampHigh === 80 at the ceiling, neither exceeded and both still finite',
+      'camera.radiusMinMetres': '=== 2 m at the near bound and camera.radiusMaxMetres === 20 at the far bound, reached by wheel and by pinch alike',
+      'camera.uiGesturesIgnored': '>= 1 gesture that began inside a data-udg-ui region ignored, with the camera state unchanged to 6 decimals and 0 drags recorded',
+      'camera.poseWritesDuringCameraOperations': '=== 0 writes to either presented pose across orbit, wheel and pinch performed while the render loop was stopped by focus loss, and camera.cameraMovedWhilePosesFrozen === true so the camera still moved',
+      'camera.targetFollowErrorMetres': '< 0.05 m between the camera target and the followed entity on the horizontal plane',
+      'lifecycle.cycles': '>= 10 mount/unmount cycles, after which lifecycle.meshesAfterDispose === 0, lifecycle.listenersAfterDispose === 0 and lifecycle.frameRequestsAfterDispose === 0, with engineDisposed and sceneDisposed both true',
+      'screenshots.rehashed': '=== 6 PNGs re-read from disk matching the byte count and sha256 browser/screenshots.json declares, each carrying a PNG signature, with no unlisted PNG in the directory',
+      'evidence.chromiumBuild': '=== chromium-1254, the Chromium build the pinned @playwright/test 1.65.0 ships, so the pictures and the verdict come from one browser',
+      'evidenceGates.binaryPortabilityProven': '=== true: a real screenshot survives sanitisation byte-for-byte and still decodes in that chromium, and a PNG carrying a machine path is refused with its bytes unchanged (assignment record §6.2, demonstrations E-4 and E-5)',
+      'seam.tokensAbsent': '=== true: the production client build contains no __udgClientHarness, lifecycleHarness or sceneReadout token in any file, source maps included, and the seam is unreachable from the static module graph',
+      'dispatch.perSuiteMatrix': '=== true: --suite camera dispatches; netcode, physics, input and hybrid refuse with exit 1 naming their owning task; a bare `test:e2e` refuses with exit 1 naming all five; an unknown suite name refuses with exit 2',
+      'capture.commandsRun': '>= 7 commands, capture.failingCommands === []',
+    },
+    commands: [
+      { label: 'install-frozen', argv: ['pnpm', 'install', '--frozen-lockfile'] },
+      { label: 'typecheck', argv: ['pnpm', 'typecheck'] },
+      { label: 'lint', argv: ['pnpm', 'lint'], env: { UDG_BOUNDARY_REPORT: 'BUNDLE/boundary-report.json' } },
+      { label: 'build', argv: ['pnpm', 'build'], buildLog: true },
+      // The browser suite runs FIRST of the two gating commands and writes straight into the bundle. Order is
+      // load-bearing: `pnpm test` below runs the UDG-004 contract suite, which refuses a bundle whose camera
+      // artefacts are missing, failed, stale or short a case, and it can only do that against bytes that
+      // already exist. This is also why the browser run writes no JUnit of its own — the bundle carries one
+      // JUnit report, and the browser result gates it transitively instead of beside it.
+      {
+        label: 'camera-e2e',
+        argv: ['pnpm', 'test:e2e', '--', '--suite', 'camera'],
+        env: {
+          // `BUNDLE/`, with the slash: the capture tool substitutes that token only in its prefixed form, and a
+          // bare `BUNDLE` is an ordinary relative path. The first capture of this plan learned that the hard
+          // way — the artefacts landed in <repo>/BUNDLE, the untracked directory made the tree dirty merely by
+          // existing, and the gate refused the bundle for TREE_DIRTY: the right answer for the wrong reason.
+          // tests/contracts/UDG-004.test.ts pins the token form now.
+          UDG_BROWSER_OUT: 'BUNDLE/',
+          UDG_E2E_JUNIT: 'none',
+          UDG_E2E_RESULTS: 'artifacts/.local/playwright-scratch/camera-results.json',
+          UDG_E2E_OUT: 'artifacts/.local/playwright-scratch',
+        },
+      },
+      {
+        label: 'test',
+        argv: ['pnpm', 'test'],
+        env: {
+          UDG_EVIDENCE_JUNIT: 'BUNDLE/junit.xml',
+          UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-004.json',
+          // The contract suite reads the browser artefacts from the bundle, so the acceptance command is the
+          // thing that refuses a stale or missing browser run. Same `BUNDLE/` token form as the step above.
+          UDG_BROWSER_OUT: 'BUNDLE/',
+          // The UDG-003 contract suite runs the third-party probes inside this `pnpm test` too, and each
+          // invocation writes its own attributed directory.
+          UDG_PROBE_INVOCATION: 'evidence-capture-udg-004',
+        },
+        junit: true,
+        measurements: true,
+      },
+      {
+        label: 'test-contract-UDG-004',
+        argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-004'],
+        env: { UDG_BROWSER_OUT: 'BUNDLE/' },
+      },
+      { label: 'test-boundaries', argv: ['pnpm', 'test:boundaries'] },
+      { label: 'test-contract-UDG-001', argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-001'] },
+    ],
+  },
 };
 
 const SECRET_PATTERNS: readonly { readonly id: string; readonly pattern: RegExp }[] = [
@@ -1133,6 +1265,99 @@ const readMeasurements = (root: string, taskId: string): Record<string, unknown>
  * `clean` is injected because the caller owns the leak accounting: a path that survives sanitisation is a
  * capture failure there, not a warning here.
  */
+/**
+ * Byte-level artefacts, by magic number, plus the NUL sniff that catches the rest.
+ *
+ * A screenshot is not text that happens to contain unusual characters; it is a length-prefixed chunk
+ * structure with a checksum in it. Reading it as UTF-8 and writing the string back is not identity: invalid
+ * sequences become U+FFFD, each one changing the byte count and everything after it. Measured on a real
+ * Playwright PNG on 2026-11-15 — 4254 bytes and a valid signature before, 5437 bytes and no signature after,
+ * `naturalWidth` 0 in the same chromium build that captured it.
+ */
+const BINARY_MAGICS: readonly (readonly [string, readonly number[]])[] = [
+  ['png', [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]],
+  ['jpeg', [0xff, 0xd8, 0xff]],
+  ['gif', [0x47, 0x49, 0x46, 0x38]],
+  ['webp-riff', [0x52, 0x49, 0x46, 0x46]],
+  ['gzip', [0x1f, 0x8b]],
+  ['zip', [0x50, 0x4b, 0x03, 0x04]],
+  ['wasm', [0x00, 0x61, 0x73, 0x6d]],
+  ['pdf', [0x25, 0x50, 0x44, 0x46]],
+];
+
+/**
+ * True when a file must be treated as bytes rather than text.
+ *
+ * Magic numbers catch the formats evidence actually carries; the NUL sniff over the first 8 KiB catches a
+ * binary a future task adds without anyone editing this list. Text formats — JSON, XML, CSV, log, markdown —
+ * never contain a NUL, so the sniff cannot misfire on the artefacts that depend on being rewritten.
+ */
+/** Write bytes into a directory that may not exist yet — the binary-safe twin of `writeFileSyncEnsuring`. */
+const writeBytesEnsuring = (absolutePath: string, data: Uint8Array): void => {
+  mkdirSync(dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, data);
+};
+
+export const isBinaryArtefact = (data: Uint8Array): boolean => {
+  for (const [, magic] of BINARY_MAGICS) {
+    if (magic.length <= data.length && magic.every((byte, index) => data[index] === byte)) return true;
+  }
+  const limit = Math.min(data.length, 8192);
+  for (let index = 0; index < limit; index += 1) {
+    if (data[index] === 0x00) return true;
+  }
+  return false;
+};
+
+/**
+ * Refuse a binary artefact that carries a machine path, and leave its bytes alone.
+ *
+ * This is the half of the rule that keeps a bundle portable. Sanitisation cannot rewrite a PNG into being
+ * portable, so a binary that quotes a private path (docs/validation/evidence-requirements.md 19.1) is a
+ * **capture failure** instead: the run stops, says which file, and the bytes that caused it survive for
+ * whoever has to fix the writer. `report.json`'s `sanitisationFailures` carries the entry, `capture` turns it
+ * into a non-PASS status, and `verify` refuses a non-PASS bundle — so the failure cannot be walked past.
+ *
+ * The scan is `latin1` because that decoding is byte-preserving and one-to-one for ASCII: the paths being
+ * looked for are ASCII, so a hit here means the exact bytes are in the file, and nothing was rewritten to find
+ * out.
+ */
+export const binaryMachinePathRefusals = (
+  absoluteRunDir: string,
+  roots: readonly (readonly [string, string])[],
+): readonly RepoPath[] => {
+  const paths = roots.map(([path]) => path).filter((path) => path.length > 2);
+  if (paths.length === 0) return [];
+  const refusals: RepoPath[] = [];
+  for (const relative of listFiles(absoluteRunDir)) {
+    if (relative === 'report.json' || relative === 'checksums.sha256' || basename(relative) === '.keep') continue;
+    const absolute = join(absoluteRunDir, relative);
+    const data = readFileSync(absolute);
+    if (!isBinaryArtefact(data)) continue;
+    const asText = data.toString('latin1');
+    const hits = paths.filter((path) => asText.includes(path));
+    if (hits.length > 0) {
+      refusals.push(`${relative} (binary artefact carries ${String(hits.length)} machine path(s); refusing instead of rewriting)`);
+    }
+  }
+  return refusals;
+};
+
+/**
+ * Sanitise every file a bundle directory holds, in place, and report which ones changed.
+ *
+ * Separated from `capture` so the rule is testable without running a whole evidence run: a suite writes its own
+ * artefacts and cannot know this machine's roots, so the gate that makes a bundle portable has to be a
+ * function someone can point at a directory containing `/home/…` and watch it work.
+ *
+ * `clean` is injected because the caller owns the leak accounting: a path that survives sanitisation is a
+ * capture failure there, not a warning here.
+ *
+ * **Binary artefacts are never read as text and never rewritten** (owner ruling G-9(b),
+ * docs/contracts/assignments/UDG-004.md §6.2 E-4/E-5). A real screenshot must survive capture byte-for-byte and
+ * still open, and the refusal of the one that cannot survive is reported by `binaryMachinePathRefusals` rather
+ * than repaired here.
+ */
 export const sanitiseBundleDirectory = (
   absoluteRunDir: string,
   clean: (label: string, text: string) => string,
@@ -1141,7 +1366,11 @@ export const sanitiseBundleDirectory = (
   for (const relative of listFiles(absoluteRunDir)) {
     if (relative === 'report.json' || relative === 'checksums.sha256' || basename(relative) === '.keep') continue;
     const absolute = join(absoluteRunDir, relative);
-    const text = readFileSync(absolute, 'utf8');
+    const bytes = readFileSync(absolute);
+    // The branch is the whole defect. Below it, `bytes.toString('utf8')` of a PNG is not the bytes it came
+    // from, and writing that string back is what turned a screenshot into an undecodable file.
+    if (isBinaryArtefact(bytes)) continue;
+    const text = bytes.toString('utf8');
     const sanitised = clean(relative, text);
     if (sanitised !== text) {
       writeFileSyncEnsuring(absolute, sanitised);
@@ -1196,7 +1425,10 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
     // Verification refuses such a file by identity; this variable stops it being written at all. A
     // suite with these variables unset simply produces no extra artefacts, which is why a required
     // file stays a verification failure rather than a capture-time one.
-    const env: Record<string, string> = { UDG_EVIDENCE_OUT: absoluteRunDir, UDG_EVIDENCE_TASK: taskId };
+    // UDG_RUN_ID is the run's own name. A suite that writes an identity-bearing artefact needs it, because a
+    // file that can only say "some run made me" cannot be told apart from last week's copy of itself — which is
+    // how a stale browser result would otherwise ride into a fresh bundle.
+    const env: Record<string, string> = { UDG_EVIDENCE_OUT: absoluteRunDir, UDG_EVIDENCE_TASK: taskId, UDG_RUN_ID: runId };
     for (const [key, value] of Object.entries(step.env ?? {})) {
       env[key] = value
         .replace('BUNDLE/', `${absoluteRunDir}/`)
@@ -1253,6 +1485,12 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
   // path in it. Sanitising only the files capture produced is what let a Phase 0 probe artefact reach a
   // hosted runner's home directory and fail the secret scan in verification rather than here.
   sanitiseBundleDirectory(absoluteRunDir, clean);
+  // Binaries are portable or they are a failure — there is no third option in which a screenshot is quietly
+  // rewritten into something that no longer decodes. Pushed into the same list the status formula already
+  // reads, so a refusal fails the capture, `report.json`, `evidence:verify` and CI in that order.
+  for (const refusal of binaryMachinePathRefusals(absoluteRunDir, roots)) {
+    sanitisationFailures.push(refusal);
+  }
 
   writeJson(join(absoluteRunDir, 'environment.json'), environmentRecord(root, runAlias));
   const measurements = readMeasurements(root, taskId);
@@ -1275,8 +1513,15 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
     if (!existsSync(sourceDir)) continue; // the required-file check reports the absence
     for (const relative of listFiles(sourceDir)) {
       const target = `${artefacts.target}${relative}`;
-      const text = readFileSync(join(sourceDir, relative), 'utf8');
-      writeFileSyncEnsuring(join(absoluteRunDir, target), clean(target, text));
+      const bytes = readFileSync(join(sourceDir, relative));
+      // Same rule as the sanitising pass: a binary crosses this boundary as bytes or the bundle stops being
+      // evidence about it. `binaryMachinePathRefusals` runs over the bundle below and reports a binary that
+      // carries a machine path, so copying it unchanged cannot smuggle a private path past the gate.
+      if (isBinaryArtefact(bytes)) {
+        writeBytesEnsuring(join(absoluteRunDir, target), bytes);
+        continue;
+      }
+      writeFileSyncEnsuring(join(absoluteRunDir, target), clean(target, bytes.toString('utf8')));
     }
   }
 

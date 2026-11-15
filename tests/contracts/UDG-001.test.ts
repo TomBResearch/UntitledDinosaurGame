@@ -367,7 +367,13 @@ describe('workspace shape', () => {
     const bareDeferredNames = deferredGroups
       .map((group) => group.name)
       .filter((name) => /^[@a-z][\w@/.-]*$/.test(name));
-    const stillAbsent = [...new Set([...bareDeferredNames, '@dimforge/', 'recast-navigation', '@babylonjs/', 'react'])].sort();
+    // `@babylonjs/` and `react` were spelled out in this list while no group named them. UDG-004 selected that
+    // family under its assignment (`docs/integration/client-stack-v1.md` records the measurements and the
+    // pins), so the register now calls the group `selected` and the loop below proves a selected package is
+    // really in the lockfile, at the exact declared version. Nothing became more permissive for a family that
+    // is still unselected: `@dimforge/` and `recast-navigation` stay spelled out because no group names them
+    // as a bare specifier, and every `not-selected` group is still asserted above.
+    const stillAbsent = [...new Set([...bareDeferredNames, '@dimforge/', 'recast-navigation'])].sort();
     for (const forbidden of stillAbsent) {
       expect(lockfile.includes(forbidden), `${forbidden} belongs to a deferred group and must not be in the lockfile`).toBe(false);
       const present = [...installed.keys()].filter((name) => name.startsWith(forbidden.replace(/\/$/, '')));
@@ -679,12 +685,18 @@ describe('task and suite dispatch', () => {
     const usage = guardUnavailable(undefined, []).message;
     const guarded = usage.replace('usage: ', '').trim().split(/\s*\|\s*/).filter((entry) => entry.length > 0).sort();
     expect(guarded.length).toBeGreaterThan(0);
+    // `test:e2e` is still a guarded command: four of its five suites (netcode, physics, input, hybrid) are
+    // still owed, so the command as a whole is still not something the dispatcher will run blindly. UDG-004
+    // made the guard per-suite rather than removing it, and `tests/contracts/UDG-004.test.ts` owns the
+    // per-suite cases — including that `--suite camera` now dispatches. The forwarded suite below is `netcode`
+    // rather than `camera` for exactly that reason: this loop proves the refusal contract for a suite nobody
+    // has implemented, which is what it always meant to prove.
     expect(guarded).toContain('test:e2e');
     expect(guarded).toContain('test:spike');
 
     const rootScripts = json<{ scripts: Record<string, string> }>('package.json').scripts;
     for (const command of guarded) {
-      const guard = guardUnavailable(command, ['--suite', 'camera']);
+      const guard = guardUnavailable(command, ['--suite', 'netcode']);
       expect(guard.exitCode, command).toBe(1);
       expect(guard.message, command).toContain('owning task');
       expect(guard.message, command).toContain('never reported as a pass');
@@ -695,7 +707,9 @@ describe('task and suite dispatch', () => {
       expect(`${cli.stdout}${cli.stderr}`, command).toContain('owning task');
 
       // The root manifest must route the guarded command through the dispatcher, so the refusal is what
-      // `pnpm <command>` actually does rather than what a helper would say if it were called.
+      // `pnpm <command>` actually does rather than what a helper would say if it were called. For `test:e2e`
+      // that routing is also what *runs* the implemented suite: the dispatcher is the only route to Playwright,
+      // so no caller can reach a browser around the guard.
       const script = rootScripts[command];
       expect(script, `pnpm ${command} must exist`).toBeTruthy();
       expect(script, `pnpm ${command} must be dispatched`).toContain(`dispatch.js ${command}`);

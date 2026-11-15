@@ -57,12 +57,92 @@ export interface SuiteOwnership {
   readonly requiredArtefact: string;
 }
 
+/**
+ * The five browser suites `pnpm test:e2e -- --suite <name>` can name, and who owes each one.
+ *
+ * UDG-001 could only guard `test:e2e` as a whole, because none of its suites existed. UDG-004 created
+ * `tests/e2e/camera.spec.ts`, and a guard that still refused the whole command would then be false while a
+ * guard that stopped guarding the command would make `netcode`, `physics`, `input` and `hybrid` look runnable.
+ * So the guard became per-suite in `dispatch.ts`: the implemented suite dispatches, every other answer a caller
+ * can construct still refuses with the task that owes it, and `tests/contracts/UDG-004.test.ts` proves all
+ * seven cases — the implemented suite, the four owed suites, an unknown name and a missing `--suite`. Each
+ * unimplemented row below is a one-line deletion when its owning task lands.
+ */
+export interface E2eSuite {
+  readonly suite: string;
+  readonly specPath: string;
+  readonly owningTask: string;
+  readonly implemented: boolean;
+  readonly requiredArtefact: string;
+}
+
+export const E2E_SUITES: Readonly<Record<string, E2eSuite>> = {
+  camera: {
+    suite: 'camera',
+    specPath: 'tests/e2e/camera.spec.ts',
+    owningTask: 'UDG-004',
+    implemented: true,
+    requiredArtefact: 'tests/e2e/camera.spec.ts, created by UDG-004, plus the pinned Playwright chromium',
+  },
+  netcode: {
+    suite: 'netcode',
+    specPath: 'tests/e2e/netcode.spec.ts',
+    owningTask: 'UDG-SPIKE-001',
+    implemented: false,
+    requiredArtefact: 'tests/e2e/netcode.spec.ts, owned by UDG-SPIKE-001 (Gate A netcode spike)',
+  },
+  physics: {
+    suite: 'physics',
+    specPath: 'tests/e2e/physics.spec.ts',
+    owningTask: 'UDG-006',
+    implemented: false,
+    requiredArtefact: 'tests/e2e/physics.spec.ts, owned by UDG-006 (Rapier physics adapter)',
+  },
+  input: {
+    suite: 'input',
+    specPath: 'tests/e2e/input.spec.ts',
+    owningTask: 'UDG-008',
+    implemented: false,
+    requiredArtefact: 'tests/e2e/input.spec.ts, owned by UDG-008 (input adapters)',
+  },
+  hybrid: {
+    suite: 'hybrid',
+    specPath: 'tests/e2e/hybrid.spec.ts',
+    owningTask: 'UDG-SPIKE-003',
+    implemented: false,
+    requiredArtefact: 'tests/e2e/hybrid.spec.ts, owned by UDG-SPIKE-003 (Gate C hybrid spike)',
+  },
+};
+
+/** Every suite name the browser command accepts, alphabetically. */
+export const e2eSuiteNames = (): string[] => Object.keys(E2E_SUITES).sort();
+
+/** The `--suite` value a call carried, in either `--suite x` or `--suite=x` form. */
+export const suiteArgument = (forwarded: readonly string[]): string | undefined => {
+  const inline = forwarded.find((entry) => entry.startsWith('--suite='));
+  if (inline !== undefined) return inline.slice('--suite='.length);
+  const index = forwarded.indexOf('--suite');
+  if (index < 0) return undefined;
+  return forwarded[index + 1];
+};
+
+/** The suite table as a message line, so a refusal always says who owes what. */
+export const e2eSuiteUsage = (): string =>
+  `  valid suites:        ${e2eSuiteNames()
+    .map((name) => {
+      const entry = E2E_SUITES[name];
+      return entry === undefined ? name : `${name} (${entry.owningTask}${entry.implemented ? ', implemented' : ''})`;
+    })
+    .join(', ')}\n`;
+
 export const UNAVAILABLE_SUITES: Readonly<Record<string, SuiteOwnership>> = {
   'test:e2e': {
     command: 'pnpm test:e2e -- --suite <camera|netcode|physics|input|hybrid>',
-    owningTask: 'UDG-004 (camera), UDG-SPIKE-001 (netcode), UDG-006 (physics), UDG-008 (input), UDG-SPIKE-003 (hybrid)',
+    // The command stays guarded because four of its five suites are still owed; `E2E_SUITES` is what makes the
+    // guard answer per suite instead of per command.
+    owningTask: 'UDG-SPIKE-001 (netcode), UDG-006 (physics), UDG-008 (input), UDG-SPIKE-003 (hybrid)',
     contractPath: 'docs/contracts/repository.md#33-test-and-script-implementation-paths',
-    requiredArtefact: 'tests/e2e/<suite>.spec.ts plus installed Playwright browsers',
+    requiredArtefact: 'tests/e2e/<suite>.spec.ts plus installed Playwright browsers (camera is implemented by UDG-004)',
   },
   'test:spike': {
     command: 'pnpm test:spike -- --id <UDG-SPIKE-00N> --profile <profile> --seed <seed>',

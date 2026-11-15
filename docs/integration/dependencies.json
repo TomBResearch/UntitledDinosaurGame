@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "generated": {
-    "at": "2026-11-10T20:45:39.122Z",
+    "at": "2026-11-15T20:31:02.056Z",
     "taskId": "UDG-001",
     "command": "pnpm dependencies:record",
-    "commit": "23f28693ae174c3eaa554eb34e18036d85780290"
+    "commit": "9b034307c3d11a9358c3947509f3f6e49edbf1ea"
   },
   "runtime": {
     "node": {
@@ -26,7 +26,7 @@
   },
   "lockfile": {
     "path": "pnpm-lock.yaml",
-    "sha256": "072827662df4e665641491511021f2dfc00b26b4f3198e61b81e28fc5bd0f420"
+    "sha256": "944ae1e435e5cf5cf5d13d42b6b0cb80f04e364ebc39b377625687bd2a7742af"
   },
   "workspaces": [
     {
@@ -99,7 +99,15 @@
       "name": "@udg/client",
       "dir": "apps/client",
       "dependencies": {
-        "typescript": "5.9.3"
+        "@babylonjs/core": "8.56.2",
+        "@udg/config": "workspace:*",
+        "@udg/protocol": "workspace:*",
+        "react": "19.3.1",
+        "react-dom": "19.3.1",
+        "@types/react": "19.3.0",
+        "@types/react-dom": "19.3.0",
+        "typescript": "5.9.3",
+        "vite": "8.3.6"
       }
     },
     {
@@ -112,6 +120,16 @@
     }
   ],
   "packages": [
+    {
+      "name": "@babylonjs/core",
+      "declared": "8.56.2",
+      "installedVersion": "8.56.2",
+      "licence": "Apache-2.0",
+      "licenceSource": "node_modules/@babylonjs/core/package.json",
+      "importedBy": [
+        "apps/client"
+      ]
+    },
     {
       "name": "@colyseus/core",
       "declared": "0.18.27",
@@ -205,6 +223,26 @@
       ]
     },
     {
+      "name": "@types/react",
+      "declared": "19.3.0",
+      "installedVersion": "19.3.0",
+      "licence": "MIT",
+      "licenceSource": "node_modules/@types/react/package.json",
+      "importedBy": [
+        "apps/client"
+      ]
+    },
+    {
+      "name": "@types/react-dom",
+      "declared": "19.3.0",
+      "installedVersion": "19.3.0",
+      "licence": "MIT",
+      "licenceSource": "node_modules/@types/react-dom/package.json",
+      "importedBy": [
+        "apps/client"
+      ]
+    },
+    {
       "name": "@udg/checks",
       "declared": "workspace:*",
       "installedVersion": "0.0.0",
@@ -221,6 +259,7 @@
       "licence": "UNLICENSED",
       "licenceSource": "node_modules/@udg/config/package.json",
       "importedBy": [
+        "apps/client",
         "apps/server"
       ]
     },
@@ -231,6 +270,7 @@
       "licence": "UNLICENSED",
       "licenceSource": "node_modules/@udg/protocol/package.json",
       "importedBy": [
+        "apps/client",
         "apps/server",
         "packages/config"
       ]
@@ -243,6 +283,26 @@
       "licenceSource": "node_modules/eslint/package.json",
       "importedBy": [
         "."
+      ]
+    },
+    {
+      "name": "react",
+      "declared": "19.3.1",
+      "installedVersion": "19.3.1",
+      "licence": "MIT",
+      "licenceSource": "node_modules/react/package.json",
+      "importedBy": [
+        "apps/client"
+      ]
+    },
+    {
+      "name": "react-dom",
+      "declared": "19.3.1",
+      "installedVersion": "19.3.1",
+      "licence": "MIT",
+      "licenceSource": "node_modules/react-dom/package.json",
+      "importedBy": [
+        "apps/client"
       ]
     },
     {
@@ -271,6 +331,16 @@
       "licenceSource": "node_modules/typescript-eslint/package.json",
       "importedBy": [
         "."
+      ]
+    },
+    {
+      "name": "vite",
+      "declared": "8.3.6",
+      "installedVersion": "8.3.6",
+      "licence": "MIT",
+      "licenceSource": "node_modules/vite/package.json",
+      "importedBy": [
+        "apps/client"
       ]
     },
     {
@@ -360,10 +430,26 @@
     },
     {
       "name": "@babylonjs/* and react",
-      "status": "not-selected",
+      "status": "selected",
       "ownerTask": "UDG-004",
-      "reason": "Client rendering and UI dependencies are chosen by the browser client task.",
-      "selectedPackages": []
+      "reason": "Client rendering and UI dependencies are chosen by the browser client task. Selected by UDG-004: @babylonjs/core@8.56.2, react@19.3.1, react-dom@19.3.1.",
+      "selectedPackages": [
+        {
+          "name": "@babylonjs/core",
+          "version": "8.56.2",
+          "licence": "Apache-2.0"
+        },
+        {
+          "name": "react",
+          "version": "19.3.1",
+          "licence": "MIT"
+        },
+        {
+          "name": "react-dom",
+          "version": "19.3.1",
+          "licence": "MIT"
+        }
+      ]
     }
   ],
   "toolchainNotes": [

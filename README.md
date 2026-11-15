@@ -13,15 +13,17 @@ replica encoding widths stay provisional under
 [ADR 0001](docs/adr/0001-replica-precision-policy.md) until Gate A. Game movement, networking,
 physics and rendering behaviour still do not exist and validation Gates A, B and C have not run.
 [UDG-003](docs/contracts/UDG-003.md) is **In Progress** — Phases 0 to 2 accepted at phase level, **Phase 3
-unassigned** — and [UDG-004](docs/contracts/UDG-004.md) is **assigned and Ready with implementation not started**
-([assignment record](docs/contracts/assignments/UDG-004.md)); every task after them stays unassigned and no
-implementation exists for either. Refinements P04, P05 and P07 to P10 remain pending (P03 was approved 2026-11-09).
+unassigned** — and [UDG-004](docs/contracts/UDG-004.md) is **implemented and submitted for review**
+([assignment record](docs/contracts/assignments/UDG-004.md),
+[completion record](docs/contracts/assignments/UDG-004-completion.md)): the browser client, its camera controls
+and its browser evidence suite exist and run, and reviewer acceptance is pending. Every task after them stays
+unassigned. Refinements P04, P05 and P07 to P10 remain pending (P03 was approved 2026-11-09).
 The planning contracts and their [adoption status](docs/contracts/adoption.md) remain the authority for what may be built next.
 
 ## Start here
 
 - **For an agent:** read [AGENTS.md](AGENTS.md), then the specific [task contract](docs/contracts/README.md) you are assigned. Each task links only to the shared rules it needs.
-- **For the project owner:** review [adoption status](docs/contracts/adoption.md). P01, P02, P03 and P06 are approved (P02 with clarifications U2-1 to U2-6 and ADR 0001); P04, P05 and P07 to P10 remain pending. UDG-003 is In Progress with Phase 3 unassigned, UDG-004 is assigned and Ready but not started, and every task after them stays Not Started.
+- **For the project owner:** review [adoption status](docs/contracts/adoption.md). P01, P02, P03 and P06 are approved (P02 with clarifications U2-1 to U2-6 and ADR 0001); P04, P05 and P07 to P10 remain pending. UDG-003 is In Progress with Phase 3 unassigned, UDG-004 is submitted for review and not yet accepted, and every task after them stays Not Started.
 - **For the current project plan:** read the [plan and version guide](docs/specifications/README.md). The [M0 Technical Specification v0.2](docs/specifications/UDG-SPEC-M0-002.md) is the current architecture baseline; the v1.0 agent contracts elaborate it into work packages.
 
 ## Repository map
@@ -84,10 +86,9 @@ pnpm evidence:summary -- --run artifacts/RUN_ID --out docs/contracts/assignments
 node tools/checks/dist/evidence.js plans   # the task IDs that have a capture plan
 ```
 
-`pnpm clean` removes workspace build output. There is nothing to run or stop yet: no server or
-client entry point exists, so no port is bound and no ready signal is emitted. The ports and ready
-signals below are the contract that UDG-003 and UDG-004 must honour, recorded here so a developer
-can configure tooling in advance.
+`pnpm clean` removes workspace build output. Both development processes exist: the UDG-003 server
+and `pnpm dev`, the UDG-004 Vite client. A client with no server is a normal state — it renders the
+scene and reports the connection as failed rather than pretending otherwise.
 
 | Service | Address | Ready signal (from the owning task) | Shutdown |
 | --- | --- | --- | --- |
@@ -96,7 +97,10 @@ can configure tooling in advance.
 
 Both defaults are loopback only. Non-loopback exposure is refused unless the owning task's explicit
 opt-in flag is set, because a development room bound to a routable interface is a security problem.
-Copy `.env.example` for the variable names; it contains no secrets and never will.
+For the client that flag is `UDG_DEV_HOST`: unset, Vite binds `127.0.0.1` and prints no `Network:` line;
+set to `0.0.0.0`, it binds every interface and says so loudly in the banner, so it is used only on an
+interface you chose, never by default. Copy `.env.example` for the variable names; it contains no
+secrets and never will.
 
 ## Command availability right now
 
@@ -109,9 +113,12 @@ zero discovered tests.
 | `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build` | Implemented and passing | UDG-001 |
 | `pnpm test:boundaries`, `pnpm test:fixtures`, `pnpm test:contract -- --task UDG-001` | Implemented and passing | UDG-001 |
 | `pnpm test:unit`, `pnpm test:contract -- --task UDG-002` | Implemented and passing: protocol and configuration validation, mapping, schema round trips and the executable protocol fixtures | UDG-002 |
-| `pnpm dependencies:record`, `pnpm dependencies:verify`, `pnpm contracts:checksums`, `pnpm evidence:capture`, `pnpm evidence:verify`, `pnpm evidence:summary` | Implemented; a capture plan exists for each of UDG-001 and UDG-002 | UDG-001, extended by UDG-002 |
+| `pnpm dependencies:record`, `pnpm dependencies:verify`, `pnpm contracts:checksums`, `pnpm evidence:capture`, `pnpm evidence:verify`, `pnpm evidence:summary` | Implemented; a capture plan exists for each of UDG-001, UDG-002, UDG-003 and UDG-004 | UDG-001, extended by UDG-002, UDG-003 and UDG-004 |
 | `pnpm test:contract -- --task UDG-003 … UDG-SPIKE-003` | Exits `2`: that task's suite does not exist yet | each task creates its own suite |
-| `pnpm test:e2e -- --suite camera` | Exits `1`: no browser suite exists | UDG-004 camera, UDG-SPIKE-001 netcode, UDG-006 physics, UDG-008 input, UDG-SPIKE-003 hybrid |
+| `pnpm dev` | Implemented and passing: the UDG-004 development client on `http://127.0.0.1:5173` | UDG-004 |
+| `pnpm test:e2e -- --suite camera` | Implemented and passing: the UDG-004 camera suite, its screenshots and its lifecycle counts | UDG-004 |
+| `pnpm test:e2e -- --suite netcode\|physics\|input\|hybrid` | Exits `1` naming its owner: no such suite exists, and a suite that does not exist is never a pass | UDG-SPIKE-001 netcode, UDG-006 physics, UDG-008 input, UDG-SPIKE-003 hybrid |
+| `pnpm test:e2e` with no `--suite` | Exits `1`, naming all five owners: no single task owns "every browser suite" | the five tasks above |
 | `pnpm test:spike -- --id UDG-SPIKE-001 …` | Exits `1`: no spike harness exists | UDG-SPIKE-001, UDG-SPIKE-002, UDG-SPIKE-003 |
 | `pnpm assets:build`, `pnpm assets:verify` | Exits `1`: no asset pipeline exists | UDG-007 |
 
@@ -154,8 +161,8 @@ submission drew four corrections, and the corrected head was accepted with
 a green first submission and a green accepted submission — is recorded in
 [the UDG-002 completion record](docs/contracts/assignments/UDG-002-completion.md). P04, P05 and P07
 to P10 remain pending and Gates A, B and C remain Not Run; UDG-003 is In Progress with Phase 3 unassigned
-and UDG-004 is assigned but not started, so nothing beyond those two is assigned and no implementation for
-either exists yet; the local reproduction of the identical command sequence and every CI bundle are retained and verified.
+and UDG-004 is submitted for review, so nothing beyond those two is assigned and no implementation for
+either has been accepted beyond what those records describe; the local reproduction of the identical command sequence and every CI bundle are retained and verified.
 
 ## Evidence
 
@@ -167,7 +174,11 @@ rejection codes and the live refusal probes. Each task's bundle is described by 
 plan it finds, so adding a task cannot silently drop evidence. `pnpm evidence:verify` re-checks the
 report schema, required artefacts, non-empty and matching hashes, zero skipped or flaky tests,
 command exit codes, the task's own prerequisite commits, that task-declared JSON artefacts parse and
-carry that task's identity, and the absence of credentials or private machine paths. Verification and `pnpm evidence:summary` are gates rather than neutral audits: a bundle whose
+carry that task's identity, and the absence of credentials or private machine paths. A PNG is copied
+byte-for-byte and never rewritten as text — a screenshot read as UTF-8 and written back is a different
+file, and one that no viewer will open — while a binary that carries a machine path is reported as a
+refusal with its bytes left exactly as they were (`UDG-004` is the task that established this rule;
+see `docs/integration/client-stack-v1.md`). Verification and `pnpm evidence:summary` are gates rather than neutral audits: a bundle whose
 own record says `FAIL`, `BLOCKED` or `INVALID` is refused with `EVIDENCE-GATE-NOT-PASS` even when
 every stored hash matches, and no summary file is written for it, because a self-consistent record of
 a failing run proves nothing about completion. `artifacts/` is not committed: raw bundles are copied

@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>UDG-004 — browser client greybox</title>
+    <meta
+      name="description"
+      content="Greybox Babylon.js scene, orbit camera and development status UI. Presentation only: no authority, no session."
+    />
+    <style>
+      /*
+       * Layout for one canvas and two overlay regions. The canvas owns the whole viewport; the status banner
+       * and the development panel float above it. `touch-action: none` is set on the canvas by OrbitCamera at
+       * attach time rather than here, so the rule that disables page scrolling during a drag is installed and
+       * removed by the same object — a canvas with no camera controller attached must not swallow touches.
+       */
+      :root {
+        color-scheme: dark;
+        --udg-bg: #0a0d12;
+        --udg-panel: rgba(16, 20, 27, 0.88);
+        --udg-line: rgba(255, 255, 255, 0.12);
+        --udg-text: #dbe1ea;
+        --udg-muted: #93a0b1;
+        --udg-ok: #59c98a;
+        --udg-bad: #e2574c;
+        font-family: ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--udg-bg);
+        color: var(--udg-text);
+      }
+
+      canvas[data-udg-scene] {
+        position: fixed;
+        inset: 0;
+        display: block;
+        width: 100%;
+        height: 100%;
+        outline: none;
+      }
+
+      #udg-app,
+      #udg-shell {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      #udg-app > *,
+      #udg-shell > * {
+        pointer-events: auto;
+      }
+
+      .udg-status {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 10px;
+        align-items: baseline;
+        padding: 8px 12px;
+        border: 1px solid var(--udg-line);
+        border-radius: 10px;
+        background: var(--udg-panel);
+        font-size: 13px;
+        max-width: min(52ch, calc(100vw - 24px));
+      }
+
+      .udg-status[data-udg-tone='bad'] {
+        border-color: var(--udg-bad);
+      }
+
+      .udg-status[data-udg-tone='ok'] {
+        border-color: var(--udg-ok);
+      }
+
+      .udg-status-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--udg-muted);
+      }
+
+      .udg-status[data-udg-tone='bad'] .udg-status-dot {
+        background: var(--udg-bad);
+      }
+
+      .udg-status[data-udg-tone='ok'] .udg-status-dot {
+        background: var(--udg-ok);
+      }
+
+      .udg-status-url,
+      .udg-status-reason,
+      .udg-status-note {
+        color: var(--udg-muted);
+        font-size: 12px;
+      }
+
+      .udg-overlay {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        width: min(340px, calc(100vw - 24px));
+        margin: 0;
+        padding: 12px 14px;
+        border: 1px solid var(--udg-line);
+        border-radius: 12px;
+        background: var(--udg-panel);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .udg-overlay-title {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+
+      .udg-overlay-sub,
+      .udg-overlay-hint {
+        margin: 6px 0 0;
+        color: var(--udg-muted);
+      }
+
+      .udg-overlay-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 10px 0 4px;
+      }
+
+      .udg-overlay button,
+      .udg-shell button {
+        font: inherit;
+        color: inherit;
+        padding: 5px 9px;
+        border: 1px solid var(--udg-line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.06);
+        cursor: pointer;
+      }
+
+      .udg-overlay button:hover,
+      .udg-shell button:hover {
+        background: rgba(255, 255, 255, 0.12);
+      }
+
+      .udg-overlay-readouts {
+        display: grid;
+        grid-template-columns: 8.5rem 1fr;
+        gap: 2px 8px;
+        margin: 8px 0 0;
+      }
+
+      .udg-overlay-readouts dt {
+        color: var(--udg-muted);
+      }
+
+      .udg-overlay-readouts dd {
+        margin: 0;
+        font-variant-numeric: tabular-nums;
+        overflow-wrap: anywhere;
+      }
+
+      #udg-shell {
+        display: grid;
+        place-items: center;
+      }
+
+      .udg-shell {
+        padding: 14px 16px;
+        border: 1px solid var(--udg-line);
+        border-radius: 12px;
+        background: var(--udg-panel);
+        text-align: center;
+      }
+
+      .udg-shell-text {
+        margin: 0 0 10px;
+        color: var(--udg-muted);
+        font-size: 13px;
+      }
+
+      [data-udg-fatal='true'] {
+        position: fixed;
+        bottom: 12px;
+        left: 12px;
+        padding: 10px 12px;
+        border: 1px solid var(--udg-bad);
+        border-radius: 10px;
+        background: var(--udg-panel);
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      One canvas, one scene. `data-udg-scene` is the selector main.tsx looks for; a page with two of these is a
+      page the runtime refuses to guess about, and the fatal notice path is what the reviewer sees instead.
+    -->
+    <canvas data-udg-scene aria-label="Greybox scene with orbit camera"></canvas>
+
+    <!-- The status banner and development overlay mount here, created and destroyed with each scene cycle. -->
+    <div id="udg-app"></div>
+
+    <!-- Persistent across cycles, so unmounting the scene never hides the control that mounts it again. -->
+    <div id="udg-shell"></div>
+
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

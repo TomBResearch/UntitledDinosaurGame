@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tsconfig.base.json",
+  "//": "UDG-004 check-only project for the files that must never enter the emitted library: vite.config.ts (a Node process, not browser code), src/main.tsx (the browser entry point, whose only importer is the HTML) and src/dev/** (the mount/unmount seam the browser suite drives, which the production build must not contain). noEmit, so nothing here can reach dist/. Measured with types: [] and the inherited skipLibCheck: false: Vite 8.3.6's declarations typecheck clean, so this project needs no ambient-type widening \u2014 the same measurement that keeps @babylonjs/core at 8.56.2 (docs/integration/client-stack-v1.md).",
+  "compilerOptions": {
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "lib": [
+      "ES2024",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": []
+  },
+  "include": [
+    "vite.config.ts",
+    "src/vite-env.d.ts",
+    "src/main.tsx",
+    "src/dev/**/*.ts",
+    "src/dev/**/*.tsx"
+  ]
+}

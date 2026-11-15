@@ -30,7 +30,9 @@ jobs:
   foundation:
     name: foundation checks (Node 24.22.2, pnpm 12.18.0)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Raised from 30 to 45 when UDG-004 added the chromium download and the camera suite. A timeout that fires
+    # because the job legitimately grew is a red run that says nothing about the change under review.
+    timeout-minutes: 45
 
     steps:
       - name: Check out the exact commit
@@ -62,12 +64,29 @@ jobs:
       - name: Lint sources and dependency boundaries
         run: pnpm lint
 
+      # UDG-004's browser suite and the pinned chromium. Order matters twice over here: the chromium has to be
+      # installed before `pnpm test`, because `tests/unit/udg-004/evidence-gates.test.ts` proves the PNG
+      # portability rules against a real screenshot, and the camera suite has to run **before** `pnpm test`,
+      # because `tests/contracts/UDG-004.test.ts` gates the browser artefacts that command then reads. A camera
+      # run that never happened therefore stops the acceptance command rather than being noticed in review.
+      - name: Install the pinned Playwright chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run the UDG-004 camera suite
+        env:
+          # Written where the evidence upload below publishes it, and where the contract suite looks. The suite
+          # starts its own loopback dev server through playwright.config.ts; nothing here publishes a port.
+          UDG_BROWSER_OUT: artifacts/udg-004-browser
+        run: pnpm test:e2e -- --suite camera
+
       - name: Run the unit and Node integration suites
         env:
           # The full suite includes the UDG-003 contract suite, which builds and runs the probes. This is
           # the job's first probe invocation, and it is named so that the later ones cannot be mistaken
           # for it - or, worse, be mistaken for it by a reader of the retained artefacts.
           UDG_PROBE_INVOCATION: ci-full-test
+          # The camera artefacts this command gates were written by the step above, in this job, on this commit.
+          UDG_BROWSER_OUT: artifacts/udg-004-browser
         run: pnpm test
 
       - name: Build shared libraries, tools and apps
@@ -94,6 +113,14 @@ jobs:
 
       - name: Run the UDG-002 task suite
         run: pnpm test:contract -- --task UDG-002
+
+      # UDG-004's own suite: the pins and surfaces it was assigned, the per-suite dispatcher refusals, the
+      # absence of the development seam from the built client, and the browser/lifecycle/screenshot gate over
+      # the artefacts the camera step wrote.
+      - name: Run the UDG-004 task suite
+        env:
+          UDG_BROWSER_OUT: artifacts/udg-004-browser
+        run: pnpm test:contract -- --task UDG-004
 
       # UDG-003 Phase 0 measures the pinned third-party stack, and the suite builds what it asserts:
       # this step emits the probe project, runs each probe in its own process and checks the recorded
@@ -305,5 +332,6 @@ jobs:
             artifacts/*-ci-summary.json
             artifacts/probes
             artifacts/udg-003-phase-1
+            artifacts/udg-004-browser
           if-no-files-found: error
           retention-days: 30
