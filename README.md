@@ -15,8 +15,10 @@ physics and rendering behaviour still do not exist and validation Gates A, B and
 [UDG-003](docs/contracts/UDG-003.md) is **In Progress** — Phases 0 to 2 accepted at phase level, **Phase 3
 unassigned** — and [UDG-004](docs/contracts/UDG-004.md) is **implemented and submitted for review**
 ([assignment record](docs/contracts/assignments/UDG-004.md),
-[completion record](docs/contracts/assignments/UDG-004-completion.md)): the browser client, its camera controls
-and its browser evidence suite exist and run, and reviewer acceptance is pending. Every task after them stays
+[completion record](docs/contracts/assignments/UDG-004-completion.md) at
+`0ad8d9e9f57d98242e62b390f92bda54acfa755f` with [CI run 43770588357](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43770588357)
+green): the browser client, its camera controls and its browser evidence suite exist and run, and reviewer
+acceptance is pending. Every task after them stays
 unassigned. Refinements P04, P05 and P07 to P10 remain pending (P03 was approved 2026-11-09).
 The planning contracts and their [adoption status](docs/contracts/adoption.md) remain the authority for what may be built next.
 
