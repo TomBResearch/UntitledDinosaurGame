@@ -561,6 +561,8 @@ describe('the camera run is evidence, or the acceptance command fails', () => {
     record('camera.pageErrors', Number(results.measurements['unexplainedPageErrors']));
     record('camera.consoleErrors', Number(results.measurements['unexplainedConsoleErrors']));
     record('camera.handednessPicks', Number(results.measurements['handednessPicksAgreeing']));
+    record('camera.sweepFound', Number(results.measurements['screenMarkersFound'] ?? 0));
+    record('camera.sweepMissed', Number(results.measurements['screenMarkersMissed'] ?? 0));
     record('camera.elevationClampLow', Number(results.measurements['elevationClampLow']));
     record('camera.elevationClampHigh', Number(results.measurements['elevationClampHigh']));
     record('camera.radiusMinMetres', Number(results.measurements['radiusMinMetres']));

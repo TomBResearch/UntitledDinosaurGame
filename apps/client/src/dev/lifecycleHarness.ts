@@ -56,7 +56,7 @@
 import type { CameraReadout } from '../rendering/camera-math.js';
 import type { GestureIncident } from '../rendering/OrbitCamera.js';
 import type { RuntimeCounters } from '../game/ClientRuntime.js';
-import { pickUdgMesh, readSceneFacts, sweepUdgPicks, type MeshPoint, type SceneFacts, type ScenePick } from './sceneReadout.js';
+import { pickUdgMesh, probeUdgAxes, readSceneFacts, sweepUdgPicks, type AxisProbe, type MeshPoint, type SceneFacts, type ScenePick } from './sceneReadout.js';
 
 /** The global the browser suite drives. Absent from every non-development build. */
 export const HARNESS_GLOBAL = '__udgClientHarness';
@@ -114,6 +114,12 @@ export interface UdgClientHarness {
   pick(x: number, y: number): ScenePick | undefined;
   /** Sweep the canvas on a grid and report each of this client's meshes once, with the pixel it appeared at. */
   sweep(stepPixels?: number): readonly ScenePick[];
+  /**
+   * Cast a downward ray at each sampled world-space point and report which of this client's meshes it met.
+   * The samples come from the caller — the suite holds the answer key, not the client — so a probe cannot be
+   * satisfied by a scene that describes itself favourably.
+   */
+  probe(samples: readonly MeshPoint[], includeGround?: boolean): readonly AxisProbe[];
 }
 
 declare global {
@@ -240,6 +246,7 @@ export const installLifecycleHarness = (seam: LifecycleSeam): UdgClientHarness =
     snapshot: snap,
     pick: (x, y) => pickUdgMesh(seam.canvas(), x, y),
     sweep: (stepPixels) => sweepUdgPicks(seam.canvas(), stepPixels),
+    probe: (samples, includeGround) => probeUdgAxes(seam.canvas(), samples, { includeGround: includeGround ?? false }),
   };
 
   Object.defineProperty(window, HARNESS_GLOBAL, {

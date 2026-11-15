@@ -30,6 +30,9 @@ import type { AbstractEngine } from '@babylonjs/core/Engines/abstractEngine.js';
 import { EngineStore } from '@babylonjs/core/Engines/engineStore.js';
 import type { Scene } from '@babylonjs/core/scene.js';
 
+import { Ray } from '@babylonjs/core/Culling/ray.js';
+import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
+
 import { SCENE_NAMES } from '../rendering/create-scene.js';
 import { cameraReadout, type CameraReadout } from '../rendering/camera-math.js';
 
@@ -305,10 +308,68 @@ export const pickUdgMesh = (
 };
 
 /**
+ * Which of this client's meshes a downward ray meets at each sampled world-space point.
+ *
+ * This is the probe the handedness assertion actually rests on, and the reason it is a ray rather than a
+ * screenshot is a red CI run. The screen-space sweep below asks "which mesh did the frame show at this pixel",
+ * which depends on the camera framing, the canvas box the browser happened to lay out, and whether the mesh had
+ * been rendered yet at the moment of asking. On the GitHub runner that made one of five arms invisible — same
+ * commit, same browser build, different machine — and the failure said "the marker is not being drawn" about a
+ * marker that was being drawn. A ray cast from above at a world point asks a question the answer to which does
+ * not depend on how the page was framed: it still goes through Babylon's real picking machinery, so it needs the
+ * mesh's geometry, its world matrix and its `isPickable` flag to all agree, and it would have caught the
+ * double-negated offset exactly as the sweep did (a ray at x = -0.6 would have found the floor, not an arm).
+ *
+ * The ground is excluded unless asked for, for the same reason as the screen pick: the arms lie in the ground
+ * plane, so an unconstrained probe answers `udg-ground` at almost every point on an axis. Ground presence is its
+ * own probe with `includeGround`, not a fact swept under the rug.
+ */
+export interface AxisProbe {
+  /** The point the ray was cast from, so the artefact can be re-derived by hand. */
+  readonly sample: MeshPoint;
+  /** The mesh the ray hit, or `undefined` when nothing of ours was there. */
+  readonly hit: string | undefined;
+  /** Where it hit, in world space. */
+  readonly point: MeshPoint | undefined;
+  readonly distance: number;
+}
+
+/** How far a probe ray travels; the scene fits well inside this, and a bound keeps a stray ray honest. */
+const PROBE_RAY_LENGTH = 8;
+
+export const probeUdgAxes = (
+  canvas: HTMLCanvasElement | null,
+  samples: readonly MeshPoint[],
+  options?: { readonly includeGround?: boolean },
+): readonly AxisProbe[] => {
+  const scene = sceneForCanvas(canvas);
+  if (scene === undefined) return [];
+  const ours = new Set<string>(Object.values(SCENE_NAMES));
+  const includeGround = options?.includeGround ?? false;
+  const predicate = (mesh: { name?: string }): boolean => {
+    if (typeof mesh.name !== 'string' || !ours.has(mesh.name)) return false;
+    return includeGround || mesh.name !== SCENE_NAMES.ground;
+  };
+  return samples.map((sample) => {
+    const ray = new Ray(new Vector3(sample.x, sample.y, sample.z), new Vector3(0, -1, 0), PROBE_RAY_LENGTH);
+    const info = scene.pickWithRay(ray, predicate as never);
+    const mesh = info?.pickedMesh;
+    return {
+      sample,
+      hit: typeof mesh?.name === 'string' ? mesh.name : undefined,
+      point: asVector((info as unknown as Record<string, unknown>)['pickedPoint']),
+      distance: asNumber((info as unknown as Record<string, unknown>)['distance']) ?? Number.NaN,
+    };
+  });
+};
+
+/**
  * Sweep the canvas on a grid and report every client mesh the picker found, with the pixel it was seen at.
  *
- * Runs inside the page on purpose: 200+ round trips per assertion would make the browser suite slower than the
- * scene it is measuring, and a slow suite gets its assertions trimmed.
+ * Kept as the record of what the *frame* contains — the picture-level half of the handedness claim — and no
+ * longer the decisive half, for the reason in `probeUdgAxes`. Runs inside the page on purpose: 200+ round trips
+ * per assertion would make the browser suite slower than the scene it is measuring, and a slow suite gets its
+ * assertions trimmed.
  */
 export const sweepUdgPicks = (
   canvas: HTMLCanvasElement | null,

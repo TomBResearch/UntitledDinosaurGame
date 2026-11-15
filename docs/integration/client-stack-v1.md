@@ -61,9 +61,12 @@ the owner decides the `skipLibCheck` question first and the pin moves in a commi
 
 `Engine`/`NullEngine`, `Scene`, `ArcRotateCamera`, `FreeCamera`, `Vector3`, `Color3`, `Color4`,
 `MeshBuilder` (`CreateBox`, `CreateGround`, `CreateSphere`, `CreateLines`), `StandardMaterial`,
-`Mesh`, `Observable`, `RenderTargetTexture`, `EngineStore`, `Logger`. All are reachable from
-`@babylonjs/core`'s own entry points; the client never imports a deep path, so a Babylon upgrade
-touches one import block rather than the rendering code.
+`Mesh`, `Observable`, `RenderTargetTexture`, `EngineStore`, `Logger`. The production rendering code
+reaches all of these through `@babylonjs/core`'s package entry point, so a Babylon upgrade touches one
+import block rather than the rendering code. The development harness is the deliberate exception: it
+imports `Ray`, `Vector3`, `EngineStore` and a few types by deep path, because it is stripped from the
+production bundle anyway and a narrow import keeps its own type surface honest under
+`skipLibCheck: false`.
 
 ## 2. Typechecking and lint layout
 
@@ -130,15 +133,26 @@ distances, however, are in metres (`2`–`20`), so the scene reads as a small ob
 metre values, so nothing has to guess which scale a number is in. `docs/integration/engines.md`
 freezes the unit policy at Gate A; UDG-004 records the values and changes no policy.
 
-**Handedness was broken and is now measured.** The negative axis arms were drawn at **+0.6** because
-the mesh location double-negated an already-negative offset. It could not be seen from `getMetadata`,
-because metadata described the intended placement rather than the rendered one. A new browser check
-asks the render path: Babylon is told to pick only on the positive axis and then only on the negative,
-and counts the hits. Five meshes agree (two +X arms, two −Z arms, ground); the two positive-Z caps and
-the two negative-X arms are reported by `sweepUdgPicks` as misses, which is expected — they are caps
-placed *past* the arm ends, and the sweep records both the marker positions and the sweep misses so a
-reviewer sees what was actually checked. `axisMarkerWorldPositions` in the lifecycle artefact is the
-machine-readable half; `handednessPicksAgreeing` and the two list fields are the honest half.
+**Handedness was broken, and measuring it took two attempts.** The negative axis arms were drawn at
+**+0.6** because the mesh location double-negated an already-negative offset. Metadata could not show
+it, because metadata describes intent rather than the render. The first browser check asked the *screen*:
+sweep pixels, ask Babylon's picker what is at each one, and compare each marker's side of screen centre
+with a right-handed basis derived in the suite from the camera's own position and target. That passed
+locally and failed on the GitHub runner (CI run `43764611170`) with "udg-axis-z-negative was never
+visible in the sweep" — about a marker that was being drawn. Frame visibility depends on the canvas box
+the browser laid out and on what had been rendered by the moment of asking, and neither is a handedness
+signal.
+
+The decisive check is now a **world-space ray probe**: drop a ray from `(x, 2, z)` straight down onto a
+point only one mesh can occupy and ask Babylon's picking path what it met. Eight arm samples (mid-arm and
+near-end, positive and negative, X and Z) plus one floor probe at a point inside the plane answer with the
+expected mesh name, and the answer key lives in the suite rather than in the client. It still goes through
+geometry, world matrices and `isPickable`, so it catches the same bug — a ray at `x = -0.6` would have met
+the floor instead of an arm — and it does not care how the page was framed. `handednessPicksAgreeing`
+counts those probes (9 where the threshold asks for 5). The pixel sweep is kept and reported
+(`camera.sweepFound`, `camera.sweepMissed`) as the picture-level half: the frame must contain at least
+three of this client's own meshes, and every marker it does show must sit on the side the independently
+derived basis predicts.
 
 ## 5. Connection state without a server
 
