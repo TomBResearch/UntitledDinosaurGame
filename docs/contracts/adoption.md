@@ -2,7 +2,7 @@
 
 Status: **Partially adopted — P01, P02, P03 and P06 approved (P03 on 2026-11-09); P04, P05 and P07 to P10 pending**
 
-Implementation assignment: **UDG-001** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)) and **UDG-002** (authorised 2026-11-08, see [P02 and P06 adoption](#p02-and-p06-adoption-recorded-2026-11-08); **accepted and Verified 2026-11-09**, see [UDG-002 acceptance](#udg-002-acceptance-recorded-2026-11-09)), and **UDG-003 Phase 0 only** (authorised 2026-11-09, see [P03 adoption](#p03-adoption-and-udg-003-phase-0-authorisation-recorded-2026-11-09)). Nothing beyond UDG-003 Phase 0 is assigned: UDG-003 Phases 1 to 3, UDG-004 and every later task stay unassigned.
+Implementation assignment: **UDG-001** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)) and **UDG-002** (authorised 2026-11-08, see [P02 and P06 adoption](#p02-and-p06-adoption-recorded-2026-11-08); **accepted and Verified 2026-11-09**, see [UDG-002 acceptance](#udg-002-acceptance-recorded-2026-11-09)), and **UDG-003 Phases 0, 1 and 2** (Phase 0 authorised 2026-11-09, see [P03 adoption](#p03-adoption-and-udg-003-phase-0-authorisation-recorded-2026-11-09); Phases 1 and 2 authorised and accepted at phase level, see [Phase 1 acceptance](#udg-003-phase-1-acceptance-recorded-2026-11-14-by-commit-dated-record), [Phase 2 authorisation](#udg-003-phase-2-authorisation-recorded-2026-11-14-by-commit-dated-record) and [Phase 2 acceptance](#udg-003-phase-2-acceptance-recorded-dated-by-commit); **UDG-003 Phase 3 is not authorised** and the task as a whole stays **In Progress**), and **UDG-004** (assigned, **Ready**, implementation **not started** — see [UDG-004 assignment recorded](#udg-004-assignment-recorded-dated-by-commit)). Nothing beyond UDG-004 is assigned: UDG-003 Phase 3 and every task from UDG-005 to UDG-SPIKE-003 stay unassigned.
 
 Integration owner: **Project owner, GitHub account `TomBResearch`** — recorded 2026-11-08 at the owner's instruction as both integration owner and project reviewer. Replace with the owner's preferred display name on request; the identity, not the decision, is what may be restated.
 
@@ -598,6 +598,39 @@ Evidence preserved                             every bundle from every submissio
                                                (E1) and §19.3
 Authorises                                     acceptance records only. It assigns no further work and reopens no closed decision
 ```
+
+## UDG-004 assignment recorded (dated by commit)
+
+The integration owner instructed: *“Finalise the UDG-004 assignment from draft revision 2 … Confirm the draft CI
+result and publish the final assignment with its exact implementation baseline and handoff commit … This authorises
+finalising the assignment. I’ll give the build instruction separately.”* (The message carries no independently
+verifiable timestamp, so it is dated by the commit carrying this record — the basis already used for the Phase 1, M-1,
+D-7 and D-8 records.) **UDG-004 is assigned and Ready with implementation not started**: nothing here writes source,
+starts a dev server or passes a gate, and the record is a docs-only change while the contract text, the ten acceptance
+checks and `checksums.json`'s task-contract digest stay as adopted.
+
+| Item | Recorded state |
+| --- | --- |
+| Record | [assignments/UDG-004.md](assignments/UDG-004.md), template B1, from [revision 2 of the draft](assignments/UDG-004-assignment-draft.md) published as `089ae33d2d0d…`; **the draft is superseded and governs nothing**; where the two differ the record governs |
+| Implementation baseline | `089ae33d2d0df346d5a1de8e756971c605dc839a` — the `main` tip immediately before the record, a documentation baseline whose implementation paths are byte-identical to `81a341f`, the accepted Phase 2 head |
+| Draft CI confirmed | run `43740515165`, workflow `ci`, **completed / success**, job “foundation checks (Node 24.22.2, pnpm 12.18.0)”, artefact `udg-evidence` 1,450,722 bytes not expired |
+| Prerequisite | UDG-001 **Verified** `524658e1fb4c53a450cdf933886c7ad4b17c72e9`; UDG-002 `d364d2da…` consumed, not required |
+| Pins | `@babylonjs/core` **8.56.2**, `react`/`react-dom` **19.3.1**, `@types/react`/`@types/react-dom` **19.3.0**, `vite` **8.3.6**; no `@babylonjs/loaders`, no `@webgpu/types`, no `@colyseus/*`; **`@vitejs/plugin-react` deferred** as a separate later decision |
+| No compiler-policy exception | the revision-1 need for one disappeared with the pin choice: `9.36.0` yields 154 Babylon declaration diagnostics under `skipLibCheck: false` (17 even with the disallowed `@webgpu/types`), **`8.56.2` yields 0** with 0 first-party errors, so `tsconfig.base.json` is untouched. `eslint.config.mjs` is byte-identical: the draft’s claim that `.tsx` went unlinted was measured wrong (`eslint --print-config` already parses `.tsx`); the real gap was `.tsx` **typechecking**, granted as G-6 |
+| Grants | **G-1, G-1b, G-2, G-3, G-4, G-6, G-8, G-9 approved with limits**; G-5 withdrawn (ESLint unchanged); G-7 not exercised (`pnpm-workspace.yaml` untouched). G-3 amends **only** the assertions the per-suite guard invalidates, and the record lists the guard assertions that must keep passing; `netcode`, `physics`, `input`, `hybrid`, unknown and omitted suites still refuse |
+| Evidence | **GitHub CI is the authoritative acceptance capture**; the **single-JUnit format is kept** and the browser results gate the junit-carrying command transitively; demonstrations **E-1 missing, E-2 failed, E-3 stale** must each block acceptance, plus **E-4/E-5** for binary-safe sanitisation and **E-6** that retained bundles still verify with 0 issues and the three accepted capture plans stay byte-identical |
+| Sanitisation, measured | a real screenshot survives the accepted sanitiser **byte-for-byte** (4254 B, sha `3878570f4a62a0d6…`, opens 1280×720 in chromium 1254) **unless** a machine path appears in its bytes: the same PNG plus a `tEXt` path chunk is rewritten to 5437 B, **loses its PNG signature**, reports `sanitisationFailures: []` and fails to decode — so G-9(b) is “never rewrite a binary; refuse instead”, proven on real files, not asserted |
+| Runtime | provisioning route approved: official `node-v24.22.2-linux-arm64.tar.xz` with `sha256sum -c` plus `corepack enable --install-directory` for pnpm `12.18.0`. Measured: `v24.22.2`, `12.18.0`, and `install → typecheck → lint → build → test` green at **572/572**. **No repository pin moves** |
+| **D5 closed** | Playwright chromium is **no longer a blocker**: build **1254** is in the image at `/opt/playwright-browsers` and launches headless with WebGL2. The read-only `__dirlock` `EACCES` on `playwright install` is cosmetic and must not be worked around in container runs; CI installs chromium |
+| Access route | host-loopback mapping **`-p 127.0.0.1:5173:5173`** with **`UDG_DEV_HOST=0.0.0.0`** in the preview container; the default Vite bind stays `127.0.0.1` and nothing in the repository sets the variable; **the `--network container:…` + `-p` sidecar route is removed**. Preview URL `http://127.0.0.1:5173/`, port **5173** with `strictPort: true` (a second server was measured refusing “Port 5173 is already in use”); measured `200` on both container loopback and the `172.18.0.2` bridge address that `-p` forwards to. Mac steps, host-side reachability check and the recreation-with-mounts-intact procedure are in the record’s §7, including what recreation does **not** preserve (the pinned Node and pnpm shims live in the container layer, not the `pi-container_project` / `pi-container_pi-state` volumes) |
+| Seam | test-only `apps/client/src/dev/lifecycleHarness.ts` driving the four public `ClientRuntime` methods through ten cycles with counters, **plus** required proofs that neither `__udgClientHarness` nor `lifecycleHarness` appears in the production build and that `window.__udgClientHarness` is `undefined` when served from it |
+| Shared tooling | **UDG-004 takes first use** of `evidence.ts`, `ci.yml`, `checksums.json`, `dependencies.json`/lockfile, `README.md` and (`support.ts` + UDG-001 suite) under the single-writer rules M-1…M-7; **UDG-003 Phase 3 stays unassigned** and queues behind them |
+| Unchanged | **Gates A, B and C remain Not Run**; `stackCompatibility` remains **not-established**; **D4 remains open** and nothing is provisioned, so UDG-004 evidence goes to the existing store only; UDG-005…UDG-SPIKE-003 stay unassigned; P04, P05 and P07 to P10 stay pending; no refinement, ADR, interface or protocol field changes |
+| Open item | D-004-15: whether screenshots should join the accepted `manifests` gate (a one-field additive change). Two documentation drifts are recorded rather than silently repaired — the UDG-001 capture-plan threshold prose against measured counts, and README’s command-availability rows beyond the assignment-status sentences this record corrects |
+
+This assigns UDG-004 and nothing else; it authorises no implementation, assigns no later task, re-opens no gate, and
+**work begins only on the owner’s separate build instruction**, which must name the implementer and reviewer. If
+`main` has moved by then, the record’s §12 requires re-pinning and a fresh green CI run before any code.
 
 ## Reviewed edition and pins for the P01 approval
 

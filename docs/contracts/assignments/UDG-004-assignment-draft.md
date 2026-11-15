@@ -1,9 +1,22 @@
-# UDG-004 Browser client and camera — **DRAFT revision 2 — assigns nothing**
+# UDG-004 Browser client and camera — **SUPERSEDED draft revision 2 — assigns nothing**
 
-Status: **Draft for owner review. UDG-004 remains Not Started and unassigned; implementation is unstarted.**
-This file grants no path, moves no status field, adopts no refinement and creates no source file. On the owner's
-instruction it becomes `docs/contracts/assignments/UDG-004.md`, re-pinned to `main` at that moment. The authority
-for what UDG-004 must deliver stays in [UDG-004.md](../UDG-004.md); nothing here widens it.
+> **Superseded.** The owner's next instruction finalised this draft, and this file is no longer the operative document:
+> the [UDG-004 assignment record](UDG-004.md) governs, on implementation baseline
+> `089ae33d2d0df346d5a1de8e756971c605dc839a` (this revision-2 commit, CI run `43740515165` **success**). It is retained
+> for its measurement tables and its rejected-option reasoning, which the record cites rather than duplicates. Where
+> this draft and the record differ, **the record governs**. The four rulings the final round changed or fixed are:
+> **G-5 withdrawn** ("keep ESLint unchanged", so `eslint.config.mjs` is byte-identical and `.tsx` coverage there was
+> never a gap); the `--network container:…` + `-p` sidecar route **removed** in favour of `-p 127.0.0.1:5173:5173` with
+> `UDG_DEV_HOST=0.0.0.0` in the preview container; **GitHub CI** ruled the authoritative capture with the
+> **single-JUnit format kept**; and **G-9(b)** given a proof obligation — a real PNG must survive capture byte-for-byte
+> *and* still open, which the record measures (§6.2 E-4/E-5) instead of asserting. Sections below still describe a draft
+> in the proposing voice; read them as history of the measurement, not as a live proposal.
+
+Status before supersession: **Draft for owner review. UDG-004 was Not Started and unassigned; implementation was
+unstarted.**
+This file granted no path, moved no status field, adopted no refinement and created no source file. On the owner's
+instruction it became `docs/contracts/assignments/UDG-004.md`, re-pinned to `main` at that moment. The authority
+for what UDG-004 must deliver stays in [UDG-004.md](../UDG-004.md); nothing here widened it.
 
 Revision 2 responds to the owner's approval of the browser scope **in principle** and to four explicit rulings
 (§0). It also **corrects one factual error in revision 1** about `.tsx` linting, and adds the four things the owner

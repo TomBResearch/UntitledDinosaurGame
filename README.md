@@ -11,14 +11,17 @@ contract, validation and mapping described in
 [docs/contracts/protocol-v1.md](docs/contracts/protocol-v1.md), and they contain nothing else; the
 replica encoding widths stay provisional under
 [ADR 0001](docs/adr/0001-replica-precision-policy.md) until Gate A. Game movement, networking,
-physics and rendering behaviour still do not exist, validation Gates A, B and C have not run,
-refinements P03 to P05 and P07 to P10 remain pending, and no task beyond UDG-002 is assigned. The planning contracts and their
-[adoption status](docs/contracts/adoption.md) remain the authority for what may be built next.
+physics and rendering behaviour still do not exist and validation Gates A, B and C have not run.
+[UDG-003](docs/contracts/UDG-003.md) is **In Progress** — Phases 0 to 2 accepted at phase level, **Phase 3
+unassigned** — and [UDG-004](docs/contracts/UDG-004.md) is **assigned and Ready with implementation not started**
+([assignment record](docs/contracts/assignments/UDG-004.md)); every task after them stays unassigned and no
+implementation exists for either. Refinements P04, P05 and P07 to P10 remain pending (P03 was approved 2026-11-09).
+The planning contracts and their [adoption status](docs/contracts/adoption.md) remain the authority for what may be built next.
 
 ## Start here
 
 - **For an agent:** read [AGENTS.md](AGENTS.md), then the specific [task contract](docs/contracts/README.md) you are assigned. Each task links only to the shared rules it needs.
-- **For the project owner:** review [adoption status](docs/contracts/adoption.md). P01, P02 and P06 are approved (P02 with clarifications U2-1 to U2-6 and ADR 0001); P03 to P05 and P07 to P10 remain pending, so UDG-003 and everything downstream of it stay Not Started.
+- **For the project owner:** review [adoption status](docs/contracts/adoption.md). P01, P02, P03 and P06 are approved (P02 with clarifications U2-1 to U2-6 and ADR 0001); P04, P05 and P07 to P10 remain pending. UDG-003 is In Progress with Phase 3 unassigned, UDG-004 is assigned and Ready but not started, and every task after them stays Not Started.
 - **For the current project plan:** read the [plan and version guide](docs/specifications/README.md). The [M0 Technical Specification v0.2](docs/specifications/UDG-SPEC-M0-002.md) is the current architecture baseline; the v1.0 agent contracts elaborate it into work packages.
 
 ## Repository map
@@ -149,9 +152,10 @@ adopted P02 and P06 on 2026-11-08 and reviewed by the owner on 2026-11-09: the f
 submission drew four corrections, and the corrected head was accepted with
 [run 42627324928](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42627324928) green on the reviewed submission. Its own CI history — two red runs,
 a green first submission and a green accepted submission — is recorded in
-[the UDG-002 completion record](docs/contracts/assignments/UDG-002-completion.md). P03 to P05 and P07
-to P10 remain pending and Gates A, B and C remain Not Run, so no task beyond UDG-002 is assigned; the
-local reproduction of the identical command sequence and every CI bundle are retained and verified.
+[the UDG-002 completion record](docs/contracts/assignments/UDG-002-completion.md). P04, P05 and P07
+to P10 remain pending and Gates A, B and C remain Not Run; UDG-003 is In Progress with Phase 3 unassigned
+and UDG-004 is assigned but not started, so nothing beyond those two is assigned and no implementation for
+either exists yet; the local reproduction of the identical command sequence and every CI bundle are retained and verified.
 
 ## Evidence
 
