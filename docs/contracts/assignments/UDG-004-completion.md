@@ -725,9 +725,9 @@ With the dev server up (and no server on 2567, which is the normal state — the
    negative side, and carry no cap. If the negative arms ever appear on the positive side, that is the exact
    regression the ray-probe check exists to catch.
 8. **Resize the window.** The canvas follows, the camera stays framed on the target, and nothing throws.
-8. **The mount/unmount button, then the harness.** `window.__udgClientHarness.cycle(10)` in the console, then
+9. **The mount/unmount button, then the harness.** `window.__udgClientHarness.cycle(10)` in the console, then
    `snapshot()`: after ten cycles `engines`, `scenes`, `meshes`, `materials`, `observers`, `listeners` are all
    0 and `frameRequestsAdvanced` stops advancing. Re-`mount()` and the scene is live again.
-9. **Confirm the seam is not in what you ship.** `pnpm build && grep -r "__udgClientHarness" apps/client/dist`
+10. **Confirm the seam is not in what you ship.** `pnpm build && grep -r "__udgClientHarness" apps/client/dist`
    must print nothing, source maps included — that is the check the task suite runs on every acceptance
    capture.
