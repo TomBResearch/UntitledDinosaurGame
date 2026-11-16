@@ -387,6 +387,7 @@ CI result:
   later attempt of the same run. Round 3 also produced the first red this task caused in **its own test** — run
   43890629291, described under "What CI cost to get the keyboard assertions right" below.
 
+  https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43903672563 — success, first attempt (this record commit 58a4aaa; bundle UDG-004-2026-11-16T16-24-17-374Z-58a4aaa4, retained at /workspace/udg-evidence/ci-run-43903672563/, PASS 0 issues)
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43893238010 — success (attempt 2; attempt 1 red at W-7 inside UDG-004's capture `test` step, camera suite green on both attempts)
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43890629291 — failure (camera case 8: this task's own wall-clock keyboard tolerance, fixed in d318444)
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43871936471 — success (attempt 2; attempt 1 red at W-7)
