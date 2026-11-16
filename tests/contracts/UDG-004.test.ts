@@ -338,6 +338,58 @@ describe('UDG-004 public interface is what the contract states', () => {
     expect(math).not.toMatch(/\bdocument\b|\bwindow\b/);
     record('camera.limitsInPureModule', true);
   });
+
+  it('holds the input map the reviewer ruled, in the source rather than in a reply', () => {
+    // Ruled on 2026-11-16, and cheap to lose silently: middle button orbits, left button never does, arrows move
+    // the camera only while the canvas holds focus. Each clause below is a line of code, not a paragraph of doc,
+    // because the browser suite proves behaviour and this proves the behaviour is wired the stated way.
+    const orbit = read('apps/client/src/rendering/OrbitCamera.ts');
+    expect(orbit, 'the mouse gesture is no longer gated on the middle button').toContain('event.button !== 1');
+    expect(orbit).toContain('leftPressesIgnored');
+    expect(orbit, 'the keyboard is listening somewhere other than the canvas').toContain(
+      "this.canvas.addEventListener('keydown'",
+    );
+    expect(orbit, 'a window-level key listener would steal arrows from the page').not.toContain(
+      "window.addEventListener('keydown'",
+    );
+    // The suppression has to be conditional: refuse the default only for the four keys this handler consumes.
+    expect(orbit).toContain('if (!isCameraKey(event.key)) return;');
+    expect(orbit).toContain('event.ctrlKey || event.metaKey || event.altKey');
+    expect(orbit, 'blur does not stop keyboard motion').toContain('private onCanvasBlur');
+    expect(orbit).toContain('this.heldKeys.clear()');
+    // The middle button must not start a platform autoscroll or a primary-paste either.
+    expect(orbit).toContain("this.canvas.addEventListener('mousedown'");
+
+    const math = stripComments(read('apps/client/src/rendering/camera-math.ts'));
+    expect(math).toContain('ArrowLeft');
+    expect(math).toContain('ArrowRight');
+    expect(math).toContain('ArrowUp');
+    expect(math).toContain('ArrowDown');
+    // Both directions of both axes, and pitch handed back in degrees so the single elevation clamp governs it.
+    expect(math).toContain('KEY_PITCH_DEGREES_PER_PRESS');
+    expect(math, 'the pure module grew a DOM dependency').not.toMatch(/\bdocument\b|\bwindow\b/);
+
+    // Focus has to be reachable and visible, or the keyboard rule is a trap.
+    const page = read('apps/client/index.html');
+    expect(page, 'the scene canvas is not in the tab order').toMatch(/<canvas[\s\S]*?tabindex="0"/);
+    expect(page, 'the focused canvas has no visible focus ring').toMatch(/canvas\[data-udg-scene\]:focus\s*\{[^}]*outline:/);
+
+    // The hint on screen is the only documentation a reviewer reads before touching the mouse.
+    const overlay = read('apps/client/src/ui/DevelopmentOverlay.tsx');
+    for (const phrase of ['Middle-drag', 'wheel', 'arrow keys', 'left button', 'Tab reaches the canvas']) {
+      expect(overlay, `the on-screen controls hint no longer says "${phrase}"`).toContain(phrase);
+    }
+    // And the counters behind that hint are the ones the browser suite asserts on.
+    const runtime = read('apps/client/src/game/ClientRuntime.ts');
+    expect(runtime).toContain('cameraKeySteps');
+    expect(runtime).toContain('cameraLeftPressesIgnored');
+
+    // Eight cases now, and the plan's own wording says eight, so the gate and the prose cannot disagree.
+    expect(CAMERA_CASE_NAMES).toHaveLength(8);
+    const plan = CAPTURE_PLANS['UDG-004'];
+    expect(plan?.thresholds['camera.cases']).toContain('=== 8 cases');
+    record('camera.inputMapPinned', true);
+  });
 });
 
 describe('the browser dispatcher refuses per suite (grants G-2 and G-3)', () => {

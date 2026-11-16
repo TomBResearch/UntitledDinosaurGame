@@ -92,6 +92,10 @@ export interface RuntimeCounters {
   readonly cameraDrags: number;
   readonly cameraWheelNotches: number;
   readonly cameraPinches: number;
+  /** Arrow-key camera steps taken while the canvas held focus. */
+  readonly cameraKeySteps: number;
+  /** Left presses on the canvas: refused, because UDG-008's click-to-move owns that button. */
+  readonly cameraLeftPressesIgnored: number;
   readonly cameraIgnoredOnUi: number;
   /** The camera's own state, read from the controller that owns it. `undefined` while unmounted. */
   readonly camera: CameraReadout | undefined;
@@ -199,6 +203,8 @@ export const createClientRuntime = (): ClientRuntime => {
       drags: 0,
       wheelNotches: 0,
       pinches: 0,
+      keySteps: 0,
+      leftPressesIgnored: 0,
       ignoredOnUi: 0,
       incidents: 0,
       listeners: 0,
@@ -222,6 +228,8 @@ export const createClientRuntime = (): ClientRuntime => {
       cameraDrags: cameraStats.drags,
       cameraWheelNotches: cameraStats.wheelNotches,
       cameraPinches: cameraStats.pinches,
+      cameraKeySteps: cameraStats.keySteps,
+      cameraLeftPressesIgnored: cameraStats.leftPressesIgnored,
       cameraIgnoredOnUi: cameraStats.ignoredOnUi,
       camera: resources === undefined ? undefined : resources.camera.readout(),
       recentIncidents: [...retained],

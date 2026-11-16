@@ -55,6 +55,7 @@ export const CAMERA_CASE_NAMES = [
   'gestures that start on UI do not move the camera',
   'presented poses move the view, and camera operations never mutate either pose',
   'ten mount/unmount cycles leave no loop, listener, mesh or WebGL resource',
+  'the keyboard orbits and pitches only while the canvas holds focus, and never scrolls the page',
 ] as const;
 
 export type CameraCaseName = (typeof CAMERA_CASE_NAMES)[number];

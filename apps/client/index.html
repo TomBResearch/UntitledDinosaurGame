@@ -44,6 +44,23 @@
         outline: none;
       }
 
+      /*
+       * The canvas is a focusable control, because the arrow keys orbit and pitch it only while it has focus.
+       * A focus ring on a full-viewport canvas has nowhere to sit outside the picture, so it is drawn inside the
+       * edge (negative offset) in the same colour the status banner uses for "reachable". `:focus` rather than
+       * only `:focus-visible` on purpose: a reviewer tabbing in must see it, and so must a test that focuses the
+       * canvas from script.
+       */
+      canvas[data-udg-scene]:focus {
+        outline: 4px solid var(--udg-ok);
+        outline-offset: -4px;
+      }
+
+      canvas[data-udg-scene]:focus:not(:focus-visible) {
+        outline: 4px solid var(--udg-ok);
+        outline-offset: -4px;
+      }
+
       #udg-app,
       #udg-shell {
         position: fixed;
@@ -205,7 +222,15 @@
       One canvas, one scene. `data-udg-scene` is the selector main.tsx looks for; a page with two of these is a
       page the runtime refuses to guess about, and the fatal notice path is what the reviewer sees instead.
     -->
-    <canvas data-udg-scene aria-label="Greybox scene with orbit camera"></canvas>
+    <!--
+      `tabindex="0"` makes the scene reachable from the keyboard: the arrow keys orbit and pitch it while it holds
+      focus, and the ring above shows which element has it. With focus anywhere else, the arrows belong to the page.
+    -->
+    <canvas
+      data-udg-scene
+      tabindex="0"
+      aria-label="Greybox scene with orbit camera. Middle-drag to orbit, wheel to zoom, arrow keys to orbit and pitch while this canvas has focus."
+    ></canvas>
 
     <!-- The status banner and development overlay mount here, created and destroyed with each scene cycle. -->
     <div id="udg-app"></div>

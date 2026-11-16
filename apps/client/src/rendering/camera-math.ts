@@ -73,45 +73,66 @@ export const betaLimitsRadians = (): Readonly<{ lower: number; upper: number }> 
 });
 
 /**
- * Which physical device is dragging. Only two horizontal conventions exist in this client, and which one
- * applies is decided by `PointerEvent.pointerType`: `mouse`, or everything else (touch, pen, or a pointer that
- * declines to say), which all keep the touch convention.
- */
-export type OrbitInputSource = 'mouse' | 'touch';
-
-/**
- * The sign applied to a horizontal drag delta, per input device.
- *
- * **`touch: -1`** is the grab-the-world convention the acceptance list was written against: the scene moves with
- * the finger, because the point under the finger is treated as gripped. It is unchanged.
- *
- * **`mouse: +1`** is the owner's ruling from the Mac review of 2026-11-16: a horizontal mouse drag felt
- * inverted, so the mouse turns the camera the other way from the touch drag. Vertical drag, wheel zoom and
- * pinch zoom are untouched by this — only the azimuth sign differs by device, and the two conventions are
- * allowed to disagree because the hand holding a mouse and the finger on glass are asking for different things.
- */
-export const ORBIT_AZIMUTH_DIRECTION: Readonly<Record<OrbitInputSource, number>> = {
-  mouse: 1,
-  touch: -1,
-};
-
-/**
  * A drag delta in pixels becomes an azimuth/polar delta in radians.
  *
- * `source` selects the horizontal convention (see {@link ORBIT_AZIMUTH_DIRECTION}); the vertical term is shared,
- * because a downward drag takes the camera over the top for both devices.
+ * One convention for every pointer device, and the horizontal sign has been ruled twice:
+ *
+ * * round 1 (Mac review, 2026-11-16) reversed the **mouse** horizontally and left touch alone, which put the two
+ *   devices on opposite signs;
+ * * round 2 (same day) moved the mouse gesture to the **middle button**, reserved the left button for UDG-008's
+ *   click-to-move, and reversed the mouse horizontally **again** — back to the sign a touch drag has always used.
+ *
+ * So `−dx` is both the grab-the-world convention the acceptance list was written against and the direction the
+ * reviewer asked for on a mouse, and no device branch is needed. Vertical drag (`−dy`: a drag down takes the
+ * camera over the top) and both zoom paths are unchanged by either ruling.
  */
 export const orbitStepRadians = (
   deltaX: number,
   deltaY: number,
-  source: OrbitInputSource,
 ): Readonly<{ alphaDelta: number; betaDelta: number }> => {
   const dx = isFiniteNumber(deltaX) ? deltaX : 0;
   const dy = isFiniteNumber(deltaY) ? deltaY : 0;
-  return {
-    alphaDelta: ORBIT_AZIMUTH_DIRECTION[source] * dx * ORBIT_RADIANS_PER_PIXEL,
-    betaDelta: -dy * ORBIT_RADIANS_PER_PIXEL,
-  };
+  return { alphaDelta: -dx * ORBIT_RADIANS_PER_PIXEL, betaDelta: -dy * ORBIT_RADIANS_PER_PIXEL };
+};
+
+/**
+ * The four keys the focused scene canvas consumes. Anything else — Tab, Space, a browser shortcut — reaches the
+ * page untouched, which is what "prevent browser scrolling only for arrow keys handled by the focused canvas"
+ * asks for: the suppression is scoped to these keys and to the canvas, never to the page root.
+ */
+export const CAMERA_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'] as const;
+
+export type CameraKey = (typeof CAMERA_KEYS)[number];
+
+export const isCameraKey = (key: string): key is CameraKey =>
+  (CAMERA_KEYS as readonly string[]).includes(key);
+
+/** Azimuth turn per key press, in radians (≈2.9°). Deliberately slower than a fast drag. */
+export const KEY_ORBIT_RADIANS_PER_PRESS = 0.05;
+
+/** Pitch change per key press, in degrees, applied through the same elevation clamp a drag uses. */
+export const KEY_PITCH_DEGREES_PER_PRESS = 2;
+
+/**
+ * What a key press does to the camera, in the same directions as a drag.
+ *
+ * `ArrowRight` decreases the azimuth exactly as a rightward middle-drag does, and `ArrowUp` raises the
+ * elevation. Pitch is returned in degrees rather than Babylon's polar radians so the caller can hand it to
+ * `elevationDegreesToBetaRadians`, the one place the 10°–80° bound is written down.
+ */
+export const keyOrbitStep = (
+  key: CameraKey,
+): Readonly<{ alphaDeltaRadians: number; elevationDeltaDegrees: number }> => {
+  switch (key) {
+    case 'ArrowLeft':
+      return { alphaDeltaRadians: KEY_ORBIT_RADIANS_PER_PRESS, elevationDeltaDegrees: 0 };
+    case 'ArrowRight':
+      return { alphaDeltaRadians: -KEY_ORBIT_RADIANS_PER_PRESS, elevationDeltaDegrees: 0 };
+    case 'ArrowUp':
+      return { alphaDeltaRadians: 0, elevationDeltaDegrees: KEY_PITCH_DEGREES_PER_PRESS };
+    case 'ArrowDown':
+      return { alphaDeltaRadians: 0, elevationDeltaDegrees: -KEY_PITCH_DEGREES_PER_PRESS };
+  }
 };
 
 /**

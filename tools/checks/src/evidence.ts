@@ -970,7 +970,7 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
     // are dotted *paths*, not labels: the first capture of this plan named thirteen thresholds that no
     // measurement answered, and verification was right to refuse a bundle whose suites had all gone green.
     thresholds: {
-      'camera.cases': '=== 7 cases reported, each with status "passed", and suites.expected === 7 (a zero-case or short-case run is refused by the gate, not accepted as a smaller pass)',
+      'camera.cases': '=== 8 cases reported, each with status "passed", and suites.expected === 8 (a zero-case or short-case run is refused by the gate, not accepted as a smaller pass). The eighth case is the keyboard, added on the reviewer\'s instruction of 2026-11-16; it was not in the assignment draft, and this is the one plan threshold its wording moved for',
       'camera.pageErrors': '=== 0 unexplained page errors, and camera.consoleErrors === 0, with every tolerated message listed beside the reason it is tolerated',
       'camera.handednessPicks': '>= 5 downward ray probes landing on the axis arm the contract says is at that world point (8 arm probes plus the floor), so the verdict comes from Babylon\'s picking path rather than from scene metadata; the pixel sweep that used to decide this is recorded instead (camera.sweepFound, camera.sweepMissed), because CI run 43764611170 showed frame visibility is not a handedness signal',
       'camera.presentedHeightUnits': '=== 1.8 world units, matching the adopted MOVEMENT_DEFAULTS.capsuleHeight. Units are not metres here: AXIS_SCALE_METRES is 0.1, which is why the next row quotes arm lengths in units and the camera rows quote radius in metres — the two scales are named wherever they are used',

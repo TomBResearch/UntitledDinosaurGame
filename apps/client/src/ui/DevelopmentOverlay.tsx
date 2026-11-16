@@ -127,6 +127,13 @@ export const DevelopmentOverlay = ({
           {String(counters.focusLosses)}
         </dd>
 
+        <dt>Gestures</dt>
+        <dd data-udg-readout="gestures">
+          drags={String(counters.cameraDrags)} wheel={String(counters.cameraWheelNotches)} keys=
+          {String(counters.cameraKeySteps)} pinches={String(counters.cameraPinches)} leftIgnored=
+          {String(counters.cameraLeftPressesIgnored)} uiIgnored={String(counters.cameraIgnoredOnUi)}
+        </dd>
+
         <dt>Gesture incidents</dt>
         <dd data-udg-readout="incidents">
           {String(counters.gestureIncidents)}
@@ -134,9 +141,11 @@ export const DevelopmentOverlay = ({
         </dd>
       </dl>
 
-      <p className="udg-overlay-hint">
-        Drag the scene to orbit, wheel or pinch to zoom. Gestures that start on this panel are ignored by the
-        camera.
+      <p className="udg-overlay-hint" data-udg-readout="controls">
+        Middle-drag the scene to orbit and pitch · wheel to zoom · click the scene then arrow keys to orbit and
+        pitch (Tab reaches the canvas; the camera stops when it loses focus) · one finger drags the scene, pinch
+        zooms · left button does nothing yet, it is reserved for click-to-move. Gestures that start on this panel
+        are ignored by the camera.
       </p>
     </aside>
   );

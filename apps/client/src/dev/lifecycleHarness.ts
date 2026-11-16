@@ -180,6 +180,8 @@ export const snapshotOf = (
     cameraDrags: 0,
     cameraWheelNotches: 0,
     cameraPinches: 0,
+    cameraKeySteps: 0,
+    cameraLeftPressesIgnored: 0,
     cameraIgnoredOnUi: 0,
     camera: undefined,
     recentIncidents: [],

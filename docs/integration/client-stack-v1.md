@@ -173,33 +173,53 @@ counts those probes (9 where the threshold asks for 5). The pixel sweep is kept 
 three of this client's own meshes, and every marker it does show must sit on the side the independently
 derived basis predicts.
 
-### 4.1 Orbit direction is per input device, not per camera
+### 4.1 Which input moves the camera, and which one must not
 
-`orbitStepRadians(deltaX, deltaY, source)` in `camera-math.ts` takes the drag's device, and
-`ORBIT_AZIMUTH_DIRECTION` holds the two horizontal conventions:
+Ruled by the reviewer on the Mac, 2026-11-16, in two rounds. The horizontal direction was reversed twice, which
+lands it back on the sign the client started with; what actually changed is **which button** orbits, that the left
+button is now free, and that the canvas answers the arrow keys while it holds focus.
 
-| Device | `pointerType` | Horizontal sign | What the hand gets |
-| --- | --- | --- | --- |
-| Mouse | `mouse` | `+dx` | A drag right **increases** the azimuth. Reversed on the owner's Mac review of 2026-11-16, after the previous direction felt inverted. |
-| Everything else | `touch`, `pen`, empty | `−dx` | The scene stays under the finger — the grab-the-world convention the acceptance list was written against, unchanged. |
+| Input | Effect | Where it is written |
+| --- | --- | --- |
+| Middle-mouse drag | orbit + pitch | `OrbitCamera.onPointerDown`, gated on `event.button !== 1` |
+| Left mouse press or drag | **nothing**, counted in `leftPressesIgnored` | same handler; the button is reserved for UDG-008's click-to-move |
+| Right mouse | nothing; `contextmenu` suppressed on the scene | `onContextMenu` |
+| Wheel over the canvas | zoom, 2–20 m | `onWheel`, `zoomRadiusMeters` |
+| One-finger touch drag | orbit, scene follows the finger | `onPointerMove`, `orbitStepRadians` |
+| Two-finger pinch | zoom, 2–20 m | `onPointerMove`, `pinchRadiusMeters` |
+| Arrow keys while the canvas has focus | Left/Right orbit, Up/Down pitch, 10°–80° | `onKeyDown`, `keyOrbitStep` |
+| Arrow keys anywhere else | the page's, untouched | the listeners are on the canvas, not the window |
 
-`OrbitCamera` decides the device once per gesture: `TrackedPointer` carries `source`, so a drag that starts on a
-touch pointer keeps the touch convention for its whole life even if a mouse pointer arrives mid-gesture, and the
-two-pointer pinch path is unaffected because it never reads the azimuth term. Vertical drag (`betaDelta`), wheel
-zoom and pinch zoom have no device branch at all.
+`camera-math.ts` owns the arithmetic and stays Babylon-free and DOM-free: `orbitStepRadians` for drags (one sign
+for every device, since the second ruling), and `CAMERA_KEYS`, `isCameraKey`, `KEY_ORBIT_RADIANS_PER_PRESS`
+(0.05 rad ≈ 2.86°) and `KEY_PITCH_DEGREES_PER_PRESS` (2°) for the keyboard. Pitch is handed back in **degrees** so
+that `elevationDegreesToBetaRadians` remains the one place the 10°–80° bound is written down; keyboard and drag
+therefore cannot disagree at a bound.
 
-Measured in `chromium-1254`, 200 px drags at the canvas centre, from `tests/e2e/camera.spec.ts`:
+Focus is what makes the keyboard rule safe rather than surprising. `index.html` gives the canvas `tabindex="0"`, an
+`aria-label` that states the controls, and a 4 px focus ring drawn *inside* the canvas edge (`outline-offset: -4px`)
+because a full-viewport element has no room for a ring outside it. `preventDefault()` is called for the four arrow
+keys and nothing else, and only when the canvas is the event target, so arrow-key page scrolling is suppressed in
+exactly one place. A held key's autorepeat is the motion; `blur` clears the held-key set, so a key still down when
+focus leaves cannot keep driving the camera, and neither can its repeats. Middle-mouse `mousedown` is also
+default-prevented on the canvas, because middle-click is autoscroll on some platforms and primary-paste on X11.
+
+Measured in `chromium-1254` from `tests/e2e/camera.spec.ts` (200 px drags at the canvas centre, 10 key presses,
+in the eighth case as well as the third):
 
 ```text
-mouse drag right   Δazimuth  +68.755°      touch drag right   Δazimuth  −68.755°
-mouse drag left    Δazimuth  −68.755°      touch drag left    Δazimuth  +68.755°
-mouse drag down    Δelevation +20.626°     (unchanged: 60 px × 0.006 rad = 20.63°)
+middle drag right   Δazimuth  −68.755°      arrow Right ×10   Δazimuth  −28.648°
+middle drag left    Δazimuth  +68.755°      arrow Left  ×10   Δazimuth  +28.648°
+touch drag right    Δazimuth  −68.755°      arrow Up    ×60   elevation   80° (clamped)
+touch drag left     Δazimuth  +68.755°      arrow Down  ×80   elevation   10° (clamped)
+middle drag down    Δelevation +20.626°     left-button drags ×2   camera unchanged to 6 decimals
 ```
 
-One axis, mirrored: the mouse pair sums to 0.000°, and the touch pair is exactly the opposite sign. The
-assertions are signed for that reason — a magnitude assertion would have passed on the previous build, where both
-devices turned the camera the same way.
-
+Mouse and touch now agree in sign and in size to within 0.000° for the same screen movement, which the suite
+asserts as a number (`camera.mouseAndTouchAzimuthAgree`) rather than only as a passing case. The keyboard does
+nothing with focus on a button or off-canvas, asserted against `cameraKeySteps` so a silent no-op listener cannot
+pass it; refocusing the canvas makes the same keys move the camera again, which is what stops the unfocused
+assertion from being vacuous.
 
 ## 5. Connection state without a server
 

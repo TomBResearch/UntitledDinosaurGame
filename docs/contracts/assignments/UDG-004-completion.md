@@ -171,7 +171,7 @@ Acceptance thresholds and measured results:
 
   | Threshold | Claim | Measured |
   | --- | --- | --- |
-  | camera.cases | 7 cases, each passed | 7 |
+  | camera.cases | 8 cases, each passed (the eighth is the keyboard, added on the reviewer's instruction) | 8 |
   | camera.pageErrors | 0 unexplained page errors, 0 console errors | 0 / 0 |
   | camera.handednessPicks | ≥ 5 ray probes landing on the expected arm | 9 of 9 |
   | camera.presentedHeightUnits | 1.8 units | 1.8 |
@@ -503,80 +503,102 @@ where the suite runs against the pinned Chromium and writes retained artefacts. 
 and was never run in CI proves nothing about this task's acceptance criteria — and, until it is run, it proves
 nothing at all.
 
-## Control-direction ruling from the Mac review (2026-11-16)
+## Control rulings from the Mac review (2026-11-16, two rounds)
 
-The reviewer loaded the preview on a Mac: the scene loaded, pitch and zoom felt right, and **horizontal mouse drag
-felt inverted**. The ruling was specific and it was honoured exactly: reverse the horizontal orbit for mouse drags,
-keep the one-finger touch orbit so the scene continues to follow the finger, and leave vertical drag, wheel zoom,
-pinch zoom, the camera bounds and the overlay's drag exclusion alone.
+Both rounds came from the reviewer driving the preview on a Mac, and both are recorded because the second undoes
+part of the first — a record that kept only the latest wording would hide a real change of mind.
 
-**Where it lives.** One table and one parameter. `camera-math.ts` gained `OrbitInputSource` (`'mouse' | 'touch'`)
-and `ORBIT_AZIMUTH_DIRECTION = { mouse: +1, touch: −1 }`, and `orbitStepRadians` now takes the device; the vertical
-term is untouched and shared. `OrbitCamera.ts` decides the device once, from `event.pointerType`, and stores it on
-the tracked pointer, so a drag keeps the convention it began with and a gesture that becomes a pinch never reaches
-the azimuth term at all. `mouse` is the only value that inverts: `pen` and an empty `pointerType` keep the touch
-convention, because the ruling named the mouse and nothing else.
+**Round 1, at `2d2be86`.** Pitch and zoom felt right; horizontal mouse drag felt inverted. The ruling was to reverse
+the horizontal direction for mouse drags and nothing else, which put the mouse on the opposite sign from touch. The
+measurements from that head are kept in the table below as the "round 1" column.
 
-**Before and after, measured rather than asserted.** Both numbers come from the same case in
-`tests/e2e/camera.spec.ts` at the same default camera state, so they are comparable:
+**Round 2, this head.** Three changes, all narrow:
 
-| Gesture | Previous build | This build |
+* **Middle-mouse drag orbits and pitches.** The mouse gesture moved off the left button, and its horizontal
+  direction was reversed **again** from the round-1 build — which lands the azimuth on `−dx`, the sign a touch drag
+  has always used. `camera-math.ts` therefore lost its per-device direction table entirely: one convention, no
+  branch, and the comment on `orbitStepRadians` carries both rulings so the sign is not "corrected" back by
+  someone who read only one round.
+* **Left press and left drag do nothing at all**, counted in `leftPressesIgnored`, so UDG-008 has the button for
+  click-to-move. Middle `mousedown` is default-prevented on the canvas, because middle-click is autoscroll on some
+  platforms and primary-paste on X11 — an orbit control that triggers either is a bug report waiting.
+* **Arrow keys move the camera while the scene canvas holds focus** — Left/Right orbit, Up/Down pitch through the
+  same 10°–80° clamp a drag uses (`KEY_ORBIT_RADIANS_PER_PRESS` 0.05 rad ≈ 2.86°, `KEY_PITCH_DEGREES_PER_PRESS` 2°).
+  The canvas is `tabindex="0"` with a 4 px focus ring drawn inside its own edge, the key listeners sit on the canvas
+  and nowhere else, `preventDefault()` is called for those four keys and for nothing else, a modified arrow
+  (ctrl/meta/alt) is left alone as a browser shortcut, and `blur` clears the held-key set so an arrow still down
+  when focus leaves cannot keep driving the camera, nor its autorepeat.
+
+**Measured, all three rounds side by side.** Same case, same default camera state, 200 px drags at the canvas
+centre, 10 key presses; the round-1 column is the retained artefact of `2d2be86`:
+
+| Gesture | Round 1 (`2d2be86`) | This build |
 | --- | --- | --- |
-| 300 px mouse drag right | azimuth 135° → **31.87°** (−103.13°) | azimuth 135° → **238.13°** (+103.13°) |
-| 200 px mouse drag right | — (not asserted by sign) | **+68.755°** |
-| 200 px mouse drag left | — | **−68.755°** |
-| 200 px touch drag right | −68.755° | **−68.755°** — unchanged |
+| 200 px mouse drag right | +68.755° | **−68.755°** (reversed again) |
+| 200 px mouse drag left | −68.755° | **+68.755°** |
+| 200 px touch drag right | −68.755° | **−68.755°** — unchanged, still follows the finger |
 | 200 px touch drag left | +68.755° | **+68.755°** — unchanged |
 | 60 px mouse drag down | +20.626° elevation | **+20.626°** — unchanged |
+| 200 px **left**-button drag ×2 | orbited (it was the orbit button) | camera unchanged to 6 decimals, **2** presses counted as refused |
+| ArrowRight ×10 | keys did nothing | **−28.648°** |
+| ArrowLeft ×10 | keys did nothing | **+28.648°** |
+| ArrowUp ×60 / ArrowDown ×80 | keys did nothing | **80°** and **10°**, clamped, never exceeded |
+| Arrow keys with focus on a button or off-canvas | n/a | **0** key steps, camera unchanged |
+| Focused canvas outline | none (canvas not focusable) | **4px solid rgb(89, 201, 138)** |
 
-**Why the new assertions are signed.** The case previously asserted `|Δazimuth| > 5°`, which a build with the
-opposite direction passes just as happily — it was a proof that the axis *moved*, never that it moved *which way*.
-The added assertions name the sign for mouse-right, mouse-left, touch-right and touch-left, require the two mouse
-drags to be mirror images (`|Δright + Δleft| < 2°`, measured 0.000°), and require the mouse and the touch to
-disagree (`Math.sign(mouseRight) === −Math.sign(touchRight)`). A regression that silently re-unifies the two
-devices, or inverts touch along with the mouse, fails the suite.
+Mouse and touch now agree in sign *and* size for the same screen movement (`camera.mouseAndTouchAzimuthAgree`,
+`|mouseRight − touchRight| < 2°`, measured 0.000°) — recorded as a number, so if a future ruling drifts, the bundle
+says so rather than only failing a case.
 
-**Where it landed.** `2d2be8646ad4ab7caa17637d10bdf553a20ce313`, green on hosted CI run 43852121401 attempt 3, with
-the CI bundle named under "Raw evidence directory". The attempts that went red at W-7 before that green are named
-there too, so the rerun history is visible rather than implied.
+**Why the assertions are signed, and why the unfocused-keyboard assertion reads a counter.** The orbit case used to
+assert `|Δazimuth| > 5°`, which the opposite direction passes happily: it proved the axis moved, never which way. It
+now names the sign for mouse-right, mouse-left, touch-right and touch-left, and requires the two mouse drags to be
+mirror images. The keyboard case asserts against `cameraKeySteps` as well as against the camera, because "the camera
+did not move" is also what a keyboard listener wired to nothing looks like — the counter says the refusal was
+deliberate, and the case then refocuses the canvas and proves the same keys *do* move it, so the unfocused assertion
+cannot be vacuous. Left-button inactivity is asserted the same way, with both presses counted.
 
-**What was preserved, with the number that says so.** Elevation still clamps at **10°** and **80°**; radius still
-clamps at **2 m** and **20 m** by wheel and by pinch; UI-origin gestures are still ignored (**2** regions tested,
-camera unchanged to six decimal places); pose writes during camera operations are still **0**; the ten
-mount/unmount cycles and the production-seam absence checks are untouched. The capture plan's thresholds are
-unchanged — the direction is proved by the case's own signed assertions, so no plan threshold was added or
-retuned for it, and the new numbers are recorded as measurements
-(`camera.mouseDragRightAzimuthDelta`, `camera.mouseDragLeftAzimuthDelta`, `camera.touchDragRightAzimuthDelta`,
-`camera.touchDragLeftAzimuthDelta`, `camera.mouseInvertedAgainstTouch`, `camera.mouseDragDownElevationDelta`) so a
-later reader can see what the direction actually was.
+**One plan threshold moved, and it is named.** `camera.cases` was `=== 7`; the keyboard needs its own case, so the
+plan's own wording now says `=== 8 cases … suites.expected === 8` and the contract suite asserts both halves (eight
+names declared, and the plan text saying eight). Nothing else in the plan moved: same required files, same six
+screenshots — deliberately no seventh, because the screenshot gate rejects any PNG the plan does not name — same
+commands, same other thresholds.
 
+**What was preserved, with the number that says so.** Elevation still clamps at **10°** and **80°** for drag *and*
+keyboard; radius still clamps at **2 m** and **20 m** by wheel and by pinch; UI-origin gestures are still ignored
+(**2** regions tested, camera unchanged to six decimal places, now on the middle button as well); pose writes during
+camera operations are still **0**; handedness probes still **9 of 9**; the ten mount/unmount cycles and the
+production-seam absence checks are untouched, with the controller's listener count rising from 6 to 10 and returning
+to **0** after dispose like everything else it registers.
 
 ## Browser checks the reviewer can try
 
 With the dev server up (and no server on 2567, which is the normal state — the connection status will read
 `failed` and should stay readable):
 
-1. **Drag to orbit — mouse and touch deliberately move differently now.** A **mouse** drag right turns the camera
-   one way and a drag left the other; that direction was reversed on the owner's instruction of 2026-11-16 because
-   the mouse felt inverted on a Mac. A **one-finger touch** drag still keeps the scene under the finger, so the same
-   screen movement turns the camera the *opposite* way to the mouse — try both before deciding which feels right,
-   because they cannot both be reversed by changing one of them. Azimuth still wraps within `[0, 360)` and elevation
-   still stops at 10° and 80° without the camera flipping or going still-and-finite-broken. Dragging *down* still
-   raises the camera for both devices: that vertical convention is shared, unchanged, and is not Babylon's pointer
-   convention.
-2. **Wheel to zoom.** It stops hard at 2 m and at 20 m and does not creep past either on repeated notches.
-3. **Pinch on a touch device or touch emulation.** Two fingers together → 4-pointer orbit, spread → zoom in.
+1. **Middle-drag to orbit; the left button must do nothing.** A **middle** drag turns the camera — right
+   decreases the azimuth, left increases it — and a drag **down** raises it toward 80°. A **left** press or drag
+   leaves the camera exactly where it was: that button is reserved for UDG-008's click-to-move, and the overlay's
+   `Gestures` line counts the refusals (`leftIgnored=`) so you can see the client saw the press and declined it.
+   One-finger **touch** drag still keeps the scene under the finger, and after the second ruling mouse and touch
+   agree on direction rather than disagreeing.
+2. **Tab to the canvas, then the arrow keys.** Tab (or Shift+Tab from the overlay's buttons) lands on the scene and
+   a green ring appears inside its edge; Left/Right orbit and Up/Down pitch, clamped at 10° and 80°. Tab away to a
+   button, or click the overlay, and the same keys do nothing to the camera — and scroll the page as usual, which is
+   the part worth trying: only the four arrows on the focused canvas are swallowed.
+3. **Wheel to zoom.** It stops hard at 2 m and at 20 m and does not creep past either on repeated notches.
+4. **Pinch on a touch device or touch emulation.** Two fingers together → 4-pointer orbit, spread → zoom in.
    It clamps to the same 2 m and 20 m. (In Chrome DevTools device mode the suite's dispatched-touch path is
    what runs.)
-4. **Gestures that start on the overlay or the status line must not move the camera.** Start a drag on the
+5. **Gestures that start on the overlay or the status line must not move the camera.** Start a drag on the
    counters text or the connection status, not on a button — buttons are buttons on purpose.
-5. **Watch the two markers.** One entity holds a static pose at x = 2.5, the other walks. Orbiting, zooming or
+6. **Watch the two markers.** One entity holds a static pose at x = 2.5, the other walks. Orbiting, zooming or
    pinching must not move either one, and if you blur the window (focus loss stops the loop) and orbit anyway,
    the numbers in the overlay stay put while the camera moves.
-6. **Axis handedness.** The positive arms carry a cap and reach 3 units; the negative arms are shorter, on the
+7. **Axis handedness.** The positive arms carry a cap and reach 3 units; the negative arms are shorter, on the
    negative side, and carry no cap. If the negative arms ever appear on the positive side, that is the exact
    regression the ray-probe check exists to catch.
-7. **Resize the window.** The canvas follows, the camera stays framed on the target, and nothing throws.
+8. **Resize the window.** The canvas follows, the camera stays framed on the target, and nothing throws.
 8. **The mount/unmount button, then the harness.** `window.__udgClientHarness.cycle(10)` in the console, then
    `snapshot()`: after ten cycles `engines`, `scenes`, `meshes`, `materials`, `observers`, `listeners` are all
    0 and `frameRequestsAdvanced` stops advancing. Re-`mount()` and the scene is live again.

@@ -16,14 +16,30 @@
  * 2. **One gesture owner.** Attaching Babylon's input *and* a controller would process every wheel notch and
  *    every pinch twice, which shows up as zoom that moves twice as fast as the hand moved.
  *
- * ## Horizontal direction is per input device, not per camera
+ * ## Which gesture moves the camera, and which one must not
  *
- * A one-finger touch drag keeps the scene under the finger (grab-the-world). A mouse drag turns the camera the
- * other way, which is what the owner's Mac review asked for on 2026-11-16 after the mouse felt inverted. The
- * two conventions live in `camera-math.ts` as `ORBIT_AZIMUTH_DIRECTION` and are selected from
- * `event.pointerType` — `mouse` inverts, everything else (touch, pen, unspecified) keeps the touch convention —
- * so this file routes a gesture by device rather than holding a direction of its own. Vertical drag, wheel zoom
- * and pinch zoom are unaffected by the ruling.
+ * Ruled by the reviewer on 2026-11-16, and the horizontal direction has now been ruled twice (see
+ * `orbitStepRadians` in `camera-math.ts`, which records both rounds):
+ *
+ * | Input | Camera? | Notes |
+ * | --- | --- | --- |
+ * | Middle-mouse drag | orbit + pitch | The mouse gesture. Horizontal direction reversed twice, which lands it on the same sign a touch drag uses. |
+ * | Left mouse press or drag | **never** | Reserved for UDG-008's click-to-move. Counted in `leftPressesIgnored` so a test can prove the camera sat still rather than that nothing was recorded. |
+ * | Right mouse | never | The page's business; `contextmenu` is suppressed on the scene so an orbit view gives no menu. |
+ * | Wheel over the canvas | zoom | Unchanged by either ruling. |
+ * | One-finger touch drag | orbit | Keeps the scene under the finger. |
+ * | Two-finger pinch | zoom | Never reads the azimuth term, so no direction ruling touches it. |
+ * | Arrow keys, **canvas focused only** | orbit + pitch | See below. |
+ *
+ * ## Keyboard orbit needs a focus owner, and a scope it cannot leak out of
+ *
+ * The canvas is `tabindex="0"` (see `index.html`, which also paints the focus ring) and the key listeners are
+ * attached **to the canvas**, not to the window: an arrow key pressed while focus is on a button, the overlay or
+ * the page body is the browser's to use, and this controller never sees it. `preventDefault()` is called only
+ * for the four arrow keys this handler consumes — never for other keys, and never on the document — so arrow-key
+ * scrolling is suppressed in exactly one place. A held key autorepeats, which is the motion; `blur` clears the
+ * held-key set, so a key still held when the canvas loses focus cannot keep turning the camera, and neither can
+ * its autorepeat.
  *
  * ## Clamping is in two places on purpose
  *
@@ -47,13 +63,15 @@ import {
   betaRadiansToElevationDegrees,
   cameraReadout,
   elevationDegreesToBetaRadians,
+  isCameraKey,
+  keyOrbitStep,
   orbitStepRadians,
   pinchRadiusMeters,
   RAD_TO_DEG,
   wrapAzimuthRadians,
   zoomRadiusMeters,
+  type CameraKey,
   type CameraReadout,
-  type OrbitInputSource,
 } from './camera-math.js';
 
 /** Attribute that marks a DOM region as UI. Anything under it is excluded from camera gestures. */
@@ -85,6 +103,9 @@ export interface OrbitCameraStats {
   readonly drags: number;
   readonly wheelNotches: number;
   readonly pinches: number;
+  readonly keySteps: number;
+  /** Left presses on the canvas, refused because UDG-008's click-to-move owns that button. */
+  readonly leftPressesIgnored: number;
   readonly ignoredOnUi: number;
   readonly incidents: number;
   readonly listeners: number;
@@ -93,12 +114,7 @@ export interface OrbitCameraStats {
 interface TrackedPointer {
   x: number;
   y: number;
-  /** Which device owns this pointer, so a drag keeps the convention it started with. */
-  source: OrbitInputSource;
 }
-
-/** `mouse` is the only pointer type whose horizontal direction is inverted; see `camera-math.ts`. */
-const inputSourceOf = (pointerType: string): OrbitInputSource => (pointerType === 'mouse' ? 'mouse' : 'touch');
 
 const distanceBetween = (a: TrackedPointer, b: TrackedPointer): number =>
   Math.hypot(a.x - b.x, a.y - b.y);
@@ -120,10 +136,14 @@ export class OrbitCamera {
   private pinchStartRadius = 0;
   private attached = false;
   private isDisposed = false;
+  /** Arrow keys held down right now. Emptied on blur, which is what stops keyboard motion. */
+  private readonly heldKeys = new Set<CameraKey>();
   private stats: OrbitCameraStats = {
     drags: 0,
     wheelNotches: 0,
     pinches: 0,
+    keySteps: 0,
+    leftPressesIgnored: 0,
     ignoredOnUi: 0,
     incidents: 0,
     listeners: 0,
@@ -135,6 +155,10 @@ export class OrbitCamera {
   private readonly handlePointerUp = (event: PointerEvent): void => this.onPointerUp(event);
   private readonly handleWheel = (event: WheelEvent): void => this.onWheel(event);
   private readonly handleContextMenu = (event: MouseEvent): void => this.onContextMenu(event);
+  private readonly handleMouseDown = (event: MouseEvent): void => this.onMouseDown(event);
+  private readonly handleKeyDown = (event: KeyboardEvent): void => this.onKeyDown(event);
+  private readonly handleKeyUp = (event: KeyboardEvent): void => this.onKeyUp(event);
+  private readonly handleBlur = (): void => this.onCanvasBlur();
 
   public constructor(options: OrbitCameraOptions) {
     this.canvas = options.canvas;
@@ -193,11 +217,18 @@ export class OrbitCamera {
     );
   }
 
-  /** Drop any in-flight gesture. Called on focus loss, on unmount and on disposal. */
+  /**
+   * Drop any in-flight gesture and any held camera key.
+   *
+   * Called on focus loss, on unmount and on disposal. Clearing `heldKeys` is the keyboard half of "stop any
+   * keyboard camera motion on blur": the motion comes from a held key's autorepeat, and an autorepeat whose key
+   * is not in the set is refused by `onKeyDown`.
+   */
   public cancelActiveGestures(): void {
     this.pointers.clear();
     this.dragLast = undefined;
     this.pinchStartDistance = 0;
+    this.heldKeys.clear();
   }
 
   public dispose(): void {
@@ -224,8 +255,16 @@ export class OrbitCamera {
     window.addEventListener('pointercancel', this.handlePointerUp, { capture: true });
     this.canvas.addEventListener('wheel', this.handleWheel, { passive: false });
     this.canvas.addEventListener('contextmenu', this.handleContextMenu);
+    // Middle-click is autoscroll on some platforms and primary-paste on X11. Neither belongs in an orbit view,
+    // and the only way to stop both is to refuse the mouse default before the browser acts on it.
+    this.canvas.addEventListener('mousedown', this.handleMouseDown);
+    // Keyboard listeners live on the canvas, so focus decides who gets the arrow keys. Nothing here listens on
+    // the window for keys, and nothing here prevents a default the canvas did not consume.
+    this.canvas.addEventListener('keydown', this.handleKeyDown);
+    this.canvas.addEventListener('keyup', this.handleKeyUp);
+    this.canvas.addEventListener('blur', this.handleBlur);
     this.attached = true;
-    this.stats = { ...this.stats, listeners: 6 };
+    this.stats = { ...this.stats, listeners: 10 };
   }
 
   private detach(): void {
@@ -236,6 +275,10 @@ export class OrbitCamera {
     window.removeEventListener('pointercancel', this.handlePointerUp, { capture: true });
     this.canvas.removeEventListener('wheel', this.handleWheel);
     this.canvas.removeEventListener('contextmenu', this.handleContextMenu);
+    this.canvas.removeEventListener('mousedown', this.handleMouseDown);
+    this.canvas.removeEventListener('keydown', this.handleKeyDown);
+    this.canvas.removeEventListener('keyup', this.handleKeyUp);
+    this.canvas.removeEventListener('blur', this.handleBlur);
     this.canvas.style.touchAction = '';
     this.attached = false;
     this.stats = { ...this.stats, listeners: 0 };
@@ -256,18 +299,21 @@ export class OrbitCamera {
       return;
     }
     if (event.target !== this.canvas) return; // gestures on the page background do not own the camera either
-    if (event.button !== 0 && event.pointerType === 'mouse') return; // right/middle drag is the page's business
+    if (event.pointerType === 'mouse' && event.button !== 1) {
+      // Middle button only, by the reviewer's ruling. The left button is counted rather than silently dropped:
+      // "left drag leaves the camera still" has to be distinguishable from "the page recorded nothing".
+      if (event.button === 0) {
+        this.stats = { ...this.stats, leftPressesIgnored: this.stats.leftPressesIgnored + 1 };
+      }
+      return;
+    }
     if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
       this.incident('non-finite-gesture-value', 'pointerdown carried a non-finite position');
       return;
     }
-    this.pointers.set(event.pointerId, {
-      x: event.clientX,
-      y: event.clientY,
-      source: inputSourceOf(event.pointerType),
-    });
+    this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (this.pointers.size === 1) {
-      this.dragLast = { x: event.clientX, y: event.clientY, source: inputSourceOf(event.pointerType) };
+      this.dragLast = { x: event.clientX, y: event.clientY };
       this.stats = { ...this.stats, drags: this.stats.drags + 1 };
       this.capture(event);
     } else if (this.pointers.size === 2) {
@@ -289,11 +335,7 @@ export class OrbitCamera {
       this.incident('non-finite-gesture-value', 'pointermove carried a non-finite position');
       return;
     }
-    this.pointers.set(event.pointerId, {
-      x: event.clientX,
-      y: event.clientY,
-      source: inputSourceOf(event.pointerType),
-    });
+    this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
     if (this.pointers.size >= 2) {
       const [first, second] = [...this.pointers.values()];
@@ -304,12 +346,8 @@ export class OrbitCamera {
     }
 
     if (this.dragLast === undefined) return;
-    const step = orbitStepRadians(
-      event.clientX - this.dragLast.x,
-      event.clientY - this.dragLast.y,
-      this.dragLast.source,
-    );
-    this.dragLast = { x: event.clientX, y: event.clientY, source: this.dragLast.source };
+    const step = orbitStepRadians(event.clientX - this.dragLast.x, event.clientY - this.dragLast.y);
+    this.dragLast = { x: event.clientX, y: event.clientY };
     this.camera.alpha = wrapAzimuthRadians(this.camera.alpha + step.alphaDelta);
     // `betaDelta` is already in radians and already sign-correct for a drag (down drags the camera over the
     // top). The elevation helper clamps to 10°–80° and the conversion back is its own, so the pole and the
@@ -326,6 +364,40 @@ export class OrbitCamera {
     }
     this.dragLast = this.pointers.size === 1 ? [...this.pointers.values()][0] : undefined;
     this.release(event);
+  }
+
+  private onMouseDown(event: MouseEvent): void {
+    if (this.isDisposed || !this.attached) return;
+    if (event.button === 1) event.preventDefault(); // no autoscroll, no primary-paste from an orbit drag
+  }
+
+  private onKeyDown(event: KeyboardEvent): void {
+    if (this.isDisposed || !this.attached) return;
+    if (!isCameraKey(event.key)) return; // every other key is the page's, browser shortcuts included
+    if (event.target !== this.canvas) return; // the listener is on the canvas; focus decides, twice over
+    if (event.ctrlKey || event.metaKey || event.altKey) return; // a modified arrow is a shortcut, not a camera
+    // Scoped to the four keys above and to this element: arrow-key page scrolling is suppressed here and nowhere
+    // else, which is the whole of the "only for keys the focused canvas handles" requirement.
+    event.preventDefault();
+    if (event.repeat && !this.heldKeys.has(event.key)) return; // autorepeat after a blur cannot drive the camera
+    this.heldKeys.add(event.key);
+    this.stats = { ...this.stats, keySteps: this.stats.keySteps + 1 };
+    const step = keyOrbitStep(event.key);
+    this.camera.alpha = wrapAzimuthRadians(this.camera.alpha + step.alphaDeltaRadians);
+    // Pitch goes through the same degree-space clamp a drag uses, so keyboard and drag cannot drift apart at
+    // the bounds, and neither can reach the pole or the underside.
+    const pitched = betaRadiansToElevationDegrees(this.camera.beta) + step.elevationDeltaDegrees;
+    this.camera.beta = elevationDegreesToBetaRadians(pitched);
+  }
+
+  private onKeyUp(event: KeyboardEvent): void {
+    if (isCameraKey(event.key)) this.heldKeys.delete(event.key);
+  }
+
+  private onCanvasBlur(): void {
+    // Focus left the canvas: no held key may keep driving the camera, and no pointer gesture started inside it
+    // should look alive. The loop itself is stopped by ClientRuntime on window blur, not here.
+    this.cancelActiveGestures();
   }
 
   private onWheel(event: WheelEvent): void {
