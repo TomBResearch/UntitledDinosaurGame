@@ -383,18 +383,20 @@ CI result:
   Acceptance head: `d318444fe8668f4485d85398ecc6eb88ff5e3b36` — **green on run 43893238010 attempt 2**, and the evidence above comes from that run. Earlier
   heads keep their own green runs: `805ede6` on 43871936471 (attempt 2), `2d2be86` on 43852121401 (attempt 3),
   `0ad8d9e` on 43770588357 (attempt 2). A reviewer who re-runs `main` should expect the same nondeterminism at W-7
-  until UDG-003 deals with it: **eight attempts across six runs** have gone red there, and every green has arrived on a
+  until UDG-003 deals with it: **nine attempts across seven runs** have gone red there, and every green has arrived on a
   later attempt of the same run. Round 3 also produced the first red this task caused in **its own test** — run
   43890629291, described under "What CI cost to get the keyboard assertions right" below.
 
   It is worth saying plainly that W-7 appears to be **failing more often, not less**: the first three rounds needed
-  one rerun each, round 3's head needed one, and the docs-only head `af15028` needed two — and on attempt 2 the red
-  landed in **UDG-002's** capture rather than UDG-004's, which is what a shared nondeterministic step looks like when
+  one rerun each, round 3's head needed one, and the docs-only head `af15028` needed two and `39e9a51` needed two more — and on the second of those the red landed in
+  **UDG-002's** capture rather than UDG-004's, while on `39e9a51` attempt 1 it landed in **UDG-001's**, aborting the capture
+  loop before UDG-002, UDG-003 or UDG-004 were taken, which is what a shared nondeterministic step looks like when
   the job keeps getting heavier. Nothing about that is UDG-004's to fix, and the three owner options recorded in the
   first review round stay open and untouched: allow the load inside UDG-003's own suite, keep rerunning and recording
   as done here, or move the sibling captures ahead of UDG-004's steps so UDG-004's bundle is taken before the heavy
   work. UDG-004 has not widened a deadline, marked another task's test flaky, or added a retry to a shared step.
 
+  https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43918220690 — success on attempt 2 (record commit 39e9a51; bundle UDG-004-2026-11-16T17-58-34-306Z-39e9a51c, retained at /workspace/udg-evidence/ci-run-43918220690/, PASS 0 issues). Attempt 1 was W-7 inside **UDG-001's** capture — the first capture of the sequence, so UDG-002, UDG-003 and UDG-004 were never taken; the retained `logs/test.stderr.log` names `tests/system/udg-003-phase-2/runtime.test.ts`, `expected 1 to be +0`.
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43908313142 — success on attempt 3 (record commit af15028; bundle UDG-004-2026-11-16T17-17-56-450Z-af150282, retained at /workspace/udg-evidence/ci-run-43908313142/, PASS 0 issues). Attempts 1 and 2 both failed: attempt 2 is W-7 inside **UDG-002's** capture (`logs/test.stderr.log` in the retained bundle names `tests/system/udg-003-phase-2/runtime.test.ts`, `expected 1 to be +0`), which aborted the capture loop before UDG-004's bundle was taken; attempt 1 failed the same two capture steps with every test step green, and its per-bundle log was not retrievable after the rerun, so only attempt 2 is claimed as W-7 on evidence.
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43903672563 — success, first attempt (this record commit 58a4aaa; bundle UDG-004-2026-11-16T16-24-17-374Z-58a4aaa4, retained at /workspace/udg-evidence/ci-run-43903672563/, PASS 0 issues)
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43893238010 — success (attempt 2; attempt 1 red at W-7 inside UDG-004's capture `test` step, camera suite green on both attempts)
@@ -675,7 +677,7 @@ completes the 25° sweep at all.
 
 Run [`43893238010`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43893238010) then went red at
 attempt 1 on UDG-003's `W-7` — inside UDG-004's own capture `test` step, with the camera suite green on both
-attempts — and green on attempt 2. That red is UDG-003's, recorded under its own heading below, and it is now the eighth W-7 red across six runs.
+attempts — and green on attempt 2. That red is UDG-003's, recorded under its own heading below, and it is one of the **nine W-7 reds now recorded across seven runs**.
 
 **No plan threshold moved this round.** Round 3 is behaviour inside cases the plan already counts: the middle-mouse
 signs sit in the orbit case, and the continuous-keyboard measurements extend the eighth case rather than adding a
