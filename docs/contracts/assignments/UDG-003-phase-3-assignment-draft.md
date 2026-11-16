@@ -34,6 +34,24 @@ commit that added this paragraph cannot name it and does not try — `git log` n
 run number 133, **completed / success on the first attempt** on exactly that head. The publication itself is a
 docs-only change: no implementation path moved, no capture plan moved, no status field moved.
 
+**The records commit went red, and it is recorded rather than re-run away.** The commit adding the paragraph
+above — `9aef88f437ac115b3b27aa4f420376a2926c277e`, differing from `70f6d17` **only** in this one
+checksum-excluded draft file (implementation tree byte-identical) — ran
+[43956003339](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43956003339): **completed /
+failure** at step "Run the unit and Node integration suites", with the standing knock-on at "Verify probe
+invocation attribution" (the UDG-003 probe step never runs once the test step aborts) — the same failure shape
+as recorded `W-7` reds such as run `43871936471` attempt 1. What the retained evidence establishes, stated as
+§6.5 requires: (a) the failing step is `pnpm test`; (b) the tree was byte-identical to a head that had gone
+green on its **first attempt** roughly half an hour earlier, so identical code produced red and green — the
+recorded nondeterminism signature; (c) no assertion identity is claimed here, because the run logs are not
+retrievable without owner credentials — **the owner's view of the run page is the byte that names the failing
+assertion**, and until it is read this red stands as *shape-consistent with* `W-7`, not as a confirmed
+instance. No capture bundle exists for this run: the capture step never started. The red is kept; `9aef88f`
+is not re-run into greenness, and its status is carried forward by its successor commits the way UDG-004's
+records carried a head that never had a green run of its own. If the owner's reading confirms `W-7`, the tally
+becomes ten reds across eight runs on the day Phase 3's draft was published — recorded in §6.1 only by this
+kind of dated addendum, never by rewriting it.
+
 What is unchanged by this draft, and unchanged by reviewing it:
 
 - **UDG-003 as a whole stays In Progress.** Phase 0 is accepted as ADR-0002; Phase 1 and Phase 2 are accepted
