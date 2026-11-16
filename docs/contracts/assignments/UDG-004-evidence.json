@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "taskId": "UDG-004",
-  "runId": "UDG-004-2026-11-16T13-46-50-902Z-805ede69",
-  "generatedAt": "2026-11-16T13:57:51.206Z",
-  "generatorCommand": "pnpm evidence:summary -- --run <bundle> --out <file> (bundle UDG-004-2026-11-16T13-46-50-902Z-805ede69)",
+  "runId": "UDG-004-2026-11-16T15-50-46-953Z-d318444f",
+  "generatedAt": "2026-11-16T16:03:14.924Z",
+  "generatorCommand": "pnpm evidence:summary -- --run <bundle> --out <file> (bundle UDG-004-2026-11-16T15-50-46-953Z-d318444f)",
   "durableStorage": {
-    "location": "/workspace/udg-evidence/ci-run-43871936471/UDG-004-2026-11-16T13-46-50-902Z-805ede69",
+    "location": "/workspace/UntitledDinosaurGame/artifacts/UDG-004-2026-11-16T15-50-46-953Z-d318444f",
     "note": "Raw bundle retained outside Git per clarification C-03. The hashes below identify the retained bytes; a mismatch means the stored bundle is not the run this summary describes."
   },
   "verification": {
@@ -14,7 +14,7 @@
     "issueCount": 0
   },
   "status": "PASS",
-  "implementationSha": "805ede694dbc135ebd7e8afc047a905637dedae6",
+  "implementationSha": "d318444fe8668f4485d85398ecc6eb88ff5e3b36",
   "branch": "main",
   "workingTreeDirty": false,
   "prerequisiteShas": [
@@ -25,7 +25,7 @@
   "baselineSpecHash": "b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf",
   "dependencyLockHash": "944ae1e435e5cf5cf5d13d42b6b0cb80f04e364ebc39b377625687bd2a7742af",
   "configHashes": {
-    "taskContract": "f10d20c4df55c9e82ea88943296b0a9c98c68171e37a5655d187e67df1694eee",
+    "taskContract": "a33b9efce114b6a558bd521ab343da39b196f9dce842423ba3642f7ae77eb062",
     "tsconfigBase": "da4b844063b8abb6f48677c87c8996accf9e77cf1f7e5792827cd811edcb394d",
     "boundaryRuleTable": "818c63d5b12f984b17172688be6fd82ed103d9e18473e0978e307225e8194b82",
     "boundaryFixtures": "076b6a6f6f6ae75fdb3a3ba607df73f456b1ea0ec39cd465942e41730c79ba0d",
@@ -65,47 +65,47 @@
     {
       "label": "install-frozen",
       "exitCode": 0,
-      "durationMs": 83
+      "durationMs": 84
     },
     {
       "label": "typecheck",
       "exitCode": 0,
-      "durationMs": 18473
+      "durationMs": 18811
     },
     {
       "label": "lint",
       "exitCode": 0,
-      "durationMs": 4566
+      "durationMs": 4891
     },
     {
       "label": "build",
       "exitCode": 0,
-      "durationMs": 7120
+      "durationMs": 7371
     },
     {
       "label": "camera-e2e",
       "exitCode": 0,
-      "durationMs": 110378
+      "durationMs": 98008
     },
     {
       "label": "test",
       "exitCode": 0,
-      "durationMs": 127658
+      "durationMs": 128756
     },
     {
       "label": "test-contract-UDG-004",
       "exitCode": 0,
-      "durationMs": 9196
+      "durationMs": 9023
     },
     {
       "label": "test-boundaries",
       "exitCode": 0,
-      "durationMs": 1545
+      "durationMs": 1517
     },
     {
       "label": "test-contract-UDG-001",
       "exitCode": 0,
-      "durationMs": 4574
+      "durationMs": 4850
     }
   ],
   "measured": {
@@ -153,7 +153,7 @@
       "radiusMaxMetres": 20,
       "uiGesturesIgnored": 2,
       "poseWritesDuringCameraOperations": 0,
-      "poseWritesBeforeFreeze": 23,
+      "poseWritesBeforeFreeze": 21,
       "targetFollowErrorMetres": 1.8686641754686453e-8,
       "presentedHeightUnits": 1.7999999999999998,
       "positiveArmMetres": 3,
@@ -217,7 +217,7 @@
       "rootIsRepository": true,
       "E6.acceptedPlansUnchanged": 3,
       "E6.bundlesVisible": 3,
-      "E6.bundleOutcomes": "{\"UDG-001-2026-11-16T13-36-34-217Z-805ede69\":\"verified\",\"UDG-002-2026-11-16T13-39-17-364Z-805ede69\":\"verified\",\"UDG-003-2026-11-16T13-42-21-121Z-805ede69\":\"verified\"}",
+      "E6.bundleOutcomes": "{\"UDG-001-2026-11-16T15-40-28-146Z-d318444f\":\"verified\",\"UDG-002-2026-11-16T15-43-10-503Z-d318444f\":\"verified\",\"UDG-003-2026-11-16T15-46-13-098Z-d318444f\":\"verified\"}",
       "E6.textRewritePreserved": true,
       "binaryPortabilityProven": true
     },
@@ -226,94 +226,93 @@
       "failingCommands": [],
       "sanitisationFailures": [],
       "pnpmStoreRecorded": true,
-      "totalDurationMs": 283593,
+      "totalDurationMs": 273311,
       "keepGoing": true
     }
   },
   "ci": {
-    "status": "success (GitHub-hosted Linux, X64) on attempt 2 of run 43871936471; attempt 1 failed on UDG-003 Phase 2's nondeterministic W-7 probe, which is not UDG-004's to re-tune",
-    "url": "https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43871936471",
-    "note": "Workflow ci on the pushed commit, identified by the url field. It is a Gate A browser client pass for UDG-004 only: not a Gate A, B or C pass, not stackCompatibility, and not UDG-003 Phase 3 — those remain Not Run, not-established and unassigned respectively."
+    "status": "pending-owner-run",
+    "note": "UDG-004 stays In Review until .github/workflows/ci.yml runs green on the pushed commit and the reviewer accepts it; this summary claims no CI run of its own."
   },
   "artifacts": [
     {
       "path": "boundary-report.json",
-      "sha256": "3cfd2f1d8fe83ea5ff6e4d8871a0f6982cc0b410cf3ea5eaa1dfe96bb72bd610",
+      "sha256": "aa2d5500243976a92673735573ce4f6a018f862a67055b67da5409534913bcf5",
       "bytes": 253
     },
     {
       "path": "browser/orbit-azimuth-min.png",
-      "sha256": "6a15f5537202b116c20456d2da3417a716610c658dc022403c3aae71496d725c",
-      "bytes": 108238
+      "sha256": "52f23f6948e50ed16ca09f2198592af06733a73216de1c7def1916d2429769c5",
+      "bytes": 109558
     },
     {
       "path": "browser/orbit-default.png",
-      "sha256": "31953bff81fc5d87fb78bb24b12041737ecc3353eff510fed9add931f9a7c3f7",
-      "bytes": 123252
+      "sha256": "1ca0bff9a88037e3c945ac5a7137f9f6f66f965a79be79bd86de351cf90733d1",
+      "bytes": 127335
     },
     {
       "path": "browser/orbit-elevation-max.png",
-      "sha256": "9eeaf14e60dd89aab854bf18a00017a1c80f741fdf0ae5f32ec71282cf84d659",
-      "bytes": 125546
+      "sha256": "3e6f74b80ff1b7423a810cb0cbd18f9bb053f74800a97bebea18a810c3db38cc",
+      "bytes": 131468
     },
     {
       "path": "browser/orbit-elevation-min.png",
-      "sha256": "fc1a3ed580cdb97067d291abcb3179fccbf8e79dcb91936a25875f32f264c176",
-      "bytes": 107767
+      "sha256": "95ffc3fe35b600cb14f8297e3e322b24bebc745bb69057806361b0aebd4e9dce",
+      "bytes": 110725
     },
     {
       "path": "browser/screenshots.json",
-      "sha256": "861e06214e50946767b38d179fd74627c01b754e4a4b6f055189c5530c63a9c3",
+      "sha256": "cdcd8122bf76f453f169b99863d34e4b9f6b5d11dd4184f37e4e7f36e07c2cb1",
       "bytes": 1410
     },
     {
       "path": "browser/zoom-max-20m.png",
-      "sha256": "a9c25d2fe5e746fc0959978e6cab8b5122c33874ea5e530df779b0d0f5b71200",
-      "bytes": 103804
+      "sha256": "2735cf04f9ba358a7f198ec27fb3e1618922851f9bc80cbcc4a40614294289c3",
+      "bytes": 104811
     },
     {
       "path": "browser/zoom-min-2m.png",
-      "sha256": "4167f2e3eea59ed97e37b16f409c70491270eaacb58b8c44b3bbecc5d5742807",
-      "bytes": 144246
+      "sha256": "790d18b71d87509b95a09ed7f05f7393bf7582c8f5d79c0063a8845ab8f62e8b",
+      "bytes": 145190
     },
     {
       "path": "build.log",
-      "sha256": "ae210f1e55676fdb1c3f5143dd16682c417e6380bc3d3ba1963168ac2b100971",
+      "sha256": "2134f3b030c51686bb0635efbe212b363efff89d8020e884fce164c0ac11903d",
       "bytes": 8427
     },
     {
       "path": "camera-browser-results.json",
-      "sha256": "74a1950a17269cdded85ba99cb18bccc820daba00e3463ee39db3880ada3d63c",
-      "bytes": 5193
+      "sha256": "befdf450957000454bef9d575d2ba4ef635dadcb9d7a163d5207c0d21a7b8680",
+      "bytes": 5419
     },
     {
       "path": "checksums.sha256",
-      "sha256": "64aeb30486d617f51c3286b1f240dc37cf08205b9179ceff85a1490d43137188",
+      "sha256": "c85a22cced61a95681d776cbb1d07c929cf73ddb4c36dfbf9c3107d45ce68e0a",
       "bytes": 3109
     },
     {
       "path": "commands.json",
-      "sha256": "905dfdbf8852058da04d36c07d207435d7707cc91823e1ff07b092b77947b863",
-      "bytes": 5258
+      "sha256": "3a8d77cf71c464ad9eec3200e31b7e91b3fdb7c80d59236238ba46bcbdea3c2c",
+      "bytes": 5257
     },
     {
       "path": "console-errors.json",
-      "sha256": "3924d4cf51b4d220a82df188b79dac1421af9e2924120dc3a1c63538335dba7a",
+      "sha256": "f15575baa1ab31d5ffbcaeca6a814a24e6e383dc8f1f188aa959a34397585f84",
       "bytes": 2550
     },
     {
       "path": "environment.json",
-      "sha256": "be2abee948608a8d1512d5d3e5e4977844e86d6a5c5505bb43e2bd0089bea579",
-      "bytes": 669
+      "sha256": "e930865533863a8cecbaf4d4d32a885a1bb826829f5e7fa2a31d7e0f201a9e3d",
+      "bytes": 678
     },
     {
       "path": "junit.xml",
-      "sha256": "00bb05803a698843089741c8b367fd2dfdbb117511976ef81a3976ff54c6b33a",
-      "bytes": 143471
+      "sha256": "67a0f7ab768cb77c86f25c04a5232a71bbb5cc3a982a3cbda2b7157df7e0f67b",
+      "bytes": 143417
     },
     {
       "path": "lifecycle-counts.json",
-      "sha256": "4be6315cee93a244007226d7424564aed236ac04c12e348b498020fad02b7c5f",
+      "sha256": "d5b0d2fcf42d9177a7951427b4450203cb17441f60275046c368bbe42727bc33",
       "bytes": 528
     },
     {
@@ -323,7 +322,7 @@
     },
     {
       "path": "logs/camera-e2e.stdout.log",
-      "sha256": "bc223eec10e8ccbd1118317589e8184a1d8133770473e467c1aefbd26176b2c8",
+      "sha256": "88bde8c295bb4c4a2a331241c0e15ed979f6376e3fb41102f614ff571d21cd88",
       "bytes": 1484
     },
     {
@@ -333,7 +332,7 @@
     },
     {
       "path": "logs/install-frozen.stdout.log",
-      "sha256": "2169d6f42e9f647da3f47254cf8c97bdf8d25aef0e810244f9ce3a096f41a347",
+      "sha256": "41f4ce20d1b23dec02eb874ae47e3bece669a34255b5e0ceca136cf219559d24",
       "bytes": 177
     },
     {
@@ -363,8 +362,8 @@
     },
     {
       "path": "logs/test-contract-UDG-001.stdout.log",
-      "sha256": "ad9e3f1ae2d166f36fade6706e7903d46fb201dffc6dc41f1fe0dd5a07e74b5a",
-      "bytes": 854
+      "sha256": "6bf927e2b90d5be62b0e98b16947c4003dea753d179646053e1feba86a1f2365",
+      "bytes": 992
     },
     {
       "path": "logs/test-contract-UDG-004.stderr.log",
@@ -373,7 +372,7 @@
     },
     {
       "path": "logs/test-contract-UDG-004.stdout.log",
-      "sha256": "0f4761f75ee2b2b198b50e0dc8ac6e355cf19fb63bb363a0162307d19f4cf624",
+      "sha256": "6c38b9ba6bdddc2d964a32fdbbd0a9371c621da8529a9d9b8c9d65ca3af1e407",
       "bytes": 904
     },
     {
@@ -383,8 +382,8 @@
     },
     {
       "path": "logs/test.stdout.log",
-      "sha256": "f9057c6397caf8c5b5658872fac4c1589fd5c52c3ec49a9c51aaad0710500e1f",
-      "bytes": 7637
+      "sha256": "ae372c8e0d5083abef080a26e03093bf891fa7c119a75e806cfa99e7203277f7",
+      "bytes": 7789
     },
     {
       "path": "logs/typecheck.stderr.log",
@@ -393,12 +392,12 @@
     },
     {
       "path": "logs/typecheck.stdout.log",
-      "sha256": "28cde9926da2940a4b66ea20ab59c4a89c431aed193a4084e3adaffee2a52b01",
+      "sha256": "eb3c4f58cc22e89f765af13c1c0c4517fd3b1d9e5315fafb9374798235883683",
       "bytes": 1124
     },
     {
       "path": "measurements/UDG-004.json",
-      "sha256": "367b587c24e552d9bc1962609c001bd25bc82274de0de7b1d1b8a70ed3927783",
+      "sha256": "e3e672072e5f76621d5b98200c580ef182b5c8f4a93e35ddd7adf970698d9850",
       "bytes": 3012
     },
     {
@@ -408,7 +407,7 @@
     },
     {
       "path": "report.json",
-      "sha256": "b24f0aa16cbc7884ed97932c9823eb9cf0117055023a7d018fc7c4d072ff42dc",
+      "sha256": "9f5af15a0b412bc5ab1e4eba03f64f8ac2d34ecb03d26d6a7d1b66896d130095",
       "bytes": 18509
     }
   ]

@@ -9,10 +9,10 @@ being left blank by accident.
 ```text
 Task ID and final implementation SHA:
   UDG-004 Browser client and camera.
-  Submitted head      805ede694dbc135ebd7e8afc047a905637dedae6 (pushed to main) — the head the acceptance
-                      evidence below describes, the head CI run 43871936471 is green on, and the head whose
-                      camera artefacts are stamped `implementationSha: 805ede69…` with
-                      `workingTreeDirty: false`. It carries both Mac-review control rulings; the two heads it
+  Submitted head      d318444fe8668f4485d85398ecc6eb88ff5e3b36 (pushed to main) — the head the acceptance
+                      evidence below describes, the head CI run 43893238010 is green on (attempt 2), and the head
+                      whose camera artefacts are stamped `implementationSha: d318444f…` with
+                      `workingTreeDirty: false`. It carries all three Mac-review control rulings; the heads it
                       supersedes each keep their own green run and their own bundle, all named below.
   First submission    2e9184b3a701e351b53c139ff68b312913de8feb — the head the reviewer's first CI look
                       should include, because it went RED: CI run 43764611170 failed one of seven browser
@@ -215,13 +215,13 @@ Acceptance thresholds and measured results:
   inside UDG-004's own capture.
 
 Raw evidence directory and integrity result:
-  CI capture at the submitted head (authoritative): `UDG-004-2026-11-16T13-46-50-902Z-805ede69` inside run
-  43871936471's `udg-evidence` artefact, retained at
-  `/workspace/udg-evidence/ci-run-43871936471/UDG-004-2026-11-16T13-46-50-902Z-805ede69` — re-verified here
-  **PASS, 0 issues**, and the committed summary
+  CI capture at the submitted head (authoritative): `UDG-004-2026-11-16T15-50-46-953Z-d318444f` inside run
+  43893238010's `udg-evidence` artefact, retained at
+  `/workspace/udg-evidence/ci-run-43893238010/UDG-004-2026-11-16T15-50-46-953Z-d318444f` — re-verified here **PASS, 0 issues** (8 cases,
+  8 passed, 616 tests, 0 failures, `chromium-1254`), and the committed summary
   [UDG-004-evidence.json](UDG-004-evidence.json) is generated from **this** bundle. Retained beside it, in the same
-  store: the record-commit capture `UDG-004-2026-11-16T12-30-21-289Z-bc5b8b18`
-  (`/workspace/udg-evidence/ci-run-43863914596/`), the round-1 head's
+  store: round 2's `UDG-004-2026-11-16T13-46-50-902Z-805ede69` (`ci-run-43871936471/`), the record-commit capture
+  `UDG-004-2026-11-16T12-30-21-289Z-bc5b8b18` (`/workspace/udg-evidence/ci-run-43863914596/`), the round-1 head's
   `UDG-004-2026-11-16T11-55-52-843Z-2d2be864` (`/workspace/udg-evidence/ci-run-43852121401/`), and earlier record
   captures `UDG-004-2026-11-16T00-29-14-503Z-c0bb0c9a` (`ci-run-43778967831/`) and
   `UDG-004-2026-11-16T08-50-02-811Z-e8895261` (`ci-run-43832089262/`) — all PASS, 0 issues.
@@ -262,19 +262,46 @@ The red submission, kept because a correction that erases its own history is not
   first submission's screenshot and trace are inside that run's artefact on GitHub).
 
 CI result:
-  **Current head 805ede694dbc135ebd7e8afc047a905637dedae6 — run 43871936471, workflow `ci`, event push.**
+  **Current head d318444fe8668f4485d85398ecc6eb88ff5e3b36 — run 43893238010, workflow `ci`, event push. Previous heads keep their own runs; nothing is
+  edited away, including the red caused by a UDG-004 test rather than by a UDG-004 client.**
 
   * **Attempt 2: completed / success.** Camera suite green (8 of 8 cases), `pnpm test` green (616 tests, 0
     failures), all four capture bundles verified. The UDG-004 bundle is
+    `UDG-004-2026-11-16T15-50-46-953Z-d318444f`, retained at
+    `/workspace/udg-evidence/ci-run-43893238010/` and re-verified here: **PASS, 0 issues**. In it `suites` reads
+    `{expected: 8, passed: 8}` on `chromium-1254`, and the control measurements are the ones this record quotes:
+    **middle-mouse** right **+68.755°**, middle left **−68.755°**, **touch** right **−68.755°**, touch left
+    **+68.755°**, `mouseInvertedAgainstTouch true` (equal and opposite by construction of the third ruling),
+    `leftPressesIgnored 2`, `mouseDragDownElevationDelta +20.626°`; keyboard from a single keydown with no repeats —
+    `keyboardDeltaRightSweep −25.336°` over `keyboardFramesRightSweep 18` at
+    `keyboardDegreesPerDrivingFrame 1.408°`, `keyboardFramesToFirstMove 3` at `keyboardStartLatencyMs 118`,
+    `keyboardDeltaLeftSweep +25.041°` over 18 frames, `keyboardSweepFrameRatio 1.000`,
+    `keyboardFramesAfterKeyup 0`, pitch clamped at exactly **80** and **10**, focused outline
+    `4px solid rgb(89, 201, 138)`, `keyboardFramesTotal 234`.
+  * **Attempt 1: failed**, at `Capture the evidence bundles`, on UDG-003's `W-7` (`expected 1 to be +0`) inside
+    **UDG-004's own capture `test` step** — the retained `logs/test.stderr.log` in
+    `UDG-004-2026-11-16T15-26-23-907Z-d318444f` names `tests/system/udg-003-phase-2/runtime.test.ts`. The camera
+    suite and every test step before it were green, and the UDG-001, UDG-002 and UDG-003 bundles in that attempt all
+    verified PASS; only UDG-004's bundle recorded a failing gate, which is the gate working as designed.
+
+  **Previous head 805ede694dbc135ebd7e8afc047a905637dedae6 — run 43871936471.** Round 2: middle-button orbit, the
+  inert left button, arrow-key orbit and pitch on the focused canvas, and the eighth browser case.
+
+  * **Attempt 2: completed / success.** Camera suite green (7 → 8 cases), `pnpm test` green (616 tests, 0 failures),
+    all four capture bundles verified. The UDG-004 bundle is
     `UDG-004-2026-11-16T13-46-50-902Z-805ede69`, retained at `/workspace/udg-evidence/ci-run-43871936471/` and
-    re-verified here: **PASS, 0 issues**. In it `suites` reads `{expected: 8, passed: 8}` on `chromium-1254`, and
-    the control measurements are the ones this record quotes: middle right **−68.755°**, middle left **+68.755°**,
-    touch right **−68.755°**, touch left **+68.755°**, `mouseAndTouchAzimuthAgree true`, `leftPressesIgnored 2`,
-    ArrowRight ×10 **−28.648°**, ArrowLeft ×10 **+28.648°**, keyboard pitch clamped at exactly **80** and **10**,
-    focused outline `4px solid rgb(89, 201, 138)`, `keyboardStepsTotal 170`.
+    re-verified here: **PASS, 0 issues**, with middle right **−68.755°**, middle left **+68.755°**, touch right
+    **−68.755°**, touch left **+68.755°**, `mouseAndTouchAzimuthAgree true`, `leftPressesIgnored 2`, ArrowRight ×10
+    **−28.648°**, ArrowLeft ×10 **+28.648°**, keyboard pitch clamped at exactly **80** and **10**, focused outline
+    `4px solid rgb(89, 201, 138)`, `keyboardStepsTotal 170`.
   * **Attempt 1: failed**, at `Run the unit and Node integration suites`, on UDG-003's `W-7` — the camera suite
     and every step before it were green, and `Verify probe invocation attribution` failed afterwards only because
     the UDG-003 probe step never ran once its test step aborted.
+
+  **Run 43890629291 (head `3448bc6`) — failure, and the only one this task caused in its own test.** The camera suite
+  failed case 8 on `the keyboard axis is not mirrored`; the diagnosis and the fix are in
+  "What CI cost to get the keyboard assertions right" below. It is listed here rather than omitted so the green head's
+  history reads honestly: `3448bc6` never had a green run of its own, and its behaviour is what `d318444` verifies.
 
   **Previous head 2d2be8646ad4ab7caa17637d10bdf553a20ce313 — run 43852121401.**
 
@@ -353,12 +380,15 @@ CI result:
     described above) and `43766691106` (head `1100233`, `chromiumBuild: unknown` plus UDG-004 tests failing
     inside UDG-001's and UDG-002's captures) — are kept for the same reason. All three are linked below.
 
-  Acceptance head: `805ede694dbc135ebd7e8afc047a905637dedae6` — **green on run 43871936471 attempt 2**, and the
-  evidence above comes from that run. Earlier heads keep their own green runs: `2d2be86` on 43852121401 (attempt 3),
+  Acceptance head: `d318444fe8668f4485d85398ecc6eb88ff5e3b36` — **green on run 43893238010 attempt 2**, and the evidence above comes from that run. Earlier
+  heads keep their own green runs: `805ede6` on 43871936471 (attempt 2), `2d2be86` on 43852121401 (attempt 3),
   `0ad8d9e` on 43770588357 (attempt 2). A reviewer who re-runs `main` should expect the same nondeterminism at W-7
-  until UDG-003 deals with it: six attempts across four runs have gone red there, and every green has arrived on a
-  later attempt of the same run.
+  until UDG-003 deals with it: **seven attempts across five runs** have gone red there, and every green has arrived on a
+  later attempt of the same run. Round 3 also produced the first red this task caused in **its own test** — run
+  43890629291, described under "What CI cost to get the keyboard assertions right" below.
 
+  https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43893238010 — success (attempt 2; attempt 1 red at W-7 inside UDG-004's capture `test` step, camera suite green on both attempts)
+  https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43890629291 — failure (camera case 8: this task's own wall-clock keyboard tolerance, fixed in d318444)
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43871936471 — success (attempt 2; attempt 1 red at W-7)
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43863914596 — success (record commit bc5b8b1)
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43852121401 — success (attempt 3; attempts 1 and 2 red at W-7)
@@ -467,7 +497,7 @@ provisioning snippet is idempotent.
 
 ```sh
 cd /workspace/UntitledDinosaurGame
-git rev-parse HEAD                       # 805ede694dbc135ebd7e8afc047a905637dedae6 or its record successors
+git rev-parse HEAD                       # d318444fe8668f4485d85398ecc6eb88ff5e3b36 or its record successors
 export PATH="$HOME/.local/node-v24.22.2-linux-arm64/bin:$HOME/.local/bin:$PATH"
 UDG_DEV_HOST=0.0.0.0 VITE_UDG_SERVER_URL=ws://127.0.0.1:2567 pnpm dev
 ```
@@ -570,18 +600,22 @@ measurements from that head are kept in the table below as the "round 1" column.
   through `elevationDegreesToBetaRadians`, the only place 10°–80° is written.
 
 **Keyboard continuity, measured the way the reviewer has to be able to test it** — one `keydown`, **no repeat
-events**, then a timed interval:
+events**, then the **client's own frame clock**. `cameraKeyFrames` counts the frames in which held keys drove the
+camera, so the assertions below hold identically on a 60 fps laptop and on CI hardware that renders at a fraction of
+that; the first version of this case measured angles inside fixed 500 ms windows instead, and CI run 43890629291
+failed it. See "What CI cost to get the keyboard assertions right".
 
-| Measurement | Value | What it rules out |
+| Measurement (from the CI bundle at `d318444`) | Value | What it rules out |
 | --- | --- | --- |
-| First 100 ms after the keydown | **−8.02°** | an initial pause |
-| Held 500 ms | **−35.59°**, over **31** frames | a single jump, or a per-press step |
-| Implied rate | **71.2°/s** against 68.8°/s configured | autorepeat cadence deciding the speed |
-| Opposite key, held 500 ms | **+34.38°** (mirror within 1.2°) | an axis that only works one way |
-| Frames after `keyup` | **0** | a held state that survives release |
+| One keydown, swept 25.34° | **18** driven frames, **1.408° per frame** | a single jump, or one step per keypress |
+| Movement first visible | driven frame **3**, **118 ms** after the keydown | an initial pause |
+| Same angle in the other direction | +25.04° over **18** frames — frame ratio **1.000** | an axis that works one way, or at two rates |
+| Upper bound per frame | cap is **6.88°** (1.2 rad/s × 0.1 s clamp); measured **1.408°** | a teleport on the first frame |
+| Frames driven after `keyup` | **0** | a held state that survives release |
 | After canvas `blur`, key still down | azimuth identical across 350 ms, frames frozen | motion that continues unfocused |
-| Held with focus on a button | 0 key steps, 0 key frames, camera unchanged | a listener that ignores focus |
+| Held with focus on a button | **0** key steps, **0** driven frames, camera unchanged | a listener that ignores focus |
 | ArrowUp / ArrowDown held | exactly **80°** and **10°**, never past | a second, keyboard-only bound |
+| Whole case, cumulative | **234** driven frames (locally: 22 frames for the sweep, **1.145°/frame**, first movement on frame 1 at 16 ms) | — |
 
 **Measured, all three rounds side by side.** Same case, same default camera state, 200 px drags at the canvas
 centre, 10 key presses; the round-1 column is the retained artefact of `2d2be86`:
@@ -594,7 +628,7 @@ centre, 10 key presses; the round-1 column is the retained artefact of `2d2be86`
 | 200 px touch drag left | +68.755° | +68.755° | **+68.755°** — never changed |
 | 60 px mouse drag down | +20.626° elevation | +20.626° | **+20.626°** — never changed |
 | 200 px **left**-button drag ×2 | orbited | camera unchanged, 2 refusals | **camera unchanged to 6 decimals, 2 refusals** |
-| Arrow keys, one keydown held 500 ms | keys did nothing | needed 10 press events for −28.6° | **−35.59° in 31 frames, no repeats sent** |
+| Arrow keys, one keydown | keys did nothing | needed 10 press events for −28.6° | **25.34° swept in 18 driven frames, 1.408° each, no repeats sent** |
 | ArrowUp / ArrowDown held | n/a | per press | **80°** and **10°**, clamped, never exceeded |
 | Keys with focus on a button or off-canvas | n/a | 0 steps | **0 steps, 0 frames**, camera unchanged |
 | Focused canvas outline | none | 4px ring | **4px solid rgb(89, 201, 138)** |
@@ -610,6 +644,30 @@ did not move" is also what a keyboard listener wired to nothing looks like — t
 deliberate, and the case then refocuses the canvas and proves the same keys *do* move it, so the unfocused assertion
 cannot be vacuous. Left-button inactivity is asserted the same way, with both presses counted.
 
+### What CI cost to get the keyboard assertions right
+
+Run [`43890629291`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43890629291) is red, and the
+fault was mine rather than the client's: the first version of case 8 asserted that the two keyboard directions cover
+the **same angle inside a fixed 500 ms window** (within 6°) and that the implied rate lands between 40°/s and 100°/s.
+Locally, at 60 fps, that passed with room to spare. On CI it failed — the runner renders several times slower, and
+`MAX_FRAME_SECONDS` deliberately caps how far one slow frame may carry the camera, so two identical holds
+legitimately covered different angles. The assertion was measuring the machine.
+
+That is worth recording rather than quietly amending, because the fix is the interesting part. Case 8 now measures on
+`cameraKeyFrames`, which counts exactly the frames in which held keys drove the camera, and defines a sweep by an
+**angle to cover** rather than a time to wait. The properties the reviewer asked for survive intact and are now
+machine-independent: movement must appear within the first three driven frames (no initial pause), at least four
+frames must carry the sweep (no repeated jump), no frame may carry more than the 6.88° that
+`KEY_ORBIT_RADIANS_PER_SECOND × MAX_FRAME_SECONDS` permits (no teleport), both directions must need about the same
+number of driven frames for the same angle (mirrored), and zero frames may be driven after `keyup` (it stops).
+Because no repeat keydown is ever sent, a build that steps per keypress still fails the case outright: it never
+completes the 25° sweep at all.
+
+Run [`43893238010`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43893238010) then went red at
+attempt 1 on UDG-003's `W-7` — inside UDG-004's own capture `test` step, with the camera suite green on both
+attempts — and green on attempt 2. That red is UDG-003's, recorded under its own heading below, and it is now the
+seventh W-7 red across five runs.
+
 **No plan threshold moved this round.** Round 3 is behaviour inside cases the plan already counts: the middle-mouse
 signs sit in the orbit case, and the continuous-keyboard measurements extend the eighth case rather than adding a
 ninth, so `camera.cases` still reads `=== 8` and the required-file and screenshot lists are untouched.
@@ -620,10 +678,14 @@ names declared, and the plan text saying eight). Nothing else in the plan moved:
 screenshots — deliberately no seventh, because the screenshot gate rejects any PNG the plan does not name — same
 commands, same other thresholds.
 
-**Where both rounds landed.** Round 1: `2d2be8646ad4ab7caa17637d10bdf553a20ce313`, green on run 43852121401
-attempt 3. Round 2, with the keyboard and the eighth case: `805ede694dbc135ebd7e8afc047a905637dedae6`, green on run
-43871936471 attempt 2, its bundle named under "Raw evidence directory". The attempts that went red at UDG-003's
-W-7 before each green are named there too, so the rerun history is visible rather than implied.
+**Where the three rounds landed.** Round 1: `2d2be8646ad4ab7caa17637d10bdf553a20ce313`, green on run 43852121401
+attempt 3. Round 2, with the middle button, the inert left button, the keyboard and the eighth case:
+`805ede694dbc135ebd7e8afc047a905637dedae6`, green on run 43871936471 attempt 2. Round 3, the third horizontal
+reversal plus continuous keyboard motion: `3448bc66fb97cb4c1e2a202a9779a5a67016510a`, red on run 43890629291 for a
+reason in **my test** rather than in the client, and then `d318444fe8668f4485d85398ecc6eb88ff5e3b36` with that test
+re-measured on the frame clock, green on run 43893238010 attempt 2, whose bundle is named under "Raw evidence directory".
+The attempts that went red at UDG-003's W-7 before each green are named there too, so the rerun history is visible
+rather than implied.
 
 **What was preserved, with the number that says so.** Elevation still clamps at **10°** and **80°** for drag *and*
 keyboard; radius still clamps at **2 m** and **20 m** by wheel and by pinch; UI-origin gestures are still ignored

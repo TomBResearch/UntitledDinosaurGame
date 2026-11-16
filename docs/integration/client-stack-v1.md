@@ -212,23 +212,26 @@ focused canvas. Focus is also visible: `tabindex="0"` and a 4 px ring drawn *ins
 (`outline-offset: -4px`), because a full-viewport element has nowhere outside the picture to put one;
 `preventDefault()` covers the four arrows and nothing else, and never a modified arrow.
 
-Measured in `chromium-1254` from `tests/e2e/camera.spec.ts` (200 px drags at the canvas centre; for the keyboard,
-**one keydown, no repeat events**, then a timed interval):
+Measured in `chromium-1254` from `tests/e2e/camera.spec.ts` on the CI runner (200 px drags at the canvas centre; for the
+keyboard, **one keydown, no repeat events**, then the client's own count of frames in which held keys drove the camera):
 
 ```text
-middle drag right   Δazimuth  +68.755°      ArrowRight 100 ms   Δazimuth   −8.02°
-middle drag left    Δazimuth  −68.755°      ArrowRight 500 ms   Δazimuth  −35.59°  over 31 frames
-touch drag right    Δazimuth  −68.755°      implied rate                   71.2°/s  (configured 68.8)
-touch drag left     Δazimuth  +68.755°      ArrowLeft  500 ms   Δazimuth  +34.38°
-middle drag down    Δelevation +20.626°     ArrowUp / ArrowDown held        80° and 10°, clamped
-left-button drags ×2                        camera unchanged to 6 decimals, 2 refusals counted
-                                            frames after keyup                      0
+middle drag right   Δazimuth  +68.755°      ArrowRight swept 25.34°   over 18 driven frames
+middle drag left    Δazimuth  −68.755°      per driven frame                     1.408°
+touch drag right    Δazimuth  −68.755°      movement first visible   frame 3, 118 ms after keydown
+touch drag left     Δazimuth  +68.755°      ArrowLeft same angle, same runner    18 frames (ratio 1.000)
+middle drag down    Δelevation +20.626°     ArrowUp / ArrowDown held         80° and 10°, clamped
+left-button drags ×2      camera unchanged to 6 decimals, 2 refusals      frames after keyup        0
 ```
 
 The mouse and the finger disagree in direction by design (round 3), equal and opposite to 0.000° — recorded as
-`camera.mouseInvertedAgainstTouch` rather than left to a passing case. The keyboard's `31 frames / 500 ms` is the
-smoothness evidence: 31 separate integrations from **one** keydown, which no per-press or autorepeat-driven build
-can produce.
+`camera.mouseInvertedAgainstTouch` rather than left to a passing case. The keyboard's **18 driven frames for 25.34°**
+is the smoothness evidence: eighteen separate integrations from **one** keydown, at 1.408° each against a per-frame
+ceiling of 6.88°, which no per-press or autorepeat-driven build can produce — a per-press build never completes the
+sweep at all, because the suite sends no repeat events. Those numbers are deliberately stated in driven frames rather
+than degrees-per-500 ms: CI run `43890629291` failed the earlier wall-clock version of this assertion because a slow
+runner plus `MAX_FRAME_SECONDS` makes an angle inside a fixed window a property of the hardware. See the UDG-004
+completion record, "What CI cost to get the keyboard assertions right".
 
 ## 5. Connection state without a server
 
