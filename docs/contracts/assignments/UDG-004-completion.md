@@ -248,18 +248,40 @@ CI result:
     failed inside its own `pnpm test` step on
     `tests/system/udg-003-phase-2/runtime.test.ts > W-7: the 4000 ms episode deadline expires with no fresh
     snapshot, and the three limits stay distinct` — `expected 1 to be 0`. That is a wall-clock-sensitive probe
-    in another task's suite, not a UDG-004 assertion, and UDG-004 does not re-tune it. It is reported here
-    because the same job that runs it is now measurably heavier than the job that used to run it (chromium
-    download, a browser suite, two new test files), and because "a rerun was green" is only informative if the
-    red run is named: run 43770588357 attempt 1, retained with its bundle on GitHub. If the owner prefers, the
-    follow-up this observation suggests is to make UDG-004's E-6 verify sibling bundles **in-process** through
-    the exported `verify()` rather than by spawning `pnpm evidence:verify`, which removes a CPU-heavy
-    subprocess from inside every other task's capture without weakening the demonstration. That is an owner
-    decision about another task's timing budget and about UDG-004's evidence work, so it is offered, not taken.
+    in another task's suite, not a UDG-004 assertion, and UDG-004 does not re-tune it.
+  * **Attempt 3 of this work — the record commit `727cb86deaa7f75ffae1bc4cdd0c5b65907d0347`, whose implementation
+    tree is byte-identical to the submitted head — went red at the same assertion**
+    ([run 43775706274](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43775706274)), and its
+    `Verify probe invocation attribution` step then failed as a knock-on because the UDG-003 probe step never ran
+    after the test step aborted (`PROBE-INVOCATION-MISMATCH: PR-14.probe-result.json carries no invocationId`).
+    Two reds and one green on **the same code** is the finding, so it is stated plainly:
+  * **What W-7 actually does.** It calls `runScript('tests/runtime/udg-003-phase-2/impairment-population.ts')`,
+    which runs a live transport with **wall-clock** deadlines and measures counters such as
+    `deliveriesReachingTheSeatDuringTheEpisode`; the test then reads what the probe observed. `expected 1 to be 0`
+    means a snapshot delivery landed inside a window the case intends to be silent — what a real-time probe does
+    on a contended runner. The test itself takes 6 ms; the probe underneath it is the timing-sensitive part.
+  * **Is UDG-004 the cause?** Not as a matter of execution order: in that run's own file order
+    `tests/system/udg-003-phase-2/runtime.test.ts` completed before `tests/contracts/UDG-004.test.ts` and
+    `tests/unit/udg-004/evidence-gates.test.ts` even started, and the UDG-004 unit file costs 419 ms of CPU. So no
+    UDG-004 test was running when the probe measured. What UDG-004 did change is the job's total weight — a
+    chromium install, a browser suite and two new test files on a job that used to run only `pnpm test` — and a
+    heavier job can only make a wall-clock probe more likely to tip. That is offered as a plausible contributor
+    with its counter-evidence attached, not as a conclusion, and the same job ran green on attempt 2.
+  * **What UDG-004 will not do.** It will not widen another task's deadline, mark another task's test flaky, or
+    add a retry to the shared test step; each of those edits a different task's acceptance semantics and belongs
+    to that task's owner. Three options are on the table and none is taken here: give W-7 a load allowance inside
+    UDG-003's own suite; keep rerunning and recording red attempts as this record does; or reorder the CI job so
+    sibling captures precede UDG-004's steps, which would put UDG-004's weight ahead of the probe at the cost of
+    reordering other tasks' acceptance and is therefore not proposed.
   * The two earlier red runs on the way here — `43764611170` (head `2e9184b`, the pixel-sweep handedness check
     described above) and `43766691106` (head `1100233`, `chromiumBuild: unknown` plus UDG-004 tests failing
     inside UDG-001's and UDG-002's captures) — are kept for the same reason. All three are linked below.
 
+  Acceptance head: `0ad8d9e9f57d98242e62b390f92bda54acfa755f` — **green on run 43770588357 attempt 2**, and the
+  evidence above comes from that run. The record commit that follows it is docs-only, and its run is red at W-7 as
+  described. A reviewer who re-runs `main` should expect the same nondeterminism until W-7 is dealt with.
+
+  https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43775706274 — failure at UDG-003's W-7 (record commit 727cb86)
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43770588357 — success (attempt 2)
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43766691106 — failure, fixed by 0ad8d9e
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43764611170 — failure, fixed by 1100233
