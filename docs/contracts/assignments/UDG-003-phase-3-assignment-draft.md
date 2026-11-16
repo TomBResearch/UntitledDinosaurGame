@@ -52,6 +52,20 @@ records carried a head that never had a green run of its own. If the owner's rea
 becomes ten reds across eight runs on the day Phase 3's draft was published — recorded in §6.1 only by this
 kind of dated addendum, never by rewriting it.
 
+**Second consecutive red on a docs-only head (same sitting).** The commit recording the paragraph above —
+`ed380a0`, again a checksum-excluded draft-file-only change, implementation tree still byte-identical to the
+green `70f6d17` — ran [43962098658](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43962098658):
+**completed / failure**, but at different steps: "Capture the evidence bundles" and "Verify the captured
+evidence bundles", with the job's own "Run the unit and Node integration suites" step **green**. That is the
+other recorded shape of the same live-transport probes under load: a bundle's capture running its own
+`pnpm test` and the evidence gate refusing the bundle mid-loop, as in runs `43852121401` attempt 2 and
+`43908313142` attempt 2. Again: no log access, no assertion claimed, the bytes are the owner's to read. What
+the three-run sequence establishes without any log: on one implementation tree, `70f6d17` went green on
+attempt one, `9aef88f` red at the test step, `ed380a0` red at the capture gate — nondeterminism, in both of
+`W-7`'s recorded shapes, inside the half-hour of publishing the draft that schedules `W-A`. This is recorded
+as further support for the §0 ruling that the fix belongs to Phase 3 and for D-P3-3's rejection of
+keep-rerunning; it is **not** offered as the diagnosis, which §6.2 keeps as W-A's first deliverable.
+
 What is unchanged by this draft, and unchanged by reviewing it:
 
 - **UDG-003 as a whole stays In Progress.** Phase 0 is accepted as ADR-0002; Phase 1 and Phase 2 are accepted
