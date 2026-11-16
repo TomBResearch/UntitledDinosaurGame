@@ -27,6 +27,13 @@ authoritative for it, per the procedure the Phase 1, M-1, D-7, D-8 and Phase 2 r
 The directions answer decision items D-P3-2, D-P3-3, D-P3-5 and D-P3-6 as they previously stood, and narrow
 D-P3-4; what remains open is listed in §4 and nothing there is self-answered by this draft.
 
+**Publication CI (named by the commit after this record's own, per the standing convention).** This draft
+landed as `70f6d17ac4c8c5d4e064fd744d48c7b474634d01` on `main` (the commit carrying the §0 directions; the
+commit that added this paragraph cannot name it and does not try — `git log` names it); its hosted run is
+[43947298628](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43947298628), workflow `ci`,
+run number 133, **completed / success on the first attempt** on exactly that head. The publication itself is a
+docs-only change: no implementation path moved, no capture plan moved, no status field moved.
+
 What is unchanged by this draft, and unchanged by reviewing it:
 
 - **UDG-003 as a whole stays In Progress.** Phase 0 is accepted as ADR-0002; Phase 1 and Phase 2 are accepted
