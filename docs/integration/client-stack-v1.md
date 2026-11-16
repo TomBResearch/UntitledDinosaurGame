@@ -95,25 +95,44 @@ typechecked" means each `tsconfig` is invoked — which is what `pnpm typecheck`
 | With `UDG_DEV_HOST=0.0.0.0` | `Local: http://localhost:5173/` **and** `Network: http://172.18.0.2:5173/ eth0` |
 | Port already taken | `Error: Port 5173 is already in use` and a non-zero exit, because `strictPort` is on |
 
-The container case (Linux in Docker, reviewing from a Mac) was measured end to end on port 5173, and
-`--network container:…` plus `-p` **does not work** — Docker registers the mapping on the container's
-own network namespace, so nothing lands on the host. The route that works is the ordinary one:
+The container case (Linux in Docker, reviewing from a Mac) is ruled in the assignment record §7 and uses Docker's
+own published-port proxy: the container publishes **`-p 127.0.0.1:5173:5173`** — host side bound to the Mac's
+loopback, nothing on a routable interface — and the dev server inside the preview container binds `0.0.0.0`,
+because a container's `127.0.0.1` is its own and the proxy cannot reach it.
 
 ```console
-# inside the container
+# 1 — on the Mac: is the mapping already there?
+docker port <container>                                        # empty ⇒ no published ports
+docker inspect -f '{{json .HostConfig.PortBindings}}' <container>
+#   want {"5173/tcp":[{"HostIp":"127.0.0.1","HostPort":"5173"}]}
+lsof -nP -iTCP:5173 -sTCP:LISTEN                               # com.docker on 127.0.0.1:5173, nothing else
+
+# 2 — inside the container: start the preview (default bind stays loopback without the variable)
 UDG_DEV_HOST=0.0.0.0 pnpm dev
+curl -sS -o /dev/null -w 'container-side %{http_code}\n' http://127.0.0.1:5173/
 
-# on the Docker host, restricted to the host's own loopback
-docker run -it --rm --network host alpine/socat tcp-listen:5173,fork,reuseaddr tcp-connect:172.18.0.2:5173
+# 3 — on the Mac: check, open, then prove it stayed off the routable interface
+curl -sS -o /dev/null -w 'mac -> %{http_code}\n' http://127.0.0.1:5173/
+open http://127.0.0.1:5173/
+curl -sS -m 2 -o /dev/null -w '%{http_code}\n' "http://$(ipconfig getifaddr en0):5173/" || echo "off-loopback: refused (expected)"
 
-# in Chrome on the Mac
-http://127.0.0.1:5173/
+# 4 — stop with Ctrl-C, then: lsof -nP -iTCP:5173 -sTCP:LISTEN shows nothing
 ```
 
+Two routes are ruled out, both after measurement. `--network container:…` plus `-p` **does not work** — Docker
+registers the mapping in the other container's namespace, so nothing lands on the host. An
+`alpine/socat --network host` forward to the container's bridge address **does** work but is **withdrawn**: it
+depends on a mutable bridge address and puts a second forwarding mechanism outside Compose's control, and the
+assignment record §7.1 authorises the published-port mapping instead. A mapping cannot be added to a running
+container, so §7.2 records how to check the existing configuration and recreate the container with it — Compose
+`ports:` preferred, `docker stop` never `docker rm`.
+
 Measured on this container: `curl http://127.0.0.1:5173/` → `200`, `curl http://172.18.0.2:5173/` →
-`200`, and a second server on the same port refused by `strictPort`. `172.18.0.2` is this container's
-address and will differ per host; `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' <container>`
-prints it.
+`200` (the bridge address `-p` forwards to; `172.18.0.2` is this container's and will differ per host —
+`docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' <container>` prints it), and a
+second server on the same port refused by `strictPort`. **The host mapping and the Mac side were not measured
+here** — this container has no Docker CLI and no Mac — so Mac reachability is recorded as unverified in the
+completion record until the reviewer runs steps 1 and 3.
 
 **What the Mac check is for.** It is human inspection only, and it produces no evidence. GitHub-hosted
 CI is the acceptance record, because CI is where the Playwright suite runs against the pinned Chromium

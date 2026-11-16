@@ -346,6 +346,11 @@ docker ps --format 'table {{.ID}}\t{{.Names}}\t{{.Ports}}'
 3. Mac browser: **`http://127.0.0.1:5173/`**
 
 **Route B — sidecar that shares the container's network namespace (no container restart, Vite stays loopback).**
+**WITHDRAWN — do not run, in this or any variant.** Measured and found not to work as written: Docker registers the
+mapping in the namespace `--network container:` joins, so nothing lands on the host. A `--network host`
+`alpine/socat` forward to the container's bridge address does work but is withdrawn too, because it depends on a
+mutable bridge address and puts forwarding outside Compose's control. The final ruling is Route A alone; see the
+[assignment record](UDG-004.md) §7.1, and the completion record for the check/start/stop/curl steps.
 
 1. Container: `pnpm dev` with the default `UDG_DEV_HOST=127.0.0.1`.
 2. Mac: `docker run -d --rm --network container:<pi-container-name> -p 127.0.0.1:5173:5173 alpine/socat
@@ -354,11 +359,11 @@ docker ps --format 'table {{.ID}}\t{{.Names}}\t{{.Ports}}'
    loopback: Vite never binds anything routable.
 3. Mac browser: **`http://127.0.0.1:5173/`** — stop by deleting the relay container.
 
-**Route C — remote Docker host.** Run A or B on that host, then add
+**Route C — remote Docker host.** Run **A** on that host (B is withdrawn above), then add
 `ssh -N -L 5173:127.0.0.1:5173 <user>@<docker-host>` on the Mac and open **`http://127.0.0.1:5173/`**. The tunnel
 does not cross the container boundary by itself; it carries one of the two routes above.
 
-In all three routes the Host header stays `127.0.0.1:5173` → no `allowedHosts` entry. If a named host or a tunnel
+In the surviving routes the Host header stays `127.0.0.1:5173` → no `allowedHosts` entry. If a named host or a tunnel
 domain is used instead, `server.allowedHosts: ['<that-host>']` is required and `server.hmr.clientPort` may be needed
 for the HMR socket; the assignment's default config sets neither, and says so. Before starting, check the Mac port:
 `lsof -nP -iTCP:5173 -sTCP:LISTEN` — a stale local server on 5173 produces a preview of something that is not this

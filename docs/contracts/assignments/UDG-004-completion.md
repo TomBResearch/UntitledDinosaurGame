@@ -61,11 +61,18 @@ Files added or changed and scope deviations:
     playwright.config.ts — G-4; .gitignore (Playwright scratch directory)
     docs/integration/{client-stack-v1.md,README.md,dependencies.json}, docs/contracts/checksums.json — W-0
   Deviations from the assignment, stated plainly:
-    * Not exercised: "a failed asset load must not crash the UI". The greybox loads no files — there is no
-      asset pipeline and no network asset in this client — so the condition has no reachable path to test.
-      The nearest measured evidence is that two other hostile conditions leave the UI rendering and the loop
-      ticking: a refused WebSocket (the development socket, refused on purpose) and a cancelled pointer
-      gesture (`gesturesAfterCancelStillTicking === true`). UDG-007 owns the asset pipeline.
+    * **UNTESTED, deferred by owner decision:** "a failed asset load must not crash the UI". The greybox loads
+      no files — no asset pipeline, no network asset — so the condition has no reachable path in this client. The
+      owner ruled in the round after submission: the check is **deferred to UDG-007**, where a real asset-loading
+      path exists that can actually fail, and this task's row stays **explicitly untested** — neither passed nor
+      waived.
+      **Obligation carried to UDG-007, recorded here so it is not lost:** UDG-007's acceptance must exercise a
+      failing asset load (missing file, unreadable file, aborted transfer, corrupt payload) and show the UI still
+      rendering and the frame loop still ticking, with the failure surfaced rather than swallowed.
+      The nearest measured facts here are that two *other* hostile conditions leave the UI rendering and the loop
+      ticking: a refused WebSocket (the development socket, refused on purpose) and a cancelled pointer gesture
+      (`gesturesAfterCancelStillTicking === true`). Neither stands in for an asset-load failure and neither is
+      offered as coverage of this row.
     * Kept, not required: the pixel sweep that the first submission gated on is now reported
       (`camera.sweepFound`, `camera.sweepMissed`) and no longer decisive, for the reason in "The red
       submission".
@@ -176,6 +183,10 @@ Acceptance thresholds and measured results:
   | dispatch.perSuiteMatrix | camera dispatches, four suites refuse naming owners, bare command refuses | true |
   | capture.commandsRun | ≥ 7 commands, none failing | 9 / [] |
 
+  One acceptance criterion deliberately carries **no threshold and no measurement** in that table: the failed asset
+  load, which is untested and deferred to UDG-007 by the owner's decision recorded under Deviations. Its absence
+  from the table must not be read as coverage.
+
   The six demonstrations the assignment record §6.2 asked for, and where each is proven:
 
   | Demo | Where | What it shows |
@@ -255,6 +266,8 @@ CI result:
     `Verify probe invocation attribution` step then failed as a knock-on because the UDG-003 probe step never ran
     after the test step aborted (`PROBE-INVOCATION-MISMATCH: PR-14.probe-result.json carries no invocationId`).
     Two reds and one green on **the same code** is the finding, so it is stated plainly:
+  * **Both symptoms stay UDG-003's to resolve.** No assertion, deadline or retry policy in
+    `tests/system/udg-003-phase-2/runtime.test.ts` was touched by this task, and none is proposed for change here.
   * **What W-7 actually does.** It calls `runScript('tests/runtime/udg-003-phase-2/impairment-population.ts')`,
     which runs a live transport with **wall-clock** deadlines and measures counters such as
     `deliveriesReachingTheSeatDuringTheEpisode`; the test then reads what the probe observed. `expected 1 to be 0`
@@ -267,6 +280,15 @@ CI result:
     chromium install, a browser suite and two new test files on a job that used to run only `pnpm test` — and a
     heavier job can only make a wall-clock probe more likely to tip. That is offered as a plausible contributor
     with its counter-evidence attached, not as a conclusion, and the same job ran green on attempt 2.
+  * **A second symptom of the same file, reproduced locally during this round's verification.**
+    `runtime.test.ts > P-2b, reopened for the harness only, exercises GA-6a, GA-6b, GA-6c and GA-7 at the declared
+    test values` failed on this machine with `expected 'seat reservation expired.' to match /token/i` — the probe
+    recorded the seat-reservation refusal where the assertion expects the token-reconnect refusal, an ordering race
+    inside the same live-transport file. The immediately following run of the same command, with **no repository
+    file changed**, was green: 615 tests in 30 files, 0 failures. So two different assertions in that one file have
+    now failed on two different machines — `W-7` on a GitHub runner, `P-2b` in a Linux container — and neither
+    involves a UDG-004 file or a UDG-004 assertion. That is further evidence for the reading above (timing- and
+    ordering-sensitive live-transport probes) and further reason it belongs to UDG-003 rather than to this task.
   * **What UDG-004 will not do.** It will not widen another task's deadline, mark another task's test flaky, or
     add a retry to the shared test step; each of those edits a different task's acceptance semantics and belongs
     to that task's owner. Three options are on the table and none is taken here: give W-7 a load allowance inside
@@ -302,7 +324,8 @@ Limitations and remaining downstream work:
     frame-request silence after unmount, not by a GL-object audit: Babylon 8's public API in the pinned
     version offers no counter this suite could read honestly, and inventing one from private fields would
     have been a number the engine was asked to report about itself.
-  * "Failed asset load" has no reachable path in this client, for the reason given under Deviations.
+  * "Failed asset load" stays **untested** and is deferred to UDG-007 by owner decision, with the obligation
+    written down under Deviations; no threshold of this task stands in for it.
   * Scene scale: a Babylon unit is not a metre in this scene (1 unit = 0.1 m by the adopted
     `AXIS_SCALE_METRES`), while camera radius is expressed in metres. Both scales are named wherever a number
     uses them; the unit policy itself is frozen at Gate A, which UDG-004 does not run.
@@ -318,11 +341,14 @@ Limitations and remaining downstream work:
   * UDG-003 Phase 3 remains unassigned; Gates A, B and C Not Run; `stackCompatibility` not-established.
 
 Implementer recommendation: **In Review**.
-  Every acceptance item that can be executed is executed and measured at the submitted head, the bundle
-  verifies with 0 issues, and the hosted CI link above is the acceptance record. Two items are reported as
-  not-executable rather than as passed: the failed-asset-load condition (no reachable path in a client that
-  loads no assets) and physical-device touch performance (browser emulation only). Neither is a claim of
-  success about something untested.
+  Every acceptance item that can be executed is executed and measured at the submitted head, the bundle verifies
+  with 0 issues, and the hosted CI link above is the acceptance record. Three items are reported short of
+  acceptance and none as passed: the failed-asset-load condition is **untested**, deferred to UDG-007 by the
+  owner's decision with the obligation recorded here; touch evidence is event mapping under browser emulation and
+  certifies **no physical-device performance**; and WebGL release is evidenced by resource counts and frame-request
+  silence rather than by a GL-object audit. The touch and WebGL limits are unchanged by this round's decisions.
+  **Mac reachability is additionally unverified** until the reviewer runs the steps above. Acceptance is the
+  owner's to record.
 
 Reviewer decision and date: **Pending** — the owner records this.
 Integration owner gate decision and date: **Not applicable to UDG-004** — no gate is decided here; Gates A,
@@ -331,32 +357,111 @@ B and C remain Not Run and UDG-SPIKE-001 remains the formal Gate A execution.
 
 ## Mac preview check — how to run it, and what it is worth
 
-The implementer's environment is a Linux container; **the Mac-side check was not performed**. The route was
-measured end to end in the container (assignment record §7) and the commands are reproduced here so the
-reviewer can run them without re-deriving them:
+**Mac reachability is UNVERIFIED.** Nothing below was executed from a Mac: the implementer's environment is a Linux
+container with no Docker CLI, so only the container side of the route was measured. Until the reviewer runs it,
+"reachable from macOS Chrome" is an open question and not a claim of this record.
 
-```console
-# inside the container, from the repository root at the submitted head
-export PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-UDG_DEV_HOST=0.0.0.0 VITE_UDG_SERVER_URL=ws://127.0.0.1:2567 pnpm dev
-# banner shows both lines:  Local: http://localhost:5173/   Network: http://<container-ip>:5173/
+The route is the assignment record §7 ruling, unchanged:
 
-# on the Docker host, mapped to the host's own loopback only
-docker run -it --rm --network host alpine/socat \
-  tcp-listen:5173,fork,reuseaddr tcp-connect:<container-ip>:5173
+* the container publishes **`-p 127.0.0.1:5173:5173`**, so the host side binds the Mac's own loopback and nothing
+  is exposed on a routable interface;
+* the dev server inside the **preview** container runs with **`UDG_DEV_HOST=0.0.0.0`**, because a container's
+  `127.0.0.1` is its own and Docker's published-port proxy cannot reach it;
+* the default bind everywhere else stays `127.0.0.1`, and nothing in the repository sets the variable;
+* **Preview URL `http://127.0.0.1:5173/`, port 5173**, with `strictPort: true` so the server refuses rather than
+  sliding to 5174.
 
-# in Chrome on the Mac
-http://127.0.0.1:5173/
+The `docker run --network host alpine/socat tcp-listen:5173,fork,reuseaddr tcp-connect:<container-ip>:5173`
+forwarding line that appeared in an earlier copy of this record and of
+`docs/integration/client-stack-v1.md` is **withdrawn**, and so is any variant of it. It did work in the container,
+but it is not the approved route: it depends on the container's mutable bridge address, it runs a second forwarding
+mechanism outside Compose's control, and assignment record §7.1 authorises the published-port mapping instead. Use
+Docker's own proxy.
+
+### Step 1 — on the Mac: does the mapping already exist?
+
+```sh
+docker ps --format 'table {{.Names}}\t{{.Ports}}'
+docker port <container>          # empty ⇒ no published ports ⇒ step 2
+# what is actually published, in the machine-readable form
+docker inspect -f '{{json .HostConfig.PortBindings}}' <container>
+# want to see:  {"5173/tcp":[{"HostIp":"127.0.0.1","HostPort":"5173"}]}
 ```
 
-Measured on this container: `curl http://127.0.0.1:5173/` → `200`, `curl http://<container-ip>:5173/` → `200`,
-and a second server on 5173 refused by `strictPort` with `Error: Port 5173 is already in use`. The default bind
-stays loopback and prints no `Network:` line; `UDG_DEV_HOST=0.0.0.0` is the only way to expose it, and the
-banner says so out loud.
+Also confirm the host side of the mapping is listening on loopback:
 
-This preview is **human inspection and produces no evidence**. GitHub CI is the acceptance record, because CI
-is where the suite runs against the pinned Chromium and writes retained artefacts. A preview that looks right
-on a Mac and was never run in CI proves nothing about this task's acceptance criteria.
+```sh
+lsof -nP -iTCP:5173 -sTCP:LISTEN    # expect a com.docker listener on 127.0.0.1:5173 and nothing else
+```
+
+If the mapping is absent it cannot be added to a running container. Assignment record §7.2 steps 2, 3a and 3b are
+the procedure and are followed verbatim — record image, mounts, env, workdir and restart policy first; prefer the
+Compose route (add `ports: ["127.0.0.1:5173:5173"]` to the service, then
+`docker compose config >/dev/null && docker compose up -d --no-build <service>`); otherwise `docker stop` — never
+`rm` — and recreate with the recorded values plus `-p 127.0.0.1:5173:5173`. §7.2 also states what recreation does
+**not** preserve (the pinned Node under `$HOME/.local`, the corepack pnpm shims, the pnpm store), and its §2.1
+provisioning snippet is idempotent.
+
+### Step 2 — inside the container: start the preview
+
+```sh
+cd /workspace/UntitledDinosaurGame
+git rev-parse HEAD                       # 0ad8d9e9f57d98242e62b390f92bda54acfa755f or its record successors
+export PATH="$HOME/.local/node-v24.22.2-linux-arm64/bin:$HOME/.local/bin:$PATH"
+UDG_DEV_HOST=0.0.0.0 VITE_UDG_SERVER_URL=ws://127.0.0.1:2567 pnpm dev
+```
+
+Expect the Vite banner with **both** lines — `Local: http://localhost:5173/` and
+`Network: http://<container-ip>:5173/` — plus `[udg] UDG_CLIENT_READY server=ws://127.0.0.1:2567
+client=http://127.0.0.1:5173/`. Without `UDG_DEV_HOST` the banner prints no `Network:` line and the mapping has
+nothing to forward to; that is the default, not a failure. Check the container side first, from a second shell in
+the same container:
+
+```sh
+curl -sS -o /dev/null -w 'container-side %{http_code}\n' http://127.0.0.1:5173/
+```
+
+`VITE_UDG_SERVER_URL` is optional and only names the socket the client dials; no UDG-003 server is running, so the
+overlay is expected to show the failure state.
+
+### Step 3 — on the Mac: the reachability check, then the browser
+
+```sh
+curl -sS -o /dev/null -w 'mac -> %{http_code}\n' http://127.0.0.1:5173/    # must be 200
+open http://127.0.0.1:5173/
+# and prove it did not reach the Mac's routable interface
+curl -sS -m 2 -o /dev/null -w '%{http_code}\n' "http://$(ipconfig getifaddr en0):5173/" || echo "off-loopback: refused (expected)"
+```
+
+A `000` or refused result means the mapping is missing or the container was not recreated — a host configuration
+problem, not a client bug. An HTTP 200 on the off-loopback address means the port is exposed on a routable
+interface: stop the server and fix the mapping. `Host:` is `127.0.0.1:5173` on this route, so
+`server.allowedHosts` stays unset (and must never be `true`), and HMR reconnects through the same port, so no
+`server.hmr` override is needed.
+
+### Step 4 — stop it
+
+`Ctrl-C` in the terminal running `pnpm dev`, then confirm on both sides:
+
+```sh
+curl -sS -m 2 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5173/ || echo "host: refused (expected after stop)"
+lsof -nP -iTCP:5173 -sTCP:LISTEN || echo "host: nothing listening"
+```
+
+Leaving the container running is fine; the published mapping is harmless while nothing listens, and the repository
+has no command that sets `UDG_DEV_HOST`.
+
+### What was measured, and what was not
+
+Measured in this container on port 5173 with the pinned Vite 8.3.6: the banner lines above,
+`curl http://127.0.0.1:5173/` → `200`, `curl http://<container-ip>:5173/` → `200` (the address Docker's `-p` proxy
+connects to), and a second server refused with `Error: Port 5173 is already in use`, which is `strictPort` proven.
+**Not measured here: the `-p` mapping itself, anything on the Docker host, and anything in macOS Chrome.**
+
+This preview is **human inspection and produces no evidence**. GitHub CI is the acceptance record, because CI is
+where the suite runs against the pinned Chromium and writes retained artefacts. A preview that looks right on a Mac
+and was never run in CI proves nothing about this task's acceptance criteria — and, until it is run, it proves
+nothing at all.
 
 ## Browser checks the reviewer can try
 
