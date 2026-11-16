@@ -672,9 +672,17 @@ evidence. **It is not a gate decision and it passes nothing**: Gates A, B and C 
 remains not-established, and Gate A stays UDG-SPIKE-001's formal execution. It assigns no further work.
 
 ```text
-Acceptance commit and date                     This block cannot carry its own commit's hash, so the acceptance
-                                               commit, its date and its CI result are named in the records commit
-                                               that follows this one.
+Acceptance commit and date                     76db480892fa4aa21bd79c1bf7e939b5ddb6315e, commit date
+                                               2026-11-16T18:44:12Z, pushed to main. Its CI run 43931959796 was
+                                               created 2026-11-16T18:44:16Z and completed 2026-11-16T19:14:54Z:
+                                               **success on the first attempt**, 616 tests, 0 failures, 0 errors,
+                                               0 skipped, camera suite 8 of 8 on chromium-1254, and the UDG-004
+                                               bundle UDG-004-2026-11-16T19-07-53-244Z-76db4808 verified PASS with
+                                               0 issues, retained at
+                                               /workspace/udg-evidence/ci-run-43931959796/. A block cannot carry
+                                               its own commit's hash, so this line was added in the records commit
+                                               that follows the acceptance commit named above — the same procedure
+                                               UDG-003's phase acceptances used.
 
 Accepted implementation / reviewed submission  d318444fe8668f4485d85398ecc6eb88ff5e3b36
 Passing submission CI                          https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43893238010

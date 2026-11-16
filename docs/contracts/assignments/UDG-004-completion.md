@@ -399,6 +399,7 @@ CI result:
   as done here, or move the sibling captures ahead of UDG-004's steps so UDG-004's bundle is taken before the heavy
   work. UDG-004 has not widened a deadline, marked another task's test flaky, or added a retry to a shared step.
 
+  https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43931959796 — success, first attempt (the ACCEPTANCE commit 76db480; bundle UDG-004-2026-11-16T19-07-53-244Z-76db4808, retained at /workspace/udg-evidence/ci-run-43931959796/, PASS 0 issues)
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43918220690 — success on attempt 2 (record commit 39e9a51; bundle UDG-004-2026-11-16T17-58-34-306Z-39e9a51c, retained at /workspace/udg-evidence/ci-run-43918220690/, PASS 0 issues). Attempt 1 was W-7 inside **UDG-001's** capture — the first capture of the sequence, so UDG-002, UDG-003 and UDG-004 were never taken; the retained `logs/test.stderr.log` names `tests/system/udg-003-phase-2/runtime.test.ts`, `expected 1 to be +0`.
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43908313142 — success on attempt 3 (record commit af15028; bundle UDG-004-2026-11-16T17-17-56-450Z-af150282, retained at /workspace/udg-evidence/ci-run-43908313142/, PASS 0 issues). Attempts 1 and 2 both failed: attempt 2 is W-7 inside **UDG-002's** capture (`logs/test.stderr.log` in the retained bundle names `tests/system/udg-003-phase-2/runtime.test.ts`, `expected 1 to be +0`), which aborted the capture loop before UDG-004's bundle was taken; attempt 1 failed the same two capture steps with every test step green, and its per-bundle log was not retrievable after the rerun, so only attempt 2 is claimed as W-7 on evidence.
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43903672563 — success, first attempt (this record commit 58a4aaa; bundle UDG-004-2026-11-16T16-24-17-374Z-58a4aaa4, retained at /workspace/udg-evidence/ci-run-43903672563/, PASS 0 issues)
@@ -464,8 +465,13 @@ Reviewer decision and date: **Accepted 2026-11-16** by the project owner (`TomBR
   failed-asset-load row stays **UNTESTED** and is carried forward to UDG-007 (now also in UDG-007's own metadata), the
   touch and WebGL evidence limits stand exactly as reported, and `W-7` stays UDG-003's — tracked under UDG-003. The
   acceptance is dated by the commit that records it, because the owner's message carries no independently verifiable
-  timestamp; the acceptance commit and its CI are named in the records commit that follows, since a commit cannot
-  quote its own hash.
+  timestamp. **Acceptance commit `76db480892fa4aa21bd79c1bf7e939b5ddb6315e`** (commit date 2026-11-16T18:44:12Z, pushed
+  to `main`), whose CI run
+  [43931959796](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43931959796) completed
+  2026-11-16T19:14:54Z **success on the first attempt** — 616 tests, 0 failures, camera suite 8 of 8 on
+  `chromium-1254`, bundle `UDG-004-2026-11-16T19-07-53-244Z-76db4808` verified **PASS, 0 issues** and retained at
+  `/workspace/udg-evidence/ci-run-43931959796/`. The line above cannot carry its own commit's hash, which is why the
+  CI result of the acceptance commit appears in the records commit that follows it.
 Integration owner gate decision and date: **Not applicable to UDG-004** — no gate is decided here; Gates A,
 B and C remain Not Run and UDG-SPIKE-001 remains the formal Gate A execution.
 ```
