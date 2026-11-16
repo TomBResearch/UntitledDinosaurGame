@@ -463,14 +463,63 @@ where the suite runs against the pinned Chromium and writes retained artefacts. 
 and was never run in CI proves nothing about this task's acceptance criteria — and, until it is run, it proves
 nothing at all.
 
+## Control-direction ruling from the Mac review (2026-11-16)
+
+The reviewer loaded the preview on a Mac: the scene loaded, pitch and zoom felt right, and **horizontal mouse drag
+felt inverted**. The ruling was specific and it was honoured exactly: reverse the horizontal orbit for mouse drags,
+keep the one-finger touch orbit so the scene continues to follow the finger, and leave vertical drag, wheel zoom,
+pinch zoom, the camera bounds and the overlay's drag exclusion alone.
+
+**Where it lives.** One table and one parameter. `camera-math.ts` gained `OrbitInputSource` (`'mouse' | 'touch'`)
+and `ORBIT_AZIMUTH_DIRECTION = { mouse: +1, touch: −1 }`, and `orbitStepRadians` now takes the device; the vertical
+term is untouched and shared. `OrbitCamera.ts` decides the device once, from `event.pointerType`, and stores it on
+the tracked pointer, so a drag keeps the convention it began with and a gesture that becomes a pinch never reaches
+the azimuth term at all. `mouse` is the only value that inverts: `pen` and an empty `pointerType` keep the touch
+convention, because the ruling named the mouse and nothing else.
+
+**Before and after, measured rather than asserted.** Both numbers come from the same case in
+`tests/e2e/camera.spec.ts` at the same default camera state, so they are comparable:
+
+| Gesture | Previous build | This build |
+| --- | --- | --- |
+| 300 px mouse drag right | azimuth 135° → **31.87°** (−103.13°) | azimuth 135° → **238.13°** (+103.13°) |
+| 200 px mouse drag right | — (not asserted by sign) | **+68.755°** |
+| 200 px mouse drag left | — | **−68.755°** |
+| 200 px touch drag right | −68.755° | **−68.755°** — unchanged |
+| 200 px touch drag left | +68.755° | **+68.755°** — unchanged |
+| 60 px mouse drag down | +20.626° elevation | **+20.626°** — unchanged |
+
+**Why the new assertions are signed.** The case previously asserted `|Δazimuth| > 5°`, which a build with the
+opposite direction passes just as happily — it was a proof that the axis *moved*, never that it moved *which way*.
+The added assertions name the sign for mouse-right, mouse-left, touch-right and touch-left, require the two mouse
+drags to be mirror images (`|Δright + Δleft| < 2°`, measured 0.000°), and require the mouse and the touch to
+disagree (`Math.sign(mouseRight) === −Math.sign(touchRight)`). A regression that silently re-unifies the two
+devices, or inverts touch along with the mouse, fails the suite.
+
+**What was preserved, with the number that says so.** Elevation still clamps at **10°** and **80°**; radius still
+clamps at **2 m** and **20 m** by wheel and by pinch; UI-origin gestures are still ignored (**2** regions tested,
+camera unchanged to six decimal places); pose writes during camera operations are still **0**; the ten
+mount/unmount cycles and the production-seam absence checks are untouched. The capture plan's thresholds are
+unchanged — the direction is proved by the case's own signed assertions, so no plan threshold was added or
+retuned for it, and the new numbers are recorded as measurements
+(`camera.mouseDragRightAzimuthDelta`, `camera.mouseDragLeftAzimuthDelta`, `camera.touchDragRightAzimuthDelta`,
+`camera.touchDragLeftAzimuthDelta`, `camera.mouseInvertedAgainstTouch`, `camera.mouseDragDownElevationDelta`) so a
+later reader can see what the direction actually was.
+
+
 ## Browser checks the reviewer can try
 
 With the dev server up (and no server on 2567, which is the normal state — the connection status will read
 `failed` and should stay readable):
 
-1. **Drag to orbit.** Left-drag on the scene: azimuth wraps within `[0, 360)` and elevation stops at 10° and
-   80° without the camera flipping or going still-and-finite-broken. Dragging *down* raises the camera, which
-   is the grab-the-world convention the client documents, not Babylon's pointer convention.
+1. **Drag to orbit — mouse and touch deliberately move differently now.** A **mouse** drag right turns the camera
+   one way and a drag left the other; that direction was reversed on the owner's instruction of 2026-11-16 because
+   the mouse felt inverted on a Mac. A **one-finger touch** drag still keeps the scene under the finger, so the same
+   screen movement turns the camera the *opposite* way to the mouse — try both before deciding which feels right,
+   because they cannot both be reversed by changing one of them. Azimuth still wraps within `[0, 360)` and elevation
+   still stops at 10° and 80° without the camera flipping or going still-and-finite-broken. Dragging *down* still
+   raises the camera for both devices: that vertical convention is shared, unchanged, and is not Babylon's pointer
+   convention.
 2. **Wheel to zoom.** It stops hard at 2 m and at 20 m and does not creep past either on repeated notches.
 3. **Pinch on a touch device or touch emulation.** Two fingers together → 4-pointer orbit, spread → zoom in.
    It clamps to the same 2 m and 20 m. (In Chrome DevTools device mode the suite's dispatched-touch path is

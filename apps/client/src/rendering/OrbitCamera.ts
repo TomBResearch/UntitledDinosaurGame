@@ -16,6 +16,15 @@
  * 2. **One gesture owner.** Attaching Babylon's input *and* a controller would process every wheel notch and
  *    every pinch twice, which shows up as zoom that moves twice as fast as the hand moved.
  *
+ * ## Horizontal direction is per input device, not per camera
+ *
+ * A one-finger touch drag keeps the scene under the finger (grab-the-world). A mouse drag turns the camera the
+ * other way, which is what the owner's Mac review asked for on 2026-11-16 after the mouse felt inverted. The
+ * two conventions live in `camera-math.ts` as `ORBIT_AZIMUTH_DIRECTION` and are selected from
+ * `event.pointerType` — `mouse` inverts, everything else (touch, pen, unspecified) keeps the touch convention —
+ * so this file routes a gesture by device rather than holding a direction of its own. Vertical drag, wheel zoom
+ * and pinch zoom are unaffected by the ruling.
+ *
  * ## Clamping is in two places on purpose
  *
  * The camera carries `lowerRadiusLimit`/`upperRadiusLimit` and `lowerBetaLimit`/`upperBetaLimit`, and every
@@ -44,6 +53,7 @@ import {
   wrapAzimuthRadians,
   zoomRadiusMeters,
   type CameraReadout,
+  type OrbitInputSource,
 } from './camera-math.js';
 
 /** Attribute that marks a DOM region as UI. Anything under it is excluded from camera gestures. */
@@ -83,7 +93,12 @@ export interface OrbitCameraStats {
 interface TrackedPointer {
   x: number;
   y: number;
+  /** Which device owns this pointer, so a drag keeps the convention it started with. */
+  source: OrbitInputSource;
 }
+
+/** `mouse` is the only pointer type whose horizontal direction is inverted; see `camera-math.ts`. */
+const inputSourceOf = (pointerType: string): OrbitInputSource => (pointerType === 'mouse' ? 'mouse' : 'touch');
 
 const distanceBetween = (a: TrackedPointer, b: TrackedPointer): number =>
   Math.hypot(a.x - b.x, a.y - b.y);
@@ -246,9 +261,13 @@ export class OrbitCamera {
       this.incident('non-finite-gesture-value', 'pointerdown carried a non-finite position');
       return;
     }
-    this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    this.pointers.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+      source: inputSourceOf(event.pointerType),
+    });
     if (this.pointers.size === 1) {
-      this.dragLast = { x: event.clientX, y: event.clientY };
+      this.dragLast = { x: event.clientX, y: event.clientY, source: inputSourceOf(event.pointerType) };
       this.stats = { ...this.stats, drags: this.stats.drags + 1 };
       this.capture(event);
     } else if (this.pointers.size === 2) {
@@ -270,7 +289,11 @@ export class OrbitCamera {
       this.incident('non-finite-gesture-value', 'pointermove carried a non-finite position');
       return;
     }
-    this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    this.pointers.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+      source: inputSourceOf(event.pointerType),
+    });
 
     if (this.pointers.size >= 2) {
       const [first, second] = [...this.pointers.values()];
@@ -281,8 +304,12 @@ export class OrbitCamera {
     }
 
     if (this.dragLast === undefined) return;
-    const step = orbitStepRadians(event.clientX - this.dragLast.x, event.clientY - this.dragLast.y);
-    this.dragLast = { x: event.clientX, y: event.clientY };
+    const step = orbitStepRadians(
+      event.clientX - this.dragLast.x,
+      event.clientY - this.dragLast.y,
+      this.dragLast.source,
+    );
+    this.dragLast = { x: event.clientX, y: event.clientY, source: this.dragLast.source };
     this.camera.alpha = wrapAzimuthRadians(this.camera.alpha + step.alphaDelta);
     // `betaDelta` is already in radians and already sign-correct for a drag (down drags the camera over the
     // top). The elevation helper clamps to 10°–80° and the conversion back is its own, so the pole and the

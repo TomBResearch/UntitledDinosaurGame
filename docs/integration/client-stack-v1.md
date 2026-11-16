@@ -173,6 +173,34 @@ counts those probes (9 where the threshold asks for 5). The pixel sweep is kept 
 three of this client's own meshes, and every marker it does show must sit on the side the independently
 derived basis predicts.
 
+### 4.1 Orbit direction is per input device, not per camera
+
+`orbitStepRadians(deltaX, deltaY, source)` in `camera-math.ts` takes the drag's device, and
+`ORBIT_AZIMUTH_DIRECTION` holds the two horizontal conventions:
+
+| Device | `pointerType` | Horizontal sign | What the hand gets |
+| --- | --- | --- | --- |
+| Mouse | `mouse` | `+dx` | A drag right **increases** the azimuth. Reversed on the owner's Mac review of 2026-11-16, after the previous direction felt inverted. |
+| Everything else | `touch`, `pen`, empty | `−dx` | The scene stays under the finger — the grab-the-world convention the acceptance list was written against, unchanged. |
+
+`OrbitCamera` decides the device once per gesture: `TrackedPointer` carries `source`, so a drag that starts on a
+touch pointer keeps the touch convention for its whole life even if a mouse pointer arrives mid-gesture, and the
+two-pointer pinch path is unaffected because it never reads the azimuth term. Vertical drag (`betaDelta`), wheel
+zoom and pinch zoom have no device branch at all.
+
+Measured in `chromium-1254`, 200 px drags at the canvas centre, from `tests/e2e/camera.spec.ts`:
+
+```text
+mouse drag right   Δazimuth  +68.755°      touch drag right   Δazimuth  −68.755°
+mouse drag left    Δazimuth  −68.755°      touch drag left    Δazimuth  +68.755°
+mouse drag down    Δelevation +20.626°     (unchanged: 60 px × 0.006 rad = 20.63°)
+```
+
+One axis, mirrored: the mouse pair sums to 0.000°, and the touch pair is exactly the opposite sign. The
+assertions are signed for that reason — a magnitude assertion would have passed on the previous build, where both
+devices turned the camera the same way.
+
+
 ## 5. Connection state without a server
 
 `apps/client/src/network/ClientConnection.ts` is a hand-written `WebSocket` wrapper. The UDG-004

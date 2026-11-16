@@ -140,6 +140,15 @@ const normalise = (value: { x: number; y: number; z: number }) => {
 const dot = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number =>
   a.x * b.x + a.y * b.y + a.z * b.z;
 
+/**
+ * Signed shortest-arc azimuth difference in degrees, so a direction can be asserted rather than a distance.
+ * Wrapping is the reason this exists: 350° → 10° is +20°, not −340°.
+ */
+const azimuthDeltaDegrees = (from: number, to: number): number => {
+  const raw = (to - from) % 360;
+  return raw > 180 ? raw - 360 : raw < -180 ? raw + 360 : raw;
+};
+
 /** A drag across the canvas, expressed the way a mouse produces it: down, moves, up. */
 const drag = async (page: Page, from: { x: number; y: number }, to: { x: number; y: number }): Promise<void> => {
   const canvas = page.locator('canvas[data-udg-scene]');
@@ -244,10 +253,11 @@ const wheelToLimit = async (page: Page, direction: 'in' | 'out'): Promise<void> 
 /**
  * Push elevation to one of its bounds by overshooting into the clamp.
  *
- * The direction is the client's documented grab-the-world convention (`rendering/OrbitCamera.ts`: a drag down
+ * The direction is the client's documented vertical convention (`rendering/OrbitCamera.ts`: a drag down
  * rolls the camera over the top, because `betaDelta` is subtracted), which is the opposite of Babylon's own
  * camera-pointer convention and worth stating because it is the single most likely thing for a reader of this
- * file to assume backwards. Overshoot is exact here for the same reason it is exact for zoom: the clamp is a
+ * file to assume backwards. Vertical drag is shared by mouse and touch; only the horizontal term differs by
+ * device, and the orbit case below asserts that difference by sign. Overshoot is exact here for the same reason it is exact for zoom: the clamp is a
  * clamp, not a soft curve.
  */
 const elevationTo = async (page: Page, limit: 'min' | 'max'): Promise<void> => {
@@ -693,6 +703,68 @@ test(CAMERA_CASE_NAMES[2], async ({ page }) => {
   const afterTouch = await snapshotOf(page);
   expect(Math.abs((afterTouch.camera?.azimuthDegrees ?? 0) - (beforeTouch.camera?.azimuthDegrees ?? 0))).toBeGreaterThan(5);
   measure('azimuthAfterTouchDrag', afterTouch.camera?.azimuthDegrees ?? Number.NaN);
+
+  // Horizontal direction, asserted by **sign** rather than by distance. The owner's Mac review of 2026-11-16
+  // ruled that a horizontal mouse drag turns the camera the opposite way from a touch drag, while the one-finger
+  // touch drag keeps following the finger. Before that change the two devices moved the azimuth the same way — a
+  // +300 px mouse drag took it from 135° to 31.87° in the retained artefacts of the previous head — so these four
+  // signs are exactly what the previous build would fail. 200 px is 1.2 rad ≈ 68.8°, so the magnitudes below are
+  // nowhere near the 5° assertion floor unless the axis actually turned.
+  const mouseRightFrom = await snapshotOf(page);
+  await drag(page, { x: 540, y: 360 }, { x: 740, y: 360 });
+  const mouseRightDelta = azimuthDeltaDegrees(
+    mouseRightFrom.camera?.azimuthDegrees ?? 0,
+    (await snapshotOf(page)).camera?.azimuthDegrees ?? 0,
+  );
+  expect(mouseRightDelta, 'a rightward mouse drag must now increase the azimuth').toBeGreaterThan(5);
+  measure('mouseDragRightAzimuthDelta', mouseRightDelta);
+
+  const mouseLeftFrom = await snapshotOf(page);
+  await drag(page, { x: 740, y: 360 }, { x: 540, y: 360 });
+  const mouseLeftDelta = azimuthDeltaDegrees(
+    mouseLeftFrom.camera?.azimuthDegrees ?? 0,
+    (await snapshotOf(page)).camera?.azimuthDegrees ?? 0,
+  );
+  expect(mouseLeftDelta, 'a leftward mouse drag must now decrease the azimuth').toBeLessThan(-5);
+  measure('mouseDragLeftAzimuthDelta', mouseLeftDelta);
+  // One axis, mirrored: equal size, opposite sign.
+  expect(Math.abs(mouseRightDelta + mouseLeftDelta), 'left and right mouse drags are not mirror images').toBeLessThan(2);
+
+  // Touch keeps the direction it has always had in this client: the scene follows the finger.
+  const touchRightFrom = await snapshotOf(page);
+  await touchDrag(page, 200, 0);
+  const touchRightDelta = azimuthDeltaDegrees(
+    touchRightFrom.camera?.azimuthDegrees ?? 0,
+    (await snapshotOf(page)).camera?.azimuthDegrees ?? 0,
+  );
+  expect(touchRightDelta, 'a rightward touch drag must still decrease the azimuth (the scene follows the finger)').toBeLessThan(-5);
+  measure('touchDragRightAzimuthDelta', touchRightDelta);
+
+  const touchLeftFrom = await snapshotOf(page);
+  await touchDrag(page, -200, 0);
+  const touchLeftDelta = azimuthDeltaDegrees(
+    touchLeftFrom.camera?.azimuthDegrees ?? 0,
+    (await snapshotOf(page)).camera?.azimuthDegrees ?? 0,
+  );
+  expect(touchLeftDelta, 'a leftward touch drag must still increase the azimuth').toBeGreaterThan(5);
+  measure('touchDragLeftAzimuthDelta', touchLeftDelta);
+
+  // The disagreement *is* the ruling, recorded once as a number: same screen movement, opposite camera turn.
+  expect(Math.sign(mouseRightDelta), 'mouse and touch agree, so the mouse is not inverted').toBe(
+    -Math.sign(touchRightDelta),
+  );
+  measure('mouseInvertedAgainstTouch', mouseRightDelta > 0 && touchRightDelta < 0);
+
+  // Vertical drag is shared, and unchanged: down still rolls the camera over the top for a mouse. Normalise to
+  // the low bound first, because a clamp at 80° would otherwise hide the rise.
+  await elevationTo(page, 'min');
+  const elevationFrom = await snapshotOf(page);
+  await drag(page, { x: 640, y: 330 }, { x: 640, y: 390 });
+  const elevationAfter = await snapshotOf(page);
+  const elevationRise =
+    (elevationAfter.camera?.elevationDegrees ?? 0) - (elevationFrom.camera?.elevationDegrees ?? 0);
+  expect(elevationRise, 'a downward mouse drag must still raise the elevation').toBeGreaterThan(5);
+  measure('mouseDragDownElevationDelta', elevationRise);
 
   // Bounds: elevation cannot leave 10..80, azimuth stays wrapped into 0..360, and a clamped state stays finite.
   await elevationTo(page, 'max');

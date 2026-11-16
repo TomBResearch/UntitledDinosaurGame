@@ -72,14 +72,46 @@ export const betaLimitsRadians = (): Readonly<{ lower: number; upper: number }> 
   upper: elevationDegreesToBetaRadians(CAMERA_LIMITS.elevationMinDegrees),
 });
 
-/** A drag delta in pixels becomes an azimuth/polar delta in radians. */
+/**
+ * Which physical device is dragging. Only two horizontal conventions exist in this client, and which one
+ * applies is decided by `PointerEvent.pointerType`: `mouse`, or everything else (touch, pen, or a pointer that
+ * declines to say), which all keep the touch convention.
+ */
+export type OrbitInputSource = 'mouse' | 'touch';
+
+/**
+ * The sign applied to a horizontal drag delta, per input device.
+ *
+ * **`touch: -1`** is the grab-the-world convention the acceptance list was written against: the scene moves with
+ * the finger, because the point under the finger is treated as gripped. It is unchanged.
+ *
+ * **`mouse: +1`** is the owner's ruling from the Mac review of 2026-11-16: a horizontal mouse drag felt
+ * inverted, so the mouse turns the camera the other way from the touch drag. Vertical drag, wheel zoom and
+ * pinch zoom are untouched by this — only the azimuth sign differs by device, and the two conventions are
+ * allowed to disagree because the hand holding a mouse and the finger on glass are asking for different things.
+ */
+export const ORBIT_AZIMUTH_DIRECTION: Readonly<Record<OrbitInputSource, number>> = {
+  mouse: 1,
+  touch: -1,
+};
+
+/**
+ * A drag delta in pixels becomes an azimuth/polar delta in radians.
+ *
+ * `source` selects the horizontal convention (see {@link ORBIT_AZIMUTH_DIRECTION}); the vertical term is shared,
+ * because a downward drag takes the camera over the top for both devices.
+ */
 export const orbitStepRadians = (
   deltaX: number,
   deltaY: number,
+  source: OrbitInputSource,
 ): Readonly<{ alphaDelta: number; betaDelta: number }> => {
   const dx = isFiniteNumber(deltaX) ? deltaX : 0;
   const dy = isFiniteNumber(deltaY) ? deltaY : 0;
-  return { alphaDelta: -dx * ORBIT_RADIANS_PER_PIXEL, betaDelta: -dy * ORBIT_RADIANS_PER_PIXEL };
+  return {
+    alphaDelta: ORBIT_AZIMUTH_DIRECTION[source] * dx * ORBIT_RADIANS_PER_PIXEL,
+    betaDelta: -dy * ORBIT_RADIANS_PER_PIXEL,
+  };
 };
 
 /**
