@@ -1,10 +1,12 @@
 # UDG-004 completion record
 
 Appendix B2 submission record for the browser client and camera. The implementer recorded no acceptance of its
-own work (root [AGENTS.md](../../AGENTS.md), "do not self-sign adoption, reviewer acceptance, or gate passes"):
-every decision field below is **Pending** until the owner records it. UDG-004 validates no gate — Gates A, B and
-C stay **Not Run** and `stackCompatibility` stays **not-established** — so the gate field says so rather than
-being left blank by accident.
+own work (root [AGENTS.md](../../AGENTS.md), "do not self-sign adoption, reviewer acceptance, or gate passes"): this file
+was written with every decision field **Pending**, and the owner's decision is now recorded in the "Reviewer decision"
+field near the end of the header block rather than retro-fitted into the implementer's own wording. UDG-004 validates no
+gate — Gates A, B and C stay **Not Run** and `stackCompatibility` stays **not-established** — so the gate field says so
+rather than being left blank by accident. **Accepted 2026-11-16 by the project owner at implementation
+`d318444fe8668f4485d85398ecc6eb88ff5e3b36`, CI run 43893238010 attempt 2.**
 
 ```text
 Task ID and final implementation SHA:
@@ -74,7 +76,8 @@ Files added or changed and scope deviations:
       owner ruled in the round after submission: the check is **deferred to UDG-007**, where a real asset-loading
       path exists that can actually fail, and this task's row stays **explicitly untested** — neither passed nor
       waived.
-      **Obligation carried to UDG-007, recorded here so it is not lost:** UDG-007's acceptance must exercise a
+      **Obligation carried to UDG-007, recorded here and in [UDG-007](../UDG-007.md)'s own metadata so it cannot be
+      lost between records:** UDG-007's acceptance must exercise a
       failing asset load (missing file, unreadable file, aborted transfer, corrupt payload) and show the UI still
       rendering and the frame loop still ticking, with the failure surfaced rather than swallowed.
       The nearest measured facts here are that two *other* hostile conditions leave the UI rendering and the loop
@@ -453,16 +456,29 @@ Implementer recommendation: **In Review**.
   **Mac reachability is additionally unverified** until the reviewer runs the steps above. Acceptance is the
   owner's to record.
 
-Reviewer decision and date: **Pending** — the owner records this.
+Reviewer decision and date: **Accepted 2026-11-16** by the project owner (`TomBResearch`), at implementation
+  `d318444fe8668f4485d85398ecc6eb88ff5e3b36` with CI run 43893238010 attempt 2 as the passing submission evidence. The
+  owner retested on a Mac and accepted both round-3 controls: middle-mouse orbit moves as expected, and holding the
+  arrow keys gives smooth camera movement that stops on release. The acceptance covers the implementation and its
+  retained evidence. It is **not** a gate decision, and it closes nothing that this record reports as unmet: the
+  failed-asset-load row stays **UNTESTED** and is carried forward to UDG-007 (now also in UDG-007's own metadata), the
+  touch and WebGL evidence limits stand exactly as reported, and `W-7` stays UDG-003's — tracked under UDG-003. The
+  acceptance is dated by the commit that records it, because the owner's message carries no independently verifiable
+  timestamp; the acceptance commit and its CI are named in the records commit that follows, since a commit cannot
+  quote its own hash.
 Integration owner gate decision and date: **Not applicable to UDG-004** — no gate is decided here; Gates A,
 B and C remain Not Run and UDG-SPIKE-001 remains the formal Gate A execution.
 ```
 
 ## Mac preview check — how to run it, and what it is worth
 
-**Mac reachability is UNVERIFIED.** Nothing below was executed from a Mac: the implementer's environment is a Linux
-container with no Docker CLI, so only the container side of the route was measured. Until the reviewer runs it,
-"reachable from macOS Chrome" is an open question and not a claim of this record.
+**Mac reachability: verified by the reviewer on 2026-11-16, and still unmeasured by the implementer.** The project
+owner ran the route below on a Mac and reported the page reachable, the middle-mouse orbit moving as expected and held
+arrow keys moving smoothly and stopping on release; that is the evidence behind the acceptance, and it is the reviewer's
+own observation, recorded here rather than inferred. What has **not** changed is the implementer's limit: this record was
+written in a Linux container with no Docker CLI and no Mac, so nothing in the steps below was ever executed from a Mac by
+the party writing it — only the container side was measured here. If a future reader needs the reachability claim tied to
+a captured artefact rather than to the owner's report, the check has to be run again and its output retained.
 
 The route is the assignment record §7 ruling, unchanged:
 

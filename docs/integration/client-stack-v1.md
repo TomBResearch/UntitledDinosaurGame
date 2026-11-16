@@ -1,7 +1,10 @@
 # Client stack v1 — what UDG-004 chose, and what it measured
 
-Status: recorded by UDG-004 implementation on 2026-11-15. This is the write-up UDG-004's assignment
-record §4.1 asks for (W-0): the client's dependency pins, the measurements behind them, the
+Status: recorded by UDG-004 implementation on 2026-11-15, and **accepted with the implementation on 2026-11-16** —
+the project owner accepted `d318444fe8668f4485d85398ecc6eb88ff5e3b36` on the strength of CI run 43893238010 attempt 2 and
+their own Mac test, so the pins, the input map in §4.1 and the measured numbers below are the accepted ones
+([acceptance record](../contracts/adoption.md#udg-004-acceptance-recorded-2026-11-16)). This is the write-up UDG-004's
+assignment record §4.1 asks for (W-0): the client's dependency pins, the measurements behind them, the
 typechecking layout, the development server's bind and port behaviour including the route from a
 host outside the container, and the facts a later task inherits rather than re-derives.
 

@@ -10,22 +10,24 @@ produced four corrections and a follow-up. `@udg/protocol` and `@udg/config` con
 contract, validation and mapping described in
 [docs/contracts/protocol-v1.md](docs/contracts/protocol-v1.md), and they contain nothing else; the
 replica encoding widths stay provisional under
-[ADR 0001](docs/adr/0001-replica-precision-policy.md) until Gate A. Game movement, networking,
-physics and rendering behaviour still do not exist and validation Gates A, B and C have not run.
+[ADR 0001](docs/adr/0001-replica-precision-policy.md) until Gate A. [UDG-004](docs/contracts/UDG-004.md) is
+**Verified** — accepted by the project owner on 2026-11-16 (implementation
+`d318444fe8668f4485d85398ecc6eb88ff5e3b36`, passing CI run
+[43893238010](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43893238010) attempt 2), after three
+Mac control rulings during review; a browser client with a Babylon greybox, a React status overlay and a bounded
+orbit/zoom/pinch/keyboard camera now exists and is tested in a real browser, and it accepts no game movement, no
+server-authoritative pose and no asset pipeline — the failed-asset-load check that UDG-004 could not reach is
+**carried forward to UDG-007**, untested rather than passed. Game movement, networking and physics behaviour still
+do not exist and validation Gates A, B and C have not run.
 [UDG-003](docs/contracts/UDG-003.md) is **In Progress** — Phases 0 to 2 accepted at phase level, **Phase 3
-unassigned** — and [UDG-004](docs/contracts/UDG-004.md) is **implemented and submitted for review**
-([assignment record](docs/contracts/assignments/UDG-004.md),
-[completion record](docs/contracts/assignments/UDG-004-completion.md) at
-`d318444fe8668f4485d85398ecc6eb88ff5e3b36` with [CI run 43893238010](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43893238010)
-green): the browser client, its camera controls and its browser evidence suite exist and run, and reviewer
-acceptance is pending. Every task after them stays
-unassigned. Refinements P04, P05 and P07 to P10 remain pending (P03 was approved 2026-11-09).
+unassigned** — and its `W-7` suite nondeterminism stays tracked there, not against UDG-004. Every task after
+UDG-004 stays unassigned. Refinements P04, P05 and P07 to P10 remain pending (P03 was approved 2026-11-09).
 The planning contracts and their [adoption status](docs/contracts/adoption.md) remain the authority for what may be built next.
 
 ## Start here
 
 - **For an agent:** read [AGENTS.md](AGENTS.md), then the specific [task contract](docs/contracts/README.md) you are assigned. Each task links only to the shared rules it needs.
-- **For the project owner:** review [adoption status](docs/contracts/adoption.md). P01, P02, P03 and P06 are approved (P02 with clarifications U2-1 to U2-6 and ADR 0001); P04, P05 and P07 to P10 remain pending. UDG-003 is In Progress with Phase 3 unassigned, UDG-004 is submitted for review and not yet accepted, and every task after them stays Not Started.
+- **For the project owner:** review [adoption status](docs/contracts/adoption.md). P01, P02, P03 and P06 are approved (P02 with clarifications U2-1 to U2-6 and ADR 0001); P04, P05 and P07 to P10 remain pending. UDG-003 is In Progress with Phase 3 unassigned, UDG-004 is **Verified** (accepted 2026-11-16), and every task after it stays Not Started.
 - **For the current project plan:** read the [plan and version guide](docs/specifications/README.md). The [M0 Technical Specification v0.2](docs/specifications/UDG-SPEC-M0-002.md) is the current architecture baseline; the v1.0 agent contracts elaborate it into work packages.
 
 ## Repository map
@@ -163,8 +165,9 @@ submission drew four corrections, and the corrected head was accepted with
 a green first submission and a green accepted submission — is recorded in
 [the UDG-002 completion record](docs/contracts/assignments/UDG-002-completion.md). P04, P05 and P07
 to P10 remain pending and Gates A, B and C remain Not Run; UDG-003 is In Progress with Phase 3 unassigned
-and UDG-004 is submitted for review, so nothing beyond those two is assigned and no implementation for
-either has been accepted beyond what those records describe; the local reproduction of the identical command sequence and every CI bundle are retained and verified.
+and UDG-004 was accepted on 2026-11-16 at `d318444`, so nothing beyond those two is assigned and no implementation for
+either has been accepted beyond what those records describe; the local reproduction of the identical command sequence and every CI bundle are retained and verified —
+including the runs that went red, which are named rather than removed.
 
 ## Evidence
 
