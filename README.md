@@ -117,7 +117,7 @@ zero discovered tests.
 | `pnpm test:unit`, `pnpm test:contract -- --task UDG-002` | Implemented and passing: protocol and configuration validation, mapping, schema round trips and the executable protocol fixtures | UDG-002 |
 | `pnpm dependencies:record`, `pnpm dependencies:verify`, `pnpm contracts:checksums`, `pnpm evidence:capture`, `pnpm evidence:verify`, `pnpm evidence:summary` | Implemented; a capture plan exists for each of UDG-001, UDG-002, UDG-003 and UDG-004 | UDG-001, extended by UDG-002, UDG-003 and UDG-004 |
 | `pnpm test:contract -- --task UDG-003 … UDG-SPIKE-003` | Exits `2`: that task's suite does not exist yet | each task creates its own suite |
-| `pnpm dev` | Implemented and passing: the UDG-004 development client on `http://127.0.0.1:5173` | UDG-004 |
+| `pnpm dev` | Implemented and passing: the UDG-004 development client on `http://127.0.0.1:5173` — a **middle-button** drag orbits (the left button stays inert for UDG-008), wheel and pinch zoom within 2–20 m, a one-finger touch drag keeps the scene under the finger, and holding an arrow key orbits or pitches **continuously** while the scene canvas has focus | UDG-004 |
 | `pnpm test:e2e -- --suite camera` | Implemented and passing: the UDG-004 camera suite, its screenshots and its lifecycle counts | UDG-004 |
 | `pnpm test:e2e -- --suite netcode\|physics\|input\|hybrid` | Exits `1` naming its owner: no such suite exists, and a suite that does not exist is never a pass | UDG-SPIKE-001 netcode, UDG-006 physics, UDG-008 input, UDG-SPIKE-003 hybrid |
 | `pnpm test:e2e` with no `--suite` | Exits `1`, naming all five owners: no single task owns "every browser suite" | the five tasks above |

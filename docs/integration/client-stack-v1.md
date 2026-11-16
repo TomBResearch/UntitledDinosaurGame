@@ -175,51 +175,60 @@ derived basis predicts.
 
 ### 4.1 Which input moves the camera, and which one must not
 
-Ruled by the reviewer on the Mac, 2026-11-16, in two rounds. The horizontal direction was reversed twice, which
-lands it back on the sign the client started with; what actually changed is **which button** orbits, that the left
-button is now free, and that the canvas answers the arrow keys while it holds focus.
+Ruled by the reviewer on the Mac, 2026-11-16, in **three** rounds. Recording all three matters: the horizontal
+mouse direction has been reversed twice (rounds 1 and 3) with a "make them equal" build in between (round 2), so a
+reader who sees only one round would plausibly "fix" the sign the wrong way.
 
 | Input | Effect | Where it is written |
 | --- | --- | --- |
-| Middle-mouse drag | orbit + pitch | `OrbitCamera.onPointerDown`, gated on `event.button !== 1` |
+| Middle-mouse drag | orbit + pitch; horizontal **opposite** to a touch drag | `OrbitCamera.onPointerDown` (`event.button !== 1`), `ORBIT_AZIMUTH_DIRECTION.mouse = +1` |
 | Left mouse press or drag | **nothing**, counted in `leftPressesIgnored` | same handler; the button is reserved for UDG-008's click-to-move |
 | Right mouse | nothing; `contextmenu` suppressed on the scene | `onContextMenu` |
 | Wheel over the canvas | zoom, 2–20 m | `onWheel`, `zoomRadiusMeters` |
-| One-finger touch drag | orbit, scene follows the finger | `onPointerMove`, `orbitStepRadians` |
+| One-finger touch drag | orbit, scene follows the finger (`−dx`, never ruled on) | `onPointerMove`, `ORBIT_AZIMUTH_DIRECTION.touch = −1` |
 | Two-finger pinch | zoom, 2–20 m | `onPointerMove`, `pinchRadiusMeters` |
-| Arrow keys while the canvas has focus | Left/Right orbit, Up/Down pitch, 10°–80° | `onKeyDown`, `keyOrbitStep` |
+| Arrow keys held while the canvas has focus | Left/Right orbit, Up/Down pitch, continuously, 10°–80° | `heldKeys` + `OrbitCamera.stepHeldKeys`, driven by the render loop |
 | Arrow keys anywhere else | the page's, untouched | the listeners are on the canvas, not the window |
 
-`camera-math.ts` owns the arithmetic and stays Babylon-free and DOM-free: `orbitStepRadians` for drags (one sign
-for every device, since the second ruling), and `CAMERA_KEYS`, `isCameraKey`, `KEY_ORBIT_RADIANS_PER_PRESS`
-(0.05 rad ≈ 2.86°) and `KEY_PITCH_DEGREES_PER_PRESS` (2°) for the keyboard. Pitch is handed back in **degrees** so
-that `elevationDegreesToBetaRadians` remains the one place the 10°–80° bound is written down; keyboard and drag
-therefore cannot disagree at a bound.
+`camera-math.ts` owns the arithmetic and stays Babylon-free and DOM-free: `orbitStepRadians(dx, dy, source)` for
+drags, and `CAMERA_KEYS`, `isCameraKey`, `heldKeyCameraStep(heldKeys, deltaSeconds)`,
+`KEY_ORBIT_RADIANS_PER_SECOND` (1.2 rad ≈ 68.8°/s), `KEY_PITCH_DEGREES_PER_SECOND` (45°/s) and
+`MAX_FRAME_SECONDS` (0.1 s) for the keyboard. Pitch is handed back in **degrees** so `elevationDegreesToBetaRadians`
+remains the one place the 10°–80° bound is written down; keyboard and drag cannot disagree at a bound.
 
-Focus is what makes the keyboard rule safe rather than surprising. `index.html` gives the canvas `tabindex="0"`, an
-`aria-label` that states the controls, and a 4 px focus ring drawn *inside* the canvas edge (`outline-offset: -4px`)
-because a full-viewport element has no room for a ring outside it. `preventDefault()` is called for the four arrow
-keys and nothing else, and only when the canvas is the event target, so arrow-key page scrolling is suppressed in
-exactly one place. A held key's autorepeat is the motion; `blur` clears the held-key set, so a key still down when
-focus leaves cannot keep driving the camera, and neither can its repeats. Middle-mouse `mousedown` is also
-default-prevented on the canvas, because middle-click is autoscroll on some platforms and primary-paste on X11.
+**A key press is a state, not a step.** `keydown` adds to a `heldKeys` set, `keyup` removes, and neither writes the
+camera; `ClientRuntime`'s render loop calls `camera.stepHeldKeys(deltaSeconds)` once a frame with the elapsed time
+measured by `performance.now()` around the loop body, and `heldKeyCameraStep` integrates whatever is held against
+it. Three consequences the reviewer asked for, each of which is why this is not a keydown handler: no initial pause
+(the first frame after the keydown already moves), no repeated jumps (the rate is per frame, not per platform
+autorepeat), and no dependence on how a browser chooses to repeat a key — `event.repeat` is ignored outright. The
+interval is clamped to `MAX_FRAME_SECONDS`, and the loop captures its start time per run, so the first frame after
+a stall or a tab-hide costs one ordinary frame instead of teleporting the camera.
 
-Measured in `chromium-1254` from `tests/e2e/camera.spec.ts` (200 px drags at the canvas centre, 10 key presses,
-in the eighth case as well as the third):
+Motion stops when the state empties: `keyup`, canvas `blur`, and the `ClientRuntime` path for window blur and
+`visibilitychange: hidden` (which calls `cancelActiveGestures()` and stops the loop anyway). A key still physically
+down when focus leaves cannot resume driving the camera, because nothing re-adds it without a fresh keydown on the
+focused canvas. Focus is also visible: `tabindex="0"` and a 4 px ring drawn *inside* the canvas edge
+(`outline-offset: -4px`), because a full-viewport element has nowhere outside the picture to put one;
+`preventDefault()` covers the four arrows and nothing else, and never a modified arrow.
+
+Measured in `chromium-1254` from `tests/e2e/camera.spec.ts` (200 px drags at the canvas centre; for the keyboard,
+**one keydown, no repeat events**, then a timed interval):
 
 ```text
-middle drag right   Δazimuth  −68.755°      arrow Right ×10   Δazimuth  −28.648°
-middle drag left    Δazimuth  +68.755°      arrow Left  ×10   Δazimuth  +28.648°
-touch drag right    Δazimuth  −68.755°      arrow Up    ×60   elevation   80° (clamped)
-touch drag left     Δazimuth  +68.755°      arrow Down  ×80   elevation   10° (clamped)
-middle drag down    Δelevation +20.626°     left-button drags ×2   camera unchanged to 6 decimals
+middle drag right   Δazimuth  +68.755°      ArrowRight 100 ms   Δazimuth   −8.02°
+middle drag left    Δazimuth  −68.755°      ArrowRight 500 ms   Δazimuth  −35.59°  over 31 frames
+touch drag right    Δazimuth  −68.755°      implied rate                   71.2°/s  (configured 68.8)
+touch drag left     Δazimuth  +68.755°      ArrowLeft  500 ms   Δazimuth  +34.38°
+middle drag down    Δelevation +20.626°     ArrowUp / ArrowDown held        80° and 10°, clamped
+left-button drags ×2                        camera unchanged to 6 decimals, 2 refusals counted
+                                            frames after keyup                      0
 ```
 
-Mouse and touch now agree in sign and in size to within 0.000° for the same screen movement, which the suite
-asserts as a number (`camera.mouseAndTouchAzimuthAgree`) rather than only as a passing case. The keyboard does
-nothing with focus on a button or off-canvas, asserted against `cameraKeySteps` so a silent no-op listener cannot
-pass it; refocusing the canvas makes the same keys move the camera again, which is what stops the unfocused
-assertion from being vacuous.
+The mouse and the finger disagree in direction by design (round 3), equal and opposite to 0.000° — recorded as
+`camera.mouseInvertedAgainstTouch` rather than left to a passing case. The keyboard's `31 frames / 500 ms` is the
+smoothness evidence: 31 separate integrations from **one** keydown, which no per-press or autorepeat-driven build
+can produce.
 
 ## 5. Connection state without a server
 

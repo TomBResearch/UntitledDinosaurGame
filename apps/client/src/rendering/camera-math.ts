@@ -73,26 +73,49 @@ export const betaLimitsRadians = (): Readonly<{ lower: number; upper: number }> 
 });
 
 /**
+ * Which physical device is dragging. The horizontal convention differs by device, so `PointerEvent.pointerType`
+ * has to decide it; `mouse` is the mouse, and `touch` is everything else (touch, pen, or a pointer that declines
+ * to say), which keeps the convention the acceptance list was written against.
+ */
+export type OrbitInputSource = 'mouse' | 'touch';
+
+/**
+ * The sign applied to a horizontal drag delta, per input device.
+ *
+ * The reviewer's Mac rulings, in order, because the sign has moved three times and each move is a fact:
+ *
+ * * round 1 (`2d2be86`) — reverse the mouse horizontally, keep touch: `mouse: +1`, `touch: −1`.
+ * * round 2 (`805ede6`) — mouse moves to the middle button and reverses **again**, landing both devices on `−dx`,
+ *   so the table was deleted.
+ * * round 3 (this) — on the Mac the middle drag still felt inverted: reverse it in both directions, **and leave
+ *   the one-finger touch drag exactly as it is**. That separates the devices again, so the table is back with
+ *   `mouse: +1`, `touch: −1`.
+ *
+ * The table exists so the difference is one line, and the line is a decision rather than an accident. Vertical
+ * pitch is shared and has never been ruled on.
+ */
+export const ORBIT_AZIMUTH_DIRECTION: Readonly<Record<OrbitInputSource, number>> = {
+  mouse: 1,
+  touch: -1,
+};
+
+/**
  * A drag delta in pixels becomes an azimuth/polar delta in radians.
  *
- * One convention for every pointer device, and the horizontal sign has been ruled twice:
- *
- * * round 1 (Mac review, 2026-11-16) reversed the **mouse** horizontally and left touch alone, which put the two
- *   devices on opposite signs;
- * * round 2 (same day) moved the mouse gesture to the **middle button**, reserved the left button for UDG-008's
- *   click-to-move, and reversed the mouse horizontally **again** — back to the sign a touch drag has always used.
- *
- * So `−dx` is both the grab-the-world convention the acceptance list was written against and the direction the
- * reviewer asked for on a mouse, and no device branch is needed. Vertical drag (`−dy`: a drag down takes the
- * camera over the top) and both zoom paths are unchanged by either ruling.
+ * `source` picks the horizontal convention (see {@link ORBIT_AZIMUTH_DIRECTION}); the vertical term is shared,
+ * because a downward drag takes the camera over the top for a mouse and a finger alike.
  */
 export const orbitStepRadians = (
   deltaX: number,
   deltaY: number,
+  source: OrbitInputSource,
 ): Readonly<{ alphaDelta: number; betaDelta: number }> => {
   const dx = isFiniteNumber(deltaX) ? deltaX : 0;
   const dy = isFiniteNumber(deltaY) ? deltaY : 0;
-  return { alphaDelta: -dx * ORBIT_RADIANS_PER_PIXEL, betaDelta: -dy * ORBIT_RADIANS_PER_PIXEL };
+  return {
+    alphaDelta: ORBIT_AZIMUTH_DIRECTION[source] * dx * ORBIT_RADIANS_PER_PIXEL,
+    betaDelta: -dy * ORBIT_RADIANS_PER_PIXEL,
+  };
 };
 
 /**
@@ -107,32 +130,55 @@ export type CameraKey = (typeof CAMERA_KEYS)[number];
 export const isCameraKey = (key: string): key is CameraKey =>
   (CAMERA_KEYS as readonly string[]).includes(key);
 
-/** Azimuth turn per key press, in radians (≈2.9°). Deliberately slower than a fast drag. */
-export const KEY_ORBIT_RADIANS_PER_PRESS = 0.05;
+/** Azimuth turn per second of a held arrow key, in radians (≈69°/s: a full turn in about nine seconds). */
+export const KEY_ORBIT_RADIANS_PER_SECOND = 1.2;
 
-/** Pitch change per key press, in degrees, applied through the same elevation clamp a drag uses. */
-export const KEY_PITCH_DEGREES_PER_PRESS = 2;
+/** Pitch change per second of a held arrow key, in degrees, applied through the same elevation clamp a drag uses. */
+export const KEY_PITCH_DEGREES_PER_SECOND = 45;
 
 /**
- * What a key press does to the camera, in the same directions as a drag.
- *
- * `ArrowRight` decreases the azimuth exactly as a rightward middle-drag does, and `ArrowUp` raises the
- * elevation. Pitch is returned in degrees rather than Babylon's polar radians so the caller can hand it to
- * `elevationDegreesToBetaRadians`, the one place the 10°–80° bound is written down.
+ * The most a single frame may be worth. A held key is integrated against elapsed time, so the first frame after
+ * a stall — a backgrounded tab, a focus change, a breakpoint — would otherwise teleport the camera by however
+ * long the stall lasted. Clamping turns a stall into one ordinary frame.
  */
-export const keyOrbitStep = (
-  key: CameraKey,
+export const MAX_FRAME_SECONDS = 0.1;
+
+/**
+ * What the keys held **right now** do over the next `deltaSeconds`.
+ *
+ * This is the whole reason the keyboard is smooth: a key press is not a step, it is a state, and the render loop
+ * integrates whatever states are active against the time the frame covered. There is therefore no initial pause
+ * (the first frame after the keydown moves), no dependence on the platform's autorepeat cadence, and no jump when
+ * autorepeat's own repeat interval differs between browsers and operating systems. Opposing keys cancel, and a
+ * non-finite or over-long interval is clamped rather than trusted.
+ *
+ * Pitch is returned in degrees so the caller can hand it to `elevationDegreesToBetaRadians`, the one place the
+ * 10°–80° bound is written down — keyboard and drag cannot disagree at a bound.
+ */
+export const heldKeyCameraStep = (
+  heldKeys: Iterable<CameraKey>,
+  deltaSeconds: number,
 ): Readonly<{ alphaDeltaRadians: number; elevationDeltaDegrees: number }> => {
-  switch (key) {
-    case 'ArrowLeft':
-      return { alphaDeltaRadians: KEY_ORBIT_RADIANS_PER_PRESS, elevationDeltaDegrees: 0 };
-    case 'ArrowRight':
-      return { alphaDeltaRadians: -KEY_ORBIT_RADIANS_PER_PRESS, elevationDeltaDegrees: 0 };
-    case 'ArrowUp':
-      return { alphaDeltaRadians: 0, elevationDeltaDegrees: KEY_PITCH_DEGREES_PER_PRESS };
-    case 'ArrowDown':
-      return { alphaDeltaRadians: 0, elevationDeltaDegrees: -KEY_PITCH_DEGREES_PER_PRESS };
+  const dt = isFiniteNumber(deltaSeconds) ? Math.min(Math.max(deltaSeconds, 0), MAX_FRAME_SECONDS) : 0;
+  let alpha = 0;
+  let elevation = 0;
+  for (const key of heldKeys) {
+    switch (key) {
+      case 'ArrowLeft':
+        alpha += KEY_ORBIT_RADIANS_PER_SECOND;
+        break;
+      case 'ArrowRight':
+        alpha -= KEY_ORBIT_RADIANS_PER_SECOND;
+        break;
+      case 'ArrowUp':
+        elevation += KEY_PITCH_DEGREES_PER_SECOND;
+        break;
+      case 'ArrowDown':
+        elevation -= KEY_PITCH_DEGREES_PER_SECOND;
+        break;
+    }
   }
+  return { alphaDeltaRadians: alpha * dt, elevationDeltaDegrees: elevation * dt };
 };
 
 /**

@@ -524,10 +524,11 @@ where the suite runs against the pinned Chromium and writes retained artefacts. 
 and was never run in CI proves nothing about this task's acceptance criteria — and, until it is run, it proves
 nothing at all.
 
-## Control rulings from the Mac review (2026-11-16, two rounds)
+## Control rulings from the Mac review (2026-11-16, three rounds)
 
-Both rounds came from the reviewer driving the preview on a Mac, and both are recorded because the second undoes
-part of the first — a record that kept only the latest wording would hide a real change of mind.
+Three rounds came from the reviewer driving the preview on a Mac, and all three are recorded because the third
+undoes part of the second — a record that kept only the latest wording would invite someone to "correct" the sign
+back the wrong way.
 
 **Round 1, at `2d2be86`.** Pitch and zoom felt right; horizontal mouse drag felt inverted. The ruling was to reverse
 the horizontal direction for mouse drags and nothing else, which put the mouse on the opposite sign from touch. The
@@ -550,26 +551,56 @@ measurements from that head are kept in the table below as the "round 1" column.
   (ctrl/meta/alt) is left alone as a browser shortcut, and `blur` clears the held-key set so an arrow still down
   when focus leaves cannot keep driving the camera, nor its autorepeat.
 
+**Round 3, this head.** Tested on a Mac again, two findings, both fixed here:
+
+* **The middle-mouse horizontal direction is reversed again, in both directions**, and the one-finger touch orbit is
+  left exactly as it is. That separates the two devices once more, so the per-device table came back — now
+  `ORBIT_AZIMUTH_DIRECTION = { mouse: +1, touch: −1 }`, with the three rulings written into its comment. Vertical
+  mouse pitch, wheel zoom, pinch zoom, the left button's inertness, the camera bounds and the overlay's gesture
+  exclusion are untouched.
+* **Holding an arrow key now moves the camera continuously.** A press used to be a step, which on a Mac reads as a
+  pause and then a stutter, because it rode on the platform's key-repeat cadence. Now `keydown` adds to a `heldKeys`
+  set, `keyup` removes it, and nothing on either event writes the camera; `ClientRuntime`'s render loop calls
+  `camera.stepHeldKeys(deltaSeconds)` once a frame with the elapsed time measured around the loop body, and
+  `heldKeyCameraStep` integrates whatever is held (`KEY_ORBIT_RADIANS_PER_SECOND` 1.2 rad ≈ 68.8°/s,
+  `KEY_PITCH_DEGREES_PER_SECOND` 45°/s, interval clamped by `MAX_FRAME_SECONDS` 0.1 s). So there is no initial pause,
+  no repeated jump, and no dependence on autorepeat — `event.repeat` is ignored outright. Motion ends when the state
+  empties: `keyup`, canvas `blur`, and the window-blur / `visibilitychange: hidden` path that `ClientRuntime` already
+  routes through `cancelActiveGestures()` while stopping the loop. Bounds are unchanged because pitch still goes
+  through `elevationDegreesToBetaRadians`, the only place 10°–80° is written.
+
+**Keyboard continuity, measured the way the reviewer has to be able to test it** — one `keydown`, **no repeat
+events**, then a timed interval:
+
+| Measurement | Value | What it rules out |
+| --- | --- | --- |
+| First 100 ms after the keydown | **−8.02°** | an initial pause |
+| Held 500 ms | **−35.59°**, over **31** frames | a single jump, or a per-press step |
+| Implied rate | **71.2°/s** against 68.8°/s configured | autorepeat cadence deciding the speed |
+| Opposite key, held 500 ms | **+34.38°** (mirror within 1.2°) | an axis that only works one way |
+| Frames after `keyup` | **0** | a held state that survives release |
+| After canvas `blur`, key still down | azimuth identical across 350 ms, frames frozen | motion that continues unfocused |
+| Held with focus on a button | 0 key steps, 0 key frames, camera unchanged | a listener that ignores focus |
+| ArrowUp / ArrowDown held | exactly **80°** and **10°**, never past | a second, keyboard-only bound |
+
 **Measured, all three rounds side by side.** Same case, same default camera state, 200 px drags at the canvas
 centre, 10 key presses; the round-1 column is the retained artefact of `2d2be86`:
 
-| Gesture | Round 1 (`2d2be86`) | This build |
-| --- | --- | --- |
-| 200 px mouse drag right | +68.755° | **−68.755°** (reversed again) |
-| 200 px mouse drag left | −68.755° | **+68.755°** |
-| 200 px touch drag right | −68.755° | **−68.755°** — unchanged, still follows the finger |
-| 200 px touch drag left | +68.755° | **+68.755°** — unchanged |
-| 60 px mouse drag down | +20.626° elevation | **+20.626°** — unchanged |
-| 200 px **left**-button drag ×2 | orbited (it was the orbit button) | camera unchanged to 6 decimals, **2** presses counted as refused |
-| ArrowRight ×10 | keys did nothing | **−28.648°** |
-| ArrowLeft ×10 | keys did nothing | **+28.648°** |
-| ArrowUp ×60 / ArrowDown ×80 | keys did nothing | **80°** and **10°**, clamped, never exceeded |
-| Arrow keys with focus on a button or off-canvas | n/a | **0** key steps, camera unchanged |
-| Focused canvas outline | none (canvas not focusable) | **4px solid rgb(89, 201, 138)** |
+| Gesture | Round 1 | Round 2 | This build (round 3) |
+| --- | --- | --- | --- |
+| 200 px middle-mouse drag right | +68.755° | −68.755° | **+68.755°** (reversed again) |
+| 200 px middle-mouse drag left | −68.755° | +68.755° | **−68.755°** |
+| 200 px touch drag right | −68.755° | −68.755° | **−68.755°** — never changed |
+| 200 px touch drag left | +68.755° | +68.755° | **+68.755°** — never changed |
+| 60 px mouse drag down | +20.626° elevation | +20.626° | **+20.626°** — never changed |
+| 200 px **left**-button drag ×2 | orbited | camera unchanged, 2 refusals | **camera unchanged to 6 decimals, 2 refusals** |
+| Arrow keys, one keydown held 500 ms | keys did nothing | needed 10 press events for −28.6° | **−35.59° in 31 frames, no repeats sent** |
+| ArrowUp / ArrowDown held | n/a | per press | **80°** and **10°**, clamped, never exceeded |
+| Keys with focus on a button or off-canvas | n/a | 0 steps | **0 steps, 0 frames**, camera unchanged |
+| Focused canvas outline | none | 4px ring | **4px solid rgb(89, 201, 138)** |
 
-Mouse and touch now agree in sign *and* size for the same screen movement (`camera.mouseAndTouchAzimuthAgree`,
-`|mouseRight − touchRight| < 2°`, measured 0.000°) — recorded as a number, so if a future ruling drifts, the bundle
-says so rather than only failing a case.
+Mouse and touch are equal and **opposite** again (`camera.mouseInvertedAgainstTouch`, `|mouseRight + touchRight| < 2°`,
+measured 0.000°) — recorded as numbers in the bundle, not only as a passing case, so a future drift is visible there.
 
 **Why the assertions are signed, and why the unfocused-keyboard assertion reads a counter.** The orbit case used to
 assert `|Δazimuth| > 5°`, which the opposite direction passes happily: it proved the axis moved, never which way. It
@@ -578,6 +609,10 @@ mirror images. The keyboard case asserts against `cameraKeySteps` as well as aga
 did not move" is also what a keyboard listener wired to nothing looks like — the counter says the refusal was
 deliberate, and the case then refocuses the canvas and proves the same keys *do* move it, so the unfocused assertion
 cannot be vacuous. Left-button inactivity is asserted the same way, with both presses counted.
+
+**No plan threshold moved this round.** Round 3 is behaviour inside cases the plan already counts: the middle-mouse
+signs sit in the orbit case, and the continuous-keyboard measurements extend the eighth case rather than adding a
+ninth, so `camera.cases` still reads `=== 8` and the required-file and screenshot lists are untouched.
 
 **One plan threshold moved, and it is named.** `camera.cases` was `=== 7`; the keyboard needs its own case, so the
 plan's own wording now says `=== 8 cases … suites.expected === 8` and the contract suite asserts both halves (eight
@@ -603,15 +638,17 @@ With the dev server up (and no server on 2567, which is the normal state — the
 `failed` and should stay readable):
 
 1. **Middle-drag to orbit; the left button must do nothing.** A **middle** drag turns the camera — right
-   decreases the azimuth, left increases it — and a drag **down** raises it toward 80°. A **left** press or drag
-   leaves the camera exactly where it was: that button is reserved for UDG-008's click-to-move, and the overlay's
-   `Gestures` line counts the refusals (`leftIgnored=`) so you can see the client saw the press and declined it.
-   One-finger **touch** drag still keeps the scene under the finger, and after the second ruling mouse and touch
-   agree on direction rather than disagreeing.
-2. **Tab to the canvas, then the arrow keys.** Tab (or Shift+Tab from the overlay's buttons) lands on the scene and
-   a green ring appears inside its edge; Left/Right orbit and Up/Down pitch, clamped at 10° and 80°. Tab away to a
-   button, or click the overlay, and the same keys do nothing to the camera — and scroll the page as usual, which is
-   the part worth trying: only the four arrows on the focused canvas are swallowed.
+   increases the azimuth, left decreases it (this direction was reversed a third time on the reviewer's Mac test) —
+   and a drag **down** raises it toward 80°. A **left** press or drag leaves the camera exactly where it was: that
+   button is reserved for UDG-008's click-to-move, and the overlay's `Gestures` line counts the refusals
+   (`leftIgnored=`) so you can see the client saw the press and declined it. A one-finger **touch** drag still keeps
+   the scene under the finger, which is deliberately the *opposite* direction to the mouse.
+2. **Hold an arrow key on the focused canvas.** Tab (or Shift+Tab from the overlay's buttons) lands on the scene and
+   a green ring appears inside its edge. **Holding** Right or Left should sweep the camera at a steady ~70°/s from
+   the very first frame — no pause, no stepping — and stop the instant you release. Up/Down pitch to 80° and 10° and
+   stay there. Tab away to a button, or click the overlay, and the same keys do nothing to the camera while still
+   scrolling the page normally: only the four arrows on the focused canvas are swallowed, and the `keyFrames=`
+   counter in the overlay shows the loop driving the motion.
 3. **Wheel to zoom.** It stops hard at 2 m and at 20 m and does not creep past either on repeated notches.
 4. **Pinch on a touch device or touch emulation.** Two fingers together → 4-pointer orbit, spread → zoom in.
    It clamps to the same 2 m and 20 m. (In Chrome DevTools device mode the suite's dispatched-touch path is

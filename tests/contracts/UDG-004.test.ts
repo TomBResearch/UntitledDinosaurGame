@@ -360,13 +360,36 @@ describe('UDG-004 public interface is what the contract states', () => {
     // The middle button must not start a platform autoscroll or a primary-paste either.
     expect(orbit).toContain("this.canvas.addEventListener('mousedown'");
 
+    // Continuous keyboard motion, structurally: a keydown is a state, and the **render loop** is the only thing
+    // that moves the camera from it. A build that stepped on keydown would pass a test that sends a press per
+    // step, so this pins where the movement is applied.
+    // Positive structure only, deliberately: the drag path writes alpha too, so "keydown must not write the
+    // camera" is not a string test. What is checkable here is that a per-frame entry point exists and integrates
+    // the held set; the browser case is what proves no camera write happens on the keydown itself, by measuring
+    // movement with **no repeat events** sent.
+    expect(orbit, 'held keys are not integrated per frame').toContain('public stepHeldKeys(deltaSeconds: number)');
+    expect(orbit).toContain('heldKeyCameraStep(this.heldKeys, deltaSeconds)');
+    expect(orbit, 'autorepeat is treated as motion rather than ignored').toContain('if (event.repeat) return;');
+    expect(orbit, 'keyup does not clear the held state').toContain('this.heldKeys.delete(event.key)');
+
+    const runtime = read('apps/client/src/game/ClientRuntime.ts');
+    expect(runtime, 'the render loop does not advance the held keys').toContain(
+      'resources.camera.stepHeldKeys(deltaSeconds)',
+    );
+    expect(runtime, 'the loop has no elapsed-time source').toContain('performance.now()');
+
     const math = stripComments(read('apps/client/src/rendering/camera-math.ts'));
     expect(math).toContain('ArrowLeft');
     expect(math).toContain('ArrowRight');
     expect(math).toContain('ArrowUp');
     expect(math).toContain('ArrowDown');
     // Both directions of both axes, and pitch handed back in degrees so the single elevation clamp governs it.
-    expect(math).toContain('KEY_PITCH_DEGREES_PER_PRESS');
+    expect(math).toContain('KEY_ORBIT_RADIANS_PER_SECOND');
+    expect(math).toContain('KEY_PITCH_DEGREES_PER_SECOND');
+    // A held key integrated against a stalled frame would teleport the camera, so the interval is clamped where
+    // the arithmetic lives rather than at each call site.
+    expect(math).toContain('MAX_FRAME_SECONDS');
+    expect(math).toContain('heldKeyCameraStep');
     expect(math, 'the pure module grew a DOM dependency').not.toMatch(/\bdocument\b|\bwindow\b/);
 
     // Focus has to be reachable and visible, or the keyboard rule is a trap.
@@ -380,15 +403,21 @@ describe('UDG-004 public interface is what the contract states', () => {
       expect(overlay, `the on-screen controls hint no longer says "${phrase}"`).toContain(phrase);
     }
     // And the counters behind that hint are the ones the browser suite asserts on.
-    const runtime = read('apps/client/src/game/ClientRuntime.ts');
-    expect(runtime).toContain('cameraKeySteps');
-    expect(runtime).toContain('cameraLeftPressesIgnored');
+    const runtimeCounters = runtime;
+    expect(runtimeCounters).toContain('cameraKeySteps');
+    expect(runtimeCounters).toContain('cameraKeyFrames');
+    expect(runtimeCounters).toContain('cameraLeftPressesIgnored');
 
     // Eight cases now, and the plan's own wording says eight, so the gate and the prose cannot disagree.
     expect(CAMERA_CASE_NAMES).toHaveLength(8);
     const plan = CAPTURE_PLANS['UDG-004'];
     expect(plan?.thresholds['camera.cases']).toContain('=== 8 cases');
     record('camera.inputMapPinned', true);
+    // The third ruling separates the devices again, so the table that encodes it must exist and must say what the
+    // reviewer asked for: mouse inverted, touch untouched.
+    const directions = stripComments(read('apps/client/src/rendering/camera-math.ts'));
+    expect(directions).toMatch(/mouse:\s*1/);
+    expect(directions).toMatch(/touch:\s*-1/);
   });
 });
 

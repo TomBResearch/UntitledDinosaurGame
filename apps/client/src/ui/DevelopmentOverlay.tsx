@@ -130,8 +130,9 @@ export const DevelopmentOverlay = ({
         <dt>Gestures</dt>
         <dd data-udg-readout="gestures">
           drags={String(counters.cameraDrags)} wheel={String(counters.cameraWheelNotches)} keys=
-          {String(counters.cameraKeySteps)} pinches={String(counters.cameraPinches)} leftIgnored=
-          {String(counters.cameraLeftPressesIgnored)} uiIgnored={String(counters.cameraIgnoredOnUi)}
+          {String(counters.cameraKeySteps)} keyFrames={String(counters.cameraKeyFrames)} pinches=
+          {String(counters.cameraPinches)} leftIgnored={String(counters.cameraLeftPressesIgnored)} uiIgnored=
+          {String(counters.cameraIgnoredOnUi)}
         </dd>
 
         <dt>Gesture incidents</dt>

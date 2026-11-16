@@ -35,7 +35,10 @@
  *
  * Losing focus or being backgrounded stops the loop, and regaining it starts the loop again — one loop, never
  * two, and never a tab burning a GPU while nobody looks at it. In-flight gestures are dropped at the same
- * moment, because a pointer that was down when the window lost focus is not a gesture anyone wants resumed.
+ * moment, because a pointer that was down when the window lost focus is not a gesture anyone wants resumed — and
+ * so are held keyboard states, which matters more now that the keyboard drives the camera through this loop: a key
+ * still down when the tab goes away stops the instant the loop does, and `stepHeldKeys` is never called again
+ * until the loop restarts with fresh frames and a focused canvas.
  * The browser suite uses this behaviour to freeze the test poses while it exercises the camera, which is what
  * makes "camera operations never mutate either pose" measurable rather than merely asserted.
  *
@@ -92,8 +95,10 @@ export interface RuntimeCounters {
   readonly cameraDrags: number;
   readonly cameraWheelNotches: number;
   readonly cameraPinches: number;
-  /** Arrow-key camera steps taken while the canvas held focus. */
+  /** Arrow-key presses accepted while the canvas held focus. A press is a state change, not a movement. */
   readonly cameraKeySteps: number;
+  /** Frames in which held arrow keys moved the camera — the proof that a single keydown keeps moving it. */
+  readonly cameraKeyFrames: number;
   /** Left presses on the canvas: refused, because UDG-008's click-to-move owns that button. */
   readonly cameraLeftPressesIgnored: number;
   readonly cameraIgnoredOnUi: number;
@@ -186,7 +191,16 @@ export const createClientRuntime = (): ClientRuntime => {
     const resources = owned;
     if (resources === undefined || loopRunning || backgrounded) return;
     loopRunning = true;
+    // The keyboard's clock. `lastFrameAt` is captured per loop start, so the frame after a restart measures the
+    // restart, not the whole gap the loop was stopped for; `heldKeyCameraStep` clamps it again in case a stall
+    // happens inside a running loop. Without both, a key held across a backgrounded tab would resume as a jump.
+    let lastFrameAt = performance.now();
     resources.engine.runRenderLoop(() => {
+      const now = performance.now();
+      const deltaSeconds = (now - lastFrameAt) / 1000;
+      lastFrameAt = now;
+      // Before the render, so the frame that is presented already carries the movement the reviewer feels.
+      resources.camera.stepHeldKeys(deltaSeconds);
       renderTicks += 1;
       resources.greybox.scene.render();
     });
@@ -204,6 +218,7 @@ export const createClientRuntime = (): ClientRuntime => {
       wheelNotches: 0,
       pinches: 0,
       keySteps: 0,
+      keyFrames: 0,
       leftPressesIgnored: 0,
       ignoredOnUi: 0,
       incidents: 0,
@@ -229,6 +244,7 @@ export const createClientRuntime = (): ClientRuntime => {
       cameraWheelNotches: cameraStats.wheelNotches,
       cameraPinches: cameraStats.pinches,
       cameraKeySteps: cameraStats.keySteps,
+      cameraKeyFrames: cameraStats.keyFrames,
       cameraLeftPressesIgnored: cameraStats.leftPressesIgnored,
       cameraIgnoredOnUi: cameraStats.ignoredOnUi,
       camera: resources === undefined ? undefined : resources.camera.readout(),

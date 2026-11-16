@@ -716,19 +716,18 @@ test(CAMERA_CASE_NAMES[2], async ({ page }) => {
   measure('azimuthAfterTouchDrag', afterTouch.camera?.azimuthDegrees ?? Number.NaN);
 
   // Horizontal direction, asserted by **sign** rather than by distance, and per input device. The reviewer's
-  // second ruling of 2026-11-16 moved the mouse gesture to the middle button and reversed its horizontal
-  // direction again, which puts the mouse back on the sign a touch drag has always used: a rightward gesture of
-  // either kind now **decreases** the azimuth. The head before this one did the opposite for the mouse, so the
-  // two mouse rows below are exactly what the previous build would fail, and the two touch rows are what a
-  // careless re-unification of the devices would fail. 200 px is 1.2 rad ≈ 68.8°, nowhere near the 5° floor
-  // unless the axis really turned.
+  // third Mac ruling of 2026-11-16 reverses the middle-mouse drag in both directions and leaves the one-finger
+  // touch drag exactly as it was — so a rightward **mouse** gesture now **increases** the azimuth while a
+  // rightward **touch** gesture still **decreases** it. The head before this one had them equal, so the two mouse
+  // rows below are what the previous build would fail, and the two touch rows are what a careless "fix both
+  // devices" change would fail. 200 px is 1.2 rad ≈ 68.8°, nowhere near the 5° floor unless the axis really turned.
   const mouseRightFrom = await snapshotOf(page);
   await drag(page, { x: 540, y: 360 }, { x: 740, y: 360 });
   const mouseRightDelta = azimuthDeltaDegrees(
     mouseRightFrom.camera?.azimuthDegrees ?? 0,
     (await snapshotOf(page)).camera?.azimuthDegrees ?? 0,
   );
-  expect(mouseRightDelta, 'a rightward middle-mouse drag must decrease the azimuth').toBeLessThan(-5);
+  expect(mouseRightDelta, 'a rightward middle-mouse drag must increase the azimuth').toBeGreaterThan(5);
   measure('mouseDragRightAzimuthDelta', mouseRightDelta);
 
   const mouseLeftFrom = await snapshotOf(page);
@@ -737,7 +736,7 @@ test(CAMERA_CASE_NAMES[2], async ({ page }) => {
     mouseLeftFrom.camera?.azimuthDegrees ?? 0,
     (await snapshotOf(page)).camera?.azimuthDegrees ?? 0,
   );
-  expect(mouseLeftDelta, 'a leftward middle-mouse drag must increase the azimuth').toBeGreaterThan(5);
+  expect(mouseLeftDelta, 'a leftward middle-mouse drag must decrease the azimuth').toBeLessThan(-5);
   measure('mouseDragLeftAzimuthDelta', mouseLeftDelta);
   // One axis, mirrored: equal size, opposite sign.
   expect(Math.abs(mouseRightDelta + mouseLeftDelta), 'left and right mouse drags are not mirror images').toBeLessThan(2);
@@ -760,8 +759,6 @@ test(CAMERA_CASE_NAMES[2], async ({ page }) => {
     ).toBeCloseTo(leftFrom.camera?.[field] ?? Number.NaN, 6);
   }
   expect(afterLeft.app.cameraDrags, 'a left press was counted as an orbit drag').toBe(dragsBeforeLeft);
-  // Both presses counted: a camera that sat still *and* a controller that says it refused them, rather than a
-  // gesture that vanished somewhere the client never saw.
   expect(
     afterLeft.app.cameraLeftPressesIgnored,
     'the two left presses were not both refused, so nothing proves the camera sat still on purpose',
@@ -794,14 +791,14 @@ test(CAMERA_CASE_NAMES[2], async ({ page }) => {
   expect(touchLeftDelta, 'a leftward touch drag must still increase the azimuth').toBeGreaterThan(5);
   measure('touchDragLeftAzimuthDelta', touchLeftDelta);
 
-  // After the second ruling, a mouse gesture and a touch gesture of the same screen direction turn the camera the
-  // same way, and the same size. Recorded as a number so a future divergence is visible in the bundle rather
-  // than only in a failing assertion.
-  expect(Math.sign(mouseRightDelta), 'mouse and touch disagree again, so a direction ruling has drifted').toBe(
-    Math.sign(touchRightDelta),
+  // After the third ruling the two devices disagree by design again, by equal amounts: the same screen movement
+  // turns the mouse one way and the finger the other. Recorded as numbers so the disagreement is visible in the
+  // bundle, not only in a passing case.
+  expect(Math.sign(mouseRightDelta), 'mouse and touch agree, so the middle-mouse ruling has drifted').toBe(
+    -Math.sign(touchRightDelta),
   );
-  expect(Math.abs(mouseRightDelta - touchRightDelta), 'mouse and touch no longer agree in size either').toBeLessThan(2);
-  measure('mouseAndTouchAzimuthAgree', Math.sign(mouseRightDelta) === Math.sign(touchRightDelta));
+  expect(Math.abs(mouseRightDelta + touchRightDelta), 'mouse and touch are not equal and opposite').toBeLessThan(2);
+  measure('mouseInvertedAgainstTouch', Math.sign(mouseRightDelta) === -Math.sign(touchRightDelta));
 
   // Vertical drag is shared, and unchanged: down still rolls the camera over the top for a middle drag. Normalise to
   // the low bound first, because a clamp at 80° would otherwise hide the rise.
@@ -1097,20 +1094,23 @@ export const retainedScreenshotBytes = (name: (typeof CAMERA_SCREENSHOT_NAMES)[n
 export const isPortablePng = (absolutePath: string): boolean =>
   readFileSync(absolutePath).subarray(0, 8).toString('hex') === '89504e470d0a1a0a' && statSync(absolutePath).size > 0;
 
-// Case 8: the keyboard. Ruled by the reviewer on 2026-11-16 — arrows orbit and pitch **only** while the scene
-// canvas holds focus, within the same bounds a drag uses, with the page's own arrow-key scrolling suppressed for
-// those keys and nothing else. Focus has to be reachable and visible, because a camera that answers keys nobody
-// can see it answering is a worse trap than one that answers nothing.
+// Case 8: the keyboard, and specifically *continuous* keyboard motion. Ruled by the reviewer on 2026-11-16:
+// holding an arrow key must move the camera smoothly, with no initial pause and no repeated jumps. That is only a
+// testable claim if the test refuses to help: **one keydown, no repeat events, then time** — because a build that
+// moved the camera once per keydown, or leaned on the platform's autorepeat cadence, looks fine to a test that
+// sends a press per step. Motion here comes from the render loop integrating the held-key set against elapsed time,
+// so the assertions are about how far the camera went in a measured interval, and about it stopping the moment the
+// state empties on keyup, on canvas blur, and with focus held by something else.
 test(CAMERA_CASE_NAMES[7], async ({ page }) => {
   const canvas = page.locator('canvas[data-udg-scene]');
-  await canvas.focus();
-  expect(
-    await page.evaluate(() => document.activeElement?.hasAttribute('data-udg-scene') ?? false),
-    'the scene canvas is not reachable by focus, so the arrows have no owner',
-  ).toBe(true);
+  const focusOnScene = async (): Promise<boolean> =>
+    page.evaluate(() => document.activeElement?.hasAttribute('data-udg-scene') ?? false);
 
-  // Focus has to be visible. The ring is drawn inside the canvas edge (see index.html), so it is read back off
-  // the computed style rather than judged from a screenshot.
+  await canvas.focus();
+  expect(await focusOnScene(), 'the scene canvas is not focusable, so the arrows have no owner').toBe(true);
+
+  // Focus has to be visible, or a keyboard camera is a trap. The ring is drawn inside the canvas edge (see
+  // index.html), so it is read back off the computed style rather than judged from a picture.
   const ring = await page.evaluate(() => {
     const element = document.querySelector('canvas[data-udg-scene]');
     if (!(element instanceof HTMLCanvasElement)) return 'missing';
@@ -1120,108 +1120,167 @@ test(CAMERA_CASE_NAMES[7], async ({ page }) => {
   expect(ring, `the focused canvas shows no focus ring (outline: "${ring}")`).toMatch(/^(\d+(\.\d+)?)px solid /);
   measure('canvasFocusOutline', ring);
 
-  // Tab reaches it from the keyboard alone. Asserted backwards on purpose: Chromium keeps a sequential-focus
-  // starting point where the last blurred element was, so "Tab from nothing" is not a stable starting state,
-  // while "Shift+Tab from the first control after the canvas" is.
+  // Tab reaches it. Asserted backwards on purpose: Chromium keeps a sequential-focus starting point where the last
+  // blurred element was, so "Tab from nothing" is not a stable starting state, while "Shift+Tab from the first
+  // control after the canvas" is.
   await page.locator('[data-udg-control="toggle-mount"]').focus();
-  expect(
-    await page.evaluate(() => document.activeElement?.hasAttribute('data-udg-scene') ?? true),
-    'the overlay button did not take focus, so the walk below proves nothing',
-  ).toBe(false);
+  expect(await focusOnScene(), 'the overlay button did not take focus, so the walk below proves nothing').toBe(false);
   await page.keyboard.press('Shift+Tab');
-  expect(
-    await page.evaluate(() => document.activeElement?.hasAttribute('data-udg-scene') ?? false),
-    'Shift+Tab does not reach the scene canvas, so it is not in the tab order',
-  ).toBe(true);
-  // And forwards, from the canvas, the next stop is a real control rather than the canvas again.
+  expect(await focusOnScene(), 'Shift+Tab does not reach the scene canvas, so it is not in the tab order').toBe(true);
   await page.keyboard.press('Tab');
   expect(await page.evaluate(() => document.activeElement?.tagName ?? '')).toBe('BUTTON');
 
   await canvas.focus();
   const scrollBefore = await page.evaluate(() => window.scrollY);
 
-  // Horizontal, by sign: ArrowRight turns the camera the way a rightward middle-drag does.
-  const rightFrom = await snapshotOf(page);
-  for (let press = 0; press < 10; press += 1) await page.keyboard.press('ArrowRight');
-  const keyRightDelta = azimuthDeltaDegrees(
-    rightFrom.camera?.azimuthDegrees ?? 0,
+  // ---- continuous, one direction ----
+  const heldFrom = await snapshotOf(page);
+  await page.keyboard.down('ArrowRight');
+
+  // The first frame after the keydown already moves. A per-press model with no autorepeat would read 0° here, and
+  // a model with an initial pause would read well under a third of the expected 6.9° for 100 ms.
+  await page.waitForTimeout(100);
+  const first100 = azimuthDeltaDegrees(
+    heldFrom.camera?.azimuthDegrees ?? 0,
     (await snapshotOf(page)).camera?.azimuthDegrees ?? 0,
   );
-  expect(keyRightDelta, 'ArrowRight must decrease the azimuth, like a rightward drag').toBeLessThan(-10);
-  measure('keyboardRightAzimuthDelta', keyRightDelta);
+  expect(Math.abs(first100), 'nothing moved in the first 100 ms after a single keydown — there is an initial pause').toBeGreaterThan(3);
+  measure('keyboardDeltaFirst100ms', first100);
 
-  const keyLeftFrom = await snapshotOf(page);
-  for (let press = 0; press < 10; press += 1) await page.keyboard.press('ArrowLeft');
-  const keyLeftDelta = azimuthDeltaDegrees(
-    keyLeftFrom.camera?.azimuthDegrees ?? 0,
-    (await snapshotOf(page)).camera?.azimuthDegrees ?? 0,
+  // Keep holding. 500 ms total at 1.2 rad/s is 0.6 rad ≈ 34.4°, and the direction must match a rightward drag.
+  await page.waitForTimeout(400);
+  const heldTo = await snapshotOf(page);
+  const holdDelta = azimuthDeltaDegrees(heldFrom.camera?.azimuthDegrees ?? 0, heldTo.camera?.azimuthDegrees ?? 0);
+  expect(holdDelta, 'ArrowRight must decrease the azimuth while held').toBeLessThan(-15);
+  measure('keyboardDeltaHeld500ms', holdDelta);
+
+  // Per frame, not per event: no repeat keydowns were sent, so every degree of that movement was integrated by
+  // the loop. A handful of frames over 500 ms also proves it was not one jump on the keydown.
+  const framesWhileHeld = heldTo.app.cameraKeyFrames - heldFrom.app.cameraKeyFrames;
+  expect(framesWhileHeld, 'a single keydown moved the camera in too few frames — that is stepping, not moving').toBeGreaterThan(5);
+  measure('keyboardFramesIn500ms', framesWhileHeld);
+  expect(heldTo.app.cameraKeySteps - heldFrom.app.cameraKeySteps, 'more than one keydown was accepted for one key').toBe(1);
+
+  // Smoothness, stated as a rate: the measured interval divided into the angle covered should land near the
+  // configured 68.8°/s. An autorepeat-driven build lands wherever the platform cadence put it, usually far below.
+  const rate = Math.abs(holdDelta) / 0.5;
+  expect(rate, `keyboard orbit rate ${rate.toFixed(1)}°/s is too slow to be frame-integrated`).toBeGreaterThan(40);
+  expect(rate, `keyboard orbit rate ${rate.toFixed(1)}°/s overshoots the configured rate`).toBeLessThan(100);
+  measure('keyboardAzimuthDegreesPerSecond', Number(rate.toFixed(2)));
+
+  // Release stops it: the camera is identical across a later interval, and the frame counter has frozen.
+  await page.keyboard.up('ArrowRight');
+  const released = await snapshotOf(page);
+  await page.waitForTimeout(300);
+  const settled = await snapshotOf(page);
+  expect(
+    settled.camera?.azimuthDegrees ?? Number.NaN,
+    'the camera was still moving after keyup',
+  ).toBeCloseTo(released.camera?.azimuthDegrees ?? Number.NaN, 6);
+  expect(settled.app.cameraKeyFrames, 'held keys kept driving the camera after keyup').toBe(
+    released.app.cameraKeyFrames,
   );
-  expect(keyLeftDelta, 'ArrowLeft must increase the azimuth, like a leftward drag').toBeGreaterThan(10);
-  measure('keyboardLeftAzimuthDelta', keyLeftDelta);
-  expect(Math.abs(keyRightDelta + keyLeftDelta), 'the keyboard axis is not mirrored').toBeLessThan(2);
+  measure('keyboardFramesAfterKeyup', settled.app.cameraKeyFrames - released.app.cameraKeyFrames);
 
-  // Pitch, driven into both bounds. The same clamp a drag uses is the only thing between a key press and the
-  // pole, so a keyboard that could exceed 10° or 80° would mean a second bound had crept in.
-  for (let press = 0; press < 60; press += 1) await page.keyboard.press('ArrowUp');
-  const atTop = await snapshotOf(page);
-  expect(atTop.camera?.elevationDegrees ?? 0).toBeLessThanOrEqual(80 + 1e-6);
-  expect(atTop.camera?.elevationDegrees ?? 0).toBeGreaterThan(79);
-  measure('keyboardElevationClampHigh', atTop.camera?.elevationDegrees ?? Number.NaN);
+  // ---- the other direction, same single keydown, same duration ----
+  const leftFrom = await snapshotOf(page);
+  await page.keyboard.down('ArrowLeft');
+  await page.waitForTimeout(500);
+  const leftTo = await snapshotOf(page);
+  await page.keyboard.up('ArrowLeft');
+  const leftDelta = azimuthDeltaDegrees(leftFrom.camera?.azimuthDegrees ?? 0, leftTo.camera?.azimuthDegrees ?? 0);
+  expect(leftDelta, 'ArrowLeft must increase the azimuth while held').toBeGreaterThan(15);
+  measure('keyboardDeltaLeftHeld500ms', leftDelta);
+  expect(Math.abs(leftDelta + holdDelta), 'the keyboard axis is not mirrored').toBeLessThan(6);
 
-  for (let press = 0; press < 80; press += 1) await page.keyboard.press('ArrowDown');
-  const atBottom = await snapshotOf(page);
-  expect(atBottom.camera?.elevationDegrees ?? 999).toBeGreaterThanOrEqual(10 - 1e-6);
-  expect(atBottom.camera?.elevationDegrees ?? 0).toBeLessThan(11);
-  measure('keyboardElevationClampLow', atBottom.camera?.elevationDegrees ?? Number.NaN);
-  expectFiniteCamera(atBottom);
+  // ---- pitch, held to both bounds ----
+  const top = await holdKeyTo(page, 'ArrowUp', (elevation) => elevation >= 79.9, 8000);
+  expect(top.elevation, `ArrowUp did not reach the ceiling (stopped at ${top.elevation.toFixed(2)}°)`).toBeGreaterThan(79.5);
+  expect(top.elevation, `ArrowUp passed the ceiling: ${top.elevation.toFixed(2)}°`).toBeLessThanOrEqual(80 + 1e-6);
+  measure('keyboardElevationClampHigh', Number(top.elevation.toFixed(4)));
 
-  // The keys this handler consumes are the only ones it suppresses, and suppressing them must not scroll the page.
+  const bottom = await holdKeyTo(page, 'ArrowDown', (elevation) => elevation <= 10.1, 8000);
+  expect(bottom.elevation, `ArrowDown did not reach the floor (stopped at ${bottom.elevation.toFixed(2)}°)`).toBeLessThan(10.5);
+  expect(bottom.elevation, `ArrowDown passed the floor: ${bottom.elevation.toFixed(2)}°`).toBeGreaterThanOrEqual(10 - 1e-6);
+  measure('keyboardElevationClampLow', Number(bottom.elevation.toFixed(4)));
+  expectFiniteCamera(bottom.snapshot);
+
+  // The keys this handler consumes must not scroll the page either.
   expect(await page.evaluate(() => window.scrollY), 'arrow keys scrolled the page').toBe(scrollBefore);
 
-  // Blur stops keyboard motion dead: the steps counter freezes, and the camera does not move.
-  const beforeBlur = await snapshotOf(page);
+  // ---- blur stops it, with the key still physically down ----
+  await canvas.focus();
+  const beforeDown = await snapshotOf(page);
+  await page.keyboard.down('ArrowRight');
+  await page.waitForTimeout(150);
+  const midHold = await snapshotOf(page);
+  expect(
+    midHold.app.cameraKeyFrames,
+    'the key was not driving the camera before the blur, so the stop below would prove nothing',
+  ).toBeGreaterThan(beforeDown.app.cameraKeyFrames);
   await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
-  for (let press = 0; press < 20; press += 1) await page.keyboard.press('ArrowRight');
+  const atBlur = await snapshotOf(page);
+  await page.waitForTimeout(350);
   const afterBlur = await snapshotOf(page);
-  expect(afterBlur.app.cameraKeySteps, 'a key press reached the camera with the canvas unfocused').toBe(
-    beforeBlur.app.cameraKeySteps,
-  );
-  for (const field of ['azimuthDegrees', 'elevationDegrees', 'radiusMeters'] as const) {
-    expect(
-      afterBlur.camera?.[field] ?? Number.NaN,
-      `the camera moved with focus outside the canvas (${field})`,
-    ).toBeCloseTo(beforeBlur.camera?.[field] ?? Number.NaN, 6);
-  }
+  expect(
+    afterBlur.camera?.azimuthDegrees ?? Number.NaN,
+    'the camera kept turning after the canvas lost focus, with the key still down',
+  ).toBeCloseTo(atBlur.camera?.azimuthDegrees ?? Number.NaN, 6);
+  expect(afterBlur.app.cameraKeyFrames, 'held keys survived the canvas blur').toBe(atBlur.app.cameraKeyFrames);
+  await page.keyboard.up('ArrowRight');
 
-  // Focus on a real control: the arrows belong to that control and to the page, not to the camera.
+  // ---- focus elsewhere: the same keys belong to that control ----
   await canvas.focus();
   await page.keyboard.press('Tab');
   expect(await page.evaluate(() => document.activeElement?.tagName ?? '')).toBe('BUTTON');
   const onButton = await snapshotOf(page);
-  for (let press = 0; press < 10; press += 1) await page.keyboard.press('ArrowLeft');
-  const afterButtonKeys = await snapshotOf(page);
-  expect(afterButtonKeys.app.cameraKeySteps, 'the camera consumed arrow keys aimed at a button').toBe(
-    onButton.app.cameraKeySteps,
-  );
-  expect(afterButtonKeys.camera?.azimuthDegrees ?? Number.NaN).toBeCloseTo(
+  await page.keyboard.down('ArrowLeft');
+  await page.waitForTimeout(350);
+  const afterButton = await snapshotOf(page);
+  await page.keyboard.up('ArrowLeft');
+  expect(afterButton.app.cameraKeySteps, 'the camera accepted a keydown aimed at a button').toBe(onButton.app.cameraKeySteps);
+  expect(afterButton.app.cameraKeyFrames, 'the camera moved on keys aimed at a button').toBe(onButton.app.cameraKeyFrames);
+  expect(afterButton.camera?.azimuthDegrees ?? Number.NaN).toBeCloseTo(
     onButton.camera?.azimuthDegrees ?? Number.NaN,
     6,
   );
 
-  // And with focus back on the canvas, the same keys move it again — proof that the freeze above was about focus
-  // rather than about the keyboard being wired to nothing at all.
+  // ---- and with focus back, the same keys move again: the two refusals above were about focus ----
   await canvas.focus();
-  expect(
-    await page.evaluate(() => document.activeElement?.hasAttribute('data-udg-scene') ?? false),
-    'the canvas could not be refocused',
-  ).toBe(true);
   const refocused = await snapshotOf(page);
-  for (let press = 0; press < 10; press += 1) await page.keyboard.press('ArrowRight');
-  const afterRefocus = await snapshotOf(page);
-  expect(afterRefocus.app.cameraKeySteps).toBeGreaterThan(refocused.app.cameraKeySteps);
+  await page.keyboard.down('ArrowRight');
+  await page.waitForTimeout(300);
+  const movedAgain = await snapshotOf(page);
+  await page.keyboard.up('ArrowRight');
+  expect(movedAgain.app.cameraKeyFrames, 'the keyboard stopped working after the focus round trip').toBeGreaterThan(
+    refocused.app.cameraKeyFrames,
+  );
   expect(
-    azimuthDeltaDegrees(refocused.camera?.azimuthDegrees ?? 0, afterRefocus.camera?.azimuthDegrees ?? 0),
-    'the keyboard stopped working after the focus round trip',
-  ).toBeLessThan(-10);
-  measure('keyboardStepsTotal', afterRefocus.app.cameraKeySteps);
+    azimuthDeltaDegrees(refocused.camera?.azimuthDegrees ?? 0, movedAgain.camera?.azimuthDegrees ?? 0),
+    'the camera did not resume moving when the canvas was refocused',
+  ).toBeLessThan(-5);
+  measure('keyboardFramesTotal', movedAgain.app.cameraKeyFrames);
 });
+
+/**
+ * Hold one key until `reached` accepts the current elevation, or fail the wait budget. Returns the last snapshot
+ * read while the key was still down, so a bound can be asserted on the frame that hit it rather than on whatever
+ * the release happened to leave behind.
+ */
+const holdKeyTo = async (
+  page: Page,
+  key: 'ArrowUp' | 'ArrowDown',
+  reached: (elevationDegrees: number) => boolean,
+  budgetMs: number,
+): Promise<{ elevation: number; snapshot: Awaited<ReturnType<typeof snapshotOf>> }> => {
+  await page.keyboard.down(key);
+  const deadline = Date.now() + budgetMs;
+  let latest = await snapshotOf(page);
+  while (Date.now() < deadline && !reached(latest.camera?.elevationDegrees ?? -1)) {
+    await page.waitForTimeout(50);
+    latest = await snapshotOf(page);
+  }
+  const elevation = latest.camera?.elevationDegrees ?? -1;
+  await page.keyboard.up(key);
+  return { elevation, snapshot: latest };
+};
