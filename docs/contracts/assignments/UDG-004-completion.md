@@ -9,10 +9,12 @@ being left blank by accident.
 ```text
 Task ID and final implementation SHA:
   UDG-004 Browser client and camera.
-  Submitted head      0ad8d9e9f57d98242e62b390f92bda54acfa755f (pushed to main) — the head the acceptance
-                      evidence below describes, the head CI run 43770588357 is green on, and the head whose
-                      camera artefacts are stamped `implementationSha: 0ad8d9e9…` with
-                      `workingTreeDirty: false`.
+  Submitted head      2d2be8646ad4ab7caa17637d10bdf553a20ce313 (pushed to main) — the head the acceptance
+                      evidence below describes, the head CI run 43852121401 is green on, and the head whose
+                      camera artefacts are stamped `implementationSha: 2d2be864…` with
+                      `workingTreeDirty: false`. It is `0ad8d9e9f57d…` plus the one camera-direction change the
+                      reviewer's Mac test asked for; the head before that change keeps its own green run,
+                      43770588357, and its own bundle, both named below.
   First submission    2e9184b3a701e351b53c139ff68b312913de8feb — the head the reviewer's first CI look
                       should include, because it went RED: CI run 43764611170 failed one of seven browser
                       cases. That commit, its run and the diagnosis are retained below under "The red
@@ -23,6 +25,10 @@ Task ID and final implementation SHA:
                       0ad8d9e fix(client) — the chromium build read from Playwright rather than from an
                       environment variable a GitHub runner does not set, and UDG-004's artefact gates made
                       absent-aware so they cannot turn another task's acceptance bundle red
+                      727cb86, c0bb0c9, e889526 docs — the record itself: completion record, committed evidence
+                      summary, the Mac-route correction to the published-port mapping, and the W-7 analysis
+                      2d2be86 fix(client) — horizontal orbit reversed for mouse drags only; the one-finger touch
+                      orbit keeps its direction, and the orbit case asserts signed azimuth deltas
   Record set          this file plus the status pages that move with it (README.md,
                       docs/contracts/UDG-004.md, docs/contracts/adoption.md, checksums.json). A commit
                       cannot quote its own SHA or its own CI run, so those two are named by the handoff
@@ -207,13 +213,22 @@ Acceptance thresholds and measured results:
   inside UDG-004's own capture.
 
 Raw evidence directory and integrity result:
-  CI capture (authoritative): `UDG-004-2026-11-15T23-21-30-673Z-0ad8d9e9` inside run 43770588357's
+  CI capture at the submitted head (authoritative): `UDG-004-2026-11-16T11-55-52-843Z-2d2be864` inside run
+  43852121401's `udg-evidence` artefact, retained at
+  `/workspace/udg-evidence/ci-run-43852121401/UDG-004-2026-11-16T11-55-52-843Z-2d2be864` — re-verified here
+  **PASS, 0 issues**, and the committed summary
+  [UDG-004-evidence.json](UDG-004-evidence.json) is generated from **this** bundle. Two further record-commit
+  captures are retained beside it for completeness: `UDG-004-2026-11-16T00-29-14-503Z-c0bb0c9a`
+  (`/workspace/udg-evidence/ci-run-43778967831/`) and `UDG-004-2026-11-16T08-50-02-811Z-e8895261`
+  (`/workspace/udg-evidence/ci-run-43832089262/`), both PASS, 0 issues.
+
+  CI capture at the previous head: `UDG-004-2026-11-15T23-21-30-673Z-0ad8d9e9` inside run 43770588357's
   `udg-evidence` artefact, retained at
   `/workspace/udg-evidence/ci-run-43770588357/UDG-004-2026-11-15T23-21-30-673Z-0ad8d9e9` — 35 files hashed,
   `pnpm evidence:verify` → **PASS, 0 issues** after the copy, beside the CI captures of UDG-001, UDG-002 and
   UDG-003 from the same job. The committed summary
   [UDG-004-evidence.json](UDG-004-evidence.json) is generated from **that** bundle, not from a local one.
-  Local capture, same head: `UDG-004-2026-11-15T22-37-36-275Z-0ad8d9e9` — status PASS, 34 files hashed,
+  Local capture at that earlier head: `UDG-004-2026-11-15T22-37-36-275Z-0ad8d9e9` — status PASS, 34 files hashed,
   `pnpm evidence:verify` → PASS, 0 issues, retained at
   `/workspace/udg-evidence/local-capture-2026-11-15/UDG-004-2026-11-15T22-37-36-275Z-0ad8d9e9` (existing
   store only; **D4 remains open and unprovisioned**, so no new archive, bucket or remote was created).
@@ -243,7 +258,28 @@ The red submission, kept because a correction that erases its own history is not
   first submission's screenshot and trace are inside that run's artefact on GitHub).
 
 CI result:
-  Run 43770588357, workflow `ci`, event push, head 0ad8d9e9f57d98242e62b390f92bda54acfa755f.
+  **Current head 2d2be8646ad4ab7caa17637d10bdf553a20ce313 — run 43852121401, workflow `ci`, event push.**
+
+  * **Attempt 3: completed / success.** Camera suite green, `pnpm test` green (615 tests, 0 failures), all four
+    capture bundles verified. The UDG-004 bundle is `UDG-004-2026-11-16T11-55-52-843Z-2d2be864`, retained at
+    `/workspace/udg-evidence/ci-run-43852121401/` and re-verified here: **PASS, 0 issues**. Inside it
+    `camera-browser-results.json` carries the direction measurements the reviewer asked for, measured on the
+    runner: `mouseDragRightAzimuthDelta +68.755°`, `mouseDragLeftAzimuthDelta −68.755°`,
+    `touchDragRightAzimuthDelta −68.755°`, `touchDragLeftAzimuthDelta +68.755°`,
+    `mouseInvertedAgainstTouch true`, `mouseDragDownElevationDelta +20.626°`, with the bounds, UI exclusion and
+    pose-write numbers unchanged (`10`/`80`, `2`/`20`, 2 regions ignored, 0 pose writes) and
+    `chromium-1254`. Those values live in the artefact rather than in `measurements/UDG-004.json` on purpose: no
+    capture-plan threshold was added for the direction, so nothing in the plan reads them, and the file is hashed
+    into `checksums.sha256` either way.
+  * **Attempt 1: failed** at `Run the unit and Node integration suites` on UDG-003's `W-7`, the same
+    nondeterministic probe described further down; the camera suite and every step before it were green.
+  * **Attempt 2: failed** at `Capture the evidence bundles`, and it is the most informative of the three: the
+    job's own `pnpm test` passed `W-7`, but **UDG-003's capture** ran its own `pnpm test` and hit `W-7` inside
+    itself, so its bundle recorded `EVIDENCE-GATE-NOT-PASS` and the capture loop stopped **before UDG-004's bundle
+    was written**. UDG-001's and UDG-002's bundles from that attempt verified PASS. Nothing about the camera change
+    was implicated in any of the three attempts.
+
+  **Previous head 0ad8d9e9f57d98242e62b390f92bda54acfa755f — run 43770588357.**
 
   * **Attempt 2: completed / success.** Every step green, including the camera suite, `pnpm test` (615 tests,
     0 failures/errors/skipped), the UDG-004 task suite, all four evidence captures and all four bundle
@@ -299,10 +335,14 @@ CI result:
     described above) and `43766691106` (head `1100233`, `chromiumBuild: unknown` plus UDG-004 tests failing
     inside UDG-001's and UDG-002's captures) — are kept for the same reason. All three are linked below.
 
-  Acceptance head: `0ad8d9e9f57d98242e62b390f92bda54acfa755f` — **green on run 43770588357 attempt 2**, and the
-  evidence above comes from that run. The record commit that follows it is docs-only, and its run is red at W-7 as
-  described. A reviewer who re-runs `main` should expect the same nondeterminism until W-7 is dealt with.
+  Acceptance head: `2d2be8646ad4ab7caa17637d10bdf553a20ce313` — **green on run 43852121401 attempt 3**, and the
+  evidence above comes from that run; the head before the direction change, `0ad8d9e`, is green on run 43770588357
+  attempt 2. A reviewer who re-runs `main` should expect the same nondeterminism at W-7 until UDG-003 deals with it:
+  five attempts across three runs have gone red there, and each green has arrived on a later attempt.
 
+  https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43852121401 — success (attempt 3; attempts 1 and 2 red at W-7)
+  https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43832089262 — success (record commit e889526)
+  https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43778967831 — success (record commit c0bb0c9)
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43775706274 — failure at UDG-003's W-7 (record commit 727cb86)
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43770588357 — success (attempt 2)
   https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43766691106 — failure, fixed by 0ad8d9e
@@ -406,7 +446,7 @@ provisioning snippet is idempotent.
 
 ```sh
 cd /workspace/UntitledDinosaurGame
-git rev-parse HEAD                       # 0ad8d9e9f57d98242e62b390f92bda54acfa755f or its record successors
+git rev-parse HEAD                       # 2d2be8646ad4ab7caa17637d10bdf553a20ce313 or its record successors
 export PATH="$HOME/.local/node-v24.22.2-linux-arm64/bin:$HOME/.local/bin:$PATH"
 UDG_DEV_HOST=0.0.0.0 VITE_UDG_SERVER_URL=ws://127.0.0.1:2567 pnpm dev
 ```
@@ -495,6 +535,10 @@ The added assertions name the sign for mouse-right, mouse-left, touch-right and 
 drags to be mirror images (`|Δright + Δleft| < 2°`, measured 0.000°), and require the mouse and the touch to
 disagree (`Math.sign(mouseRight) === −Math.sign(touchRight)`). A regression that silently re-unifies the two
 devices, or inverts touch along with the mouse, fails the suite.
+
+**Where it landed.** `2d2be8646ad4ab7caa17637d10bdf553a20ce313`, green on hosted CI run 43852121401 attempt 3, with
+the CI bundle named under "Raw evidence directory". The attempts that went red at W-7 before that green are named
+there too, so the rerun history is visible rather than implied.
 
 **What was preserved, with the number that says so.** Elevation still clamps at **10°** and **80°**; radius still
 clamps at **2 m** and **20 m** by wheel and by pinch; UI-origin gestures are still ignored (**2** regions tested,

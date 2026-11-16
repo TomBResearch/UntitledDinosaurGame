@@ -16,7 +16,7 @@ physics and rendering behaviour still do not exist and validation Gates A, B and
 unassigned** — and [UDG-004](docs/contracts/UDG-004.md) is **implemented and submitted for review**
 ([assignment record](docs/contracts/assignments/UDG-004.md),
 [completion record](docs/contracts/assignments/UDG-004-completion.md) at
-`0ad8d9e9f57d98242e62b390f92bda54acfa755f` with [CI run 43770588357](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43770588357)
+`2d2be8646ad4ab7caa17637d10bdf553a20ce313` with [CI run 43852121401](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43852121401)
 green): the browser client, its camera controls and its browser evidence suite exist and run, and reviewer
 acceptance is pending. Every task after them stays
 unassigned. Refinements P04, P05 and P07 to P10 remain pending (P03 was approved 2026-11-09).
