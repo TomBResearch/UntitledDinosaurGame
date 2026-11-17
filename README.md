@@ -20,14 +20,15 @@ server-authoritative pose and no asset pipeline — the failed-asset-load check 
 **carried forward to UDG-007**, untested rather than passed. Game movement, networking and physics behaviour still
 do not exist and validation Gates A, B and C have not run.
 [UDG-003](docs/contracts/UDG-003.md) is **In Progress** — Phases 0 to 2 accepted at phase level, **Phase 3
-unassigned** — and its `W-7` suite nondeterminism stays tracked there, not against UDG-004. Every task after
+assigned 2026-11-17 (Ready, implementation unstarted; work begins only on the owner's build instruction)** —
+and its `W-7` suite nondeterminism stays tracked there, not against UDG-004. Every task after
 UDG-004 stays unassigned. Refinements P04, P05 and P07 to P10 remain pending (P03 was approved 2026-11-09).
 The planning contracts and their [adoption status](docs/contracts/adoption.md) remain the authority for what may be built next.
 
 ## Start here
 
 - **For an agent:** read [AGENTS.md](AGENTS.md), then the specific [task contract](docs/contracts/README.md) you are assigned. Each task links only to the shared rules it needs.
-- **For the project owner:** review [adoption status](docs/contracts/adoption.md). P01, P02, P03 and P06 are approved (P02 with clarifications U2-1 to U2-6 and ADR 0001); P04, P05 and P07 to P10 remain pending. UDG-003 is In Progress with Phase 3 unassigned, UDG-004 is **Verified** (accepted 2026-11-16), and every task after it stays Not Started.
+- **For the project owner:** review [adoption status](docs/contracts/adoption.md). P01, P02, P03 and P06 are approved (P02 with clarifications U2-1 to U2-6 and ADR 0001); P04, P05 and P07 to P10 remain pending. UDG-003 is In Progress with Phase 3 **assigned, Ready and unstarted**, UDG-004 is **Verified** (accepted 2026-11-16), and every task after it stays Not Started.
 - **For the current project plan:** read the [plan and version guide](docs/specifications/README.md). The [M0 Technical Specification v0.2](docs/specifications/UDG-SPEC-M0-002.md) is the current architecture baseline; the v1.0 agent contracts elaborate it into work packages.
 
 ## Repository map
@@ -164,7 +165,8 @@ submission drew four corrections, and the corrected head was accepted with
 [run 42627324928](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42627324928) green on the reviewed submission. Its own CI history — two red runs,
 a green first submission and a green accepted submission — is recorded in
 [the UDG-002 completion record](docs/contracts/assignments/UDG-002-completion.md). P04, P05 and P07
-to P10 remain pending and Gates A, B and C remain Not Run; UDG-003 is In Progress with Phase 3 unassigned
+to P10 remain pending and Gates A, B and C remain Not Run; UDG-003 is In Progress with Phase 3 **assigned on
+2026-11-17, Ready and unstarted**
 and UDG-004 was accepted on 2026-11-16 at `d318444`, so nothing beyond those two is assigned and no implementation for
 either has been accepted beyond what those records describe; the local reproduction of the identical command sequence and every CI bundle are retained and verified —
 including the runs that went red, which are named rather than removed.

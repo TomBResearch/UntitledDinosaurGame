@@ -1,12 +1,20 @@
-# UDG-003 Phase 3 assignment **draft** — abuse, evidence, CI, the `W-7`/`P-2b` suite defect, and the task-level submission — **assigns nothing**
+# UDG-003 Phase 3 assignment **draft** — abuse, evidence, CI, the `W-7`/`P-2b` suite defect, and the task-level submission — **SUPERSEDED — assigns nothing**
+
+> **Superseded 2026-11-17 (dated by commit).** The owner's finalisation instruction turned this draft into the
+> [UDG-003 Phase 3 assignment record](UDG-003-phase-3.md), on implementation baseline
+> `eafe306578b64be37e6fd93a8b9f301ab3e43cf6` (run `43965274365`, success). This file is retained for its
+> measurement history, its §0 owner directions and its dated §0 addenda — including the two unclassified
+> red runs of the publication sitting, which the record carries forward unclassified. Where this draft and the
+> record differ, **the record governs**. The record adds the D-P3-4 selector/verifier/CI-timing/runtime ruling
+> and the finalised D-P3-9 repeatability terms; nothing in this file governs implementation.
 
 Task ID: `UDG-003` — phase `3` of `3`
-Status: **Published draft. The owner approved the Phase 3 scope in principle and directed publication of this
-draft pinned to `eb0fdf84da9494dd515b6e42969c86b773008c81` (§0). That authorises planning and publication only:
-Phase 3 remains unassigned and implementation unstarted. This file grants no path, moves no status field, adopts
-no refinement, passes no gate and creates no source file.** On a further explicit owner instruction it becomes
-the pinned assignment record `UDG-003-phase-3.md`, re-pinned to the `main` head of that moment — which today is
-this same commit; `origin/main` was confirmed at `eb0fdf8…` before publication, so no re-pin difference exists
+Status before supersession: **Published draft. The owner approved the Phase 3 scope in principle and directed publication of this
+draft pinned to `eb0fdf84da9494dd515b6e42969c86b773008c81` (§0). That authorised planning and publication only:
+Phase 3 was unassigned and implementation unstarted. This file granted no path, moved no status field, adopted
+no refinement, passed no gate and created no source file.** On a further explicit owner instruction it became
+the pinned assignment record `UDG-003-phase-3.md`, re-pinned to the `main` head of that moment — which was
+this same commit; `origin/main` was confirmed at `eb0fdf8…` before publication, so no re-pin difference existed
 to report — exactly as the [Phase 2 record](UDG-003-phase-2.md) superseded
 [its own draft](UDG-003-phase-2-assignment-draft.md).
 

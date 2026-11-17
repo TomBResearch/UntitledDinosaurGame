@@ -781,3 +781,28 @@ Baseline SHA-256: `b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73
 The baseline is [M0 Technical Specification v0.2](../specifications/UDG-SPEC-M0-002.md). The [current plan and version guide](../specifications/README.md) distinguishes that architecture baseline from these v1.0 agent contracts. Restoring the baseline and clarifying navigation on 7 November 2026 does not change the pending decisions above, assign implementation work or pass a gate.
 
 The [contract checksum manifest](checksums.json) identifies this edition's planning files. Future approvals pin a Git commit and manifest digest rather than claiming an unchanged bundle after edits. Task assignment and completion records are outside this edition's immutable manifest; they must pin their own reviewed commits.
+
+## UDG-003 Phase 3 assignment recorded (dated by commit)
+
+The integration owner instructed: *"Finalise the UDG-003 Phase 3 assignment from draft `eafe3065…`, with Pi as
+implementer and me (`TomBResearch`) as reviewer. Use that green commit as the implementation baseline if it is
+still current… This authorises the assignment; leave Phase 3 implementation unstarted pending my build
+instruction."* (The message carries no independently verifiable timestamp, so the decision is dated by the
+commit carrying this record — the basis already used for the Phase 1, M-1, D-7, D-8, Phase 2 and UDG-004
+records.) **UDG-003 Phase 3 is assigned and Ready with implementation not started**: nothing here writes
+source, moves a plan, starts a suite or passes a gate; the record is a docs-only change.
+
+| Item | Recorded state |
+| --- | --- |
+| Record | [assignments/UDG-003-phase-3.md](assignments/UDG-003-phase-3.md); the [published draft](assignments/UDG-003-phase-3-assignment-draft.md) is **superseded**, retained for its §0 directions, its measurement history and its dated addenda; where they differ, the record governs |
+| Record commit | the commit carrying this entry; its 40-character sha and the CI run covering that head are named in the records commit that follows — a commit cannot contain its own hash |
+| Implementer / reviewer | **Pi** implements; **`TomBResearch`** reviews as integration owner; the implementer authors no approval and passes no gate; work begins **only** on the owner's separate build instruction |
+| Implementation baseline | `eafe306578b64be37e6fd93a8b9f301ab3e43cf6` — re-confirmed current at finalisation (`origin/main` had not moved); CI [43965274365](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/43965274365) **success**; the records head of the draft publication, implementation tree byte-identical to `70f6d17…` (CI `43947298628`, success on the first attempt). A later `main` head is re-pinned by the owner at start |
+| D-P3-1…D-P3-9 | recorded in the record's §1. Decided: the assignment itself; the shared-tooling turn (Phase 3 next after UDG-004, second-lander re-runs of both task suites and the camera suite on the integrated head); the `W-7` remedy class (option (i) — fix inside UDG-003's own suite as W-A); the harness grant, **bounded to instrumenting and fixing a demonstrated cause**; the repeatability check — **ten consecutive passes per defect under a declared load and test order (declared before the streak, results retained) plus a first-attempt hosted green on the exact submission**; **D-P3-4 ruled**: a separate whole-task capture with selector `UDG-003-TASK`, content-driven verifier selection (`report.json phase: "task"` → the new plan; every historical bundle resolves exactly as today), CI capture from the W-C landing commit on every run appended to the existing plans loop, and the added CI runtime stated up front (baseline measured: 24.6 min job / 16.6 min capture step over four plans; expected ≈29–30 min, measured delta reported). **Open**: D4 (undesignated), Gate A execution, GA-11, GA-12/PE-1…PE-5 |
+| Preserved | the existing `UDG-003` phase capture plan stays byte-identical with its pinned digest; historical bundles, manifests and inventories are never rewritten and keep verifying (U2-1, E-6′); recovery deadlines, retry limits, close codes and every accepted guarantee are untouched by W-A in advance of any fix |
+| `W-7`, honestly tallied | the nine hosted reds across seven runs stay as recorded; the two new reds of the publication sitting — `43956003339` (test step) and `43962098658` (capture gate) on docs-only heads byte-identical to the green baseline — are recorded **unclassified**: shape-consistent with `W-7`/`P-2b`, asserted as nothing until logs or retained evidence name the failing assertion. `W-7` and `P-2b` stay **separate diagnoses** under W-A |
+| Unchanged | **Gate A, B and C remain Not Run**; deduplication-triggered closure **disabled**; **D4 open**, nothing provisioned; `stackCompatibility` **not-established**; Part B **unadopted**; no protocol, config-value or dependency-pin change; UDG-005…UDG-SPIKE-003 stay unassigned; UDG-003 as a whole stays **In Progress** |
+
+This assigns Phase 3 and nothing else; it authorises no implementation, accepts nothing, passes no gate, and
+**work begins only on the owner's separate build instruction**. If `main` has moved by then, the record
+requires re-pinning and a fresh green CI run before any code.
