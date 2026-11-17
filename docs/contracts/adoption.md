@@ -813,14 +813,29 @@ UDG-003 **Phase 3** was implemented and **submitted for review** by **Pi** (impl
 **TomBResearch** as reviewer. Record:
 [assignments/UDG-003-phase-3-submission.md](assignments/UDG-003-phase-3-submission.md); W-A diagnosis:
 [assignments/evidence/UDG-003-phase-3-wa-diagnosis.md](assignments/evidence/UDG-003-phase-3-wa-diagnosis.md).
-Submitted head: the records commit carrying this entry; the ten W-A iterations ran on
-`142b08097a4210378e68a8420409a5aaedf468ac`, and the follow-up records commit names both explicitly.
+Submitted head `f3d30626525688e8971c8c393552c91c9624d032`, whose first hosted attempt
+[`44183269571`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44183269571) was green
+(30 steps, no failures, no skips, 34.6 min against a 24.6 min baseline — the added whole-task capture costs
+≈8.5 hosted minutes, roughly twice the estimate carried in the assignment). The ten W-A iterations ran on
+`142b08097a4210378e68a8420409a5aaedf468ac`, seven record files later.
 
 What it is: the W-A defect diagnosis (two defects, kept separate; **no harness change**, because neither
 cause was demonstrated), the per-assertion audit of the 84 accepted assertions with falsification controls,
 the declared-load ten-pass streak, a task-level reading of the abuse/offender/buffer evidence, and a second
 capture selector `UDG-003-TASK` that captures and gates the whole task in one bundle while the accepted
 `UDG-003` phase plan stays byte-identical.
+
+What happened next is in the same records, because a **records-only push eleven minutes later went red**
+(`44191978254`) and was classified from the run's own evidence artifact rather than argued about: `W-7` fired
+live — message `expected 1 to be +0`, in the fifth of the job's five suite invocations, inside `UDG-004`'s
+capture bundle, the other four bundles clean — and two further reds were **Phase 3's own controls**, which had
+been written to require the live impairment artefact to audit clean. That third defect (WA-5) amplified the
+one this phase was sent to diagnose, and is fixed in the head carrying this entry: controls moved onto a
+pinned known-clean artefact, the live artefact is now audited and *reported* rather than required, and
+`tests/system/udg-003-phase-3/wa-no-amplification.test.ts` fails if the dependency ever returns. `W-7` and
+`P-2b` remain **unresolved**, no accepted assertion, deadline, allowance, close code or harness behaviour was
+changed, and the phase's assertions are proposed for the reviewer rather than taken: accept the second
+refusal wording, pin the post-close samples, or point the case's artefact into the bundle (W-A-3).
 
 What it is not: an acceptance, a gate, or a fix. Gate A remains **Not Run**, GA-11 is unevaluated,
 deduplication-triggered closure stays **disabled**, `stackCompatibility` stays not-established, decision **D4

@@ -1,0 +1,3325 @@
+{
+  "taskId": "UDG-003",
+  "phase": "phase-2",
+  "criterion": [
+    "W-10",
+    "GA-11",
+    "GA-6a",
+    "GA-6b",
+    "GA-6c",
+    "GA-6c-episode-deadline",
+    "GA-7"
+  ],
+  "producer": "tests/runtime/udg-003-phase-2/impairment-population.ts",
+  "statement": "W-10 as amended (OD-2): RTT, jitter, application-layer delivery loss and arrival-phase populations over a real WebSocket round trip, with the loopback baseline reported separately. Phase 2 records the populations; evaluating the two GA-11 inequalities and selecting production values belong to UDG-SPIKE-001. The `ga6Ga7` section is P-2b, reopened for the Phase 2 harness only (owner, 2026-11-14): GA-6a/6b/6c and GA-7 exercised against the live room at the declared test values, with the production client machine left in UDG-008 and the formal Gate A execution in UDG-SPIKE-001.",
+  "impairmentLayer": {
+    "name": "application-layer delivery impairment (tests/support/client-harness/impairment.mjs)",
+    "impairmentSource": "harness",
+    "seam": "room.connection.transport.send (outbound) and room.connection.events.onmessage (inbound), wrapped per seat after the join — the pinned SDK's own paths (@colyseus/sdk 0.18.9 Room.mjs:126-127, Connection.mjs:36, transport/WebSocketTransport.mjs:79)",
+    "noProxyAndNoNewDependency": "a relay would need `ws`, which pnpm does not expose to apps/server (transitive-only in pnpm-lock.yaml); the wrapper adds nothing to the dependency set",
+    "streamDurationMs": 3213.775619,
+    "framesPerSeat": 40,
+    "frameIntervalMs": 50,
+    "imposedDelayMs": 40,
+    "imposedJitterMs": 20,
+    "envelope": "hashed defaults; only the region bounds are declared, and they move no envelope number",
+    "seats": [
+      {
+        "label": "baseline",
+        "purpose": "unarmed control: the loopback round trip this run actually has, published separately from every imposed figure",
+        "armed": false,
+        "options": {}
+      },
+      {
+        "label": "imposed-delay",
+        "purpose": "RTT and jitter populations under 40 ms imposed each way with 20 ms of deterministic jitter",
+        "armed": true,
+        "options": {
+          "forwardDelayMs": 40,
+          "inboundDelayMs": 40,
+          "inboundJitterMs": 20,
+          "seed": 20261113
+        }
+      },
+      {
+        "label": "withheld-deliveries",
+        "purpose": "loss population: named deliveries withheld in flight, later deliveries allowed through",
+        "armed": true,
+        "options": {
+          "dropOutboundAt": [
+            3,
+            7,
+            12,
+            18
+          ],
+          "seed": 7
+        }
+      },
+      {
+        "label": "delivery-stall",
+        "purpose": "patches withheld for 350 ms while the seat keeps streaming: what a seat observes during a stall, and nothing beyond it",
+        "armed": true,
+        "options": {
+          "seed": 11,
+          "inboundDelayMs": 0
+        }
+      }
+    ]
+  },
+  "pairingPolicy": {
+    "rule": "arrival latencies are published only where stamps and rows pair one-for-one; a seat that does not pair publishes `arrivalPairing` with both counts instead of a number averaged over a mismatch",
+    "unpairedSeats": []
+  },
+  "ga6Ga7": {
+    "why": "P-2b, reopened by the owner on 2026-11-14 for the Phase 2 test harness only. GA-6 and GA-7 ask for a client that acts on its own timer; the recovery rules live in tests/support/client-harness/recovery.ts and are driven here over the live room by the impairment layer, at the declared test values.",
+    "boundary": [
+      "GA-6a/6b/6c: exercised in the UDG-003 Phase 2 test harness at the declared test values (clientSnapshotDeadlineMs 500 ms, clientRecoveryDeadlineMs 4000 ms, rejoinWindowAllowance 2 per rolling window, closureMaxMs 1000 ms). The production client machine is UDG-008's; the formal Gate A execution is UDG-SPIKE-001's, and Gate A stays Not Run here.",
+      "GA-7: exercised in the UDG-003 Phase 2 test harness at the declared test values (clientSnapshotDeadlineMs 500 ms, clientRecoveryDeadlineMs 4000 ms, rejoinWindowAllowance 2 per rolling window, closureMaxMs 1000 ms). The production client machine is UDG-008's; the formal Gate A execution is UDG-SPIKE-001's, and Gate A stays Not Run here.",
+      "what is NOT claimed: that the production client behaves this way (UDG-008), that Gate A has run (it has not: UDG-SPIKE-001), or that the 500/4000 ms figures are production values — they are the hashed provisional values this phase runs on (D-P2-4)",
+      "the prediction limb is reported, not passed: the Phase 2 harness keeps no prediction buffer to discard, because building one would be UDG-008's production client. The policy's own discard-prediction event is observed and published; the production buffer is named as absent here"
+    ],
+    "envelope": {
+      "clientSnapshotDeadlineMs": 500,
+      "clientRecoveryDeadlineMs": 4000,
+      "rejoinWindowAllowance": 2,
+      "closureMaxMs": 1000,
+      "retirementCloseCode": 4100
+    },
+    "ga6a": {
+      "question": "patches stop while inputs are outstanding: does the deadline expire at the declared test value, does sending stop, and does recovery finish inside the budget?",
+      "stalled": true,
+      "trigger": "deadline",
+      "deadlineElapsedFromLastDeliveryMs": 501,
+      "declaredDeadlineMs": 500,
+      "sendsAttemptedAfterExpiryWhileGateAllowed": 0,
+      "rejoinAttempted": true,
+      "recoveryElapsedFromExpiryMs": 404,
+      "recoveryBudgetMs": 4000,
+      "recoveredEpoch": 6,
+      "epochBefore": 5,
+      "serverKeptConsumingThisSeat": true,
+      "predictionBuffer": "absent in the Phase 2 harness; the discard event is the policy's own and is published in the event list",
+      "events": [
+        {
+          "atMs": 4357,
+          "type": "INPUT_ACK_STALLED",
+          "trigger": "deadline"
+        },
+        {
+          "atMs": 4357,
+          "type": "stop-sending"
+        },
+        {
+          "atMs": 4357,
+          "type": "discard-prediction"
+        },
+        {
+          "atMs": 4614,
+          "type": "rejoin-attempt",
+          "rungMs": 250
+        }
+      ]
+    },
+    "ga6b": {
+      "question": "the server neither sends nor closes: does the client still recover on its own timer, with no server event to lean on?",
+      "stalled": true,
+      "trigger": "deadline",
+      "deadlineElapsedFromLastDeliveryMs": 503,
+      "socketOpenAtCheck": true,
+      "socketClosedDuring": 0,
+      "deliveriesBeforeSilence": 1,
+      "deliveriesAtCheck": 1,
+      "publicationsSilentlyDropped": 7,
+      "silenceWindowMs": 605,
+      "roomKeptConsumingThisSeat": true,
+      "rejoinAttempted": true,
+      "whyThisIsNotTheDropCase": "recovery-scenarios.ts reaches the same deadline through an unclean tear, where a dead socket is itself the server event. Here the socket never broke and the room went on consuming this seat's frames: the only thing that ended the silence was the client's own clock.",
+      "events": [
+        {
+          "atMs": 5361,
+          "type": "INPUT_ACK_STALLED",
+          "trigger": "deadline"
+        },
+        {
+          "atMs": 5361,
+          "type": "stop-sending"
+        },
+        {
+          "atMs": 5361,
+          "type": "discard-prediction"
+        },
+        {
+          "atMs": 5618,
+          "type": "rejoin-attempt",
+          "rungMs": 250
+        }
+      ]
+    },
+    "ga6c": {
+      "question": "a limit is reached: is the spent rolling allowance surfaced, and does the seat then stay stopped with no prediction and no sends?",
+      "actualRejoins": [
+        {
+          "epochBefore": 8,
+          "epochAfter": 8,
+          "rowReadableAfterRejoin": true,
+          "allowanceUsed": 1
+        },
+        {
+          "epochBefore": 8,
+          "epochAfter": 9,
+          "rowReadableAfterRejoin": true,
+          "allowanceUsed": 2
+        }
+      ],
+      "epochNote": "epochBefore is the epoch the seat held when the episode began; epochAfter is read from the rejoined room after its first patch, because a row read at the instant reconnect resolves has not arrived and would read as absent",
+      "allowance": 2,
+      "allowanceRefused": true,
+      "suspension": {
+        "atMs": 7370,
+        "type": "client-close",
+        "reason": "allowance-exhausted",
+        "code": 4102
+      },
+      "policyStateAfterSuspension": "closed",
+      "sendsWhileGateClosedAfterSuspension": 0,
+      "stateApplicationsAfterSuspension": 0,
+      "stillStopped": true,
+      "events": [
+        {
+          "atMs": 6366,
+          "type": "INPUT_ACK_STALLED",
+          "trigger": "deadline"
+        },
+        {
+          "atMs": 6366,
+          "type": "stop-sending"
+        },
+        {
+          "atMs": 6366,
+          "type": "discard-prediction"
+        },
+        {
+          "atMs": 6616,
+          "type": "rejoin-attempt",
+          "rungMs": 250
+        },
+        {
+          "atMs": 6873,
+          "type": "rejoin-attempt",
+          "rungMs": 500
+        },
+        {
+          "atMs": 7370,
+          "type": "allowance-refused",
+          "reason": "rolling-window"
+        },
+        {
+          "atMs": 7370,
+          "type": "client-close",
+          "reason": "allowance-exhausted",
+          "code": 4102
+        }
+      ]
+    },
+    "ga6cEpisodeDeadline": {
+      "whichLimit": "the 4000 ms recovery EPISODE deadline (clientRecoveryDeadlineMs 4000), not the 500 ms snapshot deadline and not the rolling rejoin allowance",
+      "question": "W-7: does the episode deadline expire while the seat still has no fresh authoritative snapshot, and does the client then stay stopped, surface its own connection error, and send nothing further?",
+      "threeLimitsDistinguished": {
+        "snapshotDeadline": {
+          "value": 500,
+          "whatItDid": "fired first, at 509 ms after the last accepted delivery, as INPUT_ACK_STALLED with trigger \"deadline\" — it OPENS the episode; it does not close the client",
+          "closedTheClient": false
+        },
+        "rollingRejoinAllowance": {
+          "value": 2,
+          "whatItDid": "never bound: 298 ladder attempts came due and none was carried out, so nothing was charged against the window and the policy emitted no \"allowance-refused\" event at all",
+          "closedTheClient": false,
+          "contrastWithTheAllowanceCase": "the allowance branch above closed with reason \"allowance-exhausted\" after 2 real rejoins; this one closes with \"episode-deadline\" and zero rejoins charged"
+        },
+        "episodeDeadline": {
+          "value": 4000,
+          "whatItDid": "closed the client at 4009 ms after the episode opened (4518 ms after the last accepted delivery), under INPUT_RECOVERY 4102",
+          "closedTheClient": true,
+          "reason": "episode-deadline"
+        }
+      },
+      "snapshotAbsence": {
+        "freshAuthoritativeSnapshotArrived": false,
+        "deliveriesReachingTheSeatDuringTheEpisode": 0,
+        "publicationsSwallowedAtTheWrapper": 61,
+        "stateApplicationsDuringTheEpisode": 0,
+        "resolvedThroughAtSilence": 2,
+        "resolvedThroughAtClose": 2,
+        "epochAtSilence": 11,
+        "epochAtClose": 11,
+        "rejoinsPerformedByTheHarness": 0,
+        "recoveryEvents": 0
+      },
+      "surfacedError": {
+        "event": {
+          "atMs": 14784,
+          "type": "client-close",
+          "reason": "episode-deadline",
+          "code": 4102
+        },
+        "code": 4102,
+        "closeCodeName": "INPUT_RECOVERY",
+        "expectedCode": 4102,
+        "reason": "episode-deadline",
+        "surfacedBy": "the client's own deadline — no server event was involved",
+        "serverClosedTheSeatAnywhereInThisCase": false,
+        "socketClosedDuringEpisode": 0,
+        "policyStateAtClose": "closed",
+        "policyStateAfter": "closed",
+        "note": "what is surfaced here is the client-side error record the frozen rules define (code + reason + a terminal `closed` state). The app-visible connection error a player sees is the production client's, and that is UDG-008's machine; GA-6c accepts a surfaced error OR a recorded suspended state, and both halves of that are published rather than described."
+      },
+      "stayedStopped": {
+        "sendingAllowedAtClose": false,
+        "sendingAllowedAfter": false,
+        "predictionDiscarded": true,
+        "ladderAttemptsAfterClose": 0,
+        "recoveriesAfterClose": 0
+      },
+      "noFurtherInput": {
+        "sendsAttemptedWhileGateWasConsulted": 0,
+        "transportSendsObservedAfterClose": 0,
+        "roomJournalledClientFramesAtClose": 3,
+        "roomJournalledClientFramesAfter": 3,
+        "roomJournalledRefusalsAtClose": 0,
+        "roomJournalledRefusalsAfter": 0,
+        "whyTheServerSideCount": "the harness's own gate refusing to send is a claim about the harness; the room journalling nothing more for this entity — no observation rows, no refusals — is the same claim checked on the side that would have to process them"
+      },
+      "roomSide": {
+        "ticksAtSilence": 199,
+        "ticksAfter": 320,
+        "keptRunning": true
+      },
+      "timing": {
+        "episodeAgeMs": 4009,
+        "episodeDeadlineMs": 4000,
+        "closeAfterLastDeliveryMs": 4518,
+        "snapshotDeadlineElapsedMs": 509,
+        "ladderAttemptsBeforeClose": 298,
+        "allowanceRefusedEventsBeforeClose": 0
+      },
+      "events": [
+        {
+          "atMs": 10775,
+          "type": "INPUT_ACK_STALLED",
+          "trigger": "deadline"
+        },
+        {
+          "atMs": 10775,
+          "type": "stop-sending"
+        },
+        {
+          "atMs": 10775,
+          "type": "discard-prediction"
+        },
+        {
+          "atMs": 11027,
+          "type": "rejoin-attempt",
+          "rungMs": 250
+        },
+        {
+          "atMs": 11282,
+          "type": "rejoin-attempt",
+          "rungMs": 500
+        },
+        {
+          "atMs": 11777,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11787,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11797,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11806,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11817,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11827,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11837,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11847,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11857,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11867,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11877,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11888,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11898,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11908,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11918,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11929,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11939,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11949,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11960,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11970,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11980,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 11990,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12000,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12011,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12021,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12031,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12041,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12051,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12061,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12071,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12081,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12091,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12101,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12112,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12122,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12132,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12142,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12153,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12163,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12173,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12184,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12194,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12204,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12214,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12224,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12234,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12244,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12254,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12264,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12274,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12284,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12294,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12304,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12314,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12324,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12334,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12344,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12354,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12364,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12374,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12384,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12394,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12404,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12414,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12424,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12434,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12444,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12454,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12464,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12474,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12485,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12495,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12505,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12515,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12526,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12535,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12545,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12555,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12565,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12576,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12586,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12597,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12607,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12617,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12627,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12637,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12647,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12657,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12669,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12679,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12689,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12699,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12709,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12719,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12729,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12739,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12749,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12759,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12770,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12779,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12789,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12799,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12809,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12819,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12829,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12839,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12849,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12859,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12869,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12879,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12889,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12899,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12909,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12920,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12930,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12940,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12950,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12960,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12970,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12980,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 12991,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13001,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13012,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13022,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13032,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13042,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13052,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13062,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13072,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13082,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13092,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13102,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13112,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13122,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13132,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13143,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13153,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13163,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13174,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13185,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13195,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13205,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13216,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13226,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13236,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13246,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13257,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13267,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13278,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13288,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13298,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13309,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13318,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13328,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13339,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13349,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13359,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13369,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13379,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13390,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13400,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13410,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13420,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13430,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13441,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13451,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13461,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13471,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13481,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13491,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13501,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13511,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13521,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13532,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13542,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13552,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13562,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13572,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13583,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13593,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13603,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13613,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13623,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13633,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13643,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13654,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13664,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13675,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13685,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13695,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13705,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13716,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13726,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13737,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13748,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13758,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13769,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13778,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13788,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13799,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13809,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13819,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13829,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13840,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13850,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13861,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13872,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13882,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13892,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13902,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13912,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13922,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13933,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13942,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13952,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13962,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13973,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13983,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 13993,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14003,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14014,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14024,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14034,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14045,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14055,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14065,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14075,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14085,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14095,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14106,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14116,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14126,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14136,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14147,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14157,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14167,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14177,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14188,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14198,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14209,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14219,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14229,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14239,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14249,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14259,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14269,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14279,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14290,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14299,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14309,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14319,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14329,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14339,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14349,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14359,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14369,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14380,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14390,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14400,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14411,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14421,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14431,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14441,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14451,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14461,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14471,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14481,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14491,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14501,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14511,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14521,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14531,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14541,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14551,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14561,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14571,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14582,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14592,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14602,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14612,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14622,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14632,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14642,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14652,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14663,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14674,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14684,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14694,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14704,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14714,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14724,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14735,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14744,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14754,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14764,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14775,
+          "type": "rejoin-attempt",
+          "rungMs": 1000
+        },
+        {
+          "atMs": 14784,
+          "type": "client-close",
+          "reason": "episode-deadline",
+          "code": 4102
+        }
+      ],
+      "controls": {
+        "episodeDeadlineExpiredWithNoFreshSnapshot": true,
+        "episodeDeadlineIsDistinctFromTheSnapshotDeadline": true,
+        "rollingAllowanceWasNotTheBindingConstraint": true,
+        "clientSurfacedItsOwnConnectionErrorAndStayedStopped": true,
+        "noInputReachedTheRoomAfterTheEpisodeClosed": true,
+        "roomKeptRunningWhileTheSeatHadNoSnapshot": true
+      }
+    },
+    "ga7": {
+      "question": "the final publication is withheld: does the server still record the loss and its counters, does the client act inside the closure window, and does it recover without applying anything twice?",
+      "seatNeverTold": true,
+      "publicationsReachingTheSeatAfterTheSilence": 0,
+      "deliveriesAtSilence": 1,
+      "layerCounters": {
+        "armed": true,
+        "sentTotal": 70,
+        "deliveredTotal": 70,
+        "droppedTotal": 0,
+        "droppedOutboundOrdinals": [],
+        "inboundTotal": 6,
+        "inboundDelivered": 1,
+        "inboundSilentlyDropped": 5,
+        "inboundSilenceMs": 422,
+        "silencing": true,
+        "inboundQueuedPeak": 0,
+        "reconnectEvents": 1,
+        "socketOpenAtInstall": true,
+        "socketOpenNow": false,
+        "socketClosedDuring": 1,
+        "crossCheckDeliveredWhileDropping": 0,
+        "forwardDelayAppliedMs": {
+          "count": 70,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "inboundDelayAppliedMs": {
+          "count": 1,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "patchArrivalsMs": [
+          1794953228749
+        ]
+      },
+      "publicationsSwallowedDuringTheSilence": 5,
+      "publicationsSilentlyDropped": 5,
+      "closed": true,
+      "closureCode": 4100,
+      "acceptedCodes": [
+        4100
+      ],
+      "seatEnvelope": {
+        "room": "regionGa7 (its own room, runId udg-003-phase-2-impairment-ga7)",
+        "rateCeilingMessagesPerSecond": 500,
+        "why": "the default envelope lets a 64-frame burst breach the rate ceiling and overflow the buffer at the same time, and which closure arrives depends on how fast the runner drains a tick; hosted run 43581033563 lost a control to that race. Raising the ceiling leaves the retirement path — the one GA-7 is about — as the only closure this seat can meet. Nothing else about the envelope differs, and no client-visible setting is involved",
+        "configHashDiffersFromMainRoom": true
+      },
+      "closeElapsedMs": 293,
+      "closureMaxMs": 1000,
+      "serverObservation": {
+        "retiredUnrepresented": 32,
+        "serverQueuedAtClose": 32,
+        "consumedCountAtClose": 38,
+        "dequeuedTotal": 4,
+        "sampledAtMs": 17191,
+        "entityId": "_QCKWsnz_"
+      },
+      "retiredAtClose": 32,
+      "refusedFramesForThisSeat": 0,
+      "lossSignalThatSatisfiedTheControl": "retirement only: 32 frames retired unrepresented, 0 refused",
+      "serverQueuedAtCloseInterpretation": "the queue figure is published as recorded. On this path it is 0: the burst drains one frame per tick and the rate closure lands about 170 ms later, before a queue rebuilds. A non-zero queue at close is evidenced by the abuse population's paced offender (retirement with the buffer still full), retained in the same bundle; GA-7 asks that the figure be recorded, and it is, on both paths",
+      "clientDeadlineElapsedFromLastDeliveryMs": 502,
+      "recoveredThroughRejoinAndSnapshot": true,
+      "recoveryPath": "matchmaking-rejoin",
+      "sdkReconnectRestoredTheSeat": false,
+      "sdkReconnectEpochSeen": -1,
+      "epochAfterRejoin": 12,
+      "noteOnTheTwoPaths": "GA-6a recovers on its own token because the client tore the socket; GA-7 is closed by the server, whose rejoin path has already retired that session, so recovery here is a matchmaking rejoin with a fresh snapshot. UDG-008 has to implement both, and Gate A has to see both.",
+      "tokenReconnectRefusalsRecorded": [
+        "reconnection token invalid or expired."
+      ],
+      "epochBefore": 2,
+      "appliedRegressions": 0,
+      "duplicateApplications": 0,
+      "appliedSamples": [
+        {
+          "epoch": 2,
+          "resolvedThrough": 2
+        }
+      ],
+      "appliedCount": 1,
+      "events": [
+        {
+          "atMs": 17094,
+          "type": "INPUT_ACK_STALLED",
+          "trigger": "deadline"
+        },
+        {
+          "atMs": 17094,
+          "type": "stop-sending"
+        },
+        {
+          "atMs": 17094,
+          "type": "discard-prediction"
+        }
+      ]
+    },
+    "reconnectFailures": [
+      {
+        "case": "GA-7",
+        "message": "reconnection token invalid or expired."
+      }
+    ],
+    "episodeDeadlineDiscrimination": {
+      "closeReasonsObservedAcrossTheCases": {
+        "episodeDeadline": "episode-deadline",
+        "allowanceBranch": "allowance-exhausted",
+        "snapshotDeadlineTrigger": "deadline"
+      },
+      "distinct": true,
+      "note": "three limits, three records: the 500 ms snapshot deadline appears as INPUT_ACK_STALLED/trigger \"deadline\" and opens the episode; the 4000 ms episode deadline appears as client-close/\"episode-deadline\"; the rolling allowance appears as allowance-refused + client-close/\"allowance-exhausted\". No case in this artefact can satisfy one of them by producing another"
+    },
+    "controls": {
+      "ga6aDeadlineExpiredWithNoFreshDelivery": true,
+      "ga6aDeadlineMatchesTheDeclaredTestValue": true,
+      "ga6aHarnessStoppedSendingAfterExpiry": true,
+      "ga6aRecoveryCompletedInsideTheEpisodeBudget": true,
+      "ga6bDeadlineFiredWithNoServerEventAtAll": true,
+      "ga6bSocketStayedOpenAndTheRoomKeptDeciding": true,
+      "ga6cAllowanceWasSpentAndRefused": true,
+      "ga6cSeatStayedStoppedAfterSuspension": true,
+      "ga7ServerStillRecordedTheClosureAndItsCounters": true,
+      "ga7ClientActedInsideTheClosureWindow": true,
+      "ga7SeatWasNeverTold": true,
+      "ga7RecoveredThroughRejoinAndSnapshot": true,
+      "ga7NothingWasAppliedTwice": true
+    }
+  },
+  "populations": {
+    "roundTrip": {
+      "note": "both measures are published for every seat. Neither is a network round trip: one is one-way to the intake, the other is what a client observes and contains the tick and publish waits. The clause asks for \"imposed RTT over a real WebSocket round trip with the loopback baseline reported separately\", and this is that, with the names it can bear.",
+      "baselineSeat": "baseline",
+      "perSeat": [
+        {
+          "seat": "baseline",
+          "sendToJournalledArrivalMs": {
+            "count": 40,
+            "min": 39.250477000000046,
+            "p50": 42.79306199999996,
+            "p95": 44.65415299999995,
+            "p99": 45.17402199999998,
+            "max": 45.17402199999998,
+            "mean": 42.199
+          },
+          "sendToObservedResolutionMs": {
+            "count": 40,
+            "min": 86.15291399999978,
+            "p50": 135.5668109999997,
+            "p95": 141.98462199999994,
+            "p99": 142.064101,
+            "max": 142.064101,
+            "mean": 114.704
+          },
+          "resolutionSamples": 40,
+          "unresolvedAtEnd": 0,
+          "arrivalPairing": "stamps paired to rows one-for-one"
+        },
+        {
+          "seat": "imposed-delay",
+          "sendToJournalledArrivalMs": {
+            "count": 40,
+            "min": 41.272584999999935,
+            "p50": 43.51022899999998,
+            "p95": 90.560563,
+            "p99": 90.80249000000003,
+            "max": 90.80249000000003,
+            "mean": 57.039
+          },
+          "sendToObservedResolutionMs": {
+            "count": 40,
+            "min": 131.866988,
+            "p50": 184.34337600000026,
+            "p95": 235.1900740000001,
+            "p99": 245.38707799999997,
+            "max": 245.38707799999997,
+            "mean": 178.951
+          },
+          "resolutionSamples": 40,
+          "unresolvedAtEnd": 0,
+          "arrivalPairing": "stamps paired to rows one-for-one"
+        },
+        {
+          "seat": "withheld-deliveries",
+          "sendToJournalledArrivalMs": {
+            "count": 36,
+            "min": 37.53873300000009,
+            "p50": 39.958928000000014,
+            "p95": 43.324535999999966,
+            "p99": 44.76961499999999,
+            "max": 44.76961499999999,
+            "mean": 40.053
+          },
+          "sendToObservedResolutionMs": {
+            "count": 2,
+            "min": 92.673406,
+            "p50": 141.65749999999997,
+            "p95": 141.65749999999997,
+            "p99": 141.65749999999997,
+            "max": 141.65749999999997,
+            "mean": 117.165
+          },
+          "resolutionSamples": 2,
+          "unresolvedAtEnd": 38,
+          "arrivalPairing": "stamps paired to rows one-for-one"
+        },
+        {
+          "seat": "delivery-stall",
+          "sendToJournalledArrivalMs": {
+            "count": 40,
+            "min": 36.485009999999875,
+            "p50": 39.974189000000024,
+            "p95": 43.19436399999995,
+            "p99": 43.57970899999998,
+            "max": 43.57970899999998,
+            "mean": 39.847
+          },
+          "sendToObservedResolutionMs": {
+            "count": 40,
+            "min": 89.60151899999994,
+            "p50": 435.672734,
+            "p95": 489.5292159999999,
+            "p99": 489.56914100000006,
+            "max": 489.56914100000006,
+            "mean": 352.321
+          },
+          "resolutionSamples": 40,
+          "unresolvedAtEnd": 0,
+          "arrivalPairing": "stamps paired to rows one-for-one"
+        }
+      ],
+      "cadenceIncludedInClientObservedFigure": {
+        "simulationStepMs": 50,
+        "statePatchIntervalMs": 100,
+        "source": "hashed defaults: network.simulationStepSeconds and network.statePatchIntervalMs"
+      }
+    },
+    "jitter": [
+      {
+        "seat": "baseline",
+        "imposedForwardDelayMs": {
+          "count": 0,
+          "min": null,
+          "p50": null,
+          "p95": null,
+          "p99": null,
+          "max": null,
+          "mean": null
+        },
+        "imposedInboundDelayMs": {
+          "count": 32,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 1,
+          "max": 1,
+          "mean": 0.031
+        },
+        "interArrivalAtIntakeMs": {
+          "count": 39,
+          "min": 49,
+          "p50": 50,
+          "p95": 51,
+          "p99": 51,
+          "max": 51,
+          "mean": 50.179
+        },
+        "deviationFromMedianMs": {
+          "count": 39,
+          "min": 0,
+          "p50": 0,
+          "p95": 1,
+          "p99": 1,
+          "max": 1,
+          "mean": 0.333
+        },
+        "overrunTicksDepthGreaterThanOne": 0
+      },
+      {
+        "seat": "imposed-delay",
+        "imposedForwardDelayMs": {
+          "count": 40,
+          "min": 40,
+          "p50": 40,
+          "p95": 40,
+          "p99": 40,
+          "max": 40,
+          "mean": 40
+        },
+        "imposedInboundDelayMs": {
+          "count": 31,
+          "min": 41,
+          "p50": 50,
+          "p95": 59,
+          "p99": 59,
+          "max": 59,
+          "mean": 50.097
+        },
+        "interArrivalAtIntakeMs": {
+          "count": 39,
+          "min": 49,
+          "p50": 50,
+          "p95": 51,
+          "p99": 100,
+          "max": 100,
+          "mean": 51.487
+        },
+        "deviationFromMedianMs": {
+          "count": 39,
+          "min": 0,
+          "p50": 0,
+          "p95": 1,
+          "p99": 50,
+          "max": 50,
+          "mean": 1.59
+        },
+        "overrunTicksDepthGreaterThanOne": 0
+      },
+      {
+        "seat": "withheld-deliveries",
+        "imposedForwardDelayMs": {
+          "count": 36,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "imposedInboundDelayMs": {
+          "count": 32,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "interArrivalAtIntakeMs": {
+          "count": 35,
+          "min": 49,
+          "p50": 50,
+          "p95": 101,
+          "p99": 101,
+          "max": 101,
+          "mean": 55.914
+        },
+        "deviationFromMedianMs": {
+          "count": 35,
+          "min": 0,
+          "p50": 0,
+          "p95": 51,
+          "p99": 51,
+          "max": 51,
+          "mean": 5.971
+        },
+        "overrunTicksDepthGreaterThanOne": 0
+      },
+      {
+        "seat": "delivery-stall",
+        "imposedForwardDelayMs": {
+          "count": 40,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "imposedInboundDelayMs": {
+          "count": 32,
+          "min": 0,
+          "p50": 0,
+          "p95": 351,
+          "p99": 351,
+          "max": 351,
+          "mean": 164.094
+        },
+        "interArrivalAtIntakeMs": {
+          "count": 39,
+          "min": 49,
+          "p50": 50,
+          "p95": 51,
+          "p99": 51,
+          "max": 51,
+          "mean": 50.205
+        },
+        "deviationFromMedianMs": {
+          "count": 39,
+          "min": 0,
+          "p50": 0,
+          "p95": 1,
+          "p99": 1,
+          "max": 1,
+          "mean": 0.41
+        },
+        "overrunTicksDepthGreaterThanOne": 0
+      }
+    ],
+    "loss": [
+      {
+        "seat": "withheld-deliveries",
+        "withheldStamps": [
+          3,
+          7,
+          12,
+          18
+        ],
+        "withheldNeverConsumed": true,
+        "deliveriesAfterTheHoleConsumed": true,
+        "stampsStillUnresolvedAtEnd": [
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40
+        ],
+        "discriminator": {
+          "droppedDeliveries": 4,
+          "laterDeliveriesAfterTheHole": 32,
+          "outOfOrderHoleObserved": true,
+          "whyThatRulesTcpOut": "over TCP a lost segment head-of-line-blocks the stream until retransmission, so no later application message can arrive first; a hole with later arrivals is only reachable at the application layer",
+          "unrelatedTrafficDuringTheDrop": 31,
+          "socketClosedDuring": 0,
+          "reconnectEvents": 0,
+          "retransmissionObserved": false,
+          "whyRetransmissionIsImpossibleHere": "a withheld application delivery is not a byte the peer will ever resend: the SDK owns no retransmit of an application message, and the socket never broke",
+          "dropModel": "application-layer delivery loss (hole with later deliveries)",
+          "tcpLossModelled": false,
+          "networkLossRequires": "NET_ADMIN for tc/netem (or a UDP path the pinned stack does not have)",
+          "runnerReason": "GitHub-hosted ubuntu-latest grants no NET_ADMIN, so network-layer impairment cannot be produced in this pipeline"
+        }
+      }
+    ],
+    "arrivalPhase": {
+      "ticksWithMoreThanOneDequeueAcrossTheRoom": 40,
+      "interArrivalBySeat": [
+        {
+          "seat": "baseline",
+          "arrivalsAtIntake": 40,
+          "interArrivalMs": {
+            "count": 39,
+            "min": 49,
+            "p50": 50,
+            "p95": 51,
+            "p99": 51,
+            "max": 51,
+            "mean": 50.179
+          },
+          "deviationFromMedianMs": {
+            "count": 39,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "max": 1,
+            "mean": 0.333
+          },
+          "overrunTicksDepthGreaterThanOne": 0
+        },
+        {
+          "seat": "imposed-delay",
+          "arrivalsAtIntake": 40,
+          "interArrivalMs": {
+            "count": 39,
+            "min": 49,
+            "p50": 50,
+            "p95": 51,
+            "p99": 100,
+            "max": 100,
+            "mean": 51.487
+          },
+          "deviationFromMedianMs": {
+            "count": 39,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 50,
+            "max": 50,
+            "mean": 1.59
+          },
+          "overrunTicksDepthGreaterThanOne": 0
+        },
+        {
+          "seat": "withheld-deliveries",
+          "arrivalsAtIntake": 36,
+          "interArrivalMs": {
+            "count": 35,
+            "min": 49,
+            "p50": 50,
+            "p95": 101,
+            "p99": 101,
+            "max": 101,
+            "mean": 55.914
+          },
+          "deviationFromMedianMs": {
+            "count": 35,
+            "min": 0,
+            "p50": 0,
+            "p95": 51,
+            "p99": 51,
+            "max": 51,
+            "mean": 5.971
+          },
+          "overrunTicksDepthGreaterThanOne": 0
+        },
+        {
+          "seat": "delivery-stall",
+          "arrivalsAtIntake": 40,
+          "interArrivalMs": {
+            "count": 39,
+            "min": 49,
+            "p50": 50,
+            "p95": 51,
+            "p99": 51,
+            "max": 51,
+            "mean": 50.205
+          },
+          "deviationFromMedianMs": {
+            "count": 39,
+            "min": 0,
+            "p50": 0,
+            "p95": 1,
+            "p99": 1,
+            "max": 1,
+            "mean": 0.41
+          },
+          "overrunTicksDepthGreaterThanOne": 0
+        }
+      ],
+      "note": "the per-tick depth trace for the busier room is buffer-depth.csv; this artefact keeps the impairment-labelled arrivals, and the two instruments are named apart"
+    }
+  },
+  "seats": [
+    {
+      "label": "baseline",
+      "purpose": "unarmed control: the loopback round trip this run actually has, published separately from every imposed figure",
+      "entityId": "DKKu9dKGF",
+      "epoch": 1,
+      "framesSent": 40,
+      "impairment": {
+        "armed": false,
+        "sentTotal": 40,
+        "deliveredTotal": 40,
+        "droppedTotal": 0,
+        "droppedOutboundOrdinals": [],
+        "inboundTotal": 32,
+        "inboundDelivered": 32,
+        "inboundSilentlyDropped": 0,
+        "inboundSilenceMs": null,
+        "silencing": false,
+        "inboundQueuedPeak": 0,
+        "reconnectEvents": 0,
+        "socketOpenAtInstall": true,
+        "socketOpenNow": true,
+        "socketClosedDuring": 0,
+        "crossCheckDeliveredWhileDropping": 0,
+        "forwardDelayAppliedMs": {
+          "count": 0,
+          "min": null,
+          "p50": null,
+          "p95": null,
+          "p99": null,
+          "max": null,
+          "mean": null
+        },
+        "inboundDelayAppliedMs": {
+          "count": 32,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 1,
+          "max": 1,
+          "mean": 0.031
+        },
+        "patchArrivalsMs": [
+          1794953212703,
+          1794953212803,
+          1794953212904,
+          1794953213004,
+          1794953213105,
+          1794953213205,
+          1794953213305,
+          1794953213406,
+          1794953213506,
+          1794953213607,
+          1794953213707,
+          1794953213807,
+          1794953213907,
+          1794953214007,
+          1794953214107,
+          1794953214207,
+          1794953214307,
+          1794953214408,
+          1794953214509,
+          1794953214609,
+          1794953214709,
+          1794953214809,
+          1794953214910,
+          1794953215010,
+          1794953215111,
+          1794953215210,
+          1794953215310,
+          1794953215411,
+          1794953215512,
+          1794953215613,
+          1794953215714,
+          1794953215814
+        ]
+      },
+      "discriminator": {
+        "droppedDeliveries": 0,
+        "laterDeliveriesAfterTheHole": 40,
+        "outOfOrderHoleObserved": false,
+        "whyThatRulesTcpOut": "over TCP a lost segment head-of-line-blocks the stream until retransmission, so no later application message can arrive first; a hole with later arrivals is only reachable at the application layer",
+        "unrelatedTrafficDuringTheDrop": 0,
+        "socketClosedDuring": 0,
+        "reconnectEvents": 0,
+        "retransmissionObserved": false,
+        "whyRetransmissionIsImpossibleHere": "a withheld application delivery is not a byte the peer will ever resend: the SDK owns no retransmit of an application message, and the socket never broke",
+        "dropModel": "no loss applied",
+        "tcpLossModelled": false,
+        "networkLossRequires": "NET_ADMIN for tc/netem (or a UDP path the pinned stack does not have)",
+        "runnerReason": "GitHub-hosted ubuntu-latest grants no NET_ADMIN, so network-layer impairment cannot be produced in this pipeline"
+      },
+      "measuresDefined": {
+        "sendToJournalledArrivalMs": "one way: the instant the send left the seat to the instant the room journalled the arrival. Same process, so the clocks are the same clock. The floor is one simulation step, because the arrival is journalled BY the tick rather than by the socket callback, and the artefact says so instead of pretending the number is a wire time-of-flight. It is quantised as well as floored: see layerFindings, because a delay that does not move an arrival past a tick boundary is INVISIBLE in this figure, so it is not a delay meter and no control is built on it.",
+        "sendToObservedResolutionMs": "what a client can actually see: send to the patch that carried the resolution. It necessarily contains the tick wait (simulationStepSeconds, 50 ms here) and the publish wait (statePatchIntervalMs, 100 ms), so it is NOT a network round trip and is not offered as one.",
+        "withheldStampPairing": "ordinal equals stamp because stampAndSend stamps sentCount + 1; rows are paired to delivered stamps in FIFO order, the same rule accounting.ts uses"
+      },
+      "sendToJournalledArrivalMs": {
+        "count": 40,
+        "min": 39.250477000000046,
+        "p50": 42.79306199999996,
+        "p95": 44.65415299999995,
+        "p99": 45.17402199999998,
+        "max": 45.17402199999998,
+        "mean": 42.199
+      },
+      "arrivalPairing": "stamps paired to rows one-for-one",
+      "framesStamped": 40,
+      "transportSends": 40,
+      "transportDelivered": 40,
+      "retiredByTheSdkBufferBeforeTheWire": 0,
+      "sdkBufferNote": "the client-side input buffer belongs to the pinned SDK (bufferMaxSize frames). A seat acknowledged more slowly than it sends retires frames there, before this layer and before the wire; the count is published because a latency population that silently excludes those frames is a nicer lie than the run deserves",
+      "sendToObservedResolutionMs": {
+        "count": 40,
+        "min": 86.15291399999978,
+        "p50": 135.5668109999997,
+        "p95": 141.98462199999994,
+        "p99": 142.064101,
+        "max": 142.064101,
+        "mean": 114.704
+      },
+      "resolutionSamples": 40,
+      "unresolvedAtEnd": 0,
+      "stampsStillUnresolved": [],
+      "refusalReasons": {},
+      "roomSide": {
+        "stampsConsumed": 40,
+        "stampsRefused": 0,
+        "stampsDroppedAtClose": 0,
+        "consumedStamps": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40
+        ],
+        "missingStamps": [],
+        "pairingConsistent": true,
+        "movedMeters": 8,
+        "allSentStampsConsumed": true
+      },
+      "arrival": {
+        "arrivalsAtIntake": 40,
+        "interArrivalMs": {
+          "count": 39,
+          "min": 49,
+          "p50": 50,
+          "p95": 51,
+          "p99": 51,
+          "max": 51,
+          "mean": 50.179
+        },
+        "deviationFromMedianMs": {
+          "count": 39,
+          "min": 0,
+          "p50": 0,
+          "p95": 1,
+          "p99": 1,
+          "max": 1,
+          "mean": 0.333
+        },
+        "overrunTicksDepthGreaterThanOne": 0
+      },
+      "withheldStampsNamed": [],
+      "withheldNeverConsumed": false,
+      "deliveriesAfterTheHoleConsumed": null,
+      "stall": null
+    },
+    {
+      "label": "imposed-delay",
+      "purpose": "RTT and jitter populations under 40 ms imposed each way with 20 ms of deterministic jitter",
+      "entityId": "CQtcviOo8",
+      "epoch": 2,
+      "framesSent": 40,
+      "impairment": {
+        "armed": true,
+        "sentTotal": 40,
+        "deliveredTotal": 40,
+        "droppedTotal": 0,
+        "droppedOutboundOrdinals": [],
+        "inboundTotal": 32,
+        "inboundDelivered": 31,
+        "inboundSilentlyDropped": 0,
+        "inboundSilenceMs": null,
+        "silencing": false,
+        "inboundQueuedPeak": 0,
+        "reconnectEvents": 0,
+        "socketOpenAtInstall": true,
+        "socketOpenNow": true,
+        "socketClosedDuring": 0,
+        "crossCheckDeliveredWhileDropping": 0,
+        "forwardDelayAppliedMs": {
+          "count": 40,
+          "min": 40,
+          "p50": 40,
+          "p95": 40,
+          "p99": 40,
+          "max": 40,
+          "mean": 40
+        },
+        "inboundDelayAppliedMs": {
+          "count": 31,
+          "min": 41,
+          "p50": 50,
+          "p95": 59,
+          "p99": 59,
+          "max": 59,
+          "mean": 50.097
+        },
+        "patchArrivalsMs": [
+          1794953212760,
+          1794953212850,
+          1794953212956,
+          1794953213063,
+          1794953213148,
+          1794953213261,
+          1794953213346,
+          1794953213461,
+          1794953213560,
+          1794953213650,
+          1794953213757,
+          1794953213848,
+          1794953213963,
+          1794953214054,
+          1794953214159,
+          1794953214251,
+          1794953214366,
+          1794953214454,
+          1794953214558,
+          1794953214657,
+          1794953214750,
+          1794953214863,
+          1794953214966,
+          1794953215060,
+          1794953215169,
+          1794953215257,
+          1794953215351,
+          1794953215453,
+          1794953215570,
+          1794953215660,
+          1794953215771
+        ]
+      },
+      "discriminator": {
+        "droppedDeliveries": 0,
+        "laterDeliveriesAfterTheHole": 40,
+        "outOfOrderHoleObserved": false,
+        "whyThatRulesTcpOut": "over TCP a lost segment head-of-line-blocks the stream until retransmission, so no later application message can arrive first; a hole with later arrivals is only reachable at the application layer",
+        "unrelatedTrafficDuringTheDrop": 0,
+        "socketClosedDuring": 0,
+        "reconnectEvents": 0,
+        "retransmissionObserved": false,
+        "whyRetransmissionIsImpossibleHere": "a withheld application delivery is not a byte the peer will ever resend: the SDK owns no retransmit of an application message, and the socket never broke",
+        "dropModel": "no loss applied",
+        "tcpLossModelled": false,
+        "networkLossRequires": "NET_ADMIN for tc/netem (or a UDP path the pinned stack does not have)",
+        "runnerReason": "GitHub-hosted ubuntu-latest grants no NET_ADMIN, so network-layer impairment cannot be produced in this pipeline"
+      },
+      "measuresDefined": {
+        "sendToJournalledArrivalMs": "one way: the instant the send left the seat to the instant the room journalled the arrival. Same process, so the clocks are the same clock. The floor is one simulation step, because the arrival is journalled BY the tick rather than by the socket callback, and the artefact says so instead of pretending the number is a wire time-of-flight. It is quantised as well as floored: see layerFindings, because a delay that does not move an arrival past a tick boundary is INVISIBLE in this figure, so it is not a delay meter and no control is built on it.",
+        "sendToObservedResolutionMs": "what a client can actually see: send to the patch that carried the resolution. It necessarily contains the tick wait (simulationStepSeconds, 50 ms here) and the publish wait (statePatchIntervalMs, 100 ms), so it is NOT a network round trip and is not offered as one.",
+        "withheldStampPairing": "ordinal equals stamp because stampAndSend stamps sentCount + 1; rows are paired to delivered stamps in FIFO order, the same rule accounting.ts uses"
+      },
+      "sendToJournalledArrivalMs": {
+        "count": 40,
+        "min": 41.272584999999935,
+        "p50": 43.51022899999998,
+        "p95": 90.560563,
+        "p99": 90.80249000000003,
+        "max": 90.80249000000003,
+        "mean": 57.039
+      },
+      "arrivalPairing": "stamps paired to rows one-for-one",
+      "framesStamped": 40,
+      "transportSends": 40,
+      "transportDelivered": 40,
+      "retiredByTheSdkBufferBeforeTheWire": 0,
+      "sdkBufferNote": "the client-side input buffer belongs to the pinned SDK (bufferMaxSize frames). A seat acknowledged more slowly than it sends retires frames there, before this layer and before the wire; the count is published because a latency population that silently excludes those frames is a nicer lie than the run deserves",
+      "sendToObservedResolutionMs": {
+        "count": 40,
+        "min": 131.866988,
+        "p50": 184.34337600000026,
+        "p95": 235.1900740000001,
+        "p99": 245.38707799999997,
+        "max": 245.38707799999997,
+        "mean": 178.951
+      },
+      "resolutionSamples": 40,
+      "unresolvedAtEnd": 0,
+      "stampsStillUnresolved": [],
+      "refusalReasons": {},
+      "roomSide": {
+        "stampsConsumed": 40,
+        "stampsRefused": 0,
+        "stampsDroppedAtClose": 0,
+        "consumedStamps": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40
+        ],
+        "missingStamps": [],
+        "pairingConsistent": true,
+        "movedMeters": 8,
+        "allSentStampsConsumed": true
+      },
+      "arrival": {
+        "arrivalsAtIntake": 40,
+        "interArrivalMs": {
+          "count": 39,
+          "min": 49,
+          "p50": 50,
+          "p95": 51,
+          "p99": 100,
+          "max": 100,
+          "mean": 51.487
+        },
+        "deviationFromMedianMs": {
+          "count": 39,
+          "min": 0,
+          "p50": 0,
+          "p95": 1,
+          "p99": 50,
+          "max": 50,
+          "mean": 1.59
+        },
+        "overrunTicksDepthGreaterThanOne": 0
+      },
+      "withheldStampsNamed": [],
+      "withheldNeverConsumed": false,
+      "deliveriesAfterTheHoleConsumed": null,
+      "stall": null
+    },
+    {
+      "label": "withheld-deliveries",
+      "purpose": "loss population: named deliveries withheld in flight, later deliveries allowed through",
+      "entityId": "JOY9HrsMt",
+      "epoch": 3,
+      "framesSent": 40,
+      "impairment": {
+        "armed": true,
+        "sentTotal": 40,
+        "deliveredTotal": 36,
+        "droppedTotal": 4,
+        "droppedOutboundOrdinals": [
+          3,
+          7,
+          12,
+          18
+        ],
+        "inboundTotal": 32,
+        "inboundDelivered": 32,
+        "inboundSilentlyDropped": 0,
+        "inboundSilenceMs": null,
+        "silencing": false,
+        "inboundQueuedPeak": 0,
+        "reconnectEvents": 0,
+        "socketOpenAtInstall": true,
+        "socketOpenNow": true,
+        "socketClosedDuring": 0,
+        "crossCheckDeliveredWhileDropping": 31,
+        "forwardDelayAppliedMs": {
+          "count": 36,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "inboundDelayAppliedMs": {
+          "count": 32,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "patchArrivalsMs": [
+          1794953212703,
+          1794953212803,
+          1794953212903,
+          1794953213003,
+          1794953213105,
+          1794953213205,
+          1794953213305,
+          1794953213405,
+          1794953213506,
+          1794953213607,
+          1794953213707,
+          1794953213807,
+          1794953213907,
+          1794953214007,
+          1794953214107,
+          1794953214207,
+          1794953214307,
+          1794953214407,
+          1794953214508,
+          1794953214609,
+          1794953214709,
+          1794953214809,
+          1794953214909,
+          1794953215010,
+          1794953215111,
+          1794953215210,
+          1794953215310,
+          1794953215411,
+          1794953215512,
+          1794953215612,
+          1794953215713,
+          1794953215814
+        ]
+      },
+      "discriminator": {
+        "droppedDeliveries": 4,
+        "laterDeliveriesAfterTheHole": 32,
+        "outOfOrderHoleObserved": true,
+        "whyThatRulesTcpOut": "over TCP a lost segment head-of-line-blocks the stream until retransmission, so no later application message can arrive first; a hole with later arrivals is only reachable at the application layer",
+        "unrelatedTrafficDuringTheDrop": 31,
+        "socketClosedDuring": 0,
+        "reconnectEvents": 0,
+        "retransmissionObserved": false,
+        "whyRetransmissionIsImpossibleHere": "a withheld application delivery is not a byte the peer will ever resend: the SDK owns no retransmit of an application message, and the socket never broke",
+        "dropModel": "application-layer delivery loss (hole with later deliveries)",
+        "tcpLossModelled": false,
+        "networkLossRequires": "NET_ADMIN for tc/netem (or a UDP path the pinned stack does not have)",
+        "runnerReason": "GitHub-hosted ubuntu-latest grants no NET_ADMIN, so network-layer impairment cannot be produced in this pipeline"
+      },
+      "measuresDefined": {
+        "sendToJournalledArrivalMs": "one way: the instant the send left the seat to the instant the room journalled the arrival. Same process, so the clocks are the same clock. The floor is one simulation step, because the arrival is journalled BY the tick rather than by the socket callback, and the artefact says so instead of pretending the number is a wire time-of-flight. It is quantised as well as floored: see layerFindings, because a delay that does not move an arrival past a tick boundary is INVISIBLE in this figure, so it is not a delay meter and no control is built on it.",
+        "sendToObservedResolutionMs": "what a client can actually see: send to the patch that carried the resolution. It necessarily contains the tick wait (simulationStepSeconds, 50 ms here) and the publish wait (statePatchIntervalMs, 100 ms), so it is NOT a network round trip and is not offered as one.",
+        "withheldStampPairing": "ordinal equals stamp because stampAndSend stamps sentCount + 1; rows are paired to delivered stamps in FIFO order, the same rule accounting.ts uses"
+      },
+      "sendToJournalledArrivalMs": {
+        "count": 36,
+        "min": 37.53873300000009,
+        "p50": 39.958928000000014,
+        "p95": 43.324535999999966,
+        "p99": 44.76961499999999,
+        "max": 44.76961499999999,
+        "mean": 40.053
+      },
+      "arrivalPairing": "stamps paired to rows one-for-one",
+      "framesStamped": 40,
+      "transportSends": 40,
+      "transportDelivered": 36,
+      "retiredByTheSdkBufferBeforeTheWire": 0,
+      "sdkBufferNote": "the client-side input buffer belongs to the pinned SDK (bufferMaxSize frames). A seat acknowledged more slowly than it sends retires frames there, before this layer and before the wire; the count is published because a latency population that silently excludes those frames is a nicer lie than the run deserves",
+      "sendToObservedResolutionMs": {
+        "count": 2,
+        "min": 92.673406,
+        "p50": 141.65749999999997,
+        "p95": 141.65749999999997,
+        "p99": 141.65749999999997,
+        "max": 141.65749999999997,
+        "mean": 117.165
+      },
+      "resolutionSamples": 2,
+      "unresolvedAtEnd": 38,
+      "stampsStillUnresolved": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40
+      ],
+      "refusalReasons": {},
+      "roomSide": {
+        "stampsConsumed": 36,
+        "stampsRefused": 0,
+        "stampsDroppedAtClose": 0,
+        "consumedStamps": [
+          1,
+          2,
+          4,
+          5,
+          6,
+          8,
+          9,
+          10,
+          11,
+          13,
+          14,
+          15,
+          16,
+          17,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40
+        ],
+        "missingStamps": [
+          3,
+          7,
+          12,
+          18
+        ],
+        "pairingConsistent": true,
+        "movedMeters": 7.2,
+        "allSentStampsConsumed": false
+      },
+      "arrival": {
+        "arrivalsAtIntake": 36,
+        "interArrivalMs": {
+          "count": 35,
+          "min": 49,
+          "p50": 50,
+          "p95": 101,
+          "p99": 101,
+          "max": 101,
+          "mean": 55.914
+        },
+        "deviationFromMedianMs": {
+          "count": 35,
+          "min": 0,
+          "p50": 0,
+          "p95": 51,
+          "p99": 51,
+          "max": 51,
+          "mean": 5.971
+        },
+        "overrunTicksDepthGreaterThanOne": 0
+      },
+      "withheldStampsNamed": [
+        3,
+        7,
+        12,
+        18
+      ],
+      "withheldNeverConsumed": true,
+      "deliveriesAfterTheHoleConsumed": true,
+      "stall": null
+    },
+    {
+      "label": "delivery-stall",
+      "purpose": "patches withheld for 350 ms while the seat keeps streaming: what a seat observes during a stall, and nothing beyond it",
+      "entityId": "4FEhwp67A",
+      "epoch": 4,
+      "framesSent": 40,
+      "impairment": {
+        "armed": true,
+        "sentTotal": 40,
+        "deliveredTotal": 40,
+        "droppedTotal": 0,
+        "droppedOutboundOrdinals": [],
+        "inboundTotal": 32,
+        "inboundDelivered": 32,
+        "inboundSilentlyDropped": 0,
+        "inboundSilenceMs": null,
+        "silencing": false,
+        "inboundQueuedPeak": 3,
+        "reconnectEvents": 0,
+        "socketOpenAtInstall": true,
+        "socketOpenNow": true,
+        "socketClosedDuring": 0,
+        "crossCheckDeliveredWhileDropping": 0,
+        "forwardDelayAppliedMs": {
+          "count": 40,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "inboundDelayAppliedMs": {
+          "count": 32,
+          "min": 0,
+          "p50": 0,
+          "p95": 351,
+          "p99": 351,
+          "max": 351,
+          "mean": 164.094
+        },
+        "patchArrivalsMs": [
+          1794953212703,
+          1794953212803,
+          1794953212903,
+          1794953213003,
+          1794953213105,
+          1794953213554,
+          1794953213655,
+          1794953213756,
+          1794953213856,
+          1794953213957,
+          1794953214057,
+          1794953214156,
+          1794953214257,
+          1794953214357,
+          1794953214456,
+          1794953214557,
+          1794953214657,
+          1794953214709,
+          1794953214758,
+          1794953214809,
+          1794953214859,
+          1794953214909,
+          1794953214959,
+          1794953215010,
+          1794953215110,
+          1794953215210,
+          1794953215310,
+          1794953215410,
+          1794953215511,
+          1794953215612,
+          1794953215713,
+          1794953215814
+        ]
+      },
+      "discriminator": {
+        "droppedDeliveries": 0,
+        "laterDeliveriesAfterTheHole": 40,
+        "outOfOrderHoleObserved": false,
+        "whyThatRulesTcpOut": "over TCP a lost segment head-of-line-blocks the stream until retransmission, so no later application message can arrive first; a hole with later arrivals is only reachable at the application layer",
+        "unrelatedTrafficDuringTheDrop": 0,
+        "socketClosedDuring": 0,
+        "reconnectEvents": 0,
+        "retransmissionObserved": false,
+        "whyRetransmissionIsImpossibleHere": "a withheld application delivery is not a byte the peer will ever resend: the SDK owns no retransmit of an application message, and the socket never broke",
+        "dropModel": "no loss applied",
+        "tcpLossModelled": false,
+        "networkLossRequires": "NET_ADMIN for tc/netem (or a UDP path the pinned stack does not have)",
+        "runnerReason": "GitHub-hosted ubuntu-latest grants no NET_ADMIN, so network-layer impairment cannot be produced in this pipeline"
+      },
+      "measuresDefined": {
+        "sendToJournalledArrivalMs": "one way: the instant the send left the seat to the instant the room journalled the arrival. Same process, so the clocks are the same clock. The floor is one simulation step, because the arrival is journalled BY the tick rather than by the socket callback, and the artefact says so instead of pretending the number is a wire time-of-flight. It is quantised as well as floored: see layerFindings, because a delay that does not move an arrival past a tick boundary is INVISIBLE in this figure, so it is not a delay meter and no control is built on it.",
+        "sendToObservedResolutionMs": "what a client can actually see: send to the patch that carried the resolution. It necessarily contains the tick wait (simulationStepSeconds, 50 ms here) and the publish wait (statePatchIntervalMs, 100 ms), so it is NOT a network round trip and is not offered as one.",
+        "withheldStampPairing": "ordinal equals stamp because stampAndSend stamps sentCount + 1; rows are paired to delivered stamps in FIFO order, the same rule accounting.ts uses"
+      },
+      "sendToJournalledArrivalMs": {
+        "count": 40,
+        "min": 36.485009999999875,
+        "p50": 39.974189000000024,
+        "p95": 43.19436399999995,
+        "p99": 43.57970899999998,
+        "max": 43.57970899999998,
+        "mean": 39.847
+      },
+      "arrivalPairing": "stamps paired to rows one-for-one",
+      "framesStamped": 40,
+      "transportSends": 40,
+      "transportDelivered": 40,
+      "retiredByTheSdkBufferBeforeTheWire": 0,
+      "sdkBufferNote": "the client-side input buffer belongs to the pinned SDK (bufferMaxSize frames). A seat acknowledged more slowly than it sends retires frames there, before this layer and before the wire; the count is published because a latency population that silently excludes those frames is a nicer lie than the run deserves",
+      "sendToObservedResolutionMs": {
+        "count": 40,
+        "min": 89.60151899999994,
+        "p50": 435.672734,
+        "p95": 489.5292159999999,
+        "p99": 489.56914100000006,
+        "max": 489.56914100000006,
+        "mean": 352.321
+      },
+      "resolutionSamples": 40,
+      "unresolvedAtEnd": 0,
+      "stampsStillUnresolved": [],
+      "refusalReasons": {},
+      "roomSide": {
+        "stampsConsumed": 40,
+        "stampsRefused": 0,
+        "stampsDroppedAtClose": 0,
+        "consumedStamps": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40
+        ],
+        "missingStamps": [],
+        "pairingConsistent": true,
+        "movedMeters": 8,
+        "allSentStampsConsumed": true
+      },
+      "arrival": {
+        "arrivalsAtIntake": 40,
+        "interArrivalMs": {
+          "count": 39,
+          "min": 49,
+          "p50": 50,
+          "p95": 51,
+          "p99": 51,
+          "max": 51,
+          "mean": 50.205
+        },
+        "deviationFromMedianMs": {
+          "count": 39,
+          "min": 0,
+          "p50": 0,
+          "p95": 1,
+          "p99": 1,
+          "max": 1,
+          "mean": 0.41
+        },
+        "overrunTicksDepthGreaterThanOne": 0
+      },
+      "withheldStampsNamed": [],
+      "withheldNeverConsumed": false,
+      "deliveriesAfterTheHoleConsumed": null,
+      "stall": {
+        "withheldPatchWindowMs": 350,
+        "resolvedThroughAtStallStart": 9,
+        "resolvedThroughAtEnd": 39,
+        "framesTheRoomConsumedWhileTheSeatSawNothing": 30,
+        "note": "the room kept deciding while the client kept not being told; the client-side deadline that would act on this is production behaviour and belongs to UDG-008, so this row records the observation and stops"
+      }
+    }
+  ],
+  "controls": {
+    "baselineSeatHadNoImpairment": true,
+    "loopbackBaselineArrivesInsideAboutATick": true,
+    "imposedDelayIsTheDifferenceBetweenTheSeats": true,
+    "noFrameArrivedWithoutAnAssociationEpoch": true,
+    "imposedDelayAlsoLiftsWhatTheClientSees": true,
+    "everySeatReportsBothMeasures": true,
+    "latenciesArePhysicallyPossible": true,
+    "withheldDeliveriesAreNamedAndNeverConsumed": true,
+    "laterDeliveriesStillArrived": true,
+    "lossDidNotEscapeItsSeat": true,
+    "stallSeatCaughtUpAfterRelease": true,
+    "socketNeverBrokeAnywhere": true,
+    "episodeDeadlineExpiredWithNoFreshSnapshot": true,
+    "episodeDeadlineIsDistinctFromTheSnapshotDeadline": true,
+    "rollingAllowanceWasNotTheBindingConstraint": true,
+    "clientSurfacedItsOwnConnectionErrorAndStayedStopped": true,
+    "noInputReachedTheRoomAfterTheEpisodeClosed": true,
+    "roomKeptRunningWhileTheSeatHadNoSnapshot": true,
+    "ga6aDeadlineExpiredWithNoFreshDelivery": true,
+    "ga6aDeadlineMatchesTheDeclaredTestValue": true,
+    "ga6aHarnessStoppedSendingAfterExpiry": true,
+    "ga6aRecoveryCompletedInsideTheEpisodeBudget": true,
+    "ga6bDeadlineFiredWithNoServerEventAtAll": true,
+    "ga6bSocketStayedOpenAndTheRoomKeptDeciding": true,
+    "ga6cAllowanceWasSpentAndRefused": true,
+    "ga6cSeatStayedStoppedAfterSuspension": true,
+    "ga7ServerStillRecordedTheClosureAndItsCounters": true,
+    "ga7ClientActedInsideTheClosureWindow": true,
+    "ga7SeatWasNeverTold": true,
+    "ga7RecoveredThroughRejoinAndSnapshot": true,
+    "ga7NothingWasAppliedTwice": true
+  },
+  "verdict": "pass",
+  "layerFindings": [
+    {
+      "finding": "jitter on the outbound path reorders deliveries, and a reordered input stream is refused here",
+      "measured": "the first version of the imposed seat jittered the client-to-server direction too; 31 of its 40 frames were journalled as `refused:epoch` with `epoch: 0`, because the pinned input protocol carries the association epoch on the stream's first frame and the reordered frames arrived without one",
+      "response": "the layer now imposes a fixed delay outbound and jitters only the delivery direction, and the control noFrameArrivedWithoutAnAssociationEpoch is what proves this run is not that run",
+      "whyItMatters": "a real TCP path cannot reorder a stream: it stalls until retransmission. A layer that can reorder is therefore not only a different loss model from a network, it is a different ORDERING model, which is the second independent reason the label on this artefact is not decoration"
+    },
+    {
+      "finding": "resolution is observed by the client only at a patch boundary",
+      "measured": "client-observed latency is roughly one tick plus one patch interval above the one-way figure on every seat, baseline included",
+      "response": "the two figures are published separately and named differently; the client-observed one is never called a round trip",
+      "whyItMatters": "the GA-11 inequality multiplies a measured p99 RTT, and a figure inflated by publish cadence would make the deadline look safer than the path is"
+    }
+  ],
+  "doesNotEstablish": [
+    "TCP-loss behaviour of any kind: every drop in this run is an application-layer withheld delivery, with the head-of-line-blocking discriminator recorded beside it",
+    "production tuning, or any evaluation of B + J·λ + stall ≤ bufferMaxSize or clientSnapshotDeadlineMs ≥ 4 × patch + 2 × p99 RTT (GA-11 and UDG-SPIKE-001 own both)",
+    "a GA-6 or GA-7 verdict at Gate A: `ga6Ga7` exercises both criteria in the Phase 2 harness at the declared test values, which is what the owner asked for on 2026-11-14, and it is evidence about the harness plus the frozen rules in tests/support/client-harness/recovery.ts — not a Gate A pass (UDG-SPIKE-001, Not Run) and not a claim that a production client behaves this way (UDG-008 owns the machine that has to do it for real, including a prediction buffer this harness does not have)",
+    "a network path: RTT here is imposed over a measured loopback baseline, and that baseline is published beside it so the imposed component stays visible"
+  ],
+  "gateAOwns": [
+    "evaluating both production inequalities on measured values",
+    "naming production values beside the provisional ones and explaining any change",
+    "recording whether the Gate A runner could produce network-layer impairment at all"
+  ],
+  "settingsNote": "Provisional test settings on a loopback transport (D-P2-4). Every seat carries tcpLossModelled: false with the runner reason and the discriminator attached."
+}

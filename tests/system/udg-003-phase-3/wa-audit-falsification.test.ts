@@ -6,20 +6,38 @@
  * not evidence — it might simply be reading fields that no run can move. This suite moves them, on a copy,
  * and requires the audit to name the defect it is supposed to name.
  *
- * It mutates a **copy** of the artefact under `os.tmpdir()`, never anything in the tree or the store, and it
- * asserts the two messages the hosted attempts recorded: `expected 1 to be 0`-shaped W-7 counter movement,
- * and the `seat reservation expired.` refusal wording that made P-2b red in the container.
+ * It mutates a **copy** under `os.tmpdir()`, never anything in the tree or the store, and it asserts the two
+ * messages the hosted attempts recorded: `expected 1 to be 0`-shaped W-7 counter movement, and the
+ * `seat reservation expired.` refusal wording that made P-2b red in the container.
+ *
+ * Why the base is a pinned fixture and not "the artefact this run produced". `transport-impairment.json` is
+ * rewritten *during* a run by the accepted Phase 2 runtime case — the case W-A exists to watch. When W-7
+ * fires, the live artefact really does record the red counter, and a control that demanded a clean audit of it
+ * reported one real defect as three failures: that is exactly what run `44191978254` did, and it is recorded
+ * in `docs/contracts/assignments/evidence/UDG-003-phase-3-hosted-sighting-run-44191978254.json`. Amplifying a
+ * defect into unrelated red files is forbidden by the assignment, so the controls stand on bytes that cannot
+ * move, and the live artefact is audited and **reported** rather than required.
  */
 
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
-const SOURCE = join(ROOT, 'artifacts', 'udg-003-phase-2', 'transport-impairment.json');
+const LIVE =
+  process.env['UDG_WA_LIVE_ARTEFACT'] === undefined
+    ? join(ROOT, 'artifacts', 'udg-003-phase-2', 'transport-impairment.json')
+    : // Reading-only override for `wa-no-amplification.test.ts`, which points it at a synthetic artefact that
+      // records the W-7 red condition to prove this file stays green when the accepted case moves. Nothing
+      // else sets it, and no assertion in this file is decided by whatever it points at.
+      resolve(process.cwd(), process.env['UDG_WA_LIVE_ARTEFACT']);
+/** The pinned known-clean base for every control in this file (provenance: `task-vectors.test.ts`). */
+const FIXTURE = join(ROOT, 'tests', 'support', 'udg-003', 'wa-audit-clean-artefact.json');
+const FIXTURE_SHA256 = 'd9e1dce3cec976f9bb5ae1dca2271e0d8a87ecd6c75b1bb990a9e83ebc26f647';
 const AUDIT = join(ROOT, 'tests', 'system', 'udg-003-phase-3', 'wa-assertion-audit.ts');
 const directories: string[] = [];
 
@@ -33,7 +51,7 @@ interface AuditReport {
 const auditMutated = (mutate: (artefact: Record<string, unknown>) => void): AuditReport => {
   const directory = mkdtempSync(join(tmpdir(), 'udg-wa-audit-'));
   directories.push(directory);
-  copyFileSync(SOURCE, join(directory, 'transport-impairment.json'));
+  copyFileSync(FIXTURE, join(directory, 'transport-impairment.json'));
   const file = join(directory, 'transport-impairment.json');
   const artefact = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
   mutate(artefact);
@@ -50,6 +68,24 @@ const auditMutated = (mutate: (artefact: Record<string, unknown>) => void): Audi
   expect(executed.status, 'the audit must exit non-zero when a check fails').toBe(1);
   return report;
 };
+
+/** Audit an untouched copy of a given artefact file and return its report. */
+const auditCopy = (source: string): AuditReport => {
+  const directory = mkdtempSync(join(tmpdir(), 'udg-wa-copy-'));
+  directories.push(directory);
+  copyFileSync(source, join(directory, 'transport-impairment.json'));
+  const executed = spawnSync(process.execPath, [AUDIT, '--dir', directory, '--out', join(directory, 'audit.json')], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    timeout: 120_000,
+  });
+  if (!existsSync(join(directory, 'audit.json'))) {
+    throw new Error(`the audit wrote no report for ${source} (exit ${String(executed.status)}): ${executed.stderr.slice(0, 300)}`);
+  }
+  return JSON.parse(readFileSync(join(directory, 'audit.json'), 'utf8')) as AuditReport;
+};
+
+const auditClean = (): AuditReport => auditCopy(FIXTURE);
 
 const exists = (file: string): boolean => {
   try {
@@ -155,18 +191,26 @@ describe('UDG-003 Phase 3 W-A — the audit is falsifiable, per defect', () => {
     expect(timing.failing.map((entry) => entry.id)).toContain('w7-episode-deadline-value');
   });
 
-  it('reports the unmutated artefact clean, so the controls above measure mutation and not the tool', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'udg-wa-clean-'));
-    directories.push(directory);
-    copyFileSync(SOURCE, join(directory, 'transport-impairment.json'));
-    const executed = spawnSync(process.execPath, [AUDIT, '--dir', directory, '--out', join(directory, 'audit.json')], {
-      cwd: ROOT,
-      encoding: 'utf8',
-      timeout: 120_000,
-    });
-    expect(executed.status, 'the accepted artefact must audit clean').toBe(0);
-    const report = JSON.parse(readFileSync(join(directory, 'audit.json'), 'utf8')) as AuditReport;
+  it('reports the unmutated base clean, so the controls above measure mutation and not the tool', () => {
+    expect(createHash('sha256').update(readFileSync(FIXTURE)).digest('hex'), 'the control base is the pinned artefact')
+      .toBe(FIXTURE_SHA256);
+    const report = auditClean();
     expect(report.failing).toEqual([]);
     expect(report.checked).toBeGreaterThanOrEqual(80);
+  });
+
+  it('audits the artefact this run produced and reports it, without inheriting its verdict', () => {
+    // This is the instrument that saw W-7 fire in run 44191978254. Its output is a *measurement*: if the
+    // accepted case moved, the correct report is one failure in the accepted case plus this line naming
+    // which check moved — not three reds across three files, which is what an assertion here would cause.
+    if (!existsSync(LIVE)) {
+      expect(existsSync(LIVE), 'no live artefact yet: the Phase 2 runtime case has not run on this checkout').toBe(false);
+      return;
+    }
+    const report = auditCopy(LIVE);
+    expect(report.checked, 'the live audit evaluates the same number of checks').toBeGreaterThanOrEqual(80);
+    for (const entry of report.failing) {
+      expect(['W-7', 'P-2b'], `a live failing check must be attributed to a defect, got ${entry.defect}`).toContain(entry.defect);
+    }
   });
 });

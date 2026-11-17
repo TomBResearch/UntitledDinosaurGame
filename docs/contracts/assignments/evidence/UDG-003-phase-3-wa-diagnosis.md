@@ -18,10 +18,13 @@ Records head at the start of the work: `66963eb2b08d3f9cd501342db7f7784864e61f1a
 | `43770588357` attempt 1, `43775706274` (and the seven-run family recorded in UDG-004 §W-7) | GitHub runner | `runtime.test.ts > W-7: …` red with `expected 1 to be 0` | quoted in [`UDG-004-completion.md`](UDG-004-completion.md) | **quote only** — no bundle of that run carries the impairment artefact of the failing attempt |
 | the P-2b container-local red | Linux container | `expected 'seat reservation expired.' to match /token/i` | quoted in the same record and in the Phase 3 draft | **quote only** |
 | `43956003339`, `43962098658`, `44054653793`, `44056946395`, `44059160018` | GitHub runner, docs-only heads | job red before acceptance | **no** `ci-run-*` directory for `43956003339`; the others hold bundles of other tasks | **unclassified, and stays unclassified** — the retained bytes do not contain a junit or an artefact from the failing attempt, and the runner log is not readable without the owner's credentials |
+| `44191978254` | GitHub runner, records-only head `6061145b` | job red, in the capture step | **the run's own evidence artifact, downloaded and read**: `UDG-004-2026-11-17T23-06-08-302Z-6061145b/junit.xml`, extracted verbatim into [`UDG-003-phase-3-hosted-sighting-run-44191978254.json`](UDG-003-phase-3-hosted-sighting-run-44191978254.json) | **classified — `W-7` fired**, message `expected 1 to be +0`, and §9 names the two further reds, which were not defects of the product at all |
 
-Nothing in `/workspace/udg-evidence` contains the string `expected 1 to be 0` or `seat reservation expired`
-in a junit or an impairment artefact from a failing attempt. So the two symptom identities come from prose
-written by the task that observed them, and they are treated here as *reported symptoms*, not as evidence.
+Nothing in `/workspace/udg-evidence` contained the string `expected 1 to be 0` in a junit from a failing
+attempt at the time §§1-8 were written, so the two symptom identities came from prose and were treated as
+*reported symptoms*. **That sentence is superseded for `W-7` by §9**: run `44191978254` produced exactly that
+red, in bytes, fifteen minutes after the streak finished. `P-2b` remains a reported symptom with no retained
+observation.
 
 ## 2. The instrument, so an identity becomes possible
 
@@ -71,6 +74,12 @@ The case reads `artifacts/udg-003-phase-2/transport-impairment.json`, written by
 * Conclusion, stated as a limit rather than as a cause: **the recorded W-7 message is consistent with a
   post-close timer straddle and inconsistent with the explanation it was given.** That is not a demonstrated
   cause — the straddle was never observed — so no assertion is changed on the strength of it.
+* **Forward reference, §9:** a `W-7` red has now been observed in a hosted run. It does not settle this
+  section. The observed junit records the case and the message `expected 1 to be +0`, which vitest takes from
+  the *first* failing assertion in the case; it does not record which of the case's zero-comparisons moved,
+  and the artefact that the failing case read was not retained (§10). So the straddle is now *seen to be
+  possible* in the sense that the case does go red on a hosted runner, and still *unnamed* in the sense this
+  section asks for.
 
 ## 4. P-2b — two refusals of the same rejoin, and the assertion pins one of them
 
@@ -202,3 +211,116 @@ That last point is the transferable one. Under this load the two cases in `runti
 `runs the adversarial population … (W-10, W-9)` and nothing named `W-7`; contention in this file reddens the
 neighbour. It is a further reason not to read any past red in this file as self-identifying, which is the
 condition the audit at §2 exists to end.
+
+## 9. The sighting: `W-7` fired in hosted run `44191978254`, and the answer to "why another suite" is five
+
+Run `44191978254` was the **records-only** push that reported the run before it. No source, test, tool, plan
+or workflow file differed from the green head `f3d30626`. It went red, in the capture step.
+
+The red is now classified from bytes rather than from prose, because the run's own evidence artifact
+(`udg-evidence`, 4 156 191 bytes, artifact id `14379816039`) was downloaded and read. The failing bundle is
+`UDG-004-2026-11-17T23-06-08-302Z-6061145b`, whose `test` command exited 1 with three failing cases out of 644:
+
+| Case | Message, verbatim from the bundle junit | What it actually was |
+| --- | --- | --- |
+| `runtime.test.ts > … P-batch … > W-7: the 4000 ms episode deadline expires with no fresh snapshot, and the three limits stay distinct` | `expected 1 to be +0 // Object.is equality` | **the accepted `W-7` defect, live** — the first hosted sighting with retained bytes |
+| `wa-audit-falsification.test.ts > reports the unmutated artefact clean …` | `the accepted artefact must audit clean: expected 1 to be +0` | **defect WA-5, this author's own** (§10) — not a product defect |
+| `task-vectors.test.ts > proves the audit is falsifiable, per defect, from bytes this run produced` | `the accepted artefact audits clean: expected 1 to be +0` | **the same WA-5**, second copy |
+
+The four other bundles of that run — `UDG-001`, `UDG-002`, `UDG-003` and `UDG-003-TASK` — each ran the same
+644 cases with **zero** failures.
+
+### 9.1 Why a docs-only push goes red "inside another task's suite"
+
+**The whole suite runs five times in one job**, once inside each capture plan (`UDG-001`, `UDG-002`,
+`UDG-003`, `UDG-003-TASK`, `UDG-004`), because each bundle must record its own `test` command and its own
+junit. `W-7` is therefore executed five times per job, in five different processes, at five different points
+in a 25-minute step, each execution re-producing its own impairment artefact. In this job the first four
+executions passed and the fifth — `UDG-004`'s — did not.
+
+So "it fails in another task's suite" is not a cross-task interaction. It is the same case, re-run, landing
+on the invocation where the timing went the wrong way. Two consequences worth stating plainly:
+
+* a red inside `UDG-004`'s bundle is **not** evidence about `UDG-004`, and any triage that reads the owning
+  task from the bundle name will be wrong every time;
+* five invocations per job multiply the chance of a rare timing outcome by five, which is why the failure
+  rate of a *docs-only* push is the right measure of the defect's frequency and not of the push's content.
+
+### 9.2 What the sighting does and does not prove
+
+It proves the symptom, on the pinned toolchain, on a hosted runner, in retained bytes. It does not name the
+counter: vitest reports the first failing assertion (`expected 1 to be +0`), and among the accepted case's
+zero-comparisons the retained junit cannot distinguish them — the 84-check audit exists precisely to make
+that distinction, and it was **unable** to, for the reason in §10.2.
+
+It also does not mean the repeatability streak was wrong. §8 recorded ten consecutive passes under a declared
+load on a declared order, and those ten iterations did pass. Fifteen minutes later the same case failed on an
+unloaded runner in a job whose only content was documents. **A streak is a statement about iterations, not a
+repair**: `W-7` is unresolved, nothing in this work item fixed it, and no assertion was changed to make it
+appear otherwise.
+
+## 10. Defect WA-5: this work item amplified the red it was sent to diagnose
+
+### 10.1 What it was
+
+Two Phase 3 files of this author's own required `artifacts/udg-003-phase-2/transport-impairment.json` to
+audit **clean** — `wa-audit-falsification.test.ts` ("the accepted artefact must audit clean") and
+`task-vectors.test.ts` ("the accepted artefact audits clean"). That file is rewritten *during* the run by the
+accepted Phase 2 runtime case, which is the case `W-7` fails in. So whenever `W-7` fires, both controls
+necessarily fail too, and one defect is reported as three failures in three files — two of which carry
+Phase 3's name and read like capture bugs. Run `44191978254` is the observation: exactly that happened, and
+the two extra reds are the second and third rows of the table in §9.
+
+The assignment forbids making the red more likely. Amplifying one red into three does not make the defect
+clearer; it makes the triage worse, and it put a false suspicion on W-C in exactly the run where W-C's own
+bundle was clean.
+
+### 10.2 The fix, and the limit that survives it
+
+* Both controls now stand on a **pinned artefact whose bytes cannot move**:
+  `tests/support/udg-003/wa-audit-clean-artefact.json`, taken from
+  `UDG-003-2026-11-17T22-02-59-469Z-f3d30626/vectors-phase-2/transport-impairment.json` in the green run
+  `44183269571`, digest `d9e1dce3cec976f9bb5ae1dca2271e0d8a87ecd6c75b1bb990a9e83ebc26f647`, asserted in both
+  files so the base cannot drift silently. Mutations are applied to copies of that base.
+* The **live** artefact is still audited — by `task-vectors.test.ts`, which writes the result into
+  `wa-audit-falsification.json` as `liveArtefactAudit` — but as a **measurement**, so a real `W-7` produces
+  one accepted-case red plus a vector that names which check moved, instead of three reds.
+* `tests/system/udg-003-phase-3/wa-no-amplification.test.ts` is the failing control for WA-5 itself. It builds
+  a synthetic artefact carrying exactly the `W-7` condition and requires: the audit **must** refuse it, naming
+  `w7-deliveries-in-window` (so the suppression is suppression of something real), and the falsification
+  suite **must** still pass against it, in a child vitest process. Both directions are asserted; a regression
+  that reintroduces the dependency fails there rather than in a hosted capture.
+* The same reasoning removed three *outcome* assertions from `task-vectors.test.ts`
+  (`closures.length >= 2`, `no closure outside the offender pair`, `no reconnections`), which re-asserted the
+  accepted population case's verdict over a live artefact and would have relocated a `W-10`-class red into a
+  vector file. The values are still written into `task-abuse-summary.json`; what is asserted is the
+  derivation, not the outcome.
+* The producing tests no longer register skipped tests when inputs are absent; they take the accepted
+  Phase 2 vectors pattern and assert the negative instead. `EVIDENCE-SKIP-PRESENT` no longer appears in a
+  whole-task capture.
+
+**The limit that survives the fix**, and the reviewer needs it: the bundle still does not retain the artefact
+the accepted case *read*. The capture's Phase 2 step re-runs the producer
+(`node tests/runtime/udg-003-phase-2/impairment-population.ts`) and gates the bytes that production yields;
+the `test` command's case reads the file its own producer wrote a few seconds earlier, under
+`artifacts/udg-003-phase-2/`, which no bundle covers. So a future hosted `W-7` red will come with a retained
+artefact that may well audit clean, because it is a different production.
+
+The remedy is small and is **proposed, not applied**, because it changes what the accepted case does inside a
+capture and that is the reviewer's call like the other two:
+
+* **W-A-3.** In the whole-task plan only, set `UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2-case'` on the `test`
+  command. The accepted runtime case and its producer already honour `UDG_VECTORS_OUT`, so the case would
+  write, read and be judged by bytes that the bundle then hash-covers — and the next red would be named by
+  the 84-check audit instead of argued about. The accepted `UDG-003` phase plan stays untouched.
+
+## 11. What W-A concludes, in one paragraph
+
+`W-7` is real, hosted, reproducible-in-the-wild and **unresolved**: it fired in a job whose only content was
+documents, in the fifth of five invocations, with the recorded message, and no assertion was changed to
+silence it. Its mechanism remains analysed and unnamed — the counter that can be reached has no path to `1`,
+the counters that could straddle are pinned to zero, and the sighting does not distinguish them. `P-2b`
+remains a single container-local quote with a documented two-branch mechanism and no second observation. The
+instrument, the declaration, the streak, the sighting, this defect and its fix are all retained, and the
+three open remedies (accept the second refusal text, pin the post-close samples, or point the case's output
+into the bundle) are decisions for the reviewer rather than bets made in the dark at midnight.

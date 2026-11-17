@@ -1,0 +1,57 @@
+{
+  "run": "44191978254",
+  "headSha": "6061145b419f(docs-only follow-up records commit)",
+  "artifact": {
+    "id": 14379816039,
+    "name": "udg-evidence",
+    "sizeBytes": 4156191,
+    "downloadedAt": "2026-11-17T23:15:00Z"
+  },
+  "note": "Extracted from the artifact of the docs-only push run that went red. This is the first time the recorded W-7 assertion identity is backed by retained bytes: the failing case, its message and its counts are copied verbatim out of the bundle junit, not quoted from a log.",
+  "bundles": [
+    {
+      "bundle": "UDG-001-2026-11-17T22-51-13-003Z-6061145b",
+      "testsuiteCounts": "<testsuite name=\"tests/checks/fixture-layout.test.ts\" timestamp=\"2026-11-17T22:53:41.176Z\" hostname=\"ip-10-0-140-52\" tests=\"20\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"2.398066812\"",
+      "failingTestcases": []
+    },
+    {
+      "bundle": "UDG-002-2026-11-17T22-53-57-675Z-6061145b",
+      "testsuiteCounts": "<testsuite name=\"tests/checks/fixture-layout.test.ts\" timestamp=\"2026-11-17T22:56:27.066Z\" hostname=\"ip-10-0-140-52\" tests=\"20\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"2.324450812\"",
+      "failingTestcases": []
+    },
+    {
+      "bundle": "UDG-003-2026-11-17T22-57-03-693Z-6061145b",
+      "testsuiteCounts": "<testsuite name=\"tests/checks/fixture-layout.test.ts\" timestamp=\"2026-11-17T22:59:34.946Z\" hostname=\"ip-10-0-140-52\" tests=\"20\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"2.359094482\"",
+      "failingTestcases": []
+    },
+    {
+      "bundle": "UDG-003-TASK-2026-11-17T23-01-35-535Z-6061145b",
+      "testsuiteCounts": "<testsuite name=\"tests/checks/fixture-layout.test.ts\" timestamp=\"2026-11-17T23:04:08.248Z\" hostname=\"ip-10-0-140-52\" tests=\"20\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"2.366894704\"",
+      "failingTestcases": []
+    },
+    {
+      "bundle": "UDG-004-2026-11-17T23-06-08-302Z-6061145b",
+      "testsuiteCounts": "<testsuite name=\"tests/checks/fixture-layout.test.ts\" timestamp=\"2026-11-17T23:10:30.888Z\" hostname=\"ip-10-0-140-52\" tests=\"20\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"2.432673694\"",
+      "failingTestcases": [
+        {
+          "classname": "tests/system/udg-003-phase-2/runtime.test.ts",
+          "name": "UDG-003 Phase 2 runtime \u2014 the P-batch: impairment (OD-2) and the stage sequence (OD-4) > W-7: the 4000 ms episode deadline expires with no fresh snapshot, and the three limits stay distinct",
+          "message": "expected 1 to be +0 // Object.is equality",
+          "firstLines": "AssertionError: expected 1 to be +0 // Object.is equality - Expected + Received - 0 + 1 \u276f tests/system/udg-003-phase-2/runtime.test.ts:704:66"
+        },
+        {
+          "classname": "tests/system/udg-003-phase-3/wa-audit-falsification.test.ts",
+          "name": "UDG-003 Phase 3 W-A \u2014 the audit is falsifiable, per defect > reports the unmutated artefact clean, so the controls above measure mutation and not the tool",
+          "message": "the accepted artefact must audit clean: expected 1 to be +0 // Object.is equality",
+          "firstLines": "AssertionError: the accepted artefact must audit clean: expected 1 to be +0 // Object.is equality - Expected + Received - 0 + 1 \u276f tests/system/udg-003-phase-3/wa-audit-falsification.test.ts:167:71"
+        },
+        {
+          "classname": "tests/unit/udg-003/task-vectors.test.ts",
+          "name": "UDG-003 Phase 3 task vectors > proves the audit is falsifiable, per defect, from bytes this run produced",
+          "message": "the accepted artefact audits clean: expected 1 to be +0 // Object.is equality",
+          "firstLines": "AssertionError: the accepted artefact audits clean: expected 1 to be +0 // Object.is equality - Expected + Received - 0 + 1 \u276f tests/unit/udg-003/task-vectors.test.ts:295:64"
+        }
+      ]
+    }
+  ]
+}

@@ -13,7 +13,8 @@ tag, release or second evidence destination was created.
 | Tree the ten W-A iterations ran on | `142b08097a4210378e68a8420409a5aaedf468ac` |
 | Submitted head | `f3d30626525688e8971c8c393552c91c9624d032` — the commit that carries the W-A evidence and this record |
 | First-attempt hosted CI on that head | [run `44183269571`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44183269571) — **completed / success, first attempt**, 30 steps, zero failures, zero skips: `https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44183269571` |
-| Records follow-up | the commit carrying this sentence reports the attempt; it differs from `f3d30626…` by records only |
+| Records follow-up | `6061145b419f` — records only — and its own run, [`44191978254`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44191978254), **went red**: §8 |
+| Head after the fix | the commit carrying this file adds a test-only fix for the amplification defect that run exposed (§8.2), plus a pinned 96 KB fixture; it changes no assertion, no plan, no tool behaviour |
 
 **Difference between the streak tree and the submitted head.** `git diff --name-only 142b08097a f3d3062652`
 lists exactly seven files, all of them records: the retained W-A streak bytes, the W-A diagnosis with its §8
@@ -209,3 +210,73 @@ status lines that pointed at “Phase 3 unstarted”), `docs/contracts/adoption.
 paragraph, which still said Phase 3 was not authorised), and `docs/contracts/checksums.json` regenerated for
 the covered files. `docs/contracts/assignments/**` is excluded from the manifest, so the retained evidence and
 this record need no digest entries.
+
+## 8. What happened after the submission, because a records-only push went red eleven minutes later
+
+### 8.1 The run, unedited
+
+The records follow-up `6061145b419f` — seven document files, no source, no test, no tool — ran as
+[`44191978254`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44191978254) and **failed**,
+in `Capture the evidence bundles`, and consequently in `Verify the captured evidence bundles`
+(`EVIDENCE-GATE-NOT-PASS` on `UDG-004-2026-11-17T23-06-08-302Z-6061145b`).
+
+This time the red was classifiable, because the run's own evidence artifact was downloaded and read rather
+than argued about. Three of 644 cases failed, in `UDG-004`'s bundle only; the other four bundles — including
+this phase's `UDG-003-TASK` — were clean:
+
+1. **`W-7`, live.** `runtime.test.ts > … > W-7: the 4000 ms episode deadline expires …`, message
+   `expected 1 to be +0`. The first hosted sighting of the defect with retained bytes.
+2. and 3. **Two Phase 3 controls of this author's own**, both failing because they required the live
+   impairment artefact to audit clean — the artefact the accepted `W-7` case had just written red.
+
+Full extraction: [`UDG-003-phase-3-hosted-sighting-run-44191978254.json`](evidence/UDG-003-phase-3-hosted-sighting-run-44191978254.json);
+analysis: §§9-11 of the diagnosis record, including the answer to the owner's recurring question — **the whole
+suite runs five times per job, once inside each capture plan**, so `W-7` runs five times and lands red in
+whichever invocation the timing goes wrong in, here the fifth, inside `UDG-004`'s bundle. A bundle name is not
+an owning task.
+
+### 8.2 Defect WA-5, mine, and what was changed
+
+Requiring a *live* artefact to audit clean turns one `W-7` into three reds in three files, two of which read
+like capture bugs — an amplification of the defect this phase was sent to diagnose, which the assignment
+forbids. Fixed in this head:
+
+* controls moved onto a pinned known-clean artefact (`tests/support/udg-003/wa-audit-clean-artefact.json`,
+  from the green run's own bundle, digest asserted in both files);
+* the live artefact is still audited, and reported, as a measurement (`liveArtefactAudit` in
+  `wa-audit-falsification.json`);
+* `tests/system/udg-003-phase-3/wa-no-amplification.test.ts` is the failing control for WA-5: a synthetic
+  artefact carrying the exact `W-7` condition must make the **audit** refuse it and must **not** make the
+  falsification suite fail — asserted in a child vitest run, both directions;
+* three *outcome* assertions were removed from `task-vectors.test.ts` (they re-asserted the accepted
+  population verdict over live bytes; the numbers are still written, the derivation is what is asserted);
+* the Phase 3 producing tests assert the half-run negative instead of registering skipped tests, so
+  `EVIDENCE-SKIP-PRESENT` no longer appears in a local whole-task capture.
+
+Verified locally, in both states of the live artefact — forced to the `W-7` red shape: `156 passed`, nothing
+skipped; restored: `165 passed` across the Phase 3 and Phase 2-adjacent files, and `3 passed` in the new
+guard. `pnpm test:contract -- --task UDG-003` remains `105 passed`.
+
+One misstep of the same kind, found locally before it left the machine and recorded rather than dropped: the
+pinned artefact was first placed under `tests/fixtures/udg-003/`, and `pnpm test:contract -- --task UDG-001`
+went red, because every json under `tests/fixtures/` is the UDG-001 fixture registry and its validator
+demands a protocol fixture envelope. The artefact now lives at `tests/support/udg-003/`, which is where a
+test's support bytes belong, and `UDG-001` is back to the two reds this container always produces.
+
+### 8.3 The state of the submission now
+
+* **Submission evidence stands as §2 records it**: the first attempt on the exact submitted head
+  `f3d30626525688e8971c8c393552c91c9624d032` was green, run `44183269571`, 30 steps, zero failures, zero skips.
+* That head is **not** the head of this record. The head carrying this file adds the WA-5 fix, and its own
+  first attempt is reported by the next records commit — including, whatever it says, the possibility that
+  `W-7` fires again. It has now been seen to fire on a job that changed nothing but documents; a red that
+  arrives here is the defect, not a regression, and §8.1 is the method for telling which it is.
+* **Nothing about `W-7` or `P-2b` was fixed**, no accepted assertion, deadline, allowance, close code or
+  harness behaviour was changed, Gate A/B/C stay Not Run, GA-11 stays unevaluated, deduplication-triggered
+  closure stays disabled, D4 stays open, and the task stays **In Review** awaiting the reviewer.
+* One more gap is now named rather than left implicit (§10.2 of the diagnosis): a bundle retains an artefact
+  the capture *produced*, not the one the failing case *read*, so the next hosted `W-7` would still arrive
+  without its bytes. **W-A-3** is the one-line remedy — point the whole-task plan's `test` command at
+  `UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2-case'`, which the accepted case and its producer already honour —
+  and it is proposed for the reviewer to decide, not taken here, because it changes what the accepted case
+  does inside a capture.

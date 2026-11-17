@@ -21,7 +21,9 @@ server-authoritative pose and no asset pipeline — the failed-asset-load check 
 do not exist and validation Gates A, B and C have not run.
 [UDG-003](docs/contracts/UDG-003.md) is **In Progress** — Phases 0 to 2 accepted at phase level, **Phase 3
 submitted 2026-11-17 — In Review, awaiting the reviewer** —
-and its `W-7` suite nondeterminism stays tracked there, not against UDG-004. Every task after
+and its `W-7` suite nondeterminism stays tracked there, not against UDG-004 — `W-7` was **seen firing in
+retained hosted bytes on 2026-11-17** (run `44191978254`, a documents-only push, in the fifth of the job's five
+suite invocations), which is why a red inside another task's capture bundle is not that task's failure. Every task after
 UDG-004 stays unassigned. Refinements P04, P05 and P07 to P10 remain pending (P03 was approved 2026-11-09).
 The planning contracts and their [adoption status](docs/contracts/adoption.md) remain the authority for what may be built next.
 
