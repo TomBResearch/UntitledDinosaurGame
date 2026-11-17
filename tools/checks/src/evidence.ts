@@ -1780,7 +1780,12 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
   writeJson(join(absoluteRunDir, 'commands.json'), {
     schemaVersion: EVIDENCE_SCHEMA_VERSION,
     runId,
-    taskId,
+    // The identity a bundle is verified against is the TASK, and the selector that chose the plan is
+    // recorded beside it. For every accepted plan the two are the same string, so accepted bundles carry
+    // the bytes they always carried; the distinction only appears where a task has a second selector, and
+    // without it a whole-task bundle would be refused for declaring the name of its own plan.
+    taskId: plan.taskId,
+    captureSelector: taskId,
     workingDirectory: 'REPO_ROOT',
     commands: records,
     allSucceeded: failing.length === 0,

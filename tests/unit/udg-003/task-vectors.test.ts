@@ -179,6 +179,24 @@ const setLeaf = (artefact: Record<string, unknown>, dotted: string, value: unkno
   walked[keys[keys.length - 1] ?? ''] = value;
 };
 
+/**
+ * Re-hash every file a manifest directory lists and say whether the bytes still match — rule R-1 of
+ * section 8.2.1, measured from the bytes rather than copied from the manifest being checked.
+ */
+const digestsMatchIn = (directory: string): boolean => {
+  const manifest = readJson(join(directory, 'vectors-manifest.json')) as { files?: { name: string; sha256: string }[] };
+  const listed = manifest.files ?? [];
+  return listed.length > 0
+    && listed.every((entry) => {
+      try {
+        return sha256Of(readFileSync(join(directory, entry.name))) === entry.sha256;
+      } catch {
+        return false;
+      }
+    });
+};
+
+
 describe('UDG-003 Phase 3 task vectors', () => {
   it('refuses to write a whole-task manifest over a half-run', () => {
     if (READY) return;
@@ -526,8 +544,10 @@ describe('UDG-003 Phase 3 task vectors', () => {
       clientFrameQueue: { highWater: number; declaredCap: number; rows: number };
     };
 
-    const phase1Files = ((readJson(phaseVector('phase-1', 'vectors-manifest.json')) as { files?: unknown[] }).files ?? []).length;
-    const phase2Files = ((readJson(phaseVector('phase-2', 'vectors-manifest.json')) as { files?: unknown[] }).files ?? []).length;
+    const phase1Manifest = readJson(phaseVector('phase-1', 'vectors-manifest.json')) as { files?: unknown[] };
+    const phase2Manifest = readJson(phaseVector('phase-2', 'vectors-manifest.json')) as { files?: unknown[] };
+    const phase1Files = (phase1Manifest.files ?? []).length;
+    const phase2Files = (phase2Manifest.files ?? []).length;
     // `report.measured` IS this object (the collector does not unwrap a `measured` key), so the plan's
     // threshold keys are dotted paths INTO it: `wa.streakPerDefect.w7` resolves through `wa` and
     // `streakPerDefect`. Flat dotted keys would resolve to nothing and every threshold would read as
@@ -540,7 +560,15 @@ describe('UDG-003 Phase 3 task vectors', () => {
       phase: { scope: 'task' },
       generatedAt: new Date().toISOString(),
       toolchain: { node: process.version },
-      vectors: { artefacts: phase1Files + phase2Files + PHASE_3_VECTOR_FILES.length },
+      vectors: {
+        artefacts: phase1Files + phase2Files + PHASE_3_VECTOR_FILES.length,
+        // Recomputed here from the bytes on disk, not copied from a manifest: a digest that matches the
+        // manifest but not the file is exactly what the gate exists to catch.
+        digestsMatchBytes:
+          digestsMatchIn(dirname(phaseVector('phase-1', 'vectors-manifest.json')))
+          && digestsMatchIn(dirname(phaseVector('phase-2', 'vectors-manifest.json')))
+          && digestsMatchIn(OUTPUT_DIRECTORY),
+      },
       wa: {
         declaredBeforeStreak: committedAt !== '' && Date.parse(committedAt) <= Date.parse(streak.started),
         declaredPasses: declaration.rule.passes,

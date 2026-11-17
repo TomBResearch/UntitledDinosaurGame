@@ -46,6 +46,25 @@ const declaration = JSON.parse(readFileSync(declarationPath, 'utf8')) as Declara
 const w7Id = declaration.caseIds.find((id) => id.includes('W-7:')) ?? '';
 const p2bId = declaration.caseIds.find((id) => id.includes('P-2b,')) ?? '';
 
+/**
+ * The streak is evidence about a tree, so it records which tree and refuses to pretend. A run started on a
+ * dirty working tree cannot be attributed to a commit, and one aborted attempt was exactly that: it was
+ * killed at iteration 1 and no iteration of it is counted. `UDG_WA_ALLOW_DIRTY=1` overrides the refusal for
+ * a diagnostic run, which then carries `workingTreeDirty: true` in its own summary.
+ */
+const git = (args: readonly string[]): string =>
+  spawnSync('git', [...args], { cwd: process.cwd(), encoding: 'utf8' }).stdout.trim();
+
+const implementationSha = git(['rev-parse', 'HEAD']);
+const workingTreeDirty = git(['status', '--porcelain']) !== '';
+if (workingTreeDirty && process.env['UDG_WA_ALLOW_DIRTY'] !== '1') {
+  process.stderr.write(
+    '[wa-streak] refusing to run: the working tree is dirty, so no iteration of this run would be attributable to a commit\n'
+      + '[wa-streak] commit the tree or set UDG_WA_ALLOW_DIRTY=1 for a run that will be labelled diagnostic\n',
+  );
+  process.exit(2);
+}
+
 mkdirSync(outDir, { recursive: true });
 writeFileSync(join(outDir, 'declaration.json'), `${JSON.stringify(declaration, null, 2)}\n`);
 
@@ -238,6 +257,9 @@ const summary = {
   started,
   finished: new Date().toISOString(),
   machineClass: { cpus: cpus().length, nodeVersion: process.version },
+  implementationSha,
+  workingTreeDirty,
+  branch: git(['rev-parse', '--abbrev-ref', 'HEAD']),
   declaredLoad: declaration.load,
   declaredOrder: declaration.testOrder,
   iterations,
