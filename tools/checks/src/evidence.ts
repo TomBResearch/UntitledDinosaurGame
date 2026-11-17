@@ -310,6 +310,44 @@ export const PHASE_2_LABEL = 'phase-2';
  * rather than demand that one file claim to be the other (review correction R-2, option A).
  */
 export const PHASE_1_MEASUREMENTS_SCOPE = 'phase-1';
+
+/**
+ * The whole-task bundle label (UDG-003 Phase 3, assignment §5.1, owner ruling D-P3-4).
+ *
+ * A *second selector* for the same task, never a re-labelling of the phase plan: `UDG-003` keeps its
+ * `phase-2` label, thresholds and prose byte-identically, and `UDG-003-TASK` is appended beside it. The
+ * label is what the verifier selects the plan by (§5.2), because a bundle's plan must follow from the bytes
+ * it carries and not from the directory name it happens to sit in.
+ */
+export const TASK_PHASE_LABEL = 'task';
+export const TASK_PHASE_MEASUREMENTS_SCOPE = 'task';
+export const TASK_SELECTOR = 'UDG-003-TASK';
+/** The phase label the Phase 3 manifest declares and the gate selects its list by. */
+export const PHASE_3_LABEL = 'phase-3';
+export const TASK_SCOPE_NOTE =
+  'UDG-003 as a whole: the accepted Phase 1 authority core and Phase 2 transport substrate, the Phase 3 ' +
+  'abuse/evidence/CI completion, and both vector sets carried alongside the Phase 3 set. It is not a Gate ' +
+  'A, B or C pass — formal Gate A execution belongs to UDG-SPIKE-001 and GA-11 is not evaluated here — not a ' +
+  'third-party stack compatibility claim, and not the production client (UDG-008) or the navigation-result ' +
+  'publication half of AC-6 (UDG-007). The phase bundles from earlier runs remain the accepted phase ' +
+  'records; this label describes the artefacts inside this bundle, and the task stays In Progress until the ' +
+  'owner accepts it.';
+
+/**
+ * The Phase 3 vector set (assignment §5 W-B/W-C): the whole-task attribution, the W-A declaration and its
+ * retained streak evidence, the task-level abuse and buffer-depth reading, and the non-claims register.
+ * Every file is produced by the task vectors suite from committed or same-run inputs, so the whole-task
+ * capture is reproducible on a hosted runner that never saw the implementer's machine.
+ */
+export const PHASE_3_VECTOR_FILES: readonly string[] = [
+  'wa-declaration.json',
+  'wa-streak.json',
+  'wa-audit-falsification.json',
+  'task-abuse-summary.json',
+  'task-attribution.json',
+  'task-non-claims.json',
+];
+
 export const PHASE_2_SCOPE_NOTE =
   'UDG-003 Phase 2 (transport substrate: RegionRoom, ColyseusInputAdapter, the ADR-0003 envelope and its ' +
   'consequences) plus the Phase 1 vectors it still requires. It is not a third-party stack compatibility ' +
@@ -1038,6 +1076,191 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       { label: 'test-contract-UDG-001', argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-001'] },
     ],
   },
+  /**
+   * UDG-003 Phase 3 (§5 W-C, owner ruling D-P3-4): a **second selector for the same task**, appended here
+   * and nothing else in this map touched. The `UDG-003` entry above keeps its `phase-2` label, its
+   * thresholds and its report prose byte-identically — its pinned digest is asserted unchanged in
+   * `tests/contracts/UDG-004.test.ts` and `tests/unit/udg-004/evidence-gates.test.ts`, and accepted bundles
+   * keep verifying (U2-1). This entry exists so the whole task can be captured and gated as one bundle
+   * without editing, re-labelling or re-digesting the phase evidence that was accepted before it.
+   *
+   * What makes it a whole-task bundle rather than a bigger phase bundle: it carries all three vector sets,
+   * each gated against its own manifest and its own phase label; its measurement block declares the task
+   * scope; and its report says what the task does not claim (Gate A Not Run, GA-11 unevaluated, GA-10a/b
+   * and AC-6's results half with UDG-007, the production client with UDG-008).
+   */
+  'UDG-003-TASK': {
+    taskId: 'UDG-003',
+    phase: {
+      label: TASK_PHASE_LABEL,
+      note: TASK_SCOPE_NOTE,
+      measurementsScope: TASK_PHASE_MEASUREMENTS_SCOPE,
+    },
+    requiredFiles: [
+      'environment.json',
+      'commands.json',
+      'junit.xml',
+      'boundary-report.json',
+      'build.log',
+      'measurements/UDG-003-TASK.json',
+      'vectors/vectors-manifest.json',
+      ...PHASE_1_VECTOR_FILES.map((name) => `vectors/${name}`),
+      'vectors-phase-2/vectors-manifest.json',
+      ...PHASE_2_VECTOR_FILES.map((name) => `vectors-phase-2/${name}`),
+      'vectors-phase-3/vectors-manifest.json',
+      ...PHASE_3_VECTOR_FILES.map((name) => `vectors-phase-3/${name}`),
+      'probes/probe-run-index.json',
+      `probes/${PROBE_LEDGER_FILE}`,
+      'report.json',
+    ],
+    requiresMeasurements: true,
+    artefactsIntoBundle: [
+      { source: 'artifacts/udg-003-phase-1', target: 'vectors/' },
+      { source: 'artifacts/probes', target: 'probes/' },
+    ],
+    manifests: [
+      { path: 'vectors/vectors-manifest.json', phase: PHASE_1_LABEL, requiredFiles: [...PHASE_1_VECTOR_FILES] },
+      { path: 'vectors-phase-2/vectors-manifest.json', phase: PHASE_2_LABEL, requiredFiles: [...PHASE_2_VECTOR_FILES] },
+      { path: 'vectors-phase-3/vectors-manifest.json', phase: PHASE_3_LABEL, requiredFiles: [...PHASE_3_VECTOR_FILES] },
+    ],
+    measurementsIntoBundle: true,
+    identityArtefacts: [
+      'vectors/vectors-manifest.json',
+      'vectors-phase-2/vectors-manifest.json',
+      'vectors-phase-3/vectors-manifest.json',
+      'measurements/UDG-003-TASK.json',
+    ],
+    reportProse: {
+      profiles:
+        'No network profile applies to the UDG-003 bundle: the authority core owns no socket and the transport suites run against the pinned local harness. Spike runs record LAN, moderate, elevated and poor profiles with achieved RTT and jitter statistics; GA-11 belongs to that execution, not to this bundle.',
+      notApplicable: [
+        { path: 'traces/', reason: 'The task produces journal and tick traces under vectors/ and vectors-phase-2/, not gameplay traces: no engine, camera or rendered frame exists at UDG-003.' },
+        { path: 'metrics/', reason: 'Buffer depth and tick metrics are carried as named vector artefacts (buffer-depth.csv, tick-metrics.json); raw sampling CSVs belong to the spike profiles.' },
+        { path: 'browser/', reason: 'No browser suite belongs to UDG-003; the browser evidence is UDG-004\'s own bundle.' },
+        { path: 'decisions/', reason: 'No gate decision belongs to UDG-003. Gates A, B and C remain Not Run, formal Gate A execution is UDG-SPIKE-001\'s, and stackCompatibility remains not-established.' },
+      ],
+      summaryCiNote: {
+        noCiRun:
+          'UDG-003 as a whole stays In Review until the owner accepts it, and this summary records no CI run.',
+        ciRun:
+          'Workflow ci on the pushed commit, identified by the url field, for UDG-003 as a whole (Phases 1, 2 and 3 artefacts). It is not a Gate A, B or C pass, not a third-party stack compatibility claim, and not a production-client claim: GA-11 is unevaluated here, GA-10a/GA-10b and AC-6\'s navigation-result half belong to UDG-007, and the production client belongs to UDG-008.',
+      },
+    },
+    thresholds: {
+      'toolchain.node': '=== "v24.22.2" (unchanged from the accepted foundation)',
+      // The pairing rule, restated for the task bundle: this names measurements/UDG-003-TASK.json, the
+      // task-scope block the Phase 3 suite writes, and NOT the accepted phase block. Both files exist; the
+      // bundle declares which one it pairs with (R-2, option A extended, not rewritten).
+      'phase.scope': '=== "task" on measurements/UDG-003-TASK.json — paired with report.json phase === "task" at capture and asserted at verification; the accepted phase block keeps its own label and its own bundle',
+      'vectors.artefacts': `=== ${String(PHASE_1_VECTOR_FILES.length)} phase-1, ${String(PHASE_2_VECTOR_FILES.length)} phase-2 and ${String(PHASE_3_VECTOR_FILES.length)} phase-3 artefacts listed, each present with a matching digest and each manifest declaring its own phase`,
+      'vectors.digestsMatchBytes': '=== true (every artefact re-read from disk hashes to the digest its manifest declares)',
+      // Every key below is a dotted path INTO measurements/UDG-003-TASK.json, because `report.measured`
+      // is that object; a flat key with dots in its name resolves to nothing and makes the threshold
+      // decoration (EVIDENCE-THRESHOLD-UNMEASURED).
+      'wa.declaredBeforeStreak': '=== true (the declaration commit timestamp is not later than the streak\'s own recorded start — a comparison of two timestamps the repository holds, not a claim in prose)',
+      'wa.declaredPasses': '=== 10 (the assignment fixes the streak at ten; the streak cannot re-declare its own target)',
+      'wa.streakPerDefect.w7': '>= 10 consecutive W-7 passes, scored by case id out of each iteration\'s own junit — not from the suite exit code',
+      'wa.streakPerDefect.p2b': '>= 10 consecutive P-2b passes, scored separately from the same iterations',
+      'wa.iterationsWithNonZeroSuiteExit': '>= 0, and reported rather than hidden: an unrelated red in the full-suite order leaves a non-zero exit that per-case scoring deliberately does not inherit',
+      'wa.auditFalsifiable': '=== true (the per-assertion audit names a W-7 mutation, names a P-2b mutation and refuses a mutated artefact; an audit only ever seen passing is not a control)',
+      'task.bufferHighWater': '<= task.bufferDeclaredCap — the client transport buffer high-water over the tick ledger, which is a different queue from the authority queue and the two are not comparable',
+      'task.bufferDeclaredCap': '=== 32 (the declared client-frame cap; the discrete 1 MiB / 60-second half belongs to UDG-007 and is named, not counted)',
+      'task.bufferBound': '=== true',
+      'task.bufferLedgerRows': '>= 1 (the ledger is per tick: an empty ledger is a missing measurement, not a depth of zero)',
+      'task.offendersClosedAttributed': '>= 2, each closed with 4100 or 4101 and attributed to an offender entity in the room\'s own closure list',
+      'task.compliantSeatClosures': '=== 0 (a compliant seat that had been closed would appear here as a closure outside the offender pair)',
+      'task.observerIsolation': '=== true',
+      'task.abusePopulationVerdict': '=== "pass" — the accepted population verdict, read from the same artefact the accepted runtime case reads and fails on; named here so a red says which probe it arrived in',
+      'task.noGateAClaim': '=== true (the bundle states Gate A Not Run, GA-11 unevaluated, dedupe-triggered closure disabled, D4 open and stackCompatibility not-established)',
+      'capture.commandsRun': '>= 8 commands, capture.failingCommands === []',
+    },
+    commands: [
+      { label: 'install-frozen', argv: ['pnpm', 'install', '--frozen-lockfile'] },
+      { label: 'typecheck', argv: ['pnpm', 'typecheck'] },
+      { label: 'lint', argv: ['pnpm', 'lint'], env: { UDG_BOUNDARY_REPORT: 'BUNDLE/boundary-report.json' } },
+      {
+        label: 'test',
+        argv: ['pnpm', 'test'],
+        env: {
+          UDG_EVIDENCE_JUNIT: 'BUNDLE/junit.xml',
+          UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-003.json',
+          UDG_PROBE_INVOCATION: 'evidence-capture-task',
+        },
+        junit: true,
+        measurements: true,
+      },
+      { label: 'build', argv: ['pnpm', 'build'], buildLog: true },
+      // Phase 1's accepted vector set, captured and gated here too: the whole-task bundle carries it, it
+      // does not replace it (§8.2.1 rule 3).
+      {
+        label: 'phase-1-vectors',
+        argv: ['pnpm', 'exec', 'vitest', 'run', 'tests/unit/udg-003/vectors.test.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors', UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-003.json' },
+        measurements: true,
+      },
+      { label: 'phase-1-vectors-verify', argv: ['node', 'tools/checks/dist/evidence.js', 'vectors', '--dir', 'BUNDLE/vectors'] },
+      // Phase 2's runtime producers, in the accepted order (the order is part of the contract: the
+      // manifest names everything the producers wrote, so it must run last of them).
+      {
+        label: 'phase-2-reference-trace',
+        argv: ['node', 'tests/reference/flat-direct-step.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      {
+        label: 'phase-2-abuse-population',
+        argv: ['node', 'tests/runtime/udg-003-phase-2/abuse-population.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      {
+        label: 'phase-2-recovery-scenarios',
+        argv: ['node', 'tests/runtime/udg-003-phase-2/recovery-scenarios.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      {
+        label: 'phase-2-isolation-comparison',
+        argv: ['node', 'tests/runtime/udg-003-phase-2/projection-isolation.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      {
+        label: 'phase-2-impairment-population',
+        argv: ['node', 'tests/runtime/udg-003-phase-2/impairment-population.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      {
+        label: 'phase-2-stage-sequence',
+        argv: ['node', 'tests/runtime/udg-003-phase-2/stage-sequence.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      {
+        label: 'phase-2-journal-replay',
+        argv: ['node', 'tests/runtime/udg-003-phase-2/journal-replay.ts'],
+        env: {
+          UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2',
+          UDG_PR14_RESULT: 'artifacts/probes/PR-14.probe-result.json',
+        },
+      },
+      {
+        label: 'phase-2-vectors',
+        argv: ['pnpm', 'exec', 'vitest', 'run', 'tests/unit/udg-003-phase-2/vectors.test.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2' },
+      },
+      { label: 'phase-2-vectors-verify', argv: ['node', 'tools/checks/dist/evidence.js', 'vectors', '--dir', 'BUNDLE/vectors-phase-2', '--expect-phase', 'phase-2'] },
+      // Phase 3's own set: the W-A declaration and retained streak reading, the falsification control's
+      // result, the task-level abuse and buffer-depth reading, the whole-task attribution and the
+      // non-claims register. It writes the task measurement block the bundle pairs with.
+      {
+        label: 'phase-3-task-vectors',
+        argv: ['pnpm', 'exec', 'vitest', 'run', 'tests/unit/udg-003/task-vectors.test.ts'],
+        env: { UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-3', UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-003-TASK.json' },
+        measurements: true,
+      },
+      { label: 'phase-3-vectors-verify', argv: ['node', 'tools/checks/dist/evidence.js', 'vectors', '--dir', 'BUNDLE/vectors-phase-3', '--expect-phase', 'phase-3'] },
+      { label: 'test-boundaries', argv: ['pnpm', 'test:boundaries'] },
+      { label: 'test-contract-UDG-001', argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-001'] },
+      { label: 'test-contract-UDG-002', argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-002'] },
+      { label: 'test-contract-UDG-003', argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-003'] },
+    ],
+  },
 };
 
 const SECRET_PATTERNS: readonly { readonly id: string; readonly pattern: RegExp }[] = [
@@ -1254,6 +1477,34 @@ const readMeasurements = (root: string, taskId: string): Record<string, unknown>
     return { error: 'measurements file is not valid JSON' };
   }
 };
+
+/**
+ * The measurements file a capture reads, by selector key with a fallback to the plan's task.
+ *
+ * Every accepted plan uses selector === plan.taskId, so for accepted captures this resolves to exactly the
+ * file it always read. The key-based lookup exists for the one case where a task gains a second selector:
+ * the whole-task bundle reads its own measurement block, and a task-scope block is a different claim from
+ * the phase block the phase plan pairs with (R-2, option A stays intact for the phase bundle).
+ */
+const measurementsKeyFor = (root: string, selector: string, plan: CapturePlan): string =>
+  existsSync(measurementsPath(root, selector)) ? selector : plan.taskId;
+
+/**
+ * The plan a bundle is verified against (§5.2: content-driven, never name-driven).
+ *
+ * A bundle that declares `phase: "task"` is verified against the whole-task plan; every other bundle —
+ * unlabelled historical bundles included, and every phase-labelled one — resolves by `report.taskId` exactly
+ * as it always did. Selection reads the report, so renaming or copying a directory cannot choose a friendlier
+ * plan, and if the whole-task plan were ever removed the fallback resolves to the task's phase plan, whose
+ * label check then refuses a `task` bundle rather than passing it unverified.
+ */
+export const planForBundle = (
+  plans: Readonly<Record<string, CapturePlan>>,
+  report: Pick<EvidenceReport, 'taskId' | 'phase'>,
+): CapturePlan | undefined =>
+  report.phase === TASK_PHASE_LABEL
+    ? plans[`${report.taskId}-TASK`] ?? plans[report.taskId]
+    : plans[report.taskId];
 
 /**
  * Sanitise every file a bundle directory holds, in place, and report which ones changed.
@@ -1493,15 +1744,16 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
   }
 
   writeJson(join(absoluteRunDir, 'environment.json'), environmentRecord(root, runAlias));
-  const measurements = readMeasurements(root, taskId);
+  const measurementsKey = measurementsKeyFor(root, taskId, plan);
+  const measurements = readMeasurements(root, measurementsKey);
   if (plan.measurementsIntoBundle === true) {
     // The measured values behind report.measured become hash-covered bytes in the bundle, so a later
     // reader can check them without trusting the summary that embeds them.
-    const raw = readOptional(measurementsPath(root, taskId));
+    const raw = readOptional(measurementsPath(root, measurementsKey));
     if (raw !== undefined) {
       writeFileSyncEnsuring(
-        join(absoluteRunDir, 'measurements', `${taskId}.json`),
-        clean(`measurements/${taskId}.json`, `${JSON.stringify(JSON.parse(raw), null, 2)}\n`),
+        join(absoluteRunDir, 'measurements', `${measurementsKey}.json`),
+        clean(`measurements/${measurementsKey}.json`, `${JSON.stringify(JSON.parse(raw), null, 2)}\n`),
       );
     }
   }
@@ -2035,8 +2287,9 @@ export const verify = (root: string, runRelative: string): VerifyResult => {
     }
   }
 
-  // Required artefacts for the task's own contract.
-  const plan = CAPTURE_PLANS[report.taskId];
+  // Required artefacts for the task's own contract. The plan is selected by what the bundle *declares*
+  // (§5.2): a whole-task bundle resolves to the whole-task plan, everything else exactly as before.
+  const plan = planForBundle(CAPTURE_PLANS, report);
   if (plan !== undefined) {
     for (const required of plan.requiredFiles) {
       if (!existsSync(join(absoluteRunDir, required))) {
@@ -2943,9 +3196,21 @@ const main = (): number => {
   if (mode === 'vectors') {
     // The CI gate for the Phase 1 vectors, independent of any bundle: a missing manifest, a missing vector,
     // a changed byte or a manifest from another commit all exit non-zero (reviewer correction 4).
-    const directory = requireFlag(flags, 'dir', 'usage: evidence.js vectors --dir <directory> [--expect-task UDG-003] [--expect-phase phase-1|phase-2] [--allow-dirty]');
+    const directory = requireFlag(
+      flags,
+      'dir',
+      'usage: evidence.js vectors --dir <directory> [--expect-task UDG-003] [--expect-phase phase-1|phase-2|phase-3] [--allow-dirty]',
+    );
     const phase = flagString(flags, 'expect-phase') ?? PHASE_1_LABEL;
-    const requiredFiles = phase === PHASE_2_LABEL ? PHASE_2_VECTOR_FILES : PHASE_1_VECTOR_FILES;
+    // A phase the tool does not know is refused rather than defaulted: falling through to Phase 1's list
+    // would gate a Phase 3 directory against a list that has nothing to do with it, and pass.
+    const knownPhases = [PHASE_1_LABEL, PHASE_2_LABEL, PHASE_3_LABEL];
+    if (!knownPhases.includes(phase)) {
+      process.stderr.write(`::error::unknown --expect-phase ${phase}: the gate knows ${knownPhases.join(', ')}\n`);
+      return 2;
+    }
+    const requiredFiles = phase === PHASE_3_LABEL ? PHASE_3_VECTOR_FILES
+      : phase === PHASE_2_LABEL ? PHASE_2_VECTOR_FILES : PHASE_1_VECTOR_FILES;
     const issues = validateVectorManifest(resolve(process.cwd(), directory), {
       taskId: flagString(flags, 'expect-task') ?? 'UDG-003',
       phase,

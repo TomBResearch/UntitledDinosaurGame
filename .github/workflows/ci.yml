@@ -180,6 +180,22 @@ jobs:
           pnpm --filter @udg/checks build
           node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-2 --expect-phase phase-2
 
+      # Phase 3's own set (UDG-003 Phase 3 §5 W-B/W-C): the W-A load/order declaration and the retained
+      # streak reading, the audit's falsification result, the task-level abuse and buffer-depth reading, the
+      # whole-task attribution and the non-claims register. It reads the phase artefacts the step above
+      # wrote, so it runs after them, and the tool gates the directory against the gate's OWN Phase 3 list:
+      # a half-run fails the manifest rather than passing as a smaller set.
+      - name: Record and gate the UDG-003 Phase 3 task vectors
+        if: ${{ !cancelled() }}
+        env:
+          UDG_VECTORS_OUT: artifacts/udg-003-phase-3
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run tests/unit/udg-003/task-vectors.test.ts
+          pnpm --filter @udg/checks build
+          node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-3 --expect-phase phase-3
+
       # Probe evidence is only evidence if it can say which invocation wrote it. This step checks every
       # invocation the job produced - including a failing one - and fails on unattributed bytes, on a
       # result file attributed to the wrong invocation, and on any failed invocation that the latest index

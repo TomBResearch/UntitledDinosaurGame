@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "taskId": "UDG-003",
+  "phase": "phase-3",
+  "workItem": "W-A",
+  "defect": "WA-4",
+  "scenario": "pressure-throttles-and-never-closes",
+  "observed": {
+    "pressureWatched": false,
+    "throttledSeen": false,
+    "anyClosing": false,
+    "closuresTotal": 0,
+    "retired": 0,
+    "pressureStillSeated": true,
+    "seatsAtPressureStart": 6,
+    "construction": {
+      "framesSent": 160,
+      "pacingMs": 42,
+      "sendElapsedMs": 7753,
+      "measuredArrivalPerSecond": 20.64,
+      "peakDepthSampledFromServer": 7,
+      "pressureLine": 8,
+      "arrivalPerSecond": 23.81,
+      "drainPerSecond": 20,
+      "rateCeilingPerSecond": 30,
+      "insideBand": true
+    },
+    "drained": true,
+    "window": {
+      "stampsSent": 160,
+      "stampsConsumed": 160,
+      "stampsRefused": 0,
+      "stampsDroppedAtClose": 0,
+      "missingStamps": [],
+      "duplicateStamps": [],
+      "pairingConsistent": true,
+      "collidedStamps": 0,
+      "movedMeters": 0,
+      "allSentStampsConsumed": true
+    },
+    "closureLedger": []
+  },
+  "finding": "The scenario constructs a pressure band from designed rates (arrival 23.81/s against a 20/s drain, rate ceiling 30/s) and then requires the room to observe depth above its pressure line (8). Under CPU contention the sender itself runs late \u2014 160 frames at a 42 ms pace took 7753 ms instead of about 6720 ms \u2014 so the measured arrival rate fell to 20.64/s, barely above the drain, and peak depth reached 7. The premise was never established, and `construction.insideBand` still reads true because it is computed from the designed rates rather than the measured ones.",
+  "whyItIsDisclosedRatherThanFixed": "It is not one of the two defects W-A was assigned (W-7, P-2b), it belongs to the accepted Phase 2 population probe and to the W-10/W-9 case, and the assertion that reads it (`runs the adversarial population and reads back a passing verdict`) is accepted evidence. Changing that probe's premise check is a different grant; the numbers are published here so the next reader does not have to rediscover them.",
+  "sameFamilyAs": "the W-7 symptom class: a fixture whose wall-clock premise is assumed rather than re-read from measured bytes"
+}

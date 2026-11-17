@@ -24,6 +24,7 @@ interface Declaration {
   load: { spinners: number };
   rule: { passes: number };
   testOrder: { command: string };
+  junitScoring?: { file: string };
 }
 
 const args = process.argv.slice(2);
@@ -56,12 +57,24 @@ const loads: ReturnType<typeof spawnSync>[] = [];
 for (let index = 0; index < declaration.load.spinners; index += 1) {
   // Detached background load: spawnSync with `detached` + unref, so the spinner outlives this call and is
   // killed by pid at the end.
-  const child = spawnSync('sh', ['-c', `node ${spinnerPath} & echo $!`], { encoding: 'utf8' });
+  // stdout/stderr go to a file, not the inherited pipe: a detached spinner that holds the pipe would make
+  // spawnSync wait for the load it was supposed to leave running.
+  const child = spawnSync('sh', ['-c', `node ${spinnerPath} >${join(outDir, `spinner-${String(index)}.log`)} 2>&1 & echo $!`], {
+    encoding: 'utf8',
+  });
   loads.push({ pid: Number((child.stdout ?? '0').trim()) } as never);
 }
 const spinnerPids = loads.map((entry) => (entry as unknown as { pid: number }).pid);
 
 /** The case outcomes of one iteration, read from that iteration's junit. */
+/**
+ * The declared cases, scored out of one iteration's junit by file and full case name.
+ *
+ * Not the suite's exit code (five unrelated local reds coexisted with both named cases passing), and not a
+ * substring search for `W-7` (Phase 3 adds its own tests whose names contain that token). A case passes only
+ * when a testcase whose `classname` is the declared file has a `name` ending in the declared case name and
+ * carries no `<failure>`/`<error>`; absent, skipped or uncollected is `missing`, and `missing` is not a pass.
+ */
 const casesFromJunit = (file: string): Map<string, 'passed' | 'failed' | 'missing'> => {
   const outcomes = new Map<string, 'passed' | 'failed' | 'missing'>();
   let raw: string;
@@ -73,16 +86,44 @@ const casesFromJunit = (file: string): Map<string, 'passed' | 'failed' | 'missin
       [p2bId, 'missing'],
     ]);
   }
+  const declaredFile = declaration.junitScoring?.file ?? 'tests/system/udg-003-phase-2/runtime.test.ts';
+  // Split on the element boundary rather than matching a whole element with one regex: the attributes
+  // carry `&gt;` escaped, never a raw `>`, so the first raw `>` after `<testcase` ends them.
+  const unescape = (value: string): string =>
+    value
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&amp;/g, '&');
+  const attribute = (chunk: string, name: string): string => {
+    // `(?:^|\s)` is not decoration: a bare `name="` also occurs inside `classname="`, and without the
+    // boundary every case's name came back as its file, which reads as "the case never ran".
+    const found = new RegExp(`(?:^|\\s)${name}="([^"]*)"`).exec(chunk);
+    return found?.[1] === undefined ? '' : unescape(found[1]);
+  };
+  const collected: { classname: string; name: string; failed: boolean }[] = [];
+  for (const piece of raw.split('<testcase').slice(1)) {
+    const section = piece.split('</testcase>')[0] ?? '';
+    const openEnd = section.indexOf('>');
+    if (openEnd === -1) continue;
+    const head = section.slice(0, openEnd);
+    collected.push({
+      classname: attribute(head, 'classname'),
+      name: attribute(head, 'name'),
+      failed: /<(failure|error)\b/.test(section.slice(openEnd + 1)),
+    });
+  }
   for (const id of [w7Id, p2bId]) {
-    const name = id.split('> ').pop() ?? id;
-    const escaped = name.replace(/[&<>"']/g, (character) => `&${{ '&': 'amp', '<': 'lt', '>': 'gt', '"': 'quot', "'": 'apos' }[character] ?? character}`);
-    const caseStart = raw.indexOf(`name="${escaped}"`);
-    if (caseStart === -1) {
+    const caseName = id.split(' > ').pop() ?? id;
+    const found = collected.filter((entry) => entry.classname === declaredFile && entry.name.endsWith(caseName));
+    if (found.length !== 1) {
+      // Zero matches means the case never ran; two means the declaration does not identify one case.
+      // Neither is a pass, and neither is allowed to look like one.
       outcomes.set(id, 'missing');
       continue;
     }
-    const block = raw.slice(caseStart, raw.indexOf('</testcase>', caseStart) === -1 ? caseStart + 4000 : raw.indexOf('</testcase>', caseStart));
-    outcomes.set(id, /<failure/.test(block) ? 'failed' : 'passed');
+    outcomes.set(id, found[0]?.failed === true ? 'failed' : 'passed');
   }
   return outcomes;
 };
@@ -90,6 +131,7 @@ const casesFromJunit = (file: string): Map<string, 'passed' | 'failed' | 'missin
 interface Iteration {
   iteration: number;
   suiteExit: number;
+  suiteCommand: string;
   seconds: number;
   w7: string;
   p2b: string;
@@ -147,6 +189,7 @@ for (let iteration = 1; iteration <= iterations; iteration += 1) {
   const row: Iteration = {
     iteration,
     suiteExit: suite.status ?? -1,
+    suiteCommand: declaration.testOrder.command,
     seconds: Number(((Date.now() - began) / 1000).toFixed(1)),
     w7: outcomes.get(w7Id) ?? 'missing',
     p2b: outcomes.get(p2bId) ?? 'missing',

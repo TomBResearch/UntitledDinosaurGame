@@ -3,11 +3,11 @@
   "task": "UDG-003",
   "phase": "phase-3",
   "workItem": "W-A",
-  "purpose": "The load and test order for the W-A repeatability check, DECLARED BEFORE the streak ran, per the owner ruling recorded at assignment §1 (D-P3-9) and the record §6.5(2). This file is the declaration; the streak outputs are `wa-streak-w7.json` and `wa-streak-p2b.json` beside it. The declaration was committed before the first streak run and is not edited afterwards.",
+  "purpose": "The load and test order for the W-A repeatability check, DECLARED BEFORE the streak ran, per the owner ruling recorded at assignment §1 (D-P3-9) and the record §6.5(2). This file is the declaration; the retained streak is UDG-003-phase-3-wa-streak.json beside it, which carries the per-defect consecutive counts (w7, p2b) and every iteration's own junit outcome and per-assertion audit. This declaration is not edited after the evidential streak starts.",
   "declaredAtCommit": "declared by the Phase 3 W-A commit that first carries this file; the streaks were started after that commit existed",
   "caseIds": [
-    "tests/system/udg-003-phase-2/runtime.test.ts > UDG-003 Phase 2 runtime — the population and the recovery scenarios > P-2b, reopened for the harness only, exercises GA-6a, GA-6b, GA-6c and GA-7 at the declared test values",
-    "tests/system/udg-003-phase-2/runtime.test.ts > UDG-003 Phase 2 runtime — the population and the recovery scenarios > W-7: the 4000 ms episode deadline expires with no fresh snapshot, and the three limits stay distinct"
+    "tests/system/udg-003-phase-2/runtime.test.ts > UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the stage sequence (OD-4) > W-7: the 4000 ms episode deadline expires with no fresh snapshot, and the three limits stay distinct",
+    "tests/system/udg-003-phase-2/runtime.test.ts > UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the stage sequence (OD-4) > P-2b, reopened for the harness only, exercises GA-6a, GA-6b, GA-6c and GA-7 at the declared test values"
   ],
   "testOrder": {
     "declaration": "the full `pnpm test` order as resolved by the pinned `vitest.config.ts` — `fileParallelism: false`, `maxWorkers: 1`, include `tests/**/*.test.ts` — with the two affected cases running inside it, never isolated",
@@ -44,5 +44,18 @@
       "INPUT_RECOVERY": 4102
     },
     "statement": "the deadlines, the retry limits, the close codes, the three-limit discrimination map and every accepted assertion are preserved; any change that would move one of them is out of grant G-P3-2"
+  },
+  "amendedBeforeStreak": {
+    "amendedAt": "before the first evidential streak iteration; the only streaks run so far were mechanics pilots on a superseded tree",
+    "whatChanged": [
+      "caseIds: the describe block was recorded as 'the population and the recovery scenarios', but the two cases execute in 'UDG-003 Phase 2 runtime — the P-batch: impairment (OD-2) and the stage sequence (OD-4)' (verified against a junit from the same suite), so the case ids now name the block the junit actually reports",
+      "purpose: named the retained artefacts as two per-defect files; the streak retains one file with a per-defect streak inside it"
+    ],
+    "whyItIsLegitimate": "a declaration corrected before any evidential run is still a declaration made before the run; correcting it afterwards would move the goalposts, and the pilots it invalidated are disclosed rather than counted"
+  },
+  "junitScoring": {
+    "file": "tests/system/udg-003-phase-2/runtime.test.ts",
+    "rule": "a case passes only when a testcase whose classname is that file has a name ending with the declared case name and carries no <failure> or <error>; a case that is absent, skipped or not collected is 'missing', which is not a pass",
+    "why": "the suite's exit code is not a per-defect signal: five unrelated local reds (a Node pin this container cannot satisfy, a browser result this host cannot produce) coexisted with both named cases passing, and an exit-code streak would have scored that as two reds while a substring match on 'W-7' would score Phase 3's own new tests as the accepted ones"
   }
 }

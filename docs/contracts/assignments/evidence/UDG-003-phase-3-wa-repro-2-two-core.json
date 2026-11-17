@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "taskId": "UDG-003",
+  "phase": "phase-3",
+  "workItem": "W-A",
+  "profile": "repro-2: taskset -c 0,1 (two cores) with two busy-spinners, 8 consecutive probe runs",
+  "command": "taskset -c 0,1 node tests/system/udg-003-phase-3/wa-loop.ts --iterations 8 --load 2",
+  "note": "Nothing moved: 8/8 probe verdicts pass, no control failing, no W-7 or P-2b assertion red. Recorded because a negative that is not retained is indistinguishable from a test that was never run.",
+  "iterations": [
+    {
+      "iteration": "iter-001",
+      "probeVerdict": "pass",
+      "controlsFailing": []
+    },
+    {
+      "iteration": "iter-002",
+      "probeVerdict": "pass",
+      "controlsFailing": []
+    },
+    {
+      "iteration": "iter-003",
+      "probeVerdict": "pass",
+      "controlsFailing": []
+    },
+    {
+      "iteration": "iter-004",
+      "probeVerdict": "pass",
+      "controlsFailing": []
+    },
+    {
+      "iteration": "iter-005",
+      "probeVerdict": "pass",
+      "controlsFailing": []
+    },
+    {
+      "iteration": "iter-006",
+      "probeVerdict": "pass",
+      "controlsFailing": []
+    },
+    {
+      "iteration": "iter-007",
+      "probeVerdict": "pass",
+      "controlsFailing": []
+    },
+    {
+      "iteration": "iter-008",
+      "probeVerdict": "pass",
+      "controlsFailing": []
+    }
+  ]
+}

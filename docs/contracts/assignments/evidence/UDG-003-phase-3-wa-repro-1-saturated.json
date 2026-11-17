@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "taskId": "UDG-003",
+  "phase": "phase-3",
+  "workItem": "W-A",
+  "profile": "repro-1: implementer container, 18 logical CPUs, one busy-spinner per core (18 spinners), 10 consecutive probe runs",
+  "command": "node tests/system/udg-003-phase-3/wa-loop.ts --iterations 10 --load 18",
+  "note": "This profile is disclosed as environment-invalidating (defect WA-3): the probe's own environment controls go false in every iteration, so the probe declares its own measurement environment invalid. It is NOT the declared streak load. It is retained because it is the only profile in which anything at all went red, and what went red was not W-7 or P-2b.",
+  "iterations": [
+    {
+      "iteration": "iter-001",
+      "probeVerdict": "fail",
+      "controlsFailing": [
+        "imposedDelayIsTheDifferenceBetweenTheSeats",
+        "noFrameArrivedWithoutAnAssociationEpoch"
+      ],
+      "auditChecks": 84,
+      "auditPassed": 84,
+      "auditFailing": []
+    },
+    {
+      "iteration": "iter-002",
+      "probeVerdict": "fail",
+      "controlsFailing": [
+        "imposedDelayIsTheDifferenceBetweenTheSeats",
+        "noFrameArrivedWithoutAnAssociationEpoch"
+      ],
+      "auditChecks": 84,
+      "auditPassed": 84,
+      "auditFailing": []
+    },
+    {
+      "iteration": "iter-003",
+      "probeVerdict": "fail",
+      "controlsFailing": [
+        "imposedDelayIsTheDifferenceBetweenTheSeats",
+        "noFrameArrivedWithoutAnAssociationEpoch"
+      ],
+      "auditChecks": 84,
+      "auditPassed": 84,
+      "auditFailing": []
+    },
+    {
+      "iteration": "iter-004",
+      "probeVerdict": "fail",
+      "controlsFailing": [
+        "imposedDelayIsTheDifferenceBetweenTheSeats",
+        "noFrameArrivedWithoutAnAssociationEpoch"
+      ],
+      "auditChecks": 84,
+      "auditPassed": 84,
+      "auditFailing": []
+    },
+    {
+      "iteration": "iter-005",
+      "probeVerdict": "fail",
+      "controlsFailing": [
+        "imposedDelayIsTheDifferenceBetweenTheSeats",
+        "noFrameArrivedWithoutAnAssociationEpoch"
+      ],
+      "auditChecks": 84,
+      "auditPassed": 84,
+      "auditFailing": []
+    },
+    {
+      "iteration": "iter-006",
+      "probeVerdict": "fail",
+      "controlsFailing": [
+        "imposedDelayIsTheDifferenceBetweenTheSeats",
+        "noFrameArrivedWithoutAnAssociationEpoch"
+      ],
+      "auditChecks": 84,
+      "auditPassed": 84,
+      "auditFailing": []
+    },
+    {
+      "iteration": "iter-007",
+      "probeVerdict": "fail",
+      "controlsFailing": [
+        "imposedDelayIsTheDifferenceBetweenTheSeats",
+        "noFrameArrivedWithoutAnAssociationEpoch"
+      ],
+      "auditChecks": 84,
+      "auditPassed": 84,
+      "auditFailing": []
+    },
+    {
+      "iteration": "iter-008",
+      "probeVerdict": "fail",
+      "controlsFailing": [
+        "imposedDelayIsTheDifferenceBetweenTheSeats",
+        "noFrameArrivedWithoutAnAssociationEpoch"
+      ],
+      "auditChecks": 84,
+      "auditPassed": 84,
+      "auditFailing": []
+    },
+    {
+      "iteration": "iter-009",
+      "probeVerdict": "fail",
+      "controlsFailing": [
+        "imposedDelayIsTheDifferenceBetweenTheSeats",
+        "noFrameArrivedWithoutAnAssociationEpoch"
+      ],
+      "auditChecks": 84,
+      "auditPassed": 84,
+      "auditFailing": []
+    },
+    {
+      "iteration": "iter-010",
+      "probeVerdict": "fail",
+      "controlsFailing": [
+        "imposedDelayIsTheDifferenceBetweenTheSeats",
+        "noFrameArrivedWithoutAnAssociationEpoch",
+        "everySeatReportsBothMeasures"
+      ],
+      "auditChecks": 84,
+      "auditPassed": 84,
+      "auditFailing": []
+    }
+  ]
+}
