@@ -147,4 +147,58 @@ What W-A delivers instead is the thing that makes the next red diagnosable rathe
 
 ## 8. Repeatability streak under the declared load
 
-*(appended after the run — the declaration in §7 predates iteration 1 by commit timestamp)*
+Ten iterations of the declared order (`pnpm test`, the two cases in place) under the declared load (four busy
+spinner processes), on `142b08097a4210378e68a8420409a5aaedf468ac`, Node `v24.22.3` on
+18 logical CPUs, started `2026-11-17T21:19:45.242Z` and finished
+`2026-11-17T21:38:38.217Z`. The declaration's commit timestamp
+(`2026-11-17T20:57:17+00:00`)
+is not later than that start, and the vectors assert the comparison rather than restating it.
+
+**Result: `W-7` 10/10 consecutive passes and `P-2b` 10/10
+consecutive passes, scored per case id out of each iteration's own junit, with the per-assertion audit clean
+(84/84) in all ten.**
+
+| iteration | suite exit | seconds | W-7 | P-2b | audit (per-assertion) | probe verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1 | 113.7 | passed | passed | 84/84 | pass |
+| 2 | 1 | 113.3 | passed | passed | 84/84 | pass |
+| 3 | 1 | 113.9 | passed | passed | 84/84 | pass |
+| 4 | 1 | 113.6 | passed | passed | 84/84 | pass |
+| 5 | 1 | 114.3 | passed | passed | 84/84 | pass |
+| 6 | 1 | 113.7 | passed | passed | 84/84 | pass |
+| 7 | 1 | 114 | passed | passed | 84/84 | pass |
+| 8 | 1 | 107.7 | passed | passed | 84/84 | pass |
+| 9 | 1 | 114.7 | passed | passed | 84/84 | pass |
+| 10 | 1 | 114 | passed | passed | 84/84 | pass |
+
+**The suite was not green, and this record does not pretend it was.** Every one of the ten iterations
+exited non-zero. The red set was the same seven cases throughout, with a count beside each one because two of
+them did not move in every iteration:
+
+| red case (all 10 iterations, same set) | iterations in which it was red |
+| --- | --- |
+| `tests/contracts/UDG-001.test.ts :: pins Node 24.22.2 and pnpm 12.18.0 exactly, and runs on them` | 10 |
+| `tests/contracts/UDG-001.test.ts :: verifies the register on a foreign host while still refusing real drift (CI regression)` | 10 |
+| `tests/contracts/UDG-002.test.ts :: keeps the UDG-001 suite green and the committed records in sync` | 10 |
+| `tests/contracts/UDG-002.test.ts :: records the pinned toolchain and schema dependency the plan thresholds name` | 10 |
+| `tests/contracts/UDG-004.test.ts :: gates the browser results for identity, freshness, cases, screenshots and console errors` | 10 |
+| `tests/system/udg-003-phase-2/runtime.test.ts :: runs the adversarial population and reads back a passing verdict (W-10, W-9)` | 9 |
+| `tests/unit/udg-003-phase-2/vectors.test.ts :: refuses a half-run and writes the manifest over all 27 artefacts` | 9 |
+
+Five of those reds are this container, not the repository: they are red in **10 of 10** — the Node pin
+(`24.22.2` declared, `24.22.3` here), the pnpm/toolchain assertions that read it, the register check that
+assumes a CI host, and UDG-004's browser-result gate with no Chromium here. The other two are red in **9 of
+10** and are **produced by the declared load itself** —
+`pressure-throttles-and-never-closes` in the population probe (defect WA-4 above: the sender slips to about
+20.6 frames/s against a designed 23.8/s over a 20/s drain, so the pressure line is never crossed while
+`insideBand` still reports `true` from the designed numbers), and the Phase 2 vectors assertion that follows
+that verdict. Nine of ten, not ten of ten: the population's own premise slips under the load, which is itself
+the defect. They are named here rather than smoothed for two reasons: they are what the accepted suite
+actually does under this load, and they show why scoring by case id was necessary. A streak scored on the
+suite's exit code would have recorded **zero** consecutive passes for both defects while both defects passed
+every single time — and the mirror image, a red scored on the exit code, would have been blamed on `W-7`.
+
+That last point is the transferable one. Under this load the two cases in `runtime.test.ts` that go red are
+`runs the adversarial population … (W-10, W-9)` and nothing named `W-7`; contention in this file reddens the
+neighbour. It is a further reason not to read any past red in this file as self-identifying, which is the
+condition the audit at §2 exists to end.

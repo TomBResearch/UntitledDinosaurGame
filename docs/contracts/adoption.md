@@ -2,7 +2,7 @@
 
 Status: **Partially adopted — P01, P02, P03 and P06 approved (P03 on 2026-11-09); P04, P05 and P07 to P10 pending**
 
-Implementation assignment: **UDG-001** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)) and **UDG-002** (authorised 2026-11-08, see [P02 and P06 adoption](#p02-and-p06-adoption-recorded-2026-11-08); **accepted and Verified 2026-11-09**, see [UDG-002 acceptance](#udg-002-acceptance-recorded-2026-11-09)), and **UDG-003 Phases 0, 1 and 2** (Phase 0 authorised 2026-11-09, see [P03 adoption](#p03-adoption-and-udg-003-phase-0-authorisation-recorded-2026-11-09); Phases 1 and 2 authorised and accepted at phase level, see [Phase 1 acceptance](#udg-003-phase-1-acceptance-recorded-2026-11-14-by-commit-dated-record), [Phase 2 authorisation](#udg-003-phase-2-authorisation-recorded-2026-11-14-by-commit-dated-record) and [Phase 2 acceptance](#udg-003-phase-2-acceptance-recorded-dated-by-commit); **UDG-003 Phase 3 is not authorised** and the task as a whole stays **In Progress**), and **UDG-004** (assigned and **Ready** — see [UDG-004 assignment recorded](#udg-004-assignment-recorded-dated-by-commit); **implemented and submitted for review** and then **accepted and Verified on 2026-11-16** at `d318444fe8668f4485d85398ecc6eb88ff5e3b36` with CI run `43893238010` attempt 2 as the passing submission evidence — see [UDG-004 implementation submitted](#udg-004-implementation-submitted-for-review-dated-by-commit) and [UDG-004 acceptance](#udg-004-acceptance-recorded-2026-11-16)). Nothing beyond UDG-004 is assigned: UDG-003 Phase 3 and every task from UDG-005 to UDG-SPIKE-003 stay unassigned.
+Implementation assignment: **UDG-001** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)) and **UDG-002** (authorised 2026-11-08, see [P02 and P06 adoption](#p02-and-p06-adoption-recorded-2026-11-08); **accepted and Verified 2026-11-09**, see [UDG-002 acceptance](#udg-002-acceptance-recorded-2026-11-09)), and **UDG-003 Phases 0, 1 and 2** (Phase 0 authorised 2026-11-09, see [P03 adoption](#p03-adoption-and-udg-003-phase-0-authorisation-recorded-2026-11-09); Phases 1 and 2 authorised and accepted at phase level, see [Phase 1 acceptance](#udg-003-phase-1-acceptance-recorded-2026-11-14-by-commit-dated-record), [Phase 2 authorisation](#udg-003-phase-2-authorisation-recorded-2026-11-14-by-commit-dated-record) and [Phase 2 acceptance](#udg-003-phase-2-acceptance-recorded-dated-by-commit); **UDG-003 Phase 3 is assigned and submitted — In Review** (see [UDG-003 Phase 3 submitted](#udg-003-phase-3-submitted-for-review-dated-by-commit)) and the task as a whole stays **In Progress**), and **UDG-004** (assigned and **Ready** — see [UDG-004 assignment recorded](#udg-004-assignment-recorded-dated-by-commit); **implemented and submitted for review** and then **accepted and Verified on 2026-11-16** at `d318444fe8668f4485d85398ecc6eb88ff5e3b36` with CI run `43893238010` attempt 2 as the passing submission evidence — see [UDG-004 implementation submitted](#udg-004-implementation-submitted-for-review-dated-by-commit) and [UDG-004 acceptance](#udg-004-acceptance-recorded-2026-11-16)). Nothing beyond UDG-003 Phase 3 and UDG-004 is assigned: every task from UDG-005 to UDG-SPIKE-003 stays unassigned.
 
 Integration owner: **Project owner, GitHub account `TomBResearch`** — recorded 2026-11-08 at the owner's instruction as both integration owner and project reviewer. Replace with the owner's preferred display name on request; the identity, not the decision, is what may be restated.
 
@@ -806,3 +806,23 @@ source, moves a plan, starts a suite or passes a gate; the record is a docs-only
 This assigns Phase 3 and nothing else; it authorises no implementation, accepts nothing, passes no gate, and
 **work begins only on the owner's separate build instruction**. If `main` has moved by then, the record
 requires re-pinning and a fresh green CI run before any code.
+
+### UDG-003 Phase 3 submitted for review (dated by commit)
+
+UDG-003 **Phase 3** was implemented and **submitted for review** by **Pi** (implementer) with
+**TomBResearch** as reviewer. Record:
+[assignments/UDG-003-phase-3-submission.md](assignments/UDG-003-phase-3-submission.md); W-A diagnosis:
+[assignments/evidence/UDG-003-phase-3-wa-diagnosis.md](assignments/evidence/UDG-003-phase-3-wa-diagnosis.md).
+Submitted head: the records commit carrying this entry; the ten W-A iterations ran on
+`142b08097a4210378e68a8420409a5aaedf468ac`, and the follow-up records commit names both explicitly.
+
+What it is: the W-A defect diagnosis (two defects, kept separate; **no harness change**, because neither
+cause was demonstrated), the per-assertion audit of the 84 accepted assertions with falsification controls,
+the declared-load ten-pass streak, a task-level reading of the abuse/offender/buffer evidence, and a second
+capture selector `UDG-003-TASK` that captures and gates the whole task in one bundle while the accepted
+`UDG-003` phase plan stays byte-identical.
+
+What it is not: an acceptance, a gate, or a fix. Gate A remains **Not Run**, GA-11 is unevaluated,
+deduplication-triggered closure stays **disabled**, `stackCompatibility` stays not-established, decision **D4
+stays open**, evidence stays in the existing store, and `W-7`/`P-2b` remain **unresolved** with the residual
+risk stated in the submission record.
