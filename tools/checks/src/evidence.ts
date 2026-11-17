@@ -1500,7 +1500,10 @@ const measurementsKeyFor = (root: string, selector: string, plan: CapturePlan): 
  */
 export const planForBundle = (
   plans: Readonly<Record<string, CapturePlan>>,
-  report: Pick<EvidenceReport, 'taskId' | 'phase'>,
+  // `phase` is optional on purpose: the accepted historical bundles carry no phase label at all, and a
+  // resolver that demanded one would either reject them or force callers to invent a label for bytes that
+  // never declared one.
+  report: { taskId: string; phase?: string | undefined },
 ): CapturePlan | undefined =>
   report.phase === TASK_PHASE_LABEL
     ? plans[`${report.taskId}-TASK`] ?? plans[report.taskId]
