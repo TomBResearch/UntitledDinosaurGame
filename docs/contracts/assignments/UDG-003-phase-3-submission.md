@@ -437,6 +437,13 @@ are **not** the capture's later reproduction — one run produced both directori
 `test-case-artefacts` and `test-case-audit` each cost under a second. Retained:
 [`UDG-003-phase-3-hosted-green-run-44273118486.json`](evidence/UDG-003-phase-3-hosted-green-run-44273118486.json).
 
+The records-only head on top of it, `bd3ebfa299df7055a71b943602bb302767483f9`, was itself green on its first
+attempt ([`44282688256`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44282688256), 29.8 min
+job / 21.7 min capture, five bundles PASS at 657 cases), and its task bundle repeats the result on a different
+commit: manifest bound to `bd3ebfa2…`, audit 84/84, and all four retained files differing from that run's own
+reproduction (`transport-impairment.json` `5f26e093c296` against `131301b52c68`). Two runs, two commits, same
+shape — the binding is not a property of one lucky capture.
+
 What it does not show, in one sentence each. A green run does not show a red being *diagnosed* — no accepted
 case went red in this job, so the retained bytes here are clean ones. A green run does not exercise the capture
 loop's failure shape; `tests/unit/udg-003/capture-loop.test.ts` and the missing-bundle shape of `44215794779`

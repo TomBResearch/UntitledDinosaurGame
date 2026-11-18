@@ -14,19 +14,55 @@
   "jobCompletedAt": "2026-11-18T09:42:00Z",
   "jobWallMinutes": 33.5,
   "captureStepMinutes": 20.2,
-  "captureStepWindow": ["2026-11-18T09:21:28Z", "2026-11-18T09:41:40Z"],
-  "verifyStepWindow": ["2026-11-18T09:41:40Z", "2026-11-18T09:41:57Z"],
+  "captureStepWindow": [
+    "2026-11-18T09:21:28Z",
+    "2026-11-18T09:41:40Z"
+  ],
+  "verifyStepWindow": [
+    "2026-11-18T09:41:40Z",
+    "2026-11-18T09:41:57Z"
+  ],
   "stepsFailed": [],
   "bundles": [
-    {"dir": "UDG-001-2026-11-18T09-21-31-585Z-350ff275", "status": "PASS", "cases": 657, "failures": 0},
-    {"dir": "UDG-002-2026-11-18T09-24-20-242Z-350ff275", "status": "PASS", "cases": 657, "failures": 0},
-    {"dir": "UDG-003-2026-11-18T09-27-31-515Z-350ff275", "status": "PASS", "cases": 657, "failures": 0},
-    {"dir": "UDG-003-TASK-2026-11-18T09-32-09-680Z-350ff275", "status": "PASS", "cases": 657, "failures": 0},
-    {"dir": "UDG-004-2026-11-18T09-36-49-483Z-350ff275", "status": "PASS", "cases": 657, "failures": 0}
+    {
+      "dir": "UDG-001-2026-11-18T09-21-31-585Z-350ff275",
+      "status": "PASS",
+      "cases": 657,
+      "failures": 0
+    },
+    {
+      "dir": "UDG-002-2026-11-18T09-24-20-242Z-350ff275",
+      "status": "PASS",
+      "cases": 657,
+      "failures": 0
+    },
+    {
+      "dir": "UDG-003-2026-11-18T09-27-31-515Z-350ff275",
+      "status": "PASS",
+      "cases": 657,
+      "failures": 0
+    },
+    {
+      "dir": "UDG-003-TASK-2026-11-18T09-32-09-680Z-350ff275",
+      "status": "PASS",
+      "cases": 657,
+      "failures": 0
+    },
+    {
+      "dir": "UDG-004-2026-11-18T09-36-49-483Z-350ff275",
+      "status": "PASS",
+      "cases": 657,
+      "failures": 0
+    }
   ],
   "wa3HostedDemonstration": {
     "caseArtefactDirectory": "UDG-003-TASK-2026-11-18T09-32-09-680Z-350ff275/vectors-phase-2-case",
-    "retainedFiles": ["transport-impairment.json", "abuse-results.json", "room-lifecycle.json", "buffer-depth.csv"],
+    "retainedFiles": [
+      "transport-impairment.json",
+      "abuse-results.json",
+      "room-lifecycle.json",
+      "buffer-depth.csv"
+    ],
     "manifest": {
       "captureSelector": "UDG-003-TASK",
       "readByCommand": "test",
@@ -35,22 +71,88 @@
       "implementationSha": "350ff27503bcac1d7a71b943602bb302767483f9"
     },
     "auditOfRetainedBytes": "84/84 checks pass, failing: none",
-    "caseCommandsExitCodes": {"test": 0, "test-case-artefacts": 0, "test-case-audit": 0},
-    "caseStepCostSeconds": {"test-case-artefacts": 0, "test-case-audit": 0},
+    "caseCommandsExitCodes": {
+      "test": 0,
+      "test-case-artefacts": 0,
+      "test-case-audit": 0
+    },
+    "caseStepCostSeconds": {
+      "test-case-artefacts": 0,
+      "test-case-audit": 0
+    },
     "retainedBytesVersusReproduction": [
-      {"file": "transport-impairment.json", "vectorsPhase2Case": "8fb3976ab008", "vectorsPhase2": "99cdcdb2fbc1", "same": false},
-      {"file": "abuse-results.json", "vectorsPhase2Case": "858777a63c90", "vectorsPhase2": "47b22a1c08ba", "same": false},
-      {"file": "room-lifecycle.json", "vectorsPhase2Case": "8e6f7acdb154", "vectorsPhase2": "19c1006cce7c", "same": false},
-      {"file": "buffer-depth.csv", "vectorsPhase2Case": "ee7e68f744fe", "vectorsPhase2": "51572a9a660d", "same": false}
+      {
+        "file": "transport-impairment.json",
+        "vectorsPhase2Case": "8fb3976ab008",
+        "vectorsPhase2": "99cdcdb2fbc1",
+        "same": false
+      },
+      {
+        "file": "abuse-results.json",
+        "vectorsPhase2Case": "858777a63c90",
+        "vectorsPhase2": "47b22a1c08ba",
+        "same": false
+      },
+      {
+        "file": "room-lifecycle.json",
+        "vectorsPhase2Case": "8e6f7acdb154",
+        "vectorsPhase2": "19c1006cce7c",
+        "same": false
+      },
+      {
+        "file": "buffer-depth.csv",
+        "vectorsPhase2Case": "ee7e68f744fe",
+        "vectorsPhase2": "51572a9a660d",
+        "same": false
+      }
     ],
-    "reading": "First-attempt hosted proof of the three W-A-3 requirements: the bytes the test invocation read are in the bundle, they are bound to that invocation and to this commit, and they are not the capture's later reproduction of the same producers — the same run produced both directories and every file differs. The case steps cost under a second."
+    "reading": "First-attempt hosted proof of the three W-A-3 requirements: the bytes the test invocation read are in the bundle, they are bound to that invocation and to this commit, and they are not the capture's later reproduction of the same producers \u2014 the same run produced both directories and every file differs. The case steps cost under a second."
   },
   "w7Fired": false,
   "p2bFired": false,
   "limits": [
     "A green run shows the machinery works and costs little; it does not show a red being diagnosed, because no accepted case went red in this job.",
-    "The capture-loop fix is exercised only in its green shape by this run. Its red shape — an earlier plan failing while UDG-003-TASK is still retained — is demonstrated by tests/unit/udg-003/capture-loop.test.ts and by the absence-shape of run 44215794779, not by this job.",
+    "The capture-loop fix is exercised only in its green shape by this run. Its red shape \u2014 an earlier plan failing while UDG-003-TASK is still retained \u2014 is demonstrated by tests/unit/udg-003/capture-loop.test.ts and by the absence-shape of run 44215794779, not by this job.",
     "Capture step 20.2 min against the recorded baseline of 16.6 min; job 33.5 min against 24.6 min. Across three hosted observations the whole-task plan costs roughly +6 to +10 minutes of job time, not the 4-5 estimated in the assignment."
   ],
-  "note": "The commit message of 350ff275 contains a typo, '4419191978254', for run 44191978254; the records files name the run correctly."
+  "note": "The commit message of 350ff275 contains a typo, '4419191978254', for run 44191978254; the records files name the run correctly.",
+  "coveringFollowUpRuns": [
+    {
+      "runId": 44282688256,
+      "headSha": "bd3ebfa299df7055a71b943602bb302767483f9",
+      "content": "records only, on top of the submitted head",
+      "attempt": 1,
+      "conclusion": "success",
+      "jobWallMinutes": 29.8,
+      "captureStepMinutes": 21.7,
+      "bundles": "five bundles PASS, 657 cases, 0 failures each",
+      "wa3RetainedBytes": {
+        "manifestImplementationSha": "bd3ebfa299df7055a71b943602bb302767483f9",
+        "retainedVersusReproduction": [
+          {
+            "file": "transport-impairment.json",
+            "case": "5f26e093c296",
+            "reproduction": "131301b52c68"
+          },
+          {
+            "file": "abuse-results.json",
+            "case": "80604c7af18a",
+            "reproduction": "e00bdb3071ee"
+          },
+          {
+            "file": "room-lifecycle.json",
+            "case": "9bc566dafed6",
+            "reproduction": "43a13aedae3d"
+          },
+          {
+            "file": "buffer-depth.csv",
+            "case": "585ee614aeaa",
+            "reproduction": "dccac0c4838f"
+          }
+        ],
+        "auditOfRetainedBytes": "84/84 checks pass, failing: none"
+      },
+      "reading": "Second independent hosted confirmation, on a different commit: the retained bytes are bound to the commit that ran, and every one of them differs from that same run's Phase 2 reproduction. A commit cannot contain its own hash, so this run is named by the records commit it covers."
+    }
+  ]
 }
