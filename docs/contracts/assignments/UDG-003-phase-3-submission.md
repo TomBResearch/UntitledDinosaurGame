@@ -624,3 +624,29 @@ Nothing moved in the tree beyond records on this turn: no probe, harness, fixtur
 close code, refusal matching, policy sample or accepted assertion, and `stage-sequence.json` was deliberately not
 added to the retained case-artefact set. Gate A **Not Run**, GA-11 unevaluated, deduplication-triggered closure
 **disabled**, **D4 open**, acceptance reserved to the reviewer.
+
+---
+
+## 11. Accepted (2026-11-18, dated by commit)
+
+The integration owner accepted Phase 3 on the closeout basis, and UDG-003 was recorded **task-level Verified**:
+
+```text
+accepted implementation      74aa8dabbef7fcae5c455c24dfb326c2a57f6be2
+first-attempt hosted CI      44299429735  attempt 1, success (31.6 min job / 20.8 min capture step;
+                                           five bundles PASS, 665 cases, 0 failures each)
+closeout reviewed            5bec5ff665389e3c95946336b2df4275ebb2404f, CI 44316260678 (first attempt, success)
+amendments approved          A-P3-5, A-P3-6, A-P3-7 — bounded, recorded in UDG-003-phase-3.md §9.1
+carried forward              CF-1 … CF-4, evidence/UDG-003-phase-3-defect-closeout.md §0 (owners and reopening
+                             conditions named; all four still unclassified where no cause was demonstrated)
+```
+
+The owner's three conditions are recorded with the acceptance, in their own words: the ten-run results show
+**stability under the declared conditions** and **do not establish a cause** for any carried-forward item; the four
+unresolved observations are recorded **separately**; **failed captures retain their original verdicts** — the 35
+bundles recorded FAIL in `/workspace/udg-evidence` stay FAIL, unre-run and un-rejudged.
+
+This submission record stays as it was written through review, including its §8 and §10 statements of what was
+unresolved at the time; the acceptance is recorded here and in `adoption.md` rather than by rewriting the history of
+the submission. **Gates A/B/C Not Run**, GA-11 unevaluated, `stackCompatibility` not-established,
+deduplication-triggered closure **disabled**, **D4 open**.

@@ -1704,13 +1704,13 @@ emptiness, one per reporting path, both asserted in the runtime suite.
 | Item | §18 | Now | Why it moved, or why it did not |
 |---|---|---|---|
 | GA-1 … GA-5, GA-9 | as §12/§17 | unchanged | nothing in this sitting touched their evidence |
-| **GA-6a / GA-6b / GA-6c** | behind a deferred P-2b | **exercised in the Phase 2 harness, controls pass**; production client behaviour still **UDG-008** | the owner reopened P-2b for the harness; `silenceInbound()` made the silent server constructible |
-| **GA-7** (withheld publication) | behind a deferred P-2b | **exercised in the harness, controls pass**; Gate A's version stays **UDG-SPIKE-001** | same; and the closure-side counters were already recorded server-side |
+| **GA-6a / GA-6b / GA-6c** | behind a deferred P-2b | **exercised in the Phase 2 harness, controls pass**; production client behaviour still **UDG-008** | the owner reopened P-2b for the harness; `silenceInbound()` made the silent server constructible; **CF-1 and CF-3 carried forward open and unclassified** on acceptance 2026-11-18 — [closeout §0](evidence/UDG-003-phase-3-defect-closeout.md) |
+| **GA-7** (withheld publication) | behind a deferred P-2b | **exercised in the harness, controls pass**; Gate A's version stays **UDG-SPIKE-001** | same; and the closure-side counters were already recorded server-side; **CF-4 (refusal wording) and CF-3 (post-close input) carried forward open** — [closeout §0](evidence/UDG-003-phase-3-defect-closeout.md) |
 | GA-10 (zero-effect half) | FAIL as written | measured and passing under the amended §5; **the pre-amendment headline stays FAIL in its own bundle** | clause split, not a new measurement |
 | GA-10a / GA-10b | UDG-007 | UDG-007, **outstanding** | unchanged; now joined by a fourth obligation |
 | GA-11 (both inequalities) | not run | **not run** | UDG-SPIKE-001 / Gate A; Phase 2 records populations only |
 | GA-12, PE-1 … PE-5 | not passed | not passed | unchanged |
-| **AC-6** | PARTIAL, `qualified-pending-owner` | **PASS for `F…X`, `M` and `P`'s publication**; results half **outstanding at UDG-007** | the criterion moved, then the verdict followed it — see §19.1 |
+| **AC-6** | PARTIAL, `qualified-pending-owner` | **PASS for `F…X`, `M` and `P`'s publication**; results half **outstanding at UDG-007** | the criterion moved, then the verdict followed it — see §19.1; **CF-2 (authority-to-client mapping) carried forward open and unclassified** — [closeout §0](evidence/UDG-003-phase-3-defect-closeout.md) |
 | AC-3b (continuous half) / AC-3c / AC-3d / AC-3e | measured | unchanged | the discrete half remains UDG-007's |
 | AC-15 | PASS under H1 | PASS under H1; H2 deferred | unchanged; prior bundles under H1 preserved (§19.3) |
 | **Gate A** | **Not Run** | **Not Run** | UDG-SPIKE-001's, and nothing here runs it |
@@ -1886,7 +1886,7 @@ only there, and when it occurs GA-7 must have recovered through matchmaking.
 | W-7: rolling rejoin allowance spent, then refused, seat stays stopped | evidenced (§19.2 GA-6c) | unchanged, and now quoted rather than inferred on the epoch fields |
 | GA-6a / GA-6b / GA-7 at the declared test values | evidenced | evidenced; GA-7's closure is now the retirement the clause names, with `serverQueuedAtClose` non-zero |
 | Production client for all of it | UDG-008 | UDG-008 — the harness still has no prediction buffer to discard, and that limb is still reported as absent rather than passed |
-| GA-6/GA-7 at the formal Gate A envelope | UDG-SPIKE-001 | UDG-SPIKE-001; **Gate A Not Run** |
+| GA-6/GA-7 at the formal Gate A envelope | UDG-SPIKE-001 | UDG-SPIKE-001; **Gate A Not Run**; **CF-1, CF-3 and CF-4 inherit into any Gate A run as open limitations** — [closeout §0](evidence/UDG-003-phase-3-defect-closeout.md) |
 
 **Invariants.** Three commits, all in `tests/**`: no `apps/server/**`, `packages/**`, `authority/**`, protocol,
 `pnpm-lock.yaml` or manifest change; `configHash` stays

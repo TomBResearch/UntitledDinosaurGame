@@ -10,6 +10,20 @@ the bytes retained, the guarantee the defect could affect, and one recommendatio
 or a carry-forward with a named owner and a byte-named condition for reopening. Where a cause is unclassified it
 stays unclassified; nothing here promotes a hypothesis into a cause.
 
+## 0. Register — the four carry-forwards
+
+Approved as **CF-1 … CF-4** on 2026-11-18, when the owner accepted Phase 3 (§7). Each stays visible wherever the
+guarantee it touches is evaluated; the pointers below are the places a reader of that guarantee is sent to.
+
+| id | observation, unclassified unless stated | guarantee it touches | owner | reopening condition, in bytes | visible at |
+| --- | --- | --- | --- | --- | --- |
+| **CF-1** | `deliveriesReachingTheSeatDuringTheEpisode` non-zero — **unclassified** | GA-6c's "no fresh snapshot reaching the seat"; the three-limit map | `TomBResearch` | retained `vectors-phase-2-case/transport-impairment.json` with the counter non-zero, or junit naming `runtime.test.ts:702` | [UDG-003.md](../../UDG-003.md), [Phase 2 evidence matrix](../UDG-003-phase-2-evidence-matrix.md) GA-6 rows, [UDG-SPIKE-001](../../UDG-SPIKE-001.md) Gate A evidence |
+| **CF-2** | `mappingMatchesTheAuthoritysOwnRecord=false` in a capture reproduction — **unclassified** | AC-6's `M` half as amended (`P`′ half: UDG-007) | `TomBResearch`; `P`′ half **UDG-007** | junit naming `runtime.test.ts:760` or `:761` red (a **case** read refusing), or a retained artefact with the check false | [UDG-003.md](../../UDG-003.md), [UDG-007.md](../../UDG-007.md), matrix AC-6 rows |
+| **CF-3** | `noInputReachedTheRoomAfterTheEpisodeClosed=false` — **unclassified** | containment, hence GA-6c/GA-7's "the seat stayed stopped" | `TomBResearch`; production machine **UDG-008**, Gate A **UDG-SPIKE-001** | junit naming `runtime.test.ts:685` red for that control, or a retained artefact with `controls.noInputReachedTheRoomAfterTheEpisodeClosed: false` | [UDG-003.md](../../UDG-003.md), [UDG-008.md](../../UDG-008.md), [UDG-SPIKE-001](../../UDG-SPIKE-001.md), matrix GA-6/GA-7 rows |
+| **CF-4** | `'seat reservation expired.'` where `/token/i` is expected — **quote only**, never reproduced | GA-7's branch attribution and `matchmaking-rejoin` claim | `TomBResearch`; production machine **UDG-008**, Gate A **UDG-SPIKE-001** | retained junit where `runtime.test.ts:577` fails on a non-token message | [UDG-003.md](../../UDG-003.md), [UDG-008.md](../../UDG-008.md), [UDG-SPIKE-001](../../UDG-SPIKE-001.md), matrix GA-7 rows |
+
+None of the four blocks Phase 3 or UDG-003 (see §5 and §7). None is a waiver: each names the byte that reopens it.
+
 Reading key for "generation": a hosted job runs the full suite **five times** (once inside each capture plan) and
 the capture then **re-produces** the Phase 2 artefacts, so an artefact file can be written by a case's own
 invocation or by the capture's later reproduction of the same producer. Those are different events, and since
@@ -18,7 +32,7 @@ invocation or by the capture's later reproduction of the same producer. Those ar
 
 ---
 
-## 1. `W-7` — the delivery count (`deliveriesReachingTheSeatDuringTheEpisode`)
+## CF-1 — `W-7`: the delivery count (`deliveriesReachingTheSeatDuringTheEpisode`)
 
 | | |
 | --- | --- |
@@ -30,7 +44,7 @@ invocation or by the capture's later reproduction of the same producer. Those ar
 | **Recommendation** | **Carry forward — not blocking.** Owner: `TomBResearch` (reviewer/owner) to decide whether Gate A's GA-6c evidence must be scored against this sighting; agent implementer acts only on that direction. **Reopen when** a retained artefact — specifically `vectors-phase-2-case/transport-impairment.json` under a case-artefact manifest — shows a non-zero `deliveriesReachingTheSeatDuringTheEpisode`, or junit names `runtime.test.ts:702`. Both detectors already exist (`w7-deliveries-in-window` in [`wa-assertion-audit.ts`](../../../../tests/system/udg-003-phase-3/wa-assertion-audit.ts), and `W-A-3` retention), so the next occurrence is classifiable from bytes without any further change. Only at that point, and justified by that retained fact as §6.4 requires, the minimal instrument to add is recording the wrapper's `silencing` and counter values **alongside each counted delivery** — harness-only, moving no deadline, allowance, close code or sample boundary |
 | **Why not blocking now** | A fix requires a demonstrated cause (§6.1: "one fix, chosen by the demonstrated cause"; §5 W-A: "applied only to a demonstrated cause"). There is none, and the one change that would make the current evidence classify itself is retention, which `W-A-3` already provides |
 
-## 2. The authority-to-client mapping mismatch (`mappingMatchesTheAuthoritysOwnRecord`)
+## CF-2 — the authority-to-client mapping mismatch (`mappingMatchesTheAuthoritysOwnRecord`)
 
 | | |
 | --- | --- |
@@ -42,7 +56,7 @@ invocation or by the capture's later reproduction of the same producer. Those ar
 | **Recommendation** | **Carry forward — not blocking.** Owner: `TomBResearch`; the measurement belongs to UDG-003's OD-4, the outstanding `P`′ half to **UDG-007**. **Reopen when** junit names `runtime.test.ts:760` or `:761` red — that is, when a **case** read refuses, not only a reproduction — or when a retained artefact carries `mappingMatchesTheAuthoritysOwnRecord: false`. **Prerequisite the reviewer may authorise at any time** (deliberately not taken this turn, which is review-only): add `stage-sequence.json` to `CASE_ARTEFACT_FILES` so a future refusal is attributable to the generation that produced it. It is one entry in an existing list, and today the failing generation's bytes are the only thing missing to classify this defect |
 | **Why not blocking now** | Nothing in this defect currently fails a test case; it fails a capture command, which the loop already handles honestly (`W-A-6` fixed), and §6.1 forbids choosing a fix that no cause has demonstrated |
 
-## 3. The post-close input observation (`noInputReachedTheRoomAfterTheEpisodeClosed`)
+## CF-3 — the post-close input observation (`noInputReachedTheRoomAfterTheEpisodeClosed`)
 
 | | |
 | --- | --- |
@@ -55,7 +69,7 @@ invocation or by the capture's later reproduction of the same producer. Those ar
 | **Recommendation** | **Carry forward — not blocking.** Owner: `TomBResearch`, with the production-side obligation recorded against **UDG-008** and Gate A's version against **UDG-SPIKE-001**. **Reopen when** junit names `runtime.test.ts:685` red for that control, or a retained artefact carries `controls.noInputReachedTheRoomAfterTheEpisodeClosed: false`. Both now arrive with more bytes than this defect has ever had: the case's own artefact is retained (`W-A-3`) and the same artefact publishes `cleanup.deliveriesObservedDuringCleanup`, `cleanup.swallowedObservedDuringCleanup` and `cleanup.wrapperSilencingAtEpisodeEnd`, so a future sighting self-diagnoses the side of the boundary it came from without a new instrument |
 | **Why not blocking now** | Same clause: no demonstrated cause, therefore no permitted fix; and no test case has ever failed on it |
 
-## 4. `P-2b` — the rejoin refusal wording (`/token/i`)
+## CF-4 — `P-2b`: the rejoin refusal wording (`/token/i`)
 
 | | |
 | --- | --- |
@@ -101,7 +115,7 @@ cause and one (`P-2b`) has never been reproduced in bytes at all. So the answer 
 acceptance" is *no fix is permitted*, and the four entries above are the §6.4 discharge. But §7.3's sentence
 cannot be reported **met** for the `W-7` defect while one of its two assertion families stands unclassified,
 because §6.1 ends in "one fix" and no fix may be chosen for that family. That is a clause-level conflict, and it
-is reported rather than resolved silently. The proposed amendments:
+is reported rather than resolved silently. The amendments proposed, **all three approved on 2026-11-18 as bounded closeout amendments** (§7; recorded in [`UDG-003-phase-3.md`](../UDG-003-phase-3.md) §9.1):
 
 - **A-P3-5 (§6.1 read with §7.3 — closure granularity).** Close `W-A` per **assertion family**, not per case
   name. One case (`W-7: the 4000 ms episode deadline expires…`) asserts two readings that have failed apart on
@@ -127,7 +141,42 @@ publication-sitting reds", `43956003339` and `43962098658`, which stay **unclass
 obligation arrives through §7.3's artefact sentence, and both are recommended forward rather than inward: `AC-6`
 `P`′ half to **UDG-007**, the containment and recovery claims to **UDG-008** and **UDG-SPIKE-001**.
 
-## 6. What this record does not change
+## 6. The three statements the owner attached to acceptance
+
+Recorded verbatim as conditions of the acceptance, not as commentary:
+
+1. **The ten-run results show stability under the declared conditions. They do not establish a cause for any
+   carried-forward item.** `W-7` 10/10 and `P-2b` 10/10 on the repaired tree, per case id out of each iteration's
+   own junit, under the declaration committed before the streak — and still: CF-1, CF-2, CF-3 and CF-4 each have
+   no cause, and nothing in the streak may be quoted as one.
+2. **Failed captures retain their original verdicts.** A bundle recorded FAIL stays FAIL: it is not re-run until
+   green, not re-judged by a later rule, and not excluded from the store. The 35 failing bundles in
+   `/workspace/udg-evidence` failed before this record and fail now
+   ([`UDG-003-phase-3-verify-preservation-head-vs-wa3.txt`](UDG-003-phase-3-verify-preservation-head-vs-wa3.txt):
+   222 bundles, 0 differences between HEAD's verifier and this branch's). A-P3-7 fixes the *scope* of a FAIL, not
+   its existence.
+3. **The four unresolved observations are recorded separately**, each with its owner and its reopening condition,
+   in §0 above — and they travel to the places where the guarantees they touch are evaluated, rather than resting
+   only in this file.
+
+## 7. Acceptance recorded 2026-11-18 (dated by commit)
+
+The integration owner accepted **UDG-003 Phase 3** at `74aa8dabbef7fcae5c455c24dfb326c2a57f6be2`
+(hosted CI [`44299429735`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44299429735),
+**attempt 1**, success) with this closeout reviewed at `5bec5ff665389e3c95946336b2df4275ebb2404f`
+(CI [`44316260678`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44316260678), first attempt,
+success), approved A-P3-5, A-P3-6 and A-P3-7 as bounded closeout amendments, and recorded **UDG-003 task-level
+Verified** under the amended criteria. The full acceptance entry is
+[`adoption.md`](../../adoption.md); the assignment's own record of it is
+[`UDG-003-phase-3.md`](../UDG-003-phase-3.md) §9.2.
+
+What the acceptance does **not** do: it passes no gate — Gates A, B and C remain **Not Run**, GA-11 unevaluated,
+`stackCompatibility` **not-established**; it does not establish task scope completion; it does not enable
+deduplication-triggered closure, which stays **disabled**; it leaves **D4 open** with evidence in the existing
+store only; and it promotes no unclassified observation. CF-1 … CF-4 remain open observations of an accepted
+task, not defects that block it.
+
+## 8. What this record does not change
 
 - Nothing in the tree beyond records. No probe, harness, fixture, deadline, retry allowance, close code, refusal
   matching, policy sample or accepted assertion moved, and `stage-sequence.json` was **not** added to the retained

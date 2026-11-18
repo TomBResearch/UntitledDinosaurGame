@@ -5,12 +5,16 @@ Title: Task-level abuse and evidence completion on the accepted Phase 1 + Phase 
 diagnosis-and-repair (W-A), the whole-task capture (W-C), the task-level suites and records, and the task-level
 submission that is UDG-003's path to Verified.
 
-Status: **Assigned — Ready, implementation NOT started.** Assigned by the project owner on 2026-11-17 (dated by
-the commit carrying this record): implementer **Pi**, reviewer and integration owner **`TomBResearch`**.
-Work begins **only on the owner's separate build instruction**, which must name the implementer and reviewer;
-nothing in this record starts implementation. UDG-003 as a whole stays **In Progress**; **Gate A remains
-Not Run**; deduplication-triggered closure remains **disabled**; **D4 remains open**; `stackCompatibility`
-remains **not-established**; Part B remains **unadopted**.
+Status: **Accepted — Phase 3 accepted and UDG-003 recorded task-level Verified, 2026-11-18 (dated by the commit
+carrying the acceptance).** Assigned by the project owner on 2026-11-17 (same dating convention): implementer
+**Pi**, reviewer and integration owner **`TomBResearch`**. Implementation ran on the owner's build instruction, was
+submitted **In Review**, and the implementer recorded no acceptance at any point. Accepted implementation
+`74aa8dabbef7fcae5c455c24dfb326c2a57f6be2` (CI `44299429735`, **attempt 1**); the closeout of what remains
+unresolved was reviewed at `5bec5ff665389e3c95946336b2df4275ebb2404f` (CI `44316260678`). Acceptance is recorded
+under the three amendments in §9.1, and the four carried-forward observations are CF-1 … CF-4 in
+[`evidence/UDG-003-phase-3-defect-closeout.md`](evidence/UDG-003-phase-3-defect-closeout.md) §0. **It passes no
+gate**: Gates A, B and C remain **Not Run**, GA-11 unevaluated, `stackCompatibility` **not-established**;
+deduplication-triggered closure remains **disabled**; **D4 remains open**; Part B remains **unadopted**.
 
 Owner/reviewer: project owner `TomBResearch`, acting as integration owner and reviewer. The implementer authors
 no approval, records no acceptance and passes no gate.
@@ -254,7 +258,7 @@ cost after merge.
 1. **Per defect, separately** (`W-7` in `runtime.test.ts` line ~644 and the episode-deadline probe; `P-2b` in
    the same file and the GA-6/GA-7 harness seat): step-1 assertion table from retained bytes → targeted
    reproducer **or** failing control (fails unfixed, passes fixed, under the declared conditions) → one fix,
-   chosen by the demonstrated cause.
+   chosen by the demonstrated cause. *(Closure granularity is per assertion family as amended by **A-P3-5**, approved 2026-11-18 — §9.1.)*
 2. **Declared load and test order, declared before the streak and retained:** the declaration names the case
    ids, the machine class, the file order (the full `pnpm test` order as resolved by the pinned vitest
    config — the contention is the environment under test) and the load (the background CPU-load process
@@ -262,7 +266,7 @@ cost after merge.
    written into the working record **before the first streak run** and cannot be edited afterwards; results
    (per-run logs/junit digests) are retained and bundled.
 3. **Ten consecutive passes** of each affected case under that declaration, then the **first-attempt hosted
-   green on the exact submitted commit** (any earlier red of that commit is retained and named).
+   green on the exact submitted commit** (any earlier red of that commit is retained and named). *(Scored per case id out of each iteration's own junit as amended by **A-P3-6**, approved 2026-11-18 — §9.1.)*
 4. **Non-reproduction:** if an original failure cannot be reproduced, W-A publishes what the retained
    evidence establishes — the step-1 table, the attempt logs, the identical-code red/green pairs, the load
    correlation — and what it leaves open, **before** proposing any change; a change proposed against an
@@ -305,7 +309,9 @@ credentials; the E-6′ cross-verification (§5.3) runs on the submitted head.
 
 Phase 3 is complete when W-A's §6 gate is met per defect, W-B/W-C's artefacts pass the whole-task gate, W-D's
 ledgers close with their carried obligations named, and the §4 grants were not exceeded. **A criterion with a
-missing, unverifiable or non-replayable artefact is FAIL, not "not run."** Submission is **In Review**;
+missing, unverifiable or non-replayable artefact is FAIL, not "not run."** *(Scope: that sentence attaches to the
+attempt whose artefact is missing, unverifiable or non-replayable, as amended by **A-P3-7**, approved 2026-11-18 —
+§9.1.)* Submission is **In Review**;
 acceptance — task-level **Verified** included — is the owner's alone, and even then **Gate A stays Not Run** and
 UDG-SPIKE-001's to execute. Explicit non-claims at assignment: no work item is started; Gate A **Not Run**;
 GA-11 not evaluated; dedupe-triggered closure **disabled**; D4 **undesignated**; Part B **unadopted**;
@@ -326,3 +332,43 @@ Still open after this handoff: **D4** (undesignated), Gate A **Not Run**, GA-11 
 PE-1…PE-5 not passed, dedupe-triggered closure disabled, Part B unadopted, `stackCompatibility`
 not-established, the two publication-sitting reds unclassified, and the owner's build instruction — without
 which Phase 3 stays Ready and unstarted.
+
+---
+
+## 9. Amendments approved, and acceptance recorded (2026-11-18, dated by commit)
+
+### 9.1 The three amendments, as approved
+
+The owner approved **A-P3-5**, **A-P3-6** and **A-P3-7** as **bounded closeout amendments**. They are recorded here
+as text, with the clause each bounds quoted unchanged above, because an amendment that is only described is an
+amendment that can drift.
+
+| id | clause bounded | as approved | what it may **not** do |
+| --- | --- | --- | --- |
+| **A-P3-5** | §6.1 read with §7.3 — *"per defect"* | Where one case asserts readings that can fail apart, §6.1's chain and §7.3's *"W-A's §6 gate is met per defect"* are satisfied **per assertion family**. A family with a demonstrated cause is closed by that one fix. A family without one is discharged by §6.4's publication **plus** a carry-forward entry naming an owner and a byte-named reopening condition — and no fix may be applied to it. junit reports only the first failing assertion, so a case name cannot carry a per-defect gate | It cannot turn an unclassified family into a closed one, cannot be invoked for a family whose cause was never examined, and cannot lower §6.4's requirement to name the retained fact justifying any change |
+| **A-P3-6** | §6.3 — the ten passes | The streak is scored **per case id out of each iteration's own junit** (already the operative rule). A green case does **not** discharge a family-level carry-forward: ten consecutive passes record **stability under the declaration**, never cause | It cannot be quoted as evidence of cause, and cannot be used to claim a family stable that the case id does not reach |
+| **A-P3-7** | §7.3 — *"A criterion with a missing, unverifiable or non-replayable artefact is FAIL"* | The FAIL attaches to **the attempt whose artefact** is missing, unverifiable or non-replayable. A refusal by an accepted producer inside the capture's own reproduction, where that case's own generation passed and every test case passed (`44206639883`, `44211208860`), makes **that attempt's bundle** FAIL; it does not retro-FAIL the criterion for bundles holding a passing artefact. **Failed captures retain their original verdicts**: recorded FAIL, stays FAIL — not re-run to green, not re-judged, not removed | It cannot re-judge, re-run or delete a historical bundle; it bounds scope of a FAIL, never its existence; and it cannot be used to call a refused capture "not run" |
+
+**Bounded** means: none of the three moves a criterion wording, a threshold, an accepted assertion, a deadline, a
+retry allowance, a close code, a probe, a refusal matching, a policy sample boundary or an artefact byte. Historical
+bundles and artefacts keep their bytes and their verification outcomes.
+
+### 9.2 Acceptance
+
+The integration owner, acting as reviewer, **accepted UDG-003 Phase 3** on 2026-11-18 at
+`74aa8dabbef7fcae5c455c24dfb326c2a57f6be2` — CI [`44299429735`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44299429735),
+**attempt 1**, first-attempt green — with the closeout reviewed at `5bec5ff665389e3c95946336b2df4275ebb2404f`
+(CI [`44316260678`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44316260678)), and recorded
+**UDG-003 task-level Verified** under the criteria as amended in §9.1. Acceptance covers the implementation and its
+retained evidence. Conditions attached by the owner, recorded as written: the ten-run results show **stability under
+the declared conditions** and **do not establish a cause** for any carried-forward item; the four unresolved
+observations are recorded **separately**, each with its owner and reopening condition; **failed captures retain
+their original verdicts**.
+
+What acceptance is not: it passes no gate — **Gates A, B and C stay Not Run**, GA-11 unevaluated, GA-10a/GA-10b
+outstanding for any Gate A run preceding UDG-007 verification, `stackCompatibility` **not-established**; it does not
+enable deduplication-triggered closure (**disabled**); it leaves **D4 open**, evidence in the existing store only,
+no archive, tag, release or second destination; it does not adopt Part B; and it promotes nothing — CF-1 … CF-4 stay
+**unclassified** where no cause was demonstrated, and stay visible wherever the guarantees they touch are evaluated.
+The acceptance entry, with the covering CI of the commit that records it, is
+[`adoption.md`](../adoption.md).

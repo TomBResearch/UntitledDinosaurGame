@@ -2,7 +2,7 @@
 
 Status: **Partially adopted — P01, P02, P03 and P06 approved (P03 on 2026-11-09); P04, P05 and P07 to P10 pending**
 
-Implementation assignment: **UDG-001** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)) and **UDG-002** (authorised 2026-11-08, see [P02 and P06 adoption](#p02-and-p06-adoption-recorded-2026-11-08); **accepted and Verified 2026-11-09**, see [UDG-002 acceptance](#udg-002-acceptance-recorded-2026-11-09)), and **UDG-003 Phases 0, 1 and 2** (Phase 0 authorised 2026-11-09, see [P03 adoption](#p03-adoption-and-udg-003-phase-0-authorisation-recorded-2026-11-09); Phases 1 and 2 authorised and accepted at phase level, see [Phase 1 acceptance](#udg-003-phase-1-acceptance-recorded-2026-11-14-by-commit-dated-record), [Phase 2 authorisation](#udg-003-phase-2-authorisation-recorded-2026-11-14-by-commit-dated-record) and [Phase 2 acceptance](#udg-003-phase-2-acceptance-recorded-dated-by-commit); **UDG-003 Phase 3 is assigned and submitted — In Review** (see [UDG-003 Phase 3 submitted](#udg-003-phase-3-submitted-for-review-dated-by-commit)) and the task as a whole stays **In Progress**), and **UDG-004** (assigned and **Ready** — see [UDG-004 assignment recorded](#udg-004-assignment-recorded-dated-by-commit); **implemented and submitted for review** and then **accepted and Verified on 2026-11-16** at `d318444fe8668f4485d85398ecc6eb88ff5e3b36` with CI run `43893238010` attempt 2 as the passing submission evidence — see [UDG-004 implementation submitted](#udg-004-implementation-submitted-for-review-dated-by-commit) and [UDG-004 acceptance](#udg-004-acceptance-recorded-2026-11-16)). Nothing beyond UDG-003 Phase 3 and UDG-004 is assigned: every task from UDG-005 to UDG-SPIKE-003 stays unassigned.
+Implementation assignment: **UDG-001** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)) and **UDG-002** (authorised 2026-11-08, see [P02 and P06 adoption](#p02-and-p06-adoption-recorded-2026-11-08); **accepted and Verified 2026-11-09**, see [UDG-002 acceptance](#udg-002-acceptance-recorded-2026-11-09)), and **UDG-003 Phases 0, 1 and 2** (Phase 0 authorised 2026-11-09, see [P03 adoption](#p03-adoption-and-udg-003-phase-0-authorisation-recorded-2026-11-09); Phases 1 and 2 authorised and accepted at phase level, see [Phase 1 acceptance](#udg-003-phase-1-acceptance-recorded-2026-11-14-by-commit-dated-record), [Phase 2 authorisation](#udg-003-phase-2-authorisation-recorded-2026-11-14-by-commit-dated-record) and [Phase 2 acceptance](#udg-003-phase-2-acceptance-recorded-dated-by-commit); **UDG-003 Phase 3 was accepted on 2026-11-18 and the task as a whole is recorded Verified** (see [UDG-003 Phase 3 accepted](#udg-003-phase-3-accepted-and-udg-003-recorded-task-level-verified-2026-11-18-dated-by-commit); the earlier submission is retained at [UDG-003 Phase 3 submitted](#udg-003-phase-3-submitted-for-review-dated-by-commit)), and **UDG-004** (assigned and **Ready** — see [UDG-004 assignment recorded](#udg-004-assignment-recorded-dated-by-commit); **implemented and submitted for review** and then **accepted and Verified on 2026-11-16** at `d318444fe8668f4485d85398ecc6eb88ff5e3b36` with CI run `43893238010` attempt 2 as the passing submission evidence — see [UDG-004 implementation submitted](#udg-004-implementation-submitted-for-review-dated-by-commit) and [UDG-004 acceptance](#udg-004-acceptance-recorded-2026-11-16)). Nothing beyond UDG-003 Phase 3 and UDG-004 is assigned: every task from UDG-005 to UDG-SPIKE-003 stays unassigned.
 
 Integration owner: **Project owner, GitHub account `TomBResearch`** — recorded 2026-11-08 at the owner's instruction as both integration owner and project reviewer. Replace with the owner's preferred display name on request; the identity, not the decision, is what may be restated.
 
@@ -915,6 +915,54 @@ leave; record the tail); **none was applied**, because two of them change what a
 The `deliveriesReachingTheSeatDuringTheEpisode` sighting stays **unclassified** — no accepted code path delivers
 while `silencing` is set — and `W-7` stays open, with the declared ten-pass W-A streak still standing on the
 tree it was run on rather than on this head.
+
+## UDG-003 Phase 3 accepted, and UDG-003 recorded task-level Verified (2026-11-18, dated by commit)
+
+The project owner (`TomBResearch`), acting as reviewer and integration owner, accepted **UDG-003 Phase 3** on
+2026-11-18 — the date the acceptance reached `main`; the owner's message carries no independently verifiable
+timestamp — and recorded **UDG-003 task-level Verified**. Every revision was submitted **In Review** by the
+implementer, which recorded no acceptance at any point and passed no gate. Acceptance is recorded **under three
+bounded closeout amendments** the owner approved at the same sitting, so the criteria applied are the criteria as
+amended, and both the original clause text and the amendments are on the record in
+[assignments/UDG-003-phase-3.md](assignments/UDG-003-phase-3.md) §9.
+
+```text
+Accepted implementation                       74aa8dabbef7fcae5c455c24dfb326c2a57f6be2
+Passing submission CI                         https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44299429735
+                                              (success, attempt 1; 31.6 min job / 20.8 min capture step; the five
+                                              capture bundles UDG-001, UDG-002, UDG-003, UDG-003-TASK and UDG-004
+                                              verified PASS in the same run, 665 cases, 0 failures each)
+Reviewed closeout of what remains unresolved  5bec5ff665389e3c95946336b2df4275ebb2404f,
+                                              CI 44316260678 (success, first attempt) —
+                                              assignments/evidence/UDG-003-phase-3-defect-closeout.md
+Amendments approved (bounded)                 A-P3-5 close per assertion family; A-P3-6 the ten passes score case
+                                              ids and prove stability, never cause; A-P3-7 a FAIL attaches to the
+                                              attempt whose artefact failed, and failed captures retain their
+                                              original verdicts
+Carried forward, open and unclassified        CF-1 W-7's delivery count (GA-6c), CF-2 the authority-to-client
+                                              mapping (AC-6's M half, P' half at UDG-007), CF-3 the post-close
+                                              input observation (containment, GA-6c/GA-7), CF-4 P-2b's refusal
+                                              wording (GA-7's branch attribution)
+Acceptance commit                             Added by the records commit that follows this one: a block cannot
+                                              carry its own commit's hash. Same procedure as UDG-003's phase
+                                              acceptances and UDG-004's acceptance.
+```
+
+Three conditions the owner attached, recorded as written rather than paraphrased: **the ten-run results show
+stability under the declared conditions and do not establish a cause for any carried-forward item**; **the four
+unresolved observations are recorded separately**, each with its owner and its reopening condition; and **failed
+captures retain their original verdicts** — a bundle recorded FAIL in `/workspace/udg-evidence` stays FAIL, is not
+re-run until green, is not re-judged by a rule that did not exist when it was written, and is not removed (the
+preservation measurement stands at 222 bundles with 0 outcome differences between two verifiers and 35 pre-existing
+FAILs, [record](assignments/evidence/UDG-003-phase-3-verify-preservation-head-vs-wa3.txt)).
+
+**This acceptance passes no gate and closes no observation.** Gates A, B and C remain **Not Run**, GA-11
+unevaluated, GA-10a and GA-10b outstanding for any Gate A run preceding UDG-007 verification, `stackCompatibility`
+**not-established**, deduplication-triggered closure **disabled**, **D4 open** with the existing evidence store as
+its only destination (no archive, tag, release or second destination), Part B **unadopted**, and every task from
+UDG-005 onward unassigned. CF-1 … CF-4 are visible wherever the guarantees they touch are evaluated — UDG-003, its
+Phase 2 evidence matrix, [UDG-007](UDG-007.md), [UDG-008](UDG-008.md) and [UDG-SPIKE-001](UDG-SPIKE-001.md), which
+inherits CF-1, CF-3 and CF-4 as open limitations any Gate A run must resolve or be blocked by.
 
 ### UDG-003 Phase 3 — the `W-7` repair accepted, and the four open defects closed out individually (dated by commit)
 

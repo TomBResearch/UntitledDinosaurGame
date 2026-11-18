@@ -50,6 +50,20 @@ Pass only if all required tests pass in all seeds, speed/step limits hold, eleva
 Evidence is a complete common evidence bundle plus api-map.md, schema-freeze.json, raw-corrections.csv, matched-ack-trace.jsonl, remote-render.csv and a short annotated browser recording or screenshots identifying both clients and ticks. gate-a.md must contain PASS or FAIL, thresholds, actual values, unresolved limitations, prerequisite SHAs and integration-owner decision. Failure blocks 005, 006 and all later gates. A custom predictor requires an ADR; silently replacing Colyseus primitives is prohibited.
 
 
+**UDG-003's carried-forward observations arrive with its evidence (recorded 2026-11-18).** UDG-003 is
+**Verified** and passes nothing, and three of the four observations it leaves open land on criteria this spike
+executes formally, so they are named here rather than left in a phase record: **CF-1** — `W-7`'s delivery count
+(`deliveriesReachingTheSeatDuringTheEpisode` non-zero, one hosted sighting in retained junit bytes) touches GA-6c's
+premise that no fresh snapshot reached the seat, which is what keeps the episode-deadline / allowance-exhausted /
+deadline distinctions separable; **CF-3** — the post-close input observation touches the containment claim behind
+GA-6c/GA-7's "the seat stayed stopped"; **CF-4** — `P-2b`'s refusal wording touches GA-7's attribution of the
+rejoin to the token-expiry branch as opposed to the seat-reservation branch. All three are **unclassified**: no
+cause was demonstrated, UDG-003's ten-pass streak records stability under a declared load and order and is not
+evidence of cause for any of them, and none was waived. A Gate A run inherits each as an open limitation to be
+resolved or to block, and must say which; the UDG-003 harness's numbers cannot close them, because the harness is a
+harness and Gate A's envelope is the spike's own. Owners and byte-named reopening conditions:
+[UDG-003 closeout §0](assignments/evidence/UDG-003-phase-3-defect-closeout.md). **Gate A remains Not Run.**
+
 **GA-11 execution, and the deferred exactly-once rows.** Evaluate `B + J·λ + stall ≤ bufferMaxSize` and
 `clientSnapshotDeadlineMs ≥ 4 × patch interval + 2 × measured p99 RTT` on the recorded populations, name the
 production values beside the provisional ones, and record whether the runner provided network-layer impairment
