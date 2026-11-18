@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "task": "UDG-003",
+  "phase": "phase-3",
+  "kind": "store-scan-for-w7-signature",
+  "recordedAt": "2026-11-18T09:50:00.000Z",
+  "why": "A W-7 sighting does not arrive with the artefact the case read, so the diagnosis has been waiting for another one. This scan looked for sightings that already had one, in the durable store, instead of waiting.",
+  "method": "find /workspace/udg-evidence -name transport-impairment.json, parse ga6Ga7.ga6cEpisodeDeadline.snapshotAbsence, tabulate (deliveriesReachingTheSeatDuringTheEpisode, stateApplicationsDuringTheEpisode)",
+  "artefactsWithEpisodeBlock": 12,
+  "pairs": {"0/0": 11, "0/1": 1},
+  "signatureFound": {
+    "path": "/workspace/udg-evidence/ci-run-43591597910/UDG-003-2026-11-14T11-57-52-546Z-81a341fb/vectors-phase-2/transport-impairment.json",
+    "bundleStatus": "PASS",
+    "bundleCases": 572,
+    "bundleFailures": 0,
+    "snapshotAbsence": {
+      "freshAuthoritativeSnapshotArrived": false,
+      "deliveriesReachingTheSeatDuringTheEpisode": 0,
+      "publicationsSwallowedAtTheWrapper": 60,
+      "stateApplicationsDuringTheEpisode": 1,
+      "resolvedThroughAtSilence": 1,
+      "resolvedThroughAtClose": 1,
+      "epochAtSilence": 11,
+      "epochAtClose": 11
+    },
+    "waAuditOfTheseBytes": "83/84 checks pass; the only failing check is w7-state-applications (W-7), expected === 0, actual 1",
+    "internalContradiction": "freshAuthoritativeSnapshotArrived is computed from ep.applied.length at impairment-population.ts:861-863 and is false, while stateApplicationsDuringTheEpisode is ep.applied.length at :931 and is 1 — the same tally read seventy-three lines and one `await ep.room.leave(true)` apart, with `ep.controller.restore()` (:868) in between",
+    "reading": "The application tally can tick after the impairment wrapper has been taken off the socket and while the seat's own leave() is in flight, in which case the delivery counter — frozen at :858 and detached at :868 — cannot record the frame that caused it. The seat's own row did not move (resolvedThrough 1→1, epoch 11→11), so the state change was not information about this seat. Full argument: diagnosis §17."
+  },
+  "whatThisDoesNotExplain": {
+    "field": "deliveriesReachingTheSeatDuringTheEpisode",
+    "sighting": "run 44191978254, runtime.test.ts:702:71",
+    "status": "UNCLASSIFIED",
+    "why": "A non-zero delivery count requires the wrapper to have delivered while state.silencing was true, and deliver() re-checks silencing at delivery time (impairment.mjs:142), including on the queued path unless the wrapper has already been restored (:169-176). No path in the accepted code produces it. Line numbering is identical at 6061145b and 498d6a9e and the reported columns (71 for deliveries, 66 for applications) match the two property accesses, so the two sightings are two fields and are not one defect.",
+    "retainedArtefactsShowingIt": 0
+  },
+  "baseRate": "1 of 12 retained artefacts carries the application signature; the observed hosted red rate for the case is consistent with roughly one producer invocation in a dozen writing the value."
+}

@@ -410,3 +410,68 @@ hosted `W-7` arrives with its bytes attached. Neither has happened yet.
 
 Status remains **In Review**. Gate A/B/C **Not Run**, GA-11 unevaluated, deduplication-triggered closure
 disabled, `D4` open, `W-7` and `P-2b` unresolved.
+
+### 8.9 First hosted attempt on the two directives: green, with the retained bytes to prove it
+
+Run [`44273118486`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44273118486) — first
+attempt on the submitted head `350ff27503bcac1d7a71b943602bb302767483f9` (implementation commit
+`3093074c5c8418662b79a517a414f44870f0a54d`; the head adds records only) — **completed / success**, every step
+successful, job wall **33.5 min**, capture step **20.2 min** (baseline 24.6 / 16.6). All five bundles
+**PASS**, 657 cases, 0 failures each, and the run's own artifact carries:
+
+```
+UDG-003-TASK-2026-11-18T09-32-09-680Z-350ff275/vectors-phase-2-case/
+  case-artefacts-manifest.json   readByCommand test · reproduction false
+                                 captureSelector UDG-003-TASK
+                                 implementationSha 350ff27503bcac1d7a71b943602bb302767483f9
+  transport-impairment.json 8fb3976ab008   (vectors-phase-2 of the same bundle: 99cdcdb2fbc1)
+  abuse-results.json        858777a63c90   (… 47b22a1c08ba)
+  room-lifecycle.json       8e6f7acdb154   (… 19c1006cce7c)
+  buffer-depth.csv          ee7e68f744fe   (… 51572a9a660d)
+  wa-assertion-audit.json   84/84 checks pass, failing: none
+```
+
+That is the reviewer's three requirements, satisfied by a hosted run rather than by a test fixture: the bytes
+the `test` invocation read are in the bundle, they are bound to that invocation and to this commit, and they
+are **not** the capture's later reproduction — one run produced both directories and all four files differ.
+`test-case-artefacts` and `test-case-audit` each cost under a second. Retained:
+[`UDG-003-phase-3-hosted-green-run-44273118486.json`](evidence/UDG-003-phase-3-hosted-green-run-44273118486.json).
+
+What it does not show, in one sentence each. A green run does not show a red being *diagnosed* — no accepted
+case went red in this job, so the retained bytes here are clean ones. A green run does not exercise the capture
+loop's failure shape; `tests/unit/udg-003/capture-loop.test.ts` and the missing-bundle shape of `44215794779`
+do that. And a green run is not evidence that `W-7` is fixed, because `W-7` was never fixed — see below.
+
+### 8.10 `W-7` has a demonstrated cause for one of its two signatures, and no change was made for it
+
+The diagnosis stopped waiting for another sighting and looked for one that had already been retained. It found
+one: `UDG-003-2026-11-14T11-57-52-546Z-81a341fb` (run `43591597910`) carries
+`stateApplicationsDuringTheEpisode: 1` with `deliveriesReachingTheSeatDuringTheEpisode: 0` — the exact `704`
+signature — and the W-A audit over those bytes reports **83/84 checks pass, the only failing check being
+`w7-state-applications`**. Eleven of twelve retained artefacts in the store carry `0 / 0`. Full scan:
+[`UDG-003-phase-3-w7-signature-scan.json`](evidence/UDG-003-phase-3-w7-signature-scan.json), argument: §§17-18
+of the diagnosis.
+
+The artefact contradicts itself, and that is what demonstrates the cause:
+`freshAuthoritativeSnapshotArrived` is computed from `ep.applied.length` at
+`impairment-population.ts:861-863` and says *nothing was applied*, while
+`stateApplicationsDuringTheEpisode` is `ep.applied.length` evaluated at `:931` and says *one was*. In between
+lie `ep.controller.restore()` (`:868`, which takes the impairment wrapper **off** the socket) and
+`await ep.room.leave(true)` (`:869`), and in the pinned SDK a `leave(consented: true)` does not set
+`leaveCode` — the dispatch guard at `sdk/build/Room.mjs:488` stays open and `onStateChange` keeps firing
+(`:611-612`) until the close lands. So the tally can tick after the window it claims to measure, from a frame
+the delivery counter can no longer see, about state that is not this seat's (`resolvedThrough` 1→1,
+`epoch` 11→11 in the same artefact).
+
+Nothing was changed for it. Three remedies are written out and left as the reviewer's decision — take the
+after-sample at `:858` in the same synchronous sample as the counters; move `restore()` after the `leave()`;
+record the tail (both readings of all four tallies plus `silencing`) so the next sighting diagnoses itself.
+The first two change what an accepted producer records. The `deliveriesReachingTheSeatDuringTheEpisode`
+sighting of `44191978254` is **still unclassified**: `deliver()` re-checks `silencing` at delivery time
+(`impairment.mjs:142`), so no path in the accepted code produces a non-zero delivery count, and collapsing the
+two sightings into one defect would repeat the error this phase has spent four hosted runs correcting.
+
+Status is unchanged: **In Review**, Gate A/B/C **Not Run**, GA-11 unevaluated, deduplication-triggered closure
+**disabled**, `D4` **open**, `W-7` and `P-2b` **unresolved**, and the declared W-A repeatability streak stands
+on the tree it was run on (`142b080…`), not on this head — if the reviewer accepts any of the three remedies,
+the streak must be re-run on top of it.

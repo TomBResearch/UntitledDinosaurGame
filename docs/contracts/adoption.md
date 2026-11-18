@@ -892,3 +892,26 @@ deduplication-triggered closure **disabled**, `stackCompatibility` not-establish
 evidence stays in the existing store, and `W-7`, the stage-sequence straddle and the post-close containment
 refusal all remain **unresolved with no cause demonstrated** — so no probe, deadline, retry allowance, close
 code, refusal wording or sample boundary was moved. Phase 3 remains **In Review**.
+
+Both directives were first-attempted on hosted CI together, and the run is the demonstration rather than a
+fixture: [`44273118486`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44273118486) on
+`350ff27503bcac1d7a71b943602bb302767483f9` (implementation `3093074c5c84`) completed **success** in 33.5 min
+with all five bundles PASS at 657 cases and 0 failures, and its `UDG-003-TASK` bundle carries
+`vectors-phase-2-case/` — four artefacts bound to `readByCommand: test`, `reproduction: false`, this commit —
+whose bytes differ from that same run's `vectors-phase-2/` reproduction on every file. The two new capture
+steps cost under a second; the whole-task plan's real cost remains ≈+6 to +10 minutes of job time against the
+24.6 min baseline, not the 4-5 estimated.
+
+While that ran, `W-7` stopped being a guess for one of its two signatures. The store already held a retained
+artefact with the exact `stateApplicationsDuringTheEpisode = 1`, `deliveries = 0` shape
+(`UDG-003-2026-11-14T11-57-52-546Z-81a341fb`, 1 of 12 artefacts scanned, 83/84 audit checks passing on it), and
+it is internally contradictory in a way that identifies the mechanism: the "nothing was applied" reading and the
+"one was applied" reading of the *same tally* are taken seventy-three lines apart, with the impairment wrapper
+removed from the socket (`impairment.mjs` `restore()`, producer `:868`) and the seat's own
+`await room.leave(true)` (`:869`) in between — and in `@colyseus/sdk@0.18.9` a consented `leave()` does not set
+`leaveCode`, so frames keep dispatching until the close lands. The tally can therefore tick after the window it
+claims to measure. Three remedies are recorded (take the after-sample with the counters; restore after the
+leave; record the tail); **none was applied**, because two of them change what an accepted producer records.
+The `deliveriesReachingTheSeatDuringTheEpisode` sighting stays **unclassified** — no accepted code path delivers
+while `silencing` is set — and `W-7` stays open, with the declared ten-pass W-A streak still standing on the
+tree it was run on rather than on this head.

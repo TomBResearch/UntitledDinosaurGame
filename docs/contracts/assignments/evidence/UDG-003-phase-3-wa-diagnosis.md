@@ -432,3 +432,153 @@ This is the second amplification defect this phase introduced and then removed (
 three red test files; `WA-6` made one `W-7` red into four missing bundles). The lesson is recorded where it
 belongs: a control added next to an accepted artefact must not be able to change what other tasks' evidence
 looks like when the accepted artefact goes red.
+
+## 16. What the pinned dependency rules out, and the one thing the artefact cannot say
+
+The two sightings are asymmetric, and the asymmetry is the most informative number in this whole diagnosis.
+JUnit reports the *first* failing assertion, so `704` red at `44215794779` means `702` passed on the same
+artefact milliseconds earlier:
+
+```
+snapshotAbsence.deliveriesReachingTheSeatDuringTheEpisode  === 0     ← line 702 passed
+snapshotAbsence.stateApplicationsDuringTheEpisode          === 1     ← line 704 failed
+```
+
+An application with no recorded delivery. That combination is either a measurement artefact or the wrapper did
+not see the frame, and settling it needs facts about the pinned stack rather than hypotheses, so here they are,
+read from the installed packages (`@colyseus/sdk@0.18.9` under `@colyseus/core@0.18.27`, the pinned pair):
+
+| Fact | Where | Consequence |
+| --- | --- | --- |
+| `onStateChange` has exactly two invoke sites, `ROOM_STATE` and `ROOM_STATE_PATCH`, both inside frame dispatch and both **synchronous** with `setState`/`patch` | `sdk/build/Room.mjs:597`, `:612` (grep for `onStateChange.invoke` returns nothing else) | a state application cannot be observed without a frame having been dispatched first; there is no deferred/queued callback path, and no third source |
+| the room's `onmessage` handler is assigned once, in `Room.connect` | `sdk/build/Room.mjs:127` | the wrapper installed after connect is not silently replaced mid-episode by the join path |
+| the only other client-side `onmessage` assignment is `Client.getLatency`'s **own** `new Connection(protocol)` | `sdk/build/Client.mjs:204`, `:178` | an RTT probe cannot detach the room's wrapper — candidate mechanism, eliminated |
+| the third site is the opt-in debug monkey-patch | `sdk/build/debug.mjs:181-182` | not enabled here |
+| frames arriving after `leave()` are dropped by the SDK before dispatch | `sdk/build/Room.mjs:486-492` (`if (this.leaveCode !== undefined) return;`) | the window after `await ep.room.leave(true)` (`impairment-population.ts:869`) cannot grow `applied` |
+| the impairment wrapper silences **every** inbound frame while `state.silencing` is true, and resumes only on an explicit `resumeInbound()`; `restore()` runs only on teardown | `impairment.mjs:142-148`, `:208-214`, `:262-266` | nothing in the accepted `ep` path lifts the silence, so a post-silence delivery to the SDK requires the wrapper not to have seen the frame |
+
+So the shape is narrowed to: a frame reached the SDK's dispatch **without being counted by the wrapper**, in
+the interval between the two samples. Which is where the second, blunter finding comes from, and it stands on
+its own regardless of what the next sighting says:
+
+**the accepted producer does not read the two numbers as one snapshot.** `epCountersAfter` is taken at
+`impairment-population.ts:858`; `snapshotAbsence.stateApplicationsDuringTheEpisode` is
+`ep.applied.length - epAppliedAtSilence` evaluated at `:931`, seventy-three lines and one
+`await ep.room.leave(true)` later. `deliveriesReachingTheSeatDuringTheEpisode` (`:929`) uses the *earlier*
+sample, `stateApplicationsDuringTheEpisode` uses a *later* one. Two tallies of one interval, sampled at two
+instants and then compared to zero as though they were simultaneous.
+
+And **the artefact cannot say whether the silence was still in force at the end.** `controller.counters()`
+reports `silencing`, `inboundDelivered` and `patchArrivalsMs` — none of the three reaches
+`ga6Ga7.ga6cEpisodeDeadline`: the episode block records `publicationsSwallowedAtTheWrapper` and the two deltas
+and nothing else. So a red on `704` is, from the bytes alone, exactly as consistent with "the wrapper stopped
+observing this socket" as with "one publication arrived", and the accepted audit — which checks `w7-deliveries-in-window`
+and `w7-state-applications` among 84 checks — has nothing more to look at.
+
+Proposed, **not applied** (each changes what an accepted producer records, or when it records it):
+
+1. read `inboundDelivered`, `inboundSilentlyDropped`, `silencing` and `applied.length` in **one** synchronous
+   sample, immediately before the close, and write all four;
+2. write the wrapper's `patchArrivalsMs` for the episode window, so "a publication arrived" becomes a timestamp
+   rather than an inference from a delta;
+3. keep `W-A-3`'s retained `vectors-phase-2-case` bytes as the object of the audit, so the next sighting is
+   scored against all 84 checks instead of against one counter and a junit line.
+
+None of these is a change to an assertion, a deadline, an allowance, a close code or a probe, and none was made
+here: `702` and `704` still both require zero, and the cause of the `W-7` sightings is still **not demonstrated**.
+
+## 17. A retained artefact with the 704 signature, and the cause it demonstrates
+
+Searching the evidence store for the signature rather than waiting for another sighting found one. Twelve
+retained artefacts carry a `ga6Ga7.ga6cEpisodeDeadline` block; eleven have `deliveries = 0, applications = 0`;
+one does not:
+
+```
+/workspace/udg-evidence/ci-run-43591597910/UDG-003-2026-11-14T11-57-52-546Z-81a341fb
+  /vectors-phase-2/transport-impairment.json
+
+  freshAuthoritativeSnapshotArrived        false
+  deliveriesReachingTheSeatDuringTheEpisode 0
+  publicationsSwallowedAtTheWrapper        60
+  stateApplicationsDuringTheEpisode         1     ← the 704 signature
+  resolvedThroughAtSilence / AtClose        1 / 1
+  epochAtSilence / AtClose                 11 / 11
+```
+
+and the W-A audit over exactly those bytes: **83/84 checks pass; the only failing check is
+`w7-state-applications`**. Nothing else moved — not the timings, not the ladder, not the containment controls,
+all six `controls` entries `true`. Base rate, all twelve artefacts: 11 clean, 1 with the signature.
+
+That artefact also carries its own contradiction, and it is the whole finding:
+
+- `freshAuthoritativeSnapshotArrived` is `false`. It is computed at `impairment-population.ts:861-863` from
+  `epCountersAfter.inboundDelivered`, **`ep.applied.length`** and the row watermark — so at line 862
+  `applied.length` still equalled `epAppliedAtSilence`.
+- `stateApplicationsDuringTheEpisode` is `1`. It is `ep.applied.length - epAppliedAtSilence` evaluated at
+  `:931`, in the object literal, **seventy-three lines and one `await` later**.
+
+Between those two reads sit exactly these statements (`:866-869`):
+
+```ts
+const epSocketClosedByClient = epCountersAfter.socketClosedDuring;
+ep.stopClock();
+ep.controller.restore();                       // ← the impairment wrapper comes OFF the socket
+await ep.room.leave(true).catch(() => undefined);  // ← the seat asks to leave and keeps receiving
+```
+
+and the pinned stack says what those two lines allow:
+
+| Fact | Where | Consequence |
+| --- | --- | --- |
+| `leave(consented = true)` does **not** set `leaveCode`; it sets `leaving`, sends the leave request, and waits for the server. `leaveCode` is set only by `finish()`, which runs when the close lands | `sdk/build/Room.mjs:200-215`, `:236-239` | frames are still dispatched to this Room while `await leave(true)` is in flight |
+| the dispatch guard is `if (this.leaveCode !== undefined) return;` | `sdk/build/Room.mjs:488` | during the leave await the guard is **open**, so a patch arriving then reaches `serializer.patch()` and `onStateChange.invoke()` (`:611-612`) |
+| the wrapper's `restore()` puts the original handler back and is called **before** `leave()` | `impairment.mjs:262-266`, producer `:868` | any frame the seat receives after that point is applied by the SDK and is **not counted at all** by `inboundDelivered` |
+| the queued-inbound path, once `state.restored` is true, hands the held frame to `connection.events.onmessage` directly, bypassing `deliver()` and therefore bypassing both the silencing check and the delivery counter | `impairment.mjs:169-176` | a second route to the same signature: applied tally ticks, delivery counter never moves |
+| the seat's own row did not move (`resolvedThrough` 1 → 1, `epoch` 11 → 11) while `applied` ticked | the retained artefact above | the state change was not information *about this seat*: `applied.push` runs on **any** schema change, `impairment-population.ts:596-614` |
+
+**Cause, for the `stateApplicationsDuringTheEpisode` family:** the tally is not a measurement of the episode.
+Its "before" reading is taken at `:820`, before `silenceInbound()`, and its "after" reading is taken at `:931`,
+*after the wrapper has been restored and while the seat's own `leave()` is in flight*. A patch that arrives in
+that tail — about anything, from anyone — is counted as an application "during the episode", while the delivery
+counter that would have recorded it is frozen at `:858` and detached at `:868`. The assertion
+`stateApplicationsDuringTheEpisode === 0` is therefore not asserting that the window was silent; it is
+asserting that the server sent nothing at all to a leaving seat for the few milliseconds it takes the leave to
+land. That is a race the test does not control, and it is why the case is red once in a dozen invocations and
+green otherwise.
+
+What the same reasoning does **not** cover, stated plainly: the `deliveriesReachingTheSeatDuringTheEpisode`
+sighting (`44191978254`, line `702:71`). Line numbering is identical at both heads (`git show 6061145b:…` and
+`git show 498d6a9e:…` both put deliveries at 702 and applications at 704, and the reported columns — 71 and 66
+— match the two property accesses), so the two sightings really are two fields. A non-zero delivery count
+requires the wrapper to have *delivered* a frame while `state.silencing` was true, and `deliver()` re-checks
+`silencing` at delivery time (`impairment.mjs:142`), with the queue path re-checking it too unless the wrapper
+has already been restored (`:169-176`). No path in the accepted code produces that. That sighting stays
+**unclassified**, and collapsing the two into one defect would be exactly the mistake this phase has been
+correcting.
+
+## 18. What the evidence now warrants, kept as a proposal
+
+The reviewer's standing instruction was to leave sample boundaries alone "until evidence shows which change is
+warranted". For this one boundary, it now does. Recorded as a proposal with the patch spelled out, **not
+applied**, because it changes what an accepted producer records:
+
+1. **Take the after-sample once, where the window ends.** At `:858` read the tally into the same synchronous
+   sample as the counters — `const epAppliedAtSample = ep.applied.length;` — and derive
+   `stateApplicationsDuringTheEpisode` from it instead of from `ep.applied.length` at `:931`. The metric then
+   measures the interval its name describes; the accepted assertion `toBe(0)` is unchanged, as are the
+   deadlines, the allowance, the close codes and the probe. Expected effect: the `stateApplications…` family of
+   hosted reds stops; nothing else about the client's behaviour is claimed differently.
+2. **Order the teardown so it cannot fabricate a delivery.** Move `ep.controller.restore()` after
+   `await ep.room.leave(true)`, so the wrapper stays on the socket for the whole of the seat's life and any
+   frame the seat really does receive is counted rather than silently applied.
+3. **Record the tail rather than infer it.** Write `applied.length`, `inboundDelivered`,
+   `inboundSilentlyDropped` and `silencing` at both instants — at the `:858` sample and at artefact assembly —
+   so "the tally moved in the teardown tail" becomes a reading in the bundle instead of an argument from line
+   numbers. With W-A-3's retained `vectors-phase-2-case` bytes this is the difference between a sighting that
+   diagnoses itself and one that has to be reconstructed.
+
+Items 1 and 2 are behaviour-visible in the accepted producer's output, so they are the reviewer's call. Item 3
+is additive. Nothing in this file has been applied to `impairment-population.ts`, `impairment.mjs`,
+`runtime.test.ts`, the policy or the server: `W-7`'s cause is demonstrated for one of its two signatures, and
+both `W-7` sightings remain **open** until the fix lands and the declared repeatability streak is re-run on
+top of it.
