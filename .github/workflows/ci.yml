@@ -284,7 +284,9 @@ jobs:
 
   camera:
     needs: route
-    if: ${{ needs.route.outputs.camera == 'true' }}
+    # CONTROL (C-07 closeout): deliberately skipped while the router still selects it, to prove `routine outcome`
+    # refuses a selected check that did not run. This branch is closed without merging.
+    if: ${{ needs.route.outputs.camera == 'true' && false }}
     name: routine / camera (browser suite and the UDG-004 gate over its artefacts)
     runs-on: ubuntu-24.04
     # A lane's timeout is the wall-clock budget it is allowed to consume, and a cancelled lane fails the
