@@ -285,3 +285,23 @@ test's support bytes belong, and `UDG-001` is back to the two reds this containe
   `UDG_VECTORS_OUT: 'BUNDLE/vectors-phase-2-case'`, which the accepted case and its producer already honour —
   and it is proposed for the reviewer to decide, not taken here, because it changes what the accepted case
   does inside a capture.
+
+### 8.4 And then a records-only push went red a second time, for a third reason
+
+`c9c4ed7` — documents only, on top of a green head — ran as
+[`44206639883`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44206639883) and failed in
+the capture step with `failing commands: phase-2-stage-sequence (exit 2)`: a command of the **accepted**
+`UDG-003` phase plan, in the third of five plans, so the whole-task plan was never reached. All 647 cases in
+each of the three bundles the run produced passed, including `W-7` and `P-2b`.
+
+The producer's own retained log names what moved: `mappingMatchesTheAuthoritysOwnRecord=false`, with the
+authority at 11 patches and the client at 6 when the mid-window sample was taken, alongside
+`Room connection was closed unexpectedly (1008)` — a sample-versus-close straddle in an accepted producer, the
+same family as `W-7` but a different assertion in a different file. Retained bytes:
+[`UDG-003-phase-3-stage-sequence-red-run-44206639883.json`](evidence/UDG-003-phase-3-stage-sequence-red-run-44206639883.json);
+analysis: §12 of the diagnosis. Nothing was changed for it, because no cause was demonstrated.
+
+The consequence for the reviewer is the useful part: **the docs-only red family is at least three distinct
+defects**, not one flaky suite — `W-7` (§9), this stage-sequence straddle (§12), and the container-local
+`P-2b` two-branch wording (§4) — and all three are now nameable from a bundle's own `logs/` and `junit.xml`
+in minutes rather than being argued about from a step name.

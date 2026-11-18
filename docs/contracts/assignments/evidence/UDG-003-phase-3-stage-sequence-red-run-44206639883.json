@@ -1,0 +1,46 @@
+{
+  "run": "44206639883",
+  "headSha": "c9c4ed7320f3 (records-only commit; no source, test, tool, plan or workflow file differs from b23176c5b7c6, whose run 44201132927 was green)",
+  "recordedAt": "2026-11-18T00:55:00Z",
+  "artifact": {
+    "id": 14385635505,
+    "name": "udg-evidence"
+  },
+  "outcome": "capture step failed, verify step failed; the job contains three of the five bundles, because the capture aborted inside the accepted UDG-003 phase plan",
+  "failingCommand": {
+    "plan": "UDG-003",
+    "command": "phase-2-stage-sequence",
+    "exitCode": 2,
+    "note": "an accepted Phase 2 capture command, in the accepted plan, unchanged by Phase 3"
+  },
+  "retainedLog": {
+    "path": "UDG-003-2026-11-18T00-30-30-847Z-c9c4ed73/logs/phase-2-stage-sequence.stderr.log",
+    "bytes": 311,
+    "text": "Room connection was closed unexpectedly (1008): \n[stages][fail] mappingMatchesTheAuthoritysOwnRecord=false\n[stages][fail] patch median 100.30500199999983 ms, declared 100 ms, step 50 ms; mid-window {\"clientAtOpen\":6,\"serverAtOpen\":6,\"clientAtMid\":6,\"serverAtMid\":11,\"openAtMs\":908.288077,\"midAtMs\":1213.055884}\n"
+  },
+  "stdoutTail": "\n   ___      _                                   ___   _  ___  \n  / __\\___ | |_   _ ___  ___ _   _ ___  __   __/ _ \\ / |( _ ) \n / /  / _ \\| | | | / __|/ _ \\ | | / __| \\ \\ / / | | || |/ _ \\ \n/ /__| (_) | | |_| \\__ \\  __/ |_| \\__ \\  \\ V /| |_| || | (_) |\n\\____/\\___/|_|\\__, |___/\\___|\\__,_|___/   \\_/  \\___(_)_|\\___/ \n              |___/                                           \n\n             \u00b7 Multiplayer Framework for Node.js \u00b7\n\n\ud83d\udc96 Consider becoming a Sponsor on GitHub \u2192 https://github.com/sponsors/endel\n\ud83c\udf1f Give us a star on GitHub \u2192 https://github.com/colyseus/colyseus\n\u2601\ufe0f  Deploy and scale your project on Colyseus Cloud \u2192 https://cloud.colyseus.io\n\n[Colyseus reconnection]: \u274c Room has not been up for long enough for automatic reconnection. (min uptime: 5000ms)\n[stages] fail: M matches the authority record=false, refusal moved nothing=true, M\u2260P during the withheld window the room advanced 5 and the seat 0, patch median 100.30500199999983 ms vs declared 100 ms, AC-6 pass-for-the-stages-scored-here (results half outstanding at UDG-007)\n",
+  "otherBundlesInRun": [
+    {
+      "bundle": "UDG-001-2026-11-18T00-24-34-636Z-c9c4ed73",
+      "cases": 647,
+      "failures": 0
+    },
+    {
+      "bundle": "UDG-002-2026-11-18T00-27-22-913Z-c9c4ed73",
+      "cases": 647,
+      "failures": 0
+    },
+    {
+      "bundle": "UDG-003-2026-11-18T00-30-30-847Z-c9c4ed73",
+      "cases": 647,
+      "failures": 0
+    }
+  ],
+  "reading": "The stage-sequence producer (OD-4) recorded mappingMatchesTheAuthoritysOwnRecord=false with the authority at 11 patches and the client at 6 when its mid-window sample was taken (openAtMs 908.288, midAtMs 1213.056), and the harness separately journalled \"Room connection was closed unexpectedly (1008)\". The patch cadence itself was inside tolerance (median 100.305 ms against 100 ms declared, 50 ms step), so what moved is the sequence comparison, not the rate. That is a sample-versus-close straddle in an accepted producer: the client had received 6 of 11 because the room closed, and the assertion compares a client-side count taken at a fixed wall-clock instant against the authority's own record. Cause is NOT demonstrated beyond that observation, so nothing was changed.",
+  "notThis": {
+    "w7": "the W-7 case passed in all three bundles of this run",
+    "p2b": "the P-2b case passed in all three bundles of this run",
+    "phase3Capture": "the whole-task plan is the fourth plan; the capture died in the third, so this run never reached it",
+    "documents": "the push carried records only"
+  }
+}

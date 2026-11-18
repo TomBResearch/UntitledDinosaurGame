@@ -324,3 +324,41 @@ remains a single container-local quote with a documented two-branch mechanism an
 instrument, the declaration, the streak, the sighting, this defect and its fix are all retained, and the
 three open remedies (accept the second refusal text, pin the post-close samples, or point the case's output
 into the bundle) are decisions for the reviewer rather than bets made in the dark at midnight.
+
+## 12. A second hosted red, sixteen minutes later, that is neither `W-7` nor `P-2b`
+
+Run `44206639883` pushed **records only** on top of a head whose own run had been green. It failed in the
+capture step, and it failed for a reason that had not been seen before:
+
+```
+failing commands: phase-2-stage-sequence (exit 2)
+```
+
+— a command of the **accepted** `UDG-003` phase plan, in the **third** of the five capture plans, so the job
+never reached the whole-task plan and its artifact holds three bundles rather than five. All 644 cases of each
+of those three bundles passed; `W-7` and `P-2b` both passed in this run. The bytes the command left behind,
+retained verbatim in
+[`UDG-003-phase-3-stage-sequence-red-run-44206639883.json`](UDG-003-phase-3-stage-sequence-red-run-44206639883.json),
+are the whole diagnosis:
+
+```
+Room connection was closed unexpectedly (1008):
+[stages][fail] mappingMatchesTheAuthoritysOwnRecord=false
+[stages][fail] patch median 100.30500199999983 ms, declared 100 ms, step 50 ms; mid-window
+  {"clientAtOpen":6,"serverAtOpen":6,"clientAtMid":6,"serverAtMid":11,"openAtMs":908.288077,"midAtMs":1213.055884}
+```
+
+The rate was inside tolerance — a 100.305 ms median against 100 ms declared with a 50 ms step is not the
+problem. What moved is the **sequence comparison**: at the mid-window sample the authority had published 11
+patches and the client had received 6, and the harness separately journalled an unexpected close (1008). A
+client that stops receiving patches because its room closed cannot match an authority record taken at a fixed
+wall-clock instant, which is the same family of failure as `W-7` — a sample taken at a moment that the runtime
+is free to move — in a different accepted producer, on a different assertion.
+
+**No cause is demonstrated beyond that observation, so nothing was changed.** What this record establishes is
+narrower and worth having: the docs-only red family is **not one defect**. It contains at least `W-7` (§9),
+this stage-sequence straddle (§12) and, in the container, the two-branch `P-2b` wording (§4) — three
+mechanisms on three different assertions that have been discussed as if they were one flaky suite because the
+only thing each run reported was "the capture step is red". Reading the bundle's own `logs/` and `junit.xml`
+named all three in minutes, which is the argument for the whole-task capture, stated better by a failure than
+by a design note.
