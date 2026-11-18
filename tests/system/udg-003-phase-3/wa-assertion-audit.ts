@@ -10,7 +10,12 @@
  * failure. It never edits the accepted file, and it never relaxes anything: each check here is the accepted
  * assertion, evaluated in isolation, and the accepted case remains the authority over what passes.
  *
- * Usage:  node tests/system/udg-003-phase-3/wa-assertion-audit.ts --dir <artefactDirectory> [--out <file>]
+ * Usage:  node tests/system/udg-003-phase-3/wa-assertion-audit.ts --dir <artefactDirectory> [--out <file>] [--report-only]
+ *
+ * `--report-only` writes the report and exits 0 whatever it finds. The capture's `test-case-audit` step uses
+ * it: the accepted case is the gate, and a second failing command over the same defect is the WA-5
+ * amplification this phase already had to fix. Without the flag the exit status is the verdict, which is what
+ * the falsification controls and the streak runner depend on.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -246,4 +251,6 @@ process.stdout.write(
   `[wa-audit] ${String(report.passed)}/${String(report.checked)} checks pass; failing: ` +
     `${failing.length === 0 ? 'none' : failing.map((entry) => `${entry.id} (${entry.defect}) expected ${entry.expectation}, actual ${JSON.stringify(entry.actual)}`).join(' · ')}\n`,
 );
-process.exit(failing.length === 0 ? 0 : 1);
+// `--report-only`: the measurement is the point, the verdict is somebody else's gate.
+const reportOnly = args.includes('report-only') || args.includes('--report-only');
+process.exit(reportOnly || failing.length === 0 ? 0 : 1);

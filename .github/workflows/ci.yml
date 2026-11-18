@@ -219,18 +219,18 @@ jobs:
       - name: Capture the evidence bundles
         if: ${{ !cancelled() }}
         shell: bash
+        # Every plan in `evidence.js plans` is attempted and its bundle retained, whatever happened before it;
+        # the step still exits non-zero if any plan failed, and the verification step below remains a separate
+        # gate. `tools/ci/capture-plans.sh` carries the reason: a `set -e` loop here cost three jobs their
+        # whole-task evidence on 2026-11-18, because a records-only push died in the second plan and the fourth
+        # plan — the one that retains the artefacts the red case read — never ran.
         run: |
           set -euo pipefail
           pnpm --filter @udg/checks build
-          tasks="$(node tools/checks/dist/evidence.js plans)"
-          if [ -z "$tasks" ]; then
-            echo "::error::no task has a capture plan; evidence cannot be produced"
-            exit 1
-          fi
-          for task in $tasks; do
-            echo "capturing the evidence bundle for $task"
-            pnpm evidence:capture -- --task "$task" --out artifacts --keep-going
-          done
+          # The plan list stays named here: the loop is driven by it, and this step prints which tasks this
+          # run is expected to produce evidence for, so a plan that silently disappears is visible in the log.
+          echo "capture plans for this run: $(node tools/checks/dist/evidence.js plans | tr '\n' ' ')"
+          bash tools/ci/capture-plans.sh
 
       - name: Assert the required evidence artefacts exist
         if: ${{ !cancelled() }}

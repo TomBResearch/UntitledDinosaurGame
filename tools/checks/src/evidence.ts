@@ -322,6 +322,29 @@ export const PHASE_1_MEASUREMENTS_SCOPE = 'phase-1';
 export const TASK_PHASE_LABEL = 'task';
 export const TASK_PHASE_MEASUREMENTS_SCOPE = 'task';
 export const TASK_SELECTOR = 'UDG-003-TASK';
+
+/**
+ * W-A-3: the artefacts the whole-task *test invocation* produced and read, retained beside the bundle that
+ * recorded that invocation.
+ *
+ * The accepted plan's Phase 2 step re-runs each producer, so the bytes in `vectors-phase-2/` come from a
+ * **later production** than the ones the accepted cases judged. That is why a hosted `W-7` red arrived with a
+ * retained artefact that audits clean: it is a different run of the same producer, not the artefact that was
+ * read. This directory is the opposite claim — the bytes as they stood when the `test` command finished,
+ * copied before any reproduction runs, hashed, and bound to the reading command and the commit. A later
+ * reproduction lands in `vectors-phase-2/` under its own command and can never write here: the step refuses a
+ * second invocation whose bytes differ, and the verifier re-checks every hash against the manifest that was
+ * written first.
+ */
+export const CASE_ARTEFACT_DIR = 'vectors-phase-2-case';
+export const CASE_ARTEFACT_MANIFEST = 'case-artefacts-manifest.json';
+/** The artefacts the accepted Phase 2 cases read, and that Phase 3's task vectors are derived from. */
+export const CASE_ARTEFACT_FILES: readonly string[] = [
+  'transport-impairment.json',
+  'abuse-results.json',
+  'room-lifecycle.json',
+  'buffer-depth.csv',
+];
 /** The phase label the Phase 3 manifest declares and the gate selects its list by. */
 export const PHASE_3_LABEL = 'phase-3';
 export const TASK_SCOPE_NOTE =
@@ -400,6 +423,196 @@ export interface ManifestExpectation {
  * files on disk, and the required list comes from the caller (the gate), so neither side can agree on a
  * smaller body of evidence.
  */
+/** What `case-artefacts` can refuse, and why. Each code is a refusal to *write*, never a silent overwrite. */
+export type CaseArtefactIssue = { readonly code: 'CASE-ARTEFACTS-MISSING' | 'CASE-ARTEFACTS-DRIFT' | 'CASE-ARTEFACTS-WRITER-MISSING'; readonly detail: string };
+
+export interface CaseArtefactRequest {
+  readonly taskId: string;
+  readonly captureSelector: string;
+  readonly fromDirectory: string;
+  readonly intoDirectory: string;
+  readonly readByCommand: string;
+  readonly files: readonly string[];
+  readonly runId: string | null;
+}
+
+/**
+ * Copy the artefacts the `test` invocation produced and read, and write the manifest that binds them.
+ *
+ * Idempotence is deliberately asymmetric. Re-running with byte-identical sources confirms what is already
+ * recorded and changes nothing. Re-running with **different** bytes refuses: the accepted Phase 2 producers
+ * re-run later in the same plan, and if a later production could write here, a passing reproduction would
+ * replace the bytes that a red case actually read — which is the whole thing this step exists to prevent.
+ */
+export const captureCaseArtefacts = (root: string, request: CaseArtefactRequest): CaseArtefactIssue[] => {
+  const issues: CaseArtefactIssue[] = [];
+  const source = resolve(root, request.fromDirectory);
+  const target = resolve(root, request.intoDirectory);
+  const manifestPath = join(target, CASE_ARTEFACT_MANIFEST);
+  const listed = request.files.map((name) => {
+    const absolute = join(source, name);
+    const raw = existsSync(absolute) ? readFileSync(absolute) : null;
+    return { name, raw };
+  });
+  for (const entry of listed) {
+    if (entry.raw === null) {
+      issues.push({ code: 'CASE-ARTEFACTS-MISSING', detail: `${entry.name} is absent from ${request.fromDirectory}: the test invocation wrote nothing to be retained` });
+    } else if (entry.raw.length === 0) {
+      issues.push({ code: 'CASE-ARTEFACTS-MISSING', detail: `${entry.name} in ${request.fromDirectory} is empty` });
+    }
+  }
+  if (issues.length > 0) return issues;
+
+  const existing = existsSync(manifestPath) ? asRecord(safeJson(readFileSync(manifestPath, 'utf8'))) : null;
+  if (existing !== null) {
+    const recorded = new Map(
+      (Array.isArray(existing['files']) ? existing['files'] : [])
+        .map((row) => [String(asRecord(row)['name'] ?? ''), String(asRecord(row)['sha256'] ?? '')]),
+    );
+    const drifted = listed.filter((entry) => (entry.raw !== null && recorded.get(entry.name) !== sha256Bytes(entry.raw)));
+    if (drifted.length > 0) {
+      issues.push({
+        code: 'CASE-ARTEFACTS-DRIFT',
+        detail:
+          `${CASE_ARTEFACT_DIR} already records the bytes the "${request.readByCommand}" invocation read; `
+          + `re-writing it from ${request.fromDirectory} would replace them. Diverged: ${drifted.map((e) => e.name).join(', ')}. `
+          + 'A later production of the same producer is a different run and belongs in vectors-phase-2/, not here.',
+      });
+      return issues;
+    }
+    return []; // byte-identical re-invocation: nothing to write, nothing to replace.
+  }
+
+  const files = listed.map((entry) => ({
+    name: entry.name,
+    bytes: entry.raw?.length ?? 0,
+    sha256: entry.raw === null ? '' : sha256Bytes(entry.raw),
+    sourcePath: join(request.fromDirectory, entry.name).replace(/\\/g, '/'),
+  }));
+  const manifest = {
+    schemaVersion: 1,
+    taskId: request.taskId,
+    captureSelector: request.captureSelector,
+    purpose:
+      'The artefacts the whole-task test invocation produced and read, retained before any later reproduction. '
+      + 'They are not the capture\u2019s own Phase 2 production: those bytes are in vectors-phase-2/, '
+      + 'produced by the plan\u2019s phase-2-* commands after this. The distinction is the point: '
+      + 'diagnosed from the artefact it judged.',
+    readByCommand: request.readByCommand,
+    writtenByCommand: 'test-case-artefacts',
+    reproduction: false,
+    distinctFrom: 'vectors-phase-2 (the capture\u2019s own later production of the same producers)',
+    sourceDirectory: request.fromDirectory.replace(/\\/g, '/'),
+    runId: request.runId,
+    implementationSha: git(root, ['rev-parse', 'HEAD']),
+    branch: git(root, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    workingTreeDirty: git(root, ['status', '--porcelain']) !== '',
+    capturedAt: new Date().toISOString(),
+    files,
+  };
+  mkdirSync(target, { recursive: true });
+  for (const entry of listed) {
+    if (entry.raw !== null) writeBytesEnsuring(join(target, entry.name), entry.raw);
+  }
+  writeFileSyncEnsuring(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return [];
+};
+
+/**
+ * Verify the case-artefact claim. Absent directory, absent concerns: bundles captured before W-A-3 carry no
+ * such directory and must verify exactly as they did. When it is present the claim is four things — the bytes
+ * are the bytes the manifest hashed, the manifest binds them to the reading command and to this run's commit,
+ * the recording command ran after the invocation that read them, and the recording command is the only writer.
+ */
+export const caseArtefactIssues = (
+  absoluteRunDir: string,
+  report: { readonly taskId: string; readonly implementationSha: string },
+): readonly { readonly code: VerifyCode; readonly detail: string }[] => {
+  const issues: { code: VerifyCode; detail: string }[] = [];
+  const relativeManifest = `${CASE_ARTEFACT_DIR}/${CASE_ARTEFACT_MANIFEST}`;
+  const raw = readOptional(join(absoluteRunDir, relativeManifest));
+  if (raw === undefined) {
+    // The obligation follows the command, not the calendar: a bundle captured before W-A-3 ran no
+    // `test-case-artefacts` step and is judged exactly as it was before. A bundle that ran the step and
+    // retained nothing is a capture that lost the very bytes it promised.
+    const commandsRaw = readOptional(join(absoluteRunDir, 'commands.json'));
+    const labels = commandsRaw === undefined ? [] : (Array.isArray(asRecord(safeJson(commandsRaw))['commands'])
+      ? (asRecord(safeJson(commandsRaw))['commands'] as unknown[]).map((row) => String(asRecord(row)['label'] ?? ''))
+      : []);
+    if (labels.includes('test-case-artefacts')) {
+      issues.push({
+        code: 'EVIDENCE-CASE-ARTEFACT-MISSING',
+        detail:
+          `commands.json records the test-case-artefacts step but ${relativeManifest} is absent: the artefacts `
+          + 'the test invocation read were not retained, so a red in an accepted case cannot be diagnosed from this bundle',
+      });
+    }
+    return issues;
+  }
+  const manifest = asRecord(safeJson(raw));
+  if (Object.keys(manifest).length === 0) {
+    return [{ code: 'EVIDENCE-CASE-ARTEFACT-MANIFEST', detail: `${relativeManifest} is not readable JSON` }];
+  }
+  if (manifest['taskId'] !== report.taskId) {
+    issues.push({ code: 'EVIDENCE-ARTEFACT-TASK-MISMATCH', detail: `${relativeManifest} must declare taskId ${report.taskId}` });
+  }
+  if (manifest['reproduction'] !== false) {
+    issues.push({
+      code: 'EVIDENCE-CASE-ARTEFACT-MANIFEST',
+      detail: `${relativeManifest} must declare reproduction false: these are the bytes the invocation read, not a later production of them`,
+    });
+  }
+  if (manifest['implementationSha'] !== report.implementationSha) {
+    issues.push({
+      code: 'EVIDENCE-CASE-ARTEFACT-SHA',
+      detail:
+        `${relativeManifest} binds the artefacts to ${String(manifest['implementationSha'])} but this bundle ran `
+        + `${report.implementationSha}: the bytes cannot be attributed to this commit`,
+    });
+  }
+  // The reading command must exist, and the recording command must come after it.
+  const commandsRaw = readOptional(join(absoluteRunDir, 'commands.json'));
+  const commands = commandsRaw === undefined ? [] : (Array.isArray(asRecord(safeJson(commandsRaw))['commands'])
+    ? (asRecord(safeJson(commandsRaw))['commands'] as unknown[]) : []);
+  const labels = commands.map((row) => String(asRecord(row)['label'] ?? ''));
+  const readBy = String(manifest['readByCommand'] ?? '');
+  const writtenBy = String(manifest['writtenByCommand'] ?? '');
+  const readIndex = labels.indexOf(readBy);
+  const writeIndex = labels.indexOf(writtenBy);
+  if (readIndex === -1 || writeIndex === -1) {
+    issues.push({
+      code: 'EVIDENCE-CASE-ARTEFACT-ORDER',
+      detail: `${relativeManifest} names readByCommand "${readBy}" and writtenByCommand "${writtenBy}"; both must be commands this bundle recorded`,
+    });
+  } else if (writeIndex < readIndex) {
+    issues.push({
+      code: 'EVIDENCE-CASE-ARTEFACT-ORDER',
+      detail: `${relativeManifest} records the artefacts before the command that read them ran (step ${String(writeIndex)} before step ${String(readIndex)})`,
+    });
+  }
+  const listed = Array.isArray(manifest['files']) ? (manifest['files'] as unknown[]) : [];
+  if (listed.length === 0) {
+    issues.push({ code: 'EVIDENCE-CASE-ARTEFACT-MANIFEST', detail: `${relativeManifest} names no files` });
+  }
+  for (const row of listed) {
+    const entry = asRecord(row);
+    const name = String(entry['name'] ?? '');
+    const relative = `${CASE_ARTEFACT_DIR}/${name}`;
+    const bytes = readOptional(join(absoluteRunDir, relative));
+    if (bytes === undefined) {
+      issues.push({ code: 'EVIDENCE-CASE-ARTEFACT-MISSING', detail: `${relative} is named by ${relativeManifest} but is absent from the bundle` });
+      continue;
+    }
+    if (sha256Bytes(Buffer.from(bytes, 'utf8')) !== entry['sha256']) {
+      issues.push({
+        code: 'EVIDENCE-CASE-ARTEFACT-HASH',
+        detail: `${relative} does not hash to what ${relativeManifest} recorded for the "${readBy}" invocation: a later production cannot stand in for the artefact the case read`,
+      });
+    }
+  }
+  return issues;
+};
+
 export const validateVectorManifest = (directory: string, expectation: ManifestExpectation): ManifestIssue[] => {
   const issues: ManifestIssue[] = [];
   const manifestPath = join(directory, 'vectors-manifest.json');
@@ -1109,6 +1322,12 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       ...PHASE_2_VECTOR_FILES.map((name) => `vectors-phase-2/${name}`),
       'vectors-phase-3/vectors-manifest.json',
       ...PHASE_3_VECTOR_FILES.map((name) => `vectors-phase-3/${name}`),
+      // The case-artefact directory is deliberately NOT in this list. A bundle may only be judged against the
+      // requirements that existed when it was captured, and requirement lists here are read by the verifier of
+      // *today*: listing these files would make every whole-task bundle captured before W-A-3 newly invalid.
+      // The obligation is carried instead by the rule in `caseArtefactIssues` — a bundle whose commands.json
+      // contains `test-case-artefacts` must carry the claim — plus the capture step itself, which refuses to
+      // complete without it.
       'probes/probe-run-index.json',
       `probes/${PROBE_LEDGER_FILE}`,
       'report.json',
@@ -1188,6 +1407,34 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
         },
         junit: true,
         measurements: true,
+      },
+      // W-A-3, approved by the reviewer: the bytes the invocation above produced and read, retained before
+      // anything reproduces them. The accepted Phase 2 producers re-run later in this plan, and those bytes
+      // land in vectors-phase-2/; a bundle that carried only the reproduction could not diagnose a red in
+      // the case that read the earlier bytes. The step refuses a second invocation whose bytes differ, so no
+      // later production can replace them, and the verifier re-hashes each file against this manifest.
+      {
+        label: 'test-case-artefacts',
+        argv: [
+          'node', 'tools/checks/dist/evidence.js', 'case-artefacts',
+          '--task', 'UDG-003',
+          '--capture-selector', 'UDG-003-TASK',
+          '--from', 'artifacts/udg-003-phase-2',
+          '--to', 'BUNDLE/vectors-phase-2-case',
+          '--read-by-command', 'test',
+        ],
+      },
+      // The 84-check audit run over THOSE bytes, as a measurement. It writes a report and exits 0 whatever it
+      // finds: the accepted case is the gate, and making this one fail too would be the WA-5 amplification
+      // again — one defect reported twice, in two files, with the second name looking like a capture bug.
+      {
+        label: 'test-case-audit',
+        argv: [
+          'node', 'tests/system/udg-003-phase-3/wa-assertion-audit.ts',
+          '--dir', 'BUNDLE/vectors-phase-2-case',
+          '--out', 'BUNDLE/vectors-phase-2-case/wa-assertion-audit.json',
+          '--report-only',
+        ],
       },
       { label: 'build', argv: ['pnpm', 'build'], buildLog: true },
       // Phase 1's accepted vector set, captured and gated here too: the whole-task bundle carries it, it
@@ -1998,6 +2245,11 @@ export type VerifyCode =
   | 'EVIDENCE-THRESHOLD-UNMEASURED'
   | 'EVIDENCE-PREREQUISITE-MISSING'
   | 'EVIDENCE-ARTEFACT-UNPARSEABLE'
+  | 'EVIDENCE-CASE-ARTEFACT-MANIFEST'
+  | 'EVIDENCE-CASE-ARTEFACT-MISSING'
+  | 'EVIDENCE-CASE-ARTEFACT-HASH'
+  | 'EVIDENCE-CASE-ARTEFACT-SHA'
+  | 'EVIDENCE-CASE-ARTEFACT-ORDER'
   | 'EVIDENCE-ARTEFACT-TASK-MISMATCH'
   | 'EVIDENCE-PHASE-MISMATCH'
   | 'EVIDENCE-PHASE-SCOPE-MISMATCH'
@@ -2387,6 +2639,11 @@ export const verify = (root: string, runRelative: string): VerifyResult => {
       }
     }
   }
+
+  // W-A-3: the artefacts the test invocation read, when this bundle claims to carry them. A bundle that
+  // carries no such directory is untouched by this block, which is what keeps 142 historical bundles verifying
+  // exactly as they did.
+  for (const issue of caseArtefactIssues(absoluteRunDir, report)) issues.push(issue);
 
   // checksums.sha256 covers every evidence file except itself.
   const checksumsRaw = readOptional(join(absoluteRunDir, 'checksums.sha256'));
@@ -3201,6 +3458,33 @@ const main = (): number => {
   if (mode === 'verify') return verifyMain(flags);
   if (mode === 'dependencies') return dependenciesMain(flags);
   if (mode === 'summary') return summaryMain(flags);
+  if (mode === 'case-artefacts') {
+    // W-A-3: retain what the `test` invocation produced and read, before the plan's own reproductions run.
+    const usage = 'usage: evidence.js case-artefacts --task <id> --capture-selector <selector> --from <dir> --to <dir> --read-by-command <label> [--require a,b,c]';
+    const fromDirectory = flagString(flags, 'from');
+    const intoDirectory = flagString(flags, 'to');
+    const readByCommand = flagString(flags, 'read-by-command');
+    if (fromDirectory === undefined || intoDirectory === undefined || readByCommand === undefined) {
+      process.stderr.write(`::error::${usage}\n`);
+      return 2;
+    }
+    const required = (flagString(flags, 'require') ?? CASE_ARTEFACT_FILES.join(',')).split(',').map((name) => name.trim()).filter((name) => name.length > 0);
+    const issues = captureCaseArtefacts(process.cwd(), {
+      taskId: flagString(flags, 'task') ?? 'UDG-003',
+      captureSelector: flagString(flags, 'capture-selector') ?? TASK_SELECTOR,
+      fromDirectory,
+      intoDirectory,
+      readByCommand,
+      files: required,
+      runId: flagString(flags, 'run-id') ?? null,
+    });
+    for (const issue of issues) process.stderr.write(`::error::${issue.code}: ${issue.detail}\n`);
+    if (issues.length === 0) {
+      process.stdout.write(`case artefacts retained in ${intoDirectory} for the "${readByCommand}" invocation\n`);
+    }
+    return issues.length === 0 ? 0 : 1;
+  }
+
   if (mode === 'vectors') {
     // The CI gate for the Phase 1 vectors, independent of any bundle: a missing manifest, a missing vector,
     // a changed byte or a manifest from another commit all exit non-zero (reviewer correction 4).
