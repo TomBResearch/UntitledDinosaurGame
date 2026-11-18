@@ -62,7 +62,9 @@
  * A pointer can disappear between `pointerdown` and `pointermove`, and `setPointerCapture` then throws
  * `NotFoundError`. "Blocked pointer events … must not crash the UI" (docs/contracts/UDG-004.md) means that
  * case is caught, counted and reported through `onIncident` — never allowed to reach the browser's uncaught
- * error path, which is what `console-errors.json` counts.
+ * error path, which is what `console-errors.json` counts. *
+ * CI routing probe (C-07, measurement only — close without merging): `apps/client/**` is a camera-owned path,   * so the static, unit and camera lanes have a real pull request to route.
+
  */
 
 import type { ArcRotateCamera } from '@babylonjs/core';
