@@ -1,0 +1,33 @@
+{
+  "run": "44211208860",
+  "headSha": "eff55412a196 (records-only; no source, test, tool, plan or workflow file differs from b23176c5b7c6, run 44201132927, which was green)",
+  "recordedAt": "2026-11-18T01:30:00Z",
+  "artifact": {
+    "id": 14387004463,
+    "name": "udg-evidence"
+  },
+  "outcome": "capture step failed, verify step failed; three of five bundles produced \u2014 the capture died inside the accepted UDG-003 phase plan (third of five), so the whole-task plan was never reached",
+  "testCases": {
+    "perBundle": 647,
+    "failures": 0,
+    "note": "every test case in every bundle of this run passed, W-7 and P-2b included; the red is a producer gate exiting non-zero, not a test failing"
+  },
+  "failingCommand": {
+    "plan": "UDG-003",
+    "command": "phase-2-impairment-population",
+    "stderr": "[impairment][fail] noInputReachedTheRoomAfterTheEpisodeClosed=false",
+    "stdoutSummaryLine": "[impairment] fail: baseline intake p99 44.689801999999986 ms, imposed intake p50 83.62066200000004 ms, client-observed p50 baseline 126.64022899999986 / imposed 188.94049100000007 ms, withheld 4 (never consumed: true, later arrived: true), stall caught up: true, recovery controls 30/31 (of which GA-6a/6b/6c+GA-7 13/13, GA-6c episode branch 5/6) (6b silent-server deadline: true, 6c episode deadline 4007 ms -> episode-deadline with 0 deliveries and 1 room frames after, 7 close 4100 in 290 ms (closed: true, observation: true, retired 32, refused 0, lossRecorded true, consumed 38), recovered epoch -1"
+  },
+  "siblingProducerOutputsInSameRun": {
+    "stage-sequence": "pass: M matches the authority record=true \u2026 (the \u00a712 failure of run 44206639883 did not recur; its log still carries the bare \"Room connection was closed unexpectedly (1008)\" line)",
+    "abuse-population": "14/14 scenarios passed; retired-offender transport verdict pass",
+    "journal-replay": "pass (7 journals, 7 replayed, 7 equal, tampered refused)",
+    "recovery-scenarios": "4/4 scenarios passed"
+  },
+  "reading": "The impairment producer refused its own verdict because `noInputReachedTheRoomAfterTheEpisodeClosed` came back false: input reached the room **after** the recovery episode had closed. Its latency bands were inside envelope (baseline intake p99 44.69 ms against imposed intake p50 83.62 ms; client-observed p50 126.64 ms baseline against 188.94 ms imposed), so what moved is post-close containment, not rate. That is the mechanism \u00a73 of the W-A diagnosis hypothesised \u2014 a timer or an in-flight message straddling the close \u2014 seen in the producer\u2019s own instrumentation rather than in the accepted case. The same production also logged the matchmaking-side refusal text three times (\"reconnection token invalid or expired\"), which is the branch the accepted P-2b assertion expects, not the seat-reservation branch.",
+  "consequences": [
+    "the producer-gate class is not one assertion: in two consecutive records-only runs it was `mappingMatchesTheAuthoritysOwnRecord` (run 44206639883) and now `noInputReachedTheRoomAfterTheEpisodeClosed`, two accepted producers with two different post-close samples",
+    "both failures happened in the **third** of five capture plans, so the job died before the whole-task plan: from now on a red in an earlier plan means the `UDG-003-TASK` bundle simply does not exist that run",
+    "no test failed, so a reader who triages by junit alone would conclude nothing happened"
+  ]
+}

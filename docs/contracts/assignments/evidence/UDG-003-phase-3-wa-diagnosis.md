@@ -362,3 +362,36 @@ mechanisms on three different assertions that have been discussed as if they wer
 only thing each run reported was "the capture step is red". Reading the bundle's own `logs/` and `junit.xml`
 named all three in minutes, which is the argument for the whole-task capture, stated better by a failure than
 by a design note.
+
+## 13. The next records-only red named the mechanism: input reached the room after the episode closed
+
+Run `44211208860` — documents only, on a head whose own run had been green — died in the same place as the
+last one, the accepted `UDG-003` phase plan, third of five, before the whole-task plan could run. Once again
+**every test case in every bundle passed** (647 of 647 in each of the three bundles the job produced). The red
+was a producer refusing its own verdict:
+
+```
+[impairment][fail] noInputReachedTheRoomAfterTheEpisodeClosed=false
+[impairment] fail: baseline intake p99 44.69 ms, imposed intake p50 83.62 ms, client-observed p50 baseline
+  126.64 / imposed 188.94 ms, withheld 4 (never consumed: true, …
+```
+
+Read it against §3. The impairment producer carries its own containment field, and it is the containment half
+that failed: **input reached the room after the recovery episode had closed**. The latency envelope was
+comfortable — impaired median 83.62 ms against a baseline p99 of 44.69 ms, client-observed 188.94 ms against
+126.64 ms — so nothing about the *rate* was wrong. The same production logged the matchmaking-side refusal text
+three times (`reconnection token invalid or expired`), which is the branch the accepted `P-2b` assertion
+expects rather than the seat-reservation one, so it says nothing against §4.
+
+Two consecutive documents-only runs, two accepted producers, two different post-close samples
+(`mappingMatchesTheAuthoritysOwnRecord`, then `noInputReachedTheRoomAfterTheEpisodeClosed`), and no test
+failure in either. That is the strongest evidence in this record for the shape §3 proposed — a timer or an
+in-flight message straddling a close — and it is still not a demonstration of *which* line moves in the
+accepted `W-7` case, because the case and the producer are different readers of the same production and the
+producer's failure means the artefact this run needed was never written. Nothing was changed for it.
+
+**The operational consequence for the reviewer**, stated plainly because it will otherwise look like a hole in
+W-C: the five capture plans run in one step, in plan order, and the whole-task plan is fourth. A producer gate
+in an earlier plan kills the step, so on those runs the `UDG-003-TASK` bundle does not exist. If the reviewer
+wants the whole-task bundle to exist even when an accepted producer is red, the fix is ordering or
+`--keep-going` semantics in the CI loop — a workflow decision, named here rather than taken.

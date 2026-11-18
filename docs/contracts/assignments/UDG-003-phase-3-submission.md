@@ -305,3 +305,18 @@ The consequence for the reviewer is the useful part: **the docs-only red family 
 defects**, not one flaky suite — `W-7` (§9), this stage-sequence straddle (§12), and the container-local
 `P-2b` two-branch wording (§4) — and all three are now nameable from a bundle's own `logs/` and `junit.xml`
 in minutes rather than being argued about from a step name.
+
+### 8.5 A third documents-only red, naming post-close containment
+
+Run [`44211208860`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44211208860) — documents
+only, on a head whose own run was green — failed the capture step the same way: an accepted producer refusing
+its verdict, `phase-2-impairment-population`, because
+`noInputReachedTheRoomAfterTheEpisodeClosed=false`. All 647 test cases in each of its three bundles passed.
+Retained bytes:
+[`UDG-003-phase-3-impairment-gate-red-run-44211208860.json`](evidence/UDG-003-phase-3-impairment-gate-red-run-44211208860.json);
+analysis §13 of the diagnosis, which is where the mechanism this names is set against §3.
+
+Nothing in this phase was changed for it. What it adds to the submission is one operational fact a reviewer
+should not have to discover: **the whole-task plan is fourth of five in one capture step**, so whenever an
+accepted producer in an earlier plan refuses its verdict, the `UDG-003-TASK` bundle is simply absent from that
+run — which is a CI ordering question, not a defect in the plan, and is left for the reviewer to decide.
