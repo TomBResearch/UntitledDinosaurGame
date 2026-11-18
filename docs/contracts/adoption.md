@@ -1045,3 +1045,72 @@ remains **Not Run**, deduplication-triggered closure stays **disabled**, `D4` st
 failure has yet exercised the new capture-retention path because every hosted run since the loop fix has been
 green.
 
+
+## CI routing: routine checks and acceptance capture separated (2026-11-18, dated by commit)
+
+**In Review — no task, phase, gate or milestone is accepted, Verified or closed by this entry.** The integration
+owner approved [clarification C-07](assignments/ci-routing-proposal.md) and amendment **A-P3-8**
+(`UDG-003-phase-3.md` §9.3) on 2026-11-18; the implementation and its hosted proof are recorded in
+[assignments/ci-routing-submission.md](assignments/ci-routing-submission.md), and the measurements are in
+[assignments/evidence/ci-routing-timings.tsv](assignments/evidence/ci-routing-timings.tsv). The baseline the owner
+named is `b2efee21caca6a4a7fe4be15d6b40e2ae6edd66a` with CI
+[`44332154300`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44332154300): **35 min 38 s** for
+a records-only push, because the single `foundation checks` job captured, asserted, verified and published all five
+evidence bundles on every push whether or not the push contained a line of code.
+
+CI is now two workflows with two names, and the difference is a check name a reviewer can read, not a page they
+have to open. `ci (routine)` (`ci.yml`) resolves the changed paths for the whole push or pull request — union of
+commits, both sides of a rename, deletions included — and gates nine lanes on them: records, static, protocol, unit,
+camera, server, runtime, tooling, full suite. Unknown impact, an unresolvable diff, a non-ancestor base or a
+diff over 40 paths runs everything. `routine outcome` is the single name protection can require; it fails when a
+lane failed or was cancelled and it also fails when the router selected nothing, because a run that checked nothing
+is not a green run. It captures no evidence, and it says so in its own output. `ci (acceptance — full evidence
+capture)` (`acceptance.yml`) is the old job, moved with its steps and ordering intact, reached only by
+`workflow_dispatch`; its first step refuses a run whose checkout is not the dispatched `candidate_sha`, and a later
+step refuses any bundle whose `implementationSha` is not that candidate.
+
+Hosted, on the candidate `45b787b8d39b8ebd22b79b3ce989b9e4d6d1e1f0`: a records-only push that regenerates
+`checksums.json` is **1 min 00 s** (`44377641990`, `records` lane alone, eight lanes skipped — 35.6× the baseline,
+against a 3-minute target); a server change is **1 min 57 s** (`44374833468`, whose runtime lane prints
+`[reference] pass — 200 ticks … controls 7/7` and `system suites: 35 cases, 0 failures`, so "the runtime ran" is a
+number rather than an inference); a shared protocol-schema change widens to seven groups and is green in
+**12 min 09 s** (`44377266837`); the worst routine case, a CI-tooling change, is **11 min 13 s** (`44380381929`) and
+still captures nothing; and one dispatched acceptance run captures all five bundles bound to the candidate, every
+one verified PASS, in **29 min 56 s** (`44380502646`). A camera change came in at **8 min 31 s** (`44374825713`)
+against a 5-minute target, and the step is named rather than averaged away:
+`pnpm exec playwright install --with-deps chromium` cost 7 min 38 s in one lane and 7 min 12 s in another while the
+identical step cost 23 s and 28 s when fewer runners fetched at once — an uncached, contended browser download paid
+by three lanes, where the camera suite itself is 2 min 41 s. Caching it is a separate decision, because it needs a
+new pinned action.
+
+The comparison the split has to survive is unchanged: the verifier under `tools/checks/` and the five capture plans
+are byte-identical to the baseline's, `UDG-004`'s accepted-plan digests still pass, and the same five plans verify
+with the same artefact counts (22 / 31 / 196 / 239 / 35) and the same outcomes — five PASS before, five PASS after,
+zero differences. One behaviour change sits in the verifier and one only: `parseCiActions` records one register
+entry per **distinct** CI pin rather than one per `uses:` occurrence, because a job per lane recorded the same two
+pins nineteen times and turned the register's own derived claim into a list no reviewer can read. It is covered by a
+new UDG-001 test and it re-derived `docs/integration/dependencies.json`, which is derived data.
+
+Three red runs are kept and readable: `44363878340` (a lane cannot start from `pnpm install` alone — the checker
+CLI, the emitted libraries the dev server resolves and `apps/server/dist` are prerequisites of the lanes that read
+them), `44371657860` (a shallow checkout fails `git show <sha>:docs/…` and `git cat-file` in whichever lane happens
+to run the suite, so every lane now fetches full history) and `44374610247` (five bundles captured, bound and
+verified, then `--ci-status: command not found`, because a `#` comment sat inside a backslash-continued command,
+where a comment ends the command rather than annotating it — a rule now owned by a test that was checked by
+mutation). Two further red runs, `44374730423` and `44380538455`, are intended refusals kept as demonstrations: a
+dispatch naming `candidate_sha=b2efee21…` while the checkout is `7c8e68a…` or `45b787b8…` stops at the candidate
+assertion in 6 s and 13 s and writes no bundle, because a capture of a commit other than the candidate is not
+evidence for it.
+
+Two things the owner has to act on. **`main` is not protected at all** — `GET /branches/main/protection` answers
+`404` — so there is no old check name to rename and nothing to break, but nothing is required either: to require
+the routine lane, protect `main` and require the check named `routine outcome`, not the individual lane checks,
+which appear and disappear with the route. And three pull requests (`#1`, `#2`, `#3`) are open measurement fixtures
+whose whole diff is a comment saying it is a measurement fixture; they should be closed, not merged, and their
+branches deleted.
+
+What stays deliberately unchanged: the four root commands `repository.md` §3.2 requires for a **task** (a routine
+push is not a task), the evidence requirements, the definition of done, the specification, the bundle schema and
+every retained bundle. A routine green is not evidence — it has no bundle, no `pnpm test` junit, no
+`evidence:verify` result and nothing published — and A-P3-8 says so in the Phase 3 record where "every CI run" used
+to.

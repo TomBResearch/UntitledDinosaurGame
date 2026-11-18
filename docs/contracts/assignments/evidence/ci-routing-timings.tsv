@@ -1,0 +1,26 @@
+# CI routing (C-07) — hosted timings, before and after the split. Measured 2026-11-18 on
+#   https://github.com/TomBResearch/UntitledDinosaurGame, all runs on ubuntu-24.04 with Node 24.22.2 and pnpm 12.18.0.
+# "wall" is trigger to final outcome (push event created → last job completed); "runner" is the sum of the jobs that
+#   actually ran, so parallel lanes are counted separately and can exceed wall. Skipped jobs count as zero.
+# Refusing runs are counted from the job's own start, not from dispatch queue time, because the queue is not work.
+# The two "before" rows are the records-only and tooling pushes the old single workflow `foundation checks` ran on
+#   every push: five bundles, artefact assertion, verification and publication, in one job, whether or not the push
+#   touched a line of code. Records commit b2efee21caca6a4a7fe4be15d6b40e2ae6edd66a is the baseline the owner named.
+case	run_id	event	ref_or_candidate	groups_or_plans	start_utc	end_utc	wall_s	runner_s	jobs_run	jobs_skipped	slowest_job_s	conclusion	notes
+before: records-only push (baseline)	44332154300	push	b2efee21	all + five-bundle capture	15:08:32	15:44:10	2138	2133	1	0	2133	success	the records-only baseline the owner named: 35 min 38 s to learn that prose and a checksum manifest were fine
+before: CI-tooling push	44357192895	push	437d81e	all + five-bundle capture	17:18:28	17:52:47	2059	2054	1	0	2054	success	a router and its tests, in one file: same 34 min 19 s, same five bundles, none of it affected
+after: records-only push	44377641990	push	692e34d	records	19:10:20	19:11:20	60	49	3	8	28	success	README + proposal + regenerated checksums.json: 1 min 00 s wall, 35.6x the baseline; 8 lanes skipped, nothing captured
+after: server change	44374833468	pull_request	probe/ci-routing-server	static, unit, server, runtime	18:54:51	18:56:48	117	265	6	5	91	success	PR #2, closed without merging; runtime lane printed `[reference] pass — 200 ticks …` and `system suites: 35 cases, 0 failures`
+after: camera change	44374825713	pull_request	probe/ci-routing-camera	static, unit, camera	18:54:48	19:03:19	511	762	5	6	495	success	PR #1: the camera lane itself is 3 min 41 s; 7 min 38 s of the run is one chromium download — see the slow-step row below
+after: shared change (protocol)	44377266837	pull_request	probe/ci-routing-shared	static, protocol, unit, camera, server, runtime, fullSuite	19:08:16	19:20:25	729	2150	9	2	694	success	PR #3: the router widened one schema file to seven groups and skipped records and tooling — the broad case C-07 promised
+after: CI change, all groups	44374411960	push	7c8e68a	all nine groups	18:52:29	19:04:32	723	1469	11	0	692	success	routed by `.github/**` + `tools/ci/**`; the worst routine case is 12 min 03 s, and it still captures nothing
+after: CI change, all groups (candidate)	44380381929	push	45b787b8	all nine groups	19:25:30	19:36:43	673	1461	11	0	652	success	the green routine outcome on the acceptance candidate
+after: acceptance capture (candidate)	44380502646	workflow_dispatch	45b787b8	UDG-001, UDG-002, UDG-003, UDG-003-TASK, UDG-004	19:26:11	19:56:07	1796	1791	1	0	1791	success	all five bundles bound to the candidate and verified PASS; artefact counts 22 / 31 / 196 / 239 / 35, identical to the baseline's
+before/after: acceptance capture cost	—			capture only				1796	1791			compare 44332154300's 2138 s: the same five bundles cost 29 min 56 s when nothing else shares the job, and 35 min 38 s when every push paid for them
+rejected: missing lane builds	44363878340	push	08e6744	all nine groups	17:54:45	18:25:30	1845	3924	11	0	1815	failure	retained: five lanes failed and two timed out because a lane cannot start from `pnpm install` alone (checker CLI, emitted libraries, apps/server dist)
+rejected: shallow checkout, unit build	44371657860	push	5e96cf7	all nine groups	18:37:02	18:47:13	611	1627	11	0	589	failure	retained: seven lanes green; `git show <sha>:docs/...` and `apps/server/dist` prerequisites fixed in 7c8e68a
+rejected: comment inside a command	44374610247	workflow_dispatch	7c8e68a	five plans captured	18:53:35	19:20:20	1605	1600	1	0	1600	failure	retained: five bundles captured, bound and verified, then `--ci-status: command not found` — a `#` inside a backslash-continued command; now owned by a test
+refused: stale candidate	44374730423	workflow_dispatch	b2efee21 vs checkout 7c8e68a	none — refused before capture	19:20:22	19:20:28	6	6	1	0	6	failure	expected: `this run checked out 7c8e68a… but was asked to verify b2efee21…`; every later step skipped, no bundle written
+refused: stale candidate (candidate)	44380538455	workflow_dispatch	b2efee21 vs checkout 45b787b8	none — refused before capture	19:56:11	19:56:24	13	13	1	0	13	failure	expected: the same refusal on the final candidate; 13 s, and the run that would have captured the wrong commit captured nothing
+slow step: playwright download (unit lane, camera PR)	44374825713				install chromium	18:55:22	19:03:00	458	458	1	0	458	—	the single most expensive step measured anywhere in the routine lane; the same step took 23 s (PR #2) and 28 s (PR #1 camera lane) when fewer runners fetched at once
+slow step: playwright download (full-suite lane)	44374411960				install chromium	18:53:02	19:00:14	432	432	1	0	432	—	7 min 12 s of a 11 min 32 s lane; the suite work either side is 15 s + 2 min 02 s + 2 min 12 s
