@@ -12,7 +12,9 @@
  * back without publishing anything.
  *
  * There is no transport. Lifecycle arrives as internal control arrivals so stage L applies
- * disconnects, expiry and epoch changes **inside the frozen set**, exactly like a message (P03-b).
+ * disconnects, expiry and epoch changes **inside the frozen set**, exactly like a message (P03-b). *
+ * CI routing probe (C-07, measurement only — close without merging): `apps/server/**` selects the server and   * runtime lanes, which is the case that has to show the runtime suites executing.
+
  */
 
 import { configBounds } from '@udg/config';
