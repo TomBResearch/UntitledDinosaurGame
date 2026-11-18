@@ -147,16 +147,25 @@ looking at (owner clarification C-07, [proposal](docs/contracts/assignments/ci-r
 | `ci (routine)` — `.github/workflows/ci.yml` | routed checks on every push and pull request. One job resolves the changed paths for the whole push or PR (both sides of a rename, deletions included) and turns them into lanes: records, static, protocol, unit, camera, server, runtime, tooling, full suite. Unknown impact runs everything. | **none** — a routine run captures no bundle and can never satisfy a task's acceptance |
 | `ci (acceptance — full evidence capture)` — `.github/workflows/acceptance.yml` | the full command sequence, all five capture plans, artefact assertion, verification, summaries and publication. Dispatched explicitly at a task submission or milestone, on the exact candidate commit. | all five bundles, published for 30 days |
 
-Dispatch acceptance with the candidate named twice — once as the ref, once as the assertion:
+Dispatch acceptance with the candidate named twice — once as the ref GitHub has to resolve, once as the
+assertion the workflow checks it against:
 
 ```bash
-CANDIDATE=$(git rev-parse HEAD)
+# The candidate is the tip of the branch being accepted:
 gh workflow run acceptance.yml --repo TomBResearch/UntitledDinosaurGame \
-  --ref "$CANDIDATE" -f candidate_sha="$CANDIDATE"
+  --ref main -f candidate_sha="$(git rev-parse HEAD)"
+
+# The candidate is a pull request head: name its branch, and that commit exactly.
+gh workflow run acceptance.yml --repo TomBResearch/UntitledDinosaurGame \
+  --ref "$BRANCH" -f candidate_sha="$HEAD_SHA"
 ```
 
-Its first step refuses a run whose checkout is not that commit, and a later step re-reads every captured
-`report.json` and refuses any bundle whose `implementationSha` is not the candidate.
+The ref is a **ref name**, not a sha: GitHub resolves it before the workflow starts and answers
+`HTTP 422: No ref found for: <sha>` to a bare commit (measured 2026-11-18). That is what `candidate_sha` is for.
+The first step compares it against `github.sha` and refuses the run if they differ, so a branch that moved
+between choosing the candidate and the run starting produces a red run rather than evidence about some other
+commit; a later step re-reads every captured `report.json` and refuses any bundle whose `implementationSha` is
+not the candidate.
 
 Both workflows run on `ubuntu-24.04` with Node `24.22.2`, the corepack-pinned pnpm `12.18.0`, a frozen
 installation, and third-party actions pinned to commit shas. Evidence capture, the artefact assertion, evidence

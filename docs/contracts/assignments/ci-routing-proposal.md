@@ -109,16 +109,22 @@ The exact command, from a checkout whose dispatch ref contains `acceptance.yml` 
 dispatched on a ref that carries it):
 
 ```bash
-CANDIDATE=$(git rev-parse HEAD)
-github_workflow_run acceptance.yml --ref "$CANDIDATE" -f candidate_sha="$CANDIDATE"
-# which is, spelled out with the CLI this repository's owner uses:
+# candidate = the tip of the branch under review
 gh workflow run acceptance.yml --repo TomBResearch/UntitledDinosaurGame \
-  --ref "$CANDIDATE" -f candidate_sha="$CANDIDATE"
-gh run watch --repo TomBResearch/UntitledDinosaurGame --workflow acceptance.yml
+  --ref main -f candidate_sha="$(git rev-parse HEAD)"
+# candidate = a pull request head
+gh workflow run acceptance.yml --repo TomBResearch/UntitledDinosaurGame \
+  --ref "$BRANCH" -f candidate_sha="$HEAD_SHA"
+gh run watch --repo TomBResearch/UntitledDinosaurGame --workflow "ci (acceptance — full evidence capture)"
 ```
 
-`--ref <sha>` makes GitHub resolve `github.sha` to exactly that commit; `candidate_sha` is the assertion
-input, so a run that resolves anywhere else cannot pass.
+**Correction made while implementing (2026-11-18).** This section proposed `--ref <sha>`. GitHub's dispatch API
+resolves `ref` as a *ref name* and refuses a bare commit with `HTTP 422: No ref found for: <sha>` — the first
+dispatch attempt in this change got exactly that. The split of responsibility the proposal wanted is unchanged
+and is what shipped: the ref says where GitHub may take a runner from, `candidate_sha` is the assertion the
+workflow checks the checkout against, and a run whose `github.sha` is not the candidate cannot pass. The
+practical consequence is that the candidate must be reachable as a branch or tag tip when acceptance is
+dispatched — which is also the case where "accept this exact commit" means anything.
 
 1. First step of the acceptance job, new: **`Assert the exact candidate commit`** — prints `github.sha`, the
    short sha and the ref it came from, and exits non-zero when `inputs.candidate_sha` was supplied and
