@@ -194,7 +194,134 @@ which is derived data regenerated from the tool.
 - **The browser download** (§4), the `if: !cancelled()` noise in refused runs (§5), and any change to the
   capture loop's command reuse (R-1) each need their own change with their own proof.
 
-## 9. Owner-side action
+## 9. Closeout revision (2026-11-18, after the first submission)
+
+Four things the review asked to be closed. Implementation: **`6d91c61`** —
+`ci: the outcome cannot pass on a lane that never ran, the candidate must be named, and the lanes stop paying for
+apt`. This section is the evidence for each; §2 to §8 above describe the same split as it was first submitted and
+are left as the record of that round, with the two changes this round made to §2 called out below.
+
+### 9.1 The outcome cannot pass on a lane that never ran
+
+The first version of `routine outcome` refused `failure` and `cancelled` and let everything else through, so a lane
+that the router **selected** and that reported `skipped` was a pass. The new rule refuses three things:
+
+| Refusal | Why |
+| --- | --- |
+| the router did not report `success` | every lane's `if:` is one of its outputs; a router that failed or was cancelled routed nothing, so no lane's result means anything |
+| a lane the router selected whose result is not `success` | the shape this repository already has a unit test for — `tests/unit/udg-003/capture-loop.test.ts` was written because a CI step quietly stopped running |
+| a lane the router did not select whose result is not `skipped` | a lane running off the table is the other half of the drift the table↔job-list assertions watch for |
+
+The first submission's refusal of "a run that checked nothing" stays. Judged locally over six cases before
+pushing, all six as expected: selected+`skipped` red, selected+`cancelled` red, selected+`success` green,
+unselected+`skipped` green, unselected+`success` red, router-`failure` red, nothing-selected red.
+
+Both controls were then run hosted, as pull requests closed without merging:
+
+| Control | Run | Result |
+| --- | --- | --- |
+| **passing** — a docs-only change, so the router selects `records` alone and eight lanes skip | [`44401460508`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44401460508) | green in 51 s; the log prints the full nine-row decision table (`records selected=true success`, eight `selected=false skipped`) and `routine checks passed for: records` |
+| **failing** — the camera lane's `if:` gains `&& false` while a `.github/**` change escalates the router to all nine groups | [`44401507928`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44401507928) | red in 4 min 10 s: `camera was selected by the route but did not pass (skipped); a selected check that did not run is not a pass`, with the other eight selected lanes green |
+
+A variable that lied went with it: the step printed `${GROUPS}`, and bash initialises `GROUPS` from the process
+group ids rather than importing it from the environment, so on a shell where that happens the reviewer's first line
+prints a uid list instead of the route. It is `ROUTE_GROUPS` now, and locally it prints `records`.
+
+### 9.2 The candidate has to be named, in full
+
+`candidate_sha` defaulted to blank, meaning *whatever the branch is now* — which is the exact confusion the input
+exists to avoid. It is `required: true` with no default, and the guard refuses three cases **before install and
+before any capture**, so a refused dispatch writes no bundle:
+
+| Case | Evidence | Result |
+| --- | --- | --- |
+| blank candidate | dispatch attempt, 2026-11-18 21:31 UTC | never becomes a run: `HTTP 422: Required input 'candidate_sha' not provided` — GitHub refuses it before a runner is hired |
+| short candidate (`45b787b8`) | [`44403714403`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44403714403) | red in 10 s: `candidate_sha must be a full 40-character sha; 8 character(s) received`; artefacts `[]` |
+| full candidate that is not the checkout | [`44403926011`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44403926011) | red in 24 s: `this run checked out 6d91c618790f52faa38a5b725636a728a2bc118e but was asked to verify 45b787b8d39b8ebd22b79b3ce989b9e4d6d1e1f0`; artefacts `[]` |
+| correct candidate, bound end to end | [`44404109207`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44404109207) | green in 38 min 49 s on `6d91c618790f52faa38a5b725636a728a2bc118e`: `candidate confirmed` first, then `all 5 bundle(s) bound to the candidate 6d91c618790f…` after capture, five bundles verified PASS and published |
+
+A short sha is refused rather than prefix-matched because a prefix comparison against a checkout is the one
+comparison that can silently succeed on two commits.
+
+### 9.3 One pin rule over both workflow files, seen failing
+
+`tests/unit/ci-routing/workflow-policy.test.ts` now holds the rule as one function, `pinViolations(text, rules)`,
+applied to **both** `.github/workflows/ci.yml` and `.github/workflows/acceptance.yml`: a third-party reference must
+be a 40-hex sha, and that sha must either be recorded by `docs/integration/dependencies.json` or be approved in the
+test file as an acceptance-only pin at exactly that sha. (The register still reads only `ci.yml`; R-2 in §8 stands.)
+
+The rule is now known to discriminate, because a test feeds it the workflows it has to refuse
+(`refuses an acceptance-only action that nobody approved`): an action neither recorded nor allow-listed
+(`actions/cache@…`), a tag instead of a sha (`actions/checkout@v5`), and an allow-listed action pinned to a
+different sha (`actions/upload-artifact@000…`). Three refusals, and the same rule then accepts the real acceptance
+workflow in the same test — a guard that has never been seen failing is not yet a guard.
+
+### 9.4 Camera timing: remeasured, and the cost was apt, not chromium
+
+`44374825713` (the first camera PR) is 8 min 31 s, and the log says where it went. The unit lane's
+`playwright install --with-deps chromium` took **7 min 38 s**, of which the browser download was none: apt fetched
+13.2 MB of indexes in 21 s and then fetched **32.1 MB of dependency packages in 6 min 47 s at 78.8 kB/s** —
+`fonts-ipafont-gothic`, `fonts-unifont`, `fonts-takao`, `libgl1-mesa-dri`, `xfonts-*` — on top of an image that
+already ships the pinned chromium and its libraries. The camera lane's own suite is 2 min 41 s.
+
+The routine lanes (`unit`, `camera`, `full-suite`) now run `playwright install chromium`. Safe here for a specific
+reason, not a general one: the browser-dependent unit test, `tests/unit/udg-004/evidence-gates.test.ts`, compares
+PNG bytes against ones produced in the *same* run and decodes them in the *same* chromium build, so installed fonts
+and mesa packages could not change its verdict; and the golden-pixel suites do not run in a routine lane at all —
+they run in `pnpm test`, which is the full-suite lane and the acceptance lane. `acceptance.yml` keeps
+`--with-deps`: that invocation is what the retained bundles record, and one 30-minute job can afford the apt
+traffic three parallel lanes cannot.
+
+| Measurement | Run | Wall | Lane detail |
+| --- | --- | --- | --- |
+| camera route, before | [`44374825713`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44374825713) | **8 min 31 s** | unit lane 7 min 59 s (apt 6 min 47 s of it), camera lane 3 min 41 s |
+| camera route, after | [`44400801523`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44400801523) | **2 min 50 s** ✅ under the five-minute target | static 42 s, unit 50 s (browser step **8 s**, suites 13 s), camera 2 min 32 s (browser step **8 s**, suite 1 min 51 s) |
+| every lane, on `main` | [`44399821028`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44399821028) | **5 min 00 s** | was 11 min 13 s at `44380381929`; full-suite 4 min 30 s is now the critical path |
+| all nine lanes, control PR | [`44401507928`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44401507928) | 4 min 10 s | the same shape, one lane deliberately skipped |
+
+Chromium works without the system-package step on `ubuntu-24.04` because the image ships it: `launch()` succeeded
+in every browser lane of `44399821028`, `44400801523` and `44401507928`.
+
+**The acceptance lane kept `--with-deps`, and the cost is now visible.** The closeout acceptance run
+`44404109207` took 38 min 49 s against `44380502646`'s 29 min 56 s, and the difference is one step:
+`playwright install --with-deps chromium` took **10 min 16 s** of it, the same apt path the routine lanes dropped.
+That is not a reason to change the acceptance lane in this revision — the command it runs is the command the
+retained bundles record as producing them, and the capture loop is where the five bundles come from — but it is now
+the most expensive step acceptance has, and the owner can trade roughly 10 minutes of a 39-minute run for a changed
+recorded invocation. Named here so the trade is on the table rather than buried in a log.
+
+**A cache action is therefore not adopted, and nothing new is pinned.** `actions/cache@v5` at
+`1bd7e1b8f7303f4b84b6b491836e44fb3b77f52e` was checked out and verified to be MIT-licensed and v5.0.0, but its
+`restore-keys`/`save-always` semantics would put the browser download on a path that no longer needs to be fast,
+and the expected saving after this change is the ~8 s the install step now costs. Had the apt step been kept, the
+same pin would have been worth roughly 7 minutes per browser lane under contention — still an owner call, because
+it adds a third-party action to a repository whose stated position is that cache contents are a supply-chain
+surface and only the sha is trusted.
+
+### 9.5 Historical verification, run over the whole retained store
+
+§6 compared structure. This is the comparison §6 asked for: **both verifiers over the same bundle directories**,
+including the ones that failed, written to
+[`evidence/ci-routing-verifier-parity.tsv`](evidence/ci-routing-verifier-parity.tsv) — one row per bundle, verdict
+on each side, issue count on each side, a `delta` column, and the baseline issue codes.
+
+| | |
+| --- | --- |
+| Store | `/workspace/udg-evidence` — the retained capture store |
+| Population | **228 bundle directories** holding a `report.json` (220 under `ci-run-*` capture folders, 8 at the store root); by task UDG-001 90, UDG-002 76, UDG-003 47, UDG-004 15 |
+| Verifier A | `tools/checks` built at the baseline commit `b2efee21caca6a4a7fe4be15d6b40e2ae6edd66a`, in a detached worktree sharing `node_modules` (the lockfile is unchanged between the two commits, so both builds typecheck against the same graph) |
+| Verifier B | `tools/checks` built at the candidate `6d91c61` |
+| Invocation | `node tools/checks/dist/evidence.js verify --run <absolute bundle directory> --report <file under /tmp>` — the report is written outside the store; the verifier takes the run directory as given and resolves its `artifacts/` prefix from it, so a bundle verifies in place |
+| Verdicts | baseline **193 PASS / 35 FAIL**; candidate **193 PASS / 35 FAIL**; **changed verdicts: 0**; changed issue counts: 0 |
+| Historical failures included | all 35, with their original codes: `EVIDENCE-FILE-MISSING` 785, `EVIDENCE-COMMAND-MISSING` 235, `EVIDENCE-VECTORS-FILE-UNLISTED` 16, `PROBE-INVOCATION-MISMATCH` 5, `EVIDENCE-VECTORS-MANIFEST-MISSING` 4, `EVIDENCE-VECTORS-REPLAY-EQUIVALENCE` 4, `EVIDENCE-PHASE-MISMATCH` 1, `EVIDENCE-GATE-NOT-PASS` 1, `EVIDENCE-SECRET` 1 — none was re-run, re-judged or repaired |
+| Original bytes preserved | measured, not assumed: a manifest of every file in the store (`path\|size\|mtime`, **14 927 files**) hashes to `7851bd3d3b4045bc539c0ce1021dd3cf51be77e8426104b4e07ae8a6498cf32e` before and after a full pass of verifier B, same file count. The `UDG-003-TASK` whole-task bundle is not in this store copy, so its parity is the acceptance comparison in §5 instead |
+
+Together with §6's tree comparison — no changed file under `docs/validation/`, no changed capture plan, no changed
+checksummed requirement, `tools/checks` differing only in `parseCiActions` — this is the claim stated narrowly: the
+candidate verifier reaches the same verdicts as the baseline verifier over every bundle the store retains, and the
+store it read is byte-for-byte what it was.
+
+## 10. Owner-side action
 
 1. **Branch protection does not exist yet.** `GET /branches/main/protection` returns `404 Branch not protected`,
    so there is no old check name to rename — nothing in this change can be broken by protection, and nothing is
@@ -207,7 +334,7 @@ which is derived data regenerated from the tool.
 3. **Decide the deferred items** in §8, in particular whether the browser cache is worth a new pinned action —
    that decision is what moves the camera case from 8 min 31 s to under 5 min.
 
-## 10. What this record does not claim
+## 11. What this record does not claim
 
 No task, phase, gate or milestone is accepted, Verified or closed by anything here, and no historical bundle was
 re-run, re-judged or removed. The routine lane is green on the candidate, the acceptance lane is green on the

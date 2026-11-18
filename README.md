@@ -161,14 +161,30 @@ gh workflow run acceptance.yml --repo TomBResearch/UntitledDinosaurGame \
 ```
 
 The ref is a **ref name**, not a sha: GitHub resolves it before the workflow starts and answers
-`HTTP 422: No ref found for: <sha>` to a bare commit (measured 2026-11-18). That is what `candidate_sha` is for.
-The first step compares it against `github.sha` and refuses the run if they differ, so a branch that moved
-between choosing the candidate and the run starting produces a red run rather than evidence about some other
-commit; a later step re-reads every captured `report.json` and refuses any bundle whose `implementationSha` is
-not the candidate.
+`HTTP 422: No ref found for: <sha>` to a bare commit (measured 2026-11-18). That is what `candidate_sha` is for,
+and it is **required** — with no default, because a blank candidate is not a candidate. Three refusals, all of
+them before install and before any capture, so a refused dispatch writes no bundle
+([`44403714403`](.github/workflows/acceptance.yml), [`44403926011`](.github/workflows/acceptance.yml)):
+
+| Dispatch | What happens |
+| --- | --- |
+| `candidate_sha=""` | never becomes a run — `HTTP 422: Required input 'candidate_sha' not provided` |
+| `candidate_sha=45b787b8` | red in 10 s — `candidate_sha must be a full 40-character sha; 8 character(s) received`; a prefix cannot be compared with a checkout unambiguously, so it is refused rather than matched |
+| a full sha that is not what the ref resolved to | red in 24 s — `this run checked out <sha> but was asked to verify <sha>`; this is what a branch that moved between choosing the candidate and dispatching looks like |
+
+Once the candidate is confirmed, a later step re-reads every captured `report.json` and refuses any bundle whose
+`implementationSha` is not that candidate, so the five bundles and the run disagree with each other in no case.
 
 Both workflows run on `ubuntu-24.04` with Node `24.22.2`, the corepack-pinned pnpm `12.18.0`, a frozen
-installation, and third-party actions pinned to commit shas. Evidence capture, the artefact assertion, evidence
+installation, and third-party actions pinned to commit shas — a rule asserted over **both** files, where an
+action that appears only in the acceptance workflow has to be approved by name and sha in
+`tests/unit/ci-routing/workflow-policy.test.ts`, alongside a test that shows the rule refusing an unapproved
+action, a tag instead of a sha, and an approved action at a different sha. The routine lanes install the pinned
+chromium with `playwright install chromium`; `--with-deps` is kept only in the acceptance lane, because the
+runner image already ships chromium and its libraries and the system-package fetch cost 6 min 47 s of an
+8 min 31 s camera run for packages that changed nothing (`44374825713`, remeasured at 2 min 50 s in `44400801523`)
+— safe for the one browser-dependent unit test because it compares PNG bytes against ones it produced in the same
+run, in the same browser build. Evidence capture, the artefact assertion, evidence
 verification and artefact publication are required checks: no step in either file sets `continue-on-error`, so a
 failure in any of them fails its run, while `if: !cancelled()` keeps the evidence steps executing after an
 earlier failure so a red acceptance run still publishes its logs and machine-readable results. A missing

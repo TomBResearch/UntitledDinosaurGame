@@ -1105,12 +1105,67 @@ evidence for it.
 Two things the owner has to act on. **`main` is not protected at all** — `GET /branches/main/protection` answers
 `404` — so there is no old check name to rename and nothing to break, but nothing is required either: to require
 the routine lane, protect `main` and require the check named `routine outcome`, not the individual lane checks,
-which appear and disappear with the route. And three pull requests (`#1`, `#2`, `#3`) are open measurement fixtures
-whose whole diff is a comment saying it is a measurement fixture; they should be closed, not merged, and their
-branches deleted.
+which appear and disappear with the route. And the measurement fixtures are pull requests, not commits:
+`#1`, `#2` and `#3` were closed without merging on 2026-11-18 and their branches deleted, as were the closeout
+fixtures `#4`, `#5` and `#6` below; the hosted runs stay retained, which is what the records cite.
 
 What stays deliberately unchanged: the four root commands `repository.md` §3.2 requires for a **task** (a routine
 push is not a task), the evidence requirements, the definition of done, the specification, the bundle schema and
 every retained bundle. A routine green is not evidence — it has no bundle, no `pnpm test` junit, no
 `evidence:verify` result and nothing published — and A-P3-8 says so in the Phase 3 record where "every CI run" used
 to.
+
+
+## CI routing closeout: the outcome, the candidate, the pins and the browser (2026-11-18, dated by commit)
+
+**In Review — no task, phase, gate or milestone is accepted, Verified or closed by this entry.** Four closeout
+items on **C-07**, no new clarification; implementation `6d91c61`, evidence in
+[assignments/ci-routing-submission.md](assignments/ci-routing-submission.md) §9.
+
+**One name carries the routine green, and it cannot now be satisfied by a lane that never ran.** `routine outcome`
+refused `failure` and `cancelled` and let everything else through, so a lane the router *selected* that reported
+`skipped` was a pass — the shape `tests/unit/udg-003/capture-loop.test.ts` exists because this repository once had.
+It now refuses a router that did not succeed (every lane condition is one of its outputs, so a failed router means
+nothing was routed), any selected lane whose result is not `success`, and any unselected lane whose result is not
+`skipped`. Both halves were run hosted: green with eight deliberately unselected lanes skipped
+([`44401460508`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44401460508), 51 s), and red
+where the router selected the camera suite while the camera lane was forced to skip
+([`44401507928`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44401507928), 4 min 10 s:
+*camera was selected by the route but did not pass (skipped)*).
+
+**Acceptance names its candidate or does not run.** `candidate_sha` is required, has no default, must be a full
+40-character sha and must equal the checkout — a blank dispatch is refused by the API before a runner is hired
+(`HTTP 422: Required input 'candidate_sha' not provided`), a short one fails in 10 s
+(`44403714403`), a mismatched one in 24 s (`44403926011`), all before install and before capture so a refused
+dispatch writes no bundle; the green run re-asserts the binding against every captured `report.json`
+(`44404109207`).
+
+**Both workflow files are under the pin rule, and the rule has been seen failing.** `pinViolations()` checks
+`ci.yml` *and* `acceptance.yml` against "a 40-hex sha the dependency register records, or one this file approves as
+an acceptance-only pin at that exact sha" (the register still reads only `ci.yml`; R-2 unchanged), and a test feeds
+it an unregistered action, a tag instead of a sha, and an approved action at a different sha — three refusals — then
+accepts the real acceptance workflow, so the guard discriminates in both directions rather than merely never having
+fired.
+
+**Camera timing was closed by measurement, not by adding a dependency.** The 7 min 38 s in `44374825713` was
+`playwright install --with-deps chromium` fetching 32.1 MB of fonts and mesa at 78.8 kB/s on an image that already
+ships the pinned chromium; the browser was never downloaded. The routine lanes install the browser alone — safe for
+a specific reason, not a general one: the one browser-dependent unit test compares PNG bytes against ones it
+produced in the same run in the same browser build — while the acceptance lane keeps `--with-deps`, because that
+invocation is what the retained bundles record. The same camera change now measures **2 min 50 s**
+([`44400801523`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44400801523)) against the
+5-minute target, and the nine-lane run on `main` **5 min 00 s**
+([`44399821028`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44399821028), was 11 min 13 s).
+No cache action is adopted; `actions/cache@v5` (`1bd7e1b8f7303f4b84b6b491836e44fb3b77f52e`) stays an owner decision
+with nothing left for it to save.
+
+**Verification parity is measured over the whole retained store, not inferred from a tree comparison.** Both
+verifiers — `tools/checks` built at the baseline `b2efee21` and at `6d91c61` — run over **228 bundle directories**
+in `/workspace/udg-evidence`: 193 PASS and 35 FAIL on each side, **0 changed verdicts**, the 35 historical failures
+reported with their original issue codes and none re-run or re-judged, and the store proved byte-identical
+afterwards by a 14 927-file `path|size|mtime` manifest hash
+([`assignments/evidence/ci-routing-verifier-parity.tsv`](assignments/evidence/ci-routing-verifier-parity.tsv)).
+
+Unchanged by this entry: `main` remains unprotected and requiring the check named `routine outcome` stays the
+owner's action; the four root commands a **task** must run; the evidence requirements, definition of done, bundle
+schema and every retained bundle. A routine green is still not evidence.
