@@ -63,6 +63,9 @@
  * `NotFoundError`. "Blocked pointer events … must not crash the UI" (docs/contracts/UDG-004.md) means that
  * case is caught, counted and reported through `onIncident` — never allowed to reach the browser's uncaught
  * error path, which is what `console-errors.json` counts.
+ * CI timing probe (C-07 closeout, measurement only — close without merging): `apps/client/**` is a
+ * camera-owned path, and this is the camera push remeasured after the routine lanes stopped installing apt packages.
+
  */
 
 import type { ArcRotateCamera } from '@babylonjs/core';
