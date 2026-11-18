@@ -96,6 +96,20 @@ describe('CI workflows — the routing table and the job list are one design', (
       expect(timeouts, `${entry.file} has ${runners} jobs and ${timeouts} timeouts`).toBe(runners);
     }
   });
+
+  it('fetches the whole history in every lane that checks the repository out', () => {
+    // Not caution: `44371657860` failed two lanes because a shallow checkout could not resolve
+    // `git show <sha>:docs/interfaces/movement-authority.md` (UDG-003) or `git cat-file` a cited prerequisite
+    // (UDG-001). A suite that cannot see history fails for a reason unrelated to the change, in whichever lane
+    // happens to run it, which is the worst kind of red.
+    const jobBlocks = routine.split(/\n(?= {2}[a-z][\w-]*:\n)/u);
+    const checkouts = jobBlocks.filter((block) => /uses: actions\/checkout@/u.test(block));
+    expect(checkouts.length).toBeGreaterThan(5);
+    for (const block of checkouts) {
+      const id = /^ {2}([a-z][\w-]*):/u.exec(block)?.[1] ?? '<unknown>';
+      expect(block, `${id} checks out a shallow clone`).toContain('fetch-depth: 0');
+    }
+  });
 });
 
 describe('CI workflows — one policy across both files', () => {
@@ -221,6 +235,16 @@ describe('CI workflows — full capture is an explicit act, and a routine run is
     const fullSuite = job('full-suite');
     expect(fullSuite).toContain('pnpm test');
     expect(fullSuite).toContain('pnpm test:e2e -- --suite camera');
+
+    // Every lane that drives a browser or reads emitted output builds what it reads first. `44363878340` learned
+    // this the slow way: without the libraries emitted, the dev server the camera suite drives never serves the
+    // client, and the lane waited out its whole timeout instead of failing.
+    for (const id of ['unit', 'camera', 'runtime', 'full-suite']) {
+      const body = job(id);
+      expect(body, `${id} runs a suite before building what it reads`).toContain(
+        id === 'camera' || id === 'full-suite' ? 'run: pnpm build:libraries' : 'run: pnpm build\n',
+      );
+    }
 
     const runtime = job('runtime');
     expect(runtime).toContain('node tests/reference/flat-direct-step.ts');

@@ -77,7 +77,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # A pull request is routed from its merge base, so the base has to be in the object store.
+          # Every lane, not just the records one: the contract suites read historical blobs directly
+          # (`git show <sha>:docs/...` in UDG-003, `git cat-file` on a cited prerequisite in UDG-001), so a
+          # shallow checkout fails a suite for a reason that has nothing to do with the change under test.
           fetch-depth: 0
 
       - name: Route
@@ -131,8 +133,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # UDG-001's suite proves a cited prerequisite commit exists with `git cat-file`, and a records
-          # commit cites shas — so this lane cannot work from a shallow clone.
+          # Every lane, not just the records one: the contract suites read historical blobs directly
+          # (`git show <sha>:docs/...` in UDG-003, `git cat-file` on a cited prerequisite in UDG-001), so a
+          # shallow checkout fails a suite for a reason that has nothing to do with the change under test.
           fetch-depth: 0
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -171,6 +174,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Every lane, not just the records one: the contract suites read historical blobs directly
+          # (`git show <sha>:docs/...` in UDG-003, `git cat-file` on a cited prerequisite in UDG-001), so a
+          # shallow checkout fails a suite for a reason that has nothing to do with the change under test.
+          fetch-depth: 0
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -198,6 +205,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Every lane, not just the records one: the contract suites read historical blobs directly
+          # (`git show <sha>:docs/...` in UDG-003, `git cat-file` on a cited prerequisite in UDG-001), so a
+          # shallow checkout fails a suite for a reason that has nothing to do with the change under test.
           fetch-depth: 0
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -230,6 +240,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Every lane, not just the records one: the contract suites read historical blobs directly
+          # (`git show <sha>:docs/...` in UDG-003, `git cat-file` on a cited prerequisite in UDG-001), so a
+          # shallow checkout fails a suite for a reason that has nothing to do with the change under test.
+          fetch-depth: 0
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -242,12 +256,15 @@ jobs:
       - name: Install from the frozen lockfile
         run: pnpm install --frozen-lockfile
 
-      # `pnpm test:unit` builds the workspace libraries, but not the checker CLI — and several unit suites
-      # import `tools/checks/dist/evidence.js` directly (the Phase 3 case-artefact, capture-refusal, vector and
-      # UDG-004 evidence-gate suites all do). A lane that starts from a clean checkout has no dist, so this
-      # step is the lane's prerequisite, not a convenience.
-      - name: Build the checker CLI the suites import
-        run: pnpm --filter @udg/checks build
+      # The whole workspace, and it is a prerequisite rather than a convenience. Two kinds of unit suite read
+      # emitted output: several import `tools/checks/dist/evidence.js` directly (the Phase 3 case-artefact,
+      # capture-refusal and vector suites, and UDG-004's evidence gates), and
+      # `tests/unit/udg-003-phase-2/vectors.test.ts` reads the room's consequence table out of
+      # `apps/server/dist/rooms/RegionRoom.js`. Inside `pnpm test` that file is emitted by the UDG-003 contract
+      # suite, which runs earlier in the same vitest process; a lane that runs only the unit suites has no such
+      # step, so the build belongs to the lane.
+      - name: Build the workspace the suites read emitted output from
+        run: pnpm build
 
       # The unit suite launches the pinned chromium itself: `tests/unit/udg-004/evidence-gates.test.ts`
       # proves the PNG portability rules against a real screenshot, so it cannot run without a browser. It
@@ -270,6 +287,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Every lane, not just the records one: the contract suites read historical blobs directly
+          # (`git show <sha>:docs/...` in UDG-003, `git cat-file` on a cited prerequisite in UDG-001), so a
+          # shallow checkout fails a suite for a reason that has nothing to do with the change under test.
+          fetch-depth: 0
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -316,6 +337,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Every lane, not just the records one: the contract suites read historical blobs directly
+          # (`git show <sha>:docs/...` in UDG-003, `git cat-file` on a cited prerequisite in UDG-001), so a
+          # shallow checkout fails a suite for a reason that has nothing to do with the change under test.
           fetch-depth: 0
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -353,6 +377,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Every lane, not just the records one: the contract suites read historical blobs directly
+          # (`git show <sha>:docs/...` in UDG-003, `git cat-file` on a cited prerequisite in UDG-001), so a
+          # shallow checkout fails a suite for a reason that has nothing to do with the change under test.
+          fetch-depth: 0
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -410,6 +438,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Every lane, not just the records one: the contract suites read historical blobs directly
+          # (`git show <sha>:docs/...` in UDG-003, `git cat-file` on a cited prerequisite in UDG-001), so a
+          # shallow checkout fails a suite for a reason that has nothing to do with the change under test.
           fetch-depth: 0
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -452,6 +483,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Every lane, not just the records one: the contract suites read historical blobs directly
+          # (`git show <sha>:docs/...` in UDG-003, `git cat-file` on a cited prerequisite in UDG-001), so a
+          # shallow checkout fails a suite for a reason that has nothing to do with the change under test.
+          fetch-depth: 0
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

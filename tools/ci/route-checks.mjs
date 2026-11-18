@@ -27,8 +27,9 @@
  * ## How it is driven
  *
  *   node tools/ci/route-checks.mjs --base <sha> --head <sha> [--three-dot] --output-file "$GITHUB_OUTPUT"
- *   node tools/ci/route-checks.mjs --paths-file paths.txt --explain
- *   node tools/ci/route-checks.mjs --force camera,static --explain   # lane measurement only
+ *   node tools/ci/route-checks.mjs --paths-file paths.txt              # explain is the default output
+ *   node tools/ci/route-checks.mjs --force camera,static               # lane measurement only
+ *   node tools/ci/route-checks.mjs --base <sha> --head <sha> --quiet   # flags only, for a local dry run
  *
  * `--force` exists so a single lane can be timed on demand without manufacturing a change to a game path.
  * It is a workflow_dispatch affordance of the routine lane and can never enable evidence capture.
