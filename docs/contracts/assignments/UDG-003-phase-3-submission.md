@@ -320,3 +320,93 @@ Nothing in this phase was changed for it. What it adds to the submission is one 
 should not have to discover: **the whole-task plan is fourth of five in one capture step**, so whenever an
 accepted producer in an earlier plan refuses its verdict, the `UDG-003-TASK` bundle is simply absent from that
 run — which is a CI ordering question, not a defect in the plan, and is left for the reviewer to decide.
+
+### 8.6 The fourth documents-only red was not a fourth defect: the capture loop threw the evidence away
+
+Run [`44215794779`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44215794779) — documents
+only, on the head that recorded §8.5 — failed `Capture the evidence bundles` and `Verify the captured evidence
+bundles`. Its retained artifact contains **two** bundles, `UDG-001-…-498d6a9e` and `UDG-002-…-498d6a9e`, and
+nothing else: no `UDG-003`, no `UDG-003-TASK`, no `UDG-004`.
+
+The `UDG-002` bundle is the one that failed, and it failed for a reason worth having in bytes: one case out of
+644, the accepted `W-7`, `expected 1 to be +0`, at `runtime.test.ts:704:66` —
+
+```ts
+expect(ep.snapshotAbsence.stateApplicationsDuringTheEpisode).toBe(0);
+```
+
+So the two hosted sightings of `W-7` are now two *different* assertions of the same case in the same silent
+window: `702` counted a delivery reaching the seat (`44191978254`), `704` counted a state application
+(`44215794779`). That is the shape §3 of the diagnosis predicted and it is the strongest hint yet at the
+mechanism — the window stayed shut while something still reached the seat — but it is still a shape, not a
+cause, and neither run retained the artefact the case read, so the 83 values around the moved counter remain
+unknown. Retained:
+[`UDG-003-phase-3-capture-aborted-runs.json`](evidence/UDG-003-phase-3-capture-aborted-runs.json).
+
+Why the other three bundles were missing is not a fourth defect and not a verification complaint. The capture
+step runs under `set -euo pipefail` and may not be given `continue-on-error` (`UDG-001` asserts both), so the
+inline `for task in …` loop **aborted** the moment `UDG-002`'s bundle recorded a failure, and the plans after
+it — `UDG-003`, `UDG-003-TASK`, `UDG-004` — never ran. §8.5 called the whole-task plan's absence "a CI ordering
+question, not a defect in the plan". That was wrong in a way that matters: it is a defect in the capture loop,
+it is the reason `W-7` stays a guess, and it is the second amplification this phase has had to own (the first
+was `WA-5`, §8.2). Recorded as **WA-6**.
+
+### 8.7 The two changes the reviewer directed, implemented
+
+**W-A-3 — the bytes a case read are now retained, bound, and unreplaceable.** The `UDG-003-TASK` plan gained
+`test-case-artefacts` immediately after `test`: it copies the four artefacts the accepted case reads into
+`BUNDLE/vectors-phase-2-case/` with their own manifest, *before* the plan reproduces Phase 2 and in a directory
+the reproduction cannot reach. The manifest declares `readByCommand: test`, `reproduction: false`,
+`distinctFrom: vectors-phase-2`, the plan selector and the commit; `test-case-audit` then runs the accepted
+audit over the retained bytes with `--report-only`, so a red bundle names the assertion that moved instead of
+merely naming the case. Re-running the step over divergent bytes is refused with `CASE-ARTEFACTS-DRIFT`; the
+verifier refuses a replaced file (`EVIDENCE-CASE-ARTEFACT-HASH`), a manifest rebound to another commit
+(`EVIDENCE-CASE-ARTEFACT-SHA`), an out-of-order recording command (`EVIDENCE-CASE-ARTEFACT-ORDER`) and a
+capture that ran the step and retained nothing (`EVIDENCE-CASE-ARTEFACT-MISSING`).
+
+**The capture loop — every plan is attempted, everything is retained, the job still fails.**
+`tools/ci/capture-plans.sh` iterates `evidence.js plans` without `set -e` around the captures, names each
+bundle it retained, prints each failed plan's failing commands into the step log, and exits 1 if any plan
+failed (including the empty-plan case). The workflow step still names `evidence.js plans` and still names the
+production invocation, `pnpm evidence:capture -- --task TASK --out artifacts --keep-going`, passed as
+`--capture-cmd`.
+
+Demonstration, all local, all retained in
+[`UDG-003-phase-3-wa3-local-capture.md`](evidence/UDG-003-phase-3-wa3-local-capture.md):
+
+- a real whole-task capture on `44557349` retained all four case artefacts, and **all four differ from the
+  same capture's own Phase 2 reproduction** (`transport-impairment.json` `2eac681513f6` retained vs
+  `f062d502cdae` reproduced) — the retained bytes are the invocation's, not a re-production's;
+- overwriting the *source* with a clean production cannot replace or mask anything: the step refuses with
+  `CASE-ARTEFACTS-DRIFT`, the manifest bytes are unchanged, and the retained artefact still audits red
+  (`tests/unit/udg-003/task-case-artefacts.test.ts`);
+- the three verifier refusals above were produced against the real captured bundle, not a fixture;
+- **preservation**: HEAD's verifier and this branch's verifier were run side by side over all **222** bundle
+  directories currently visible in `/workspace/udg-evidence` — **0 differences**, 187 PASS / 35 FAIL, the 35
+  being the pre-existing failures. Listing:
+  [`UDG-003-phase-3-verify-preservation-head-vs-wa3.txt`](evidence/UDG-003-phase-3-verify-preservation-head-vs-wa3.txt).
+  The case directory is deliberately *not* added to any plan's `requiredFiles`, because requirement lists are
+  read by the verifier of today and would retro-invalidate bundles captured before W-A-3; the obligation
+  follows the command instead.
+
+One accepted assertion had to move, and it is called out rather than buried: `UDG-001` line
+`expect(capture?.run).toContain('for task in')` pinned the *iteration* to the workflow step text, which is
+exactly the mechanism WA-6 shows cannot work under the accepted `set -euo pipefail`. It now asserts that the
+step calls `tools/ci/capture-plans.sh` and that the script — the file CI actually executes — contains the
+plan-list iteration, the production capture invocation, `--keep-going`, no `set -euo`, and an `exit 1`. Same
+substance, same failure mode, read one file later. Status: **amended by direction, pending review**.
+
+### 8.8 What this changes about the submission, and what it does not
+
+It removes two things the reviewer was being asked to accept on trust: a whole-task bundle that could vanish
+without explanation, and a diagnosis of `W-7` that had to be rebuilt by re-running a producer.
+
+It does not resolve `W-7`, the post-close containment refusals of §8.5, or the stage-sequence straddle of §8.4.
+No cause has been demonstrated for any of them, so no probe, deadline, retry allowance, close code, refusal
+wording or sample boundary was moved — the `W-7` counter is still required to be zero, and the accepted case
+still reads the artefact path it has always read. The first hosted run on the implementation commit is what
+shows whether a `UDG-003-TASK` bundle now exists on a run where an earlier plan fails, and whether a real
+hosted `W-7` arrives with its bytes attached. Neither has happened yet.
+
+Status remains **In Review**. Gate A/B/C **Not Run**, GA-11 unevaluated, deduplication-triggered closure
+disabled, `D4` open, `W-7` and `P-2b` unresolved.

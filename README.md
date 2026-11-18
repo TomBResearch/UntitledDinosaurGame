@@ -23,7 +23,10 @@ do not exist and validation Gates A, B and C have not run.
 submitted 2026-11-17 — In Review, awaiting the reviewer** —
 and its `W-7` suite nondeterminism stays tracked there, not against UDG-004 — `W-7` was **seen firing in
 retained hosted bytes on 2026-11-17** (run `44191978254`, a documents-only push, in the fifth of the job's five
-suite invocations), which is why a red inside another task's capture bundle is not that task's failure. Every task after
+suite invocations), which is why a red inside another task's capture bundle is not that task's failure. The
+reviewer's first two directives were implemented on 2026-11-18: the whole-task capture now retains the artefacts
+a failing case actually read (`W-A-3`), and the CI capture loop attempts every plan instead of aborting at the
+first red one (`WA-6`) — a red that deletes other tasks' evidence is not evidence. Every task after
 UDG-004 stays unassigned. Refinements P04, P05 and P07 to P10 remain pending (P03 was approved 2026-11-09).
 The planning contracts and their [adoption status](docs/contracts/adoption.md) remain the authority for what may be built next.
 

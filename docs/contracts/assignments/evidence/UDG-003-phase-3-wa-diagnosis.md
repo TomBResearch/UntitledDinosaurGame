@@ -395,3 +395,40 @@ W-C: the five capture plans run in one step, in plan order, and the whole-task p
 in an earlier plan kills the step, so on those runs the `UDG-003-TASK` bundle does not exist. If the reviewer
 wants the whole-task bundle to exist even when an accepted producer is red, the fix is ordering or
 `--keep-going` semantics in the CI loop — a workflow decision, named here rather than taken.
+
+## 14. Two sightings, two assertions, one window (run 44215794779)
+
+The second hosted `W-7` sighting names a different line of the same case:
+
+| run | junit line | assertion | what counted non-zero |
+| --- | --- | --- | --- |
+| `44191978254` | `runtime.test.ts:702:71` | `deliveriesReachingTheSeatDuringTheEpisode` | a transport delivery reached the seat during the silent window |
+| `44215794779` | `runtime.test.ts:704:66` | `stateApplicationsDuringTheEpisode` | the client applied state during the silent window |
+
+Both counters are zero-or-more tallies taken over the same interval: `epAppliedAtSilence` is captured before
+`silenceInbound()` and `epCountersAfter` after close plus the waits, so `stateApplicationsDuringTheEpisode` is
+`ep.applied.length - epAppliedAtSilence` and `ep.applied` grows in the SDK's `onStateChange` callback, which
+fires after a `ROOM_STATE` baseline or a `ROOM_STATE_PATCH` application. Two observations, then, from bytes:
+
+- the window is not "quiet and stays quiet" — it is quiet and then something arrives, and *which* tally notices
+  depends on which frame the arrival is;
+- §12's `mappingMatchesTheAuthoritysOwnRecord=false` (authority 11 patches, client 6, sampled 305 ms after the
+  window opened) and §13's `noInputReachedTheRoomAfterTheEpisodeClosed=false` are the same shape seen from the
+  server side and the containment side. Four independent observations, one family.
+
+What is still not known, and what the audit still cannot say without the artefact: which frame arrived, and
+whether it was in flight before `silenceInbound()` or created after it. That is a mechanism, not a counter, and
+`W-A-3` exists so that the next sighting carries the 84 audited values around the moved counter rather than
+leaving the argument at the counter.
+
+## 15. The capture loop was losing the evidence, and that was a defect of ours
+
+`44215794779` retained two bundles out of five. Not a verification complaint: the capture step's inline loop ran
+under `set -euo pipefail` — as UDG-001 requires, with `continue-on-error` forbidden — so the first failing plan
+ended the step. **WA-6**, fixed in this branch by `tools/ci/capture-plans.sh`: every plan attempted, every
+bundle retained, the step still exits non-zero if any plan failed.
+
+This is the second amplification defect this phase introduced and then removed (`WA-5` made one `W-7` red into
+three red test files; `WA-6` made one `W-7` red into four missing bundles). The lesson is recorded where it
+belongs: a control added next to an accepted artefact must not be able to change what other tasks' evidence
+looks like when the accepted artefact goes red.

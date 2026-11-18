@@ -843,3 +843,52 @@ What it is not: an acceptance, a gate, or a fix. Gate A remains **Not Run**, GA-
 deduplication-triggered closure stays **disabled**, `stackCompatibility` stays not-established, decision **D4
 stays open**, evidence stays in the existing store, and `W-7`/`P-2b` remain **unresolved** with the residual
 risk stated in the submission record.
+
+### UDG-003 Phase 3 — the reviewer's first two directives implemented (dated by commit)
+
+Three more documents-only pushes arrived, and the last of them changed what this phase had to say. Run
+[`44206639883`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44206639883) was refused its
+verdict by the accepted `phase-2-stage-sequence` producer; run
+[`44211208860`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44211208860) by the accepted
+`phase-2-impairment-population` producer, because `noInputReachedTheRoomAfterTheEpisodeClosed` came back
+`false`. Neither failed a single test case. Each retained three bundles of five, which at the time read as
+"the whole-task plan is fourth of five, so it is absent" — a CI ordering note.
+
+Run [`44215794779`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44215794779) showed that
+note was wrong, and wrong in the direction that matters. It retained **two** bundles of five, and its
+`UDG-002` bundle carried the second retained `W-7` sighting — `expected 1 to be +0` at
+`runtime.test.ts:704:66`, `stateApplicationsDuringTheEpisode` counted `1`, where the first sighting
+(`44191978254`) had counted `deliveriesReachingTheSeatDuringTheEpisode` at `702:71`. Two assertions of one
+case, both in the silent window: the window is not silent, and which tally notices depends on which frame
+arrives. The bundles were missing because the capture step runs under `set -euo pipefail` with
+`continue-on-error` forbidden, so its inline plan loop **aborted** the moment `UDG-002`'s bundle recorded a
+failure. One product defect inside a capture was deleting four bundles' evidence, including the whole-task
+bundle whose whole purpose was to diagnose that defect. Recorded as **WA-6** — the second amplification defect
+this phase introduced and then removed, after WA-5.
+
+The reviewer then directed two implementations, and both are in the head carrying this entry:
+
+| Directive | What landed | How it is demonstrated |
+| --- | --- | --- |
+| **W-A-3** — retain the exact bytes the failing case produced and read, keep them separate from later reproductions, bind them to the invocation and commit, and show a later passing reproduction cannot replace or mask the failure | `UDG-003-TASK` gained `test-case-artefacts` immediately after `test`, copying the four artefacts the accepted case reads into `BUNDLE/vectors-phase-2-case/` with a manifest declaring `readByCommand: test`, `reproduction: false`, `distinctFrom: vectors-phase-2`, the plan selector and the commit, plus a `--report-only` audit of those bytes as `test-case-audit` | a real local capture retained all four and **every one differs from that same capture's own Phase 2 reproduction**; overwriting the source directory with a clean production is refused with `CASE-ARTEFACTS-DRIFT` and the retained bytes still audit red; the verifier refuses replacement (`EVIDENCE-CASE-ARTEFACT-HASH`), rebinding to another commit (`EVIDENCE-CASE-ARTEFACT-SHA`), an out-of-order recording command and a step that ran and retained nothing — all three run against the real bundle in `UDG-003-phase-3-wa3-local-capture.md`; `tests/unit/udg-003/task-case-artefacts.test.ts` |
+| **Capture loop** — attempt every plan, retain each plan's evidence, still fail the job, and show an earlier failed capture cannot prevent `UDG-003-TASK` evidence from being retained | `tools/ci/capture-plans.sh`: iterates `evidence.js plans`, no `set -e` around the captures, names each retained bundle, prints each failed plan's failing commands into the step log, exits 1 on any failure and on an empty plan list; the step still names the production `pnpm evidence:capture … --keep-going` invocation | `tests/unit/udg-003/capture-loop.test.ts` drives the loop with a stub through the `44215794779` shape: all five plans attempted, every bundle retained **including `UDG-003-TASK`**, step exits 1 |
+
+Preservation was re-measured rather than asserted: HEAD's verifier and this branch's verifier were run side by
+side, in one tree, over all **222** bundle directories currently visible in the evidence store — **0
+differences**, 187 PASS / 35 FAIL, the 35 being the pre-existing failures
+(`UDG-003-phase-3-verify-preservation-head-vs-wa3.txt`). The `vectors-phase-2-case` directory is deliberately
+not added to any plan's `requiredFiles`, because requirement lists are read by the verifier of today and would
+retro-invalidate bundles captured before W-A-3; the obligation follows the command instead, and the capture step
+refuses to complete without the claim.
+
+One accepted assertion moved, and it is named here rather than left in a diff: `UDG-001`'s
+`expect(capture?.run).toContain('for task in')` pinned the *shape* of the old inline loop — the exact mechanism
+WA-6 shows cannot satisfy the requirement the same test states. It now requires the step to call
+`tools/ci/capture-plans.sh` and requires that script to carry the plan-list iteration, the production capture
+invocation, `--keep-going`, no `set -euo` and an `exit 1`. **Amended by direction, pending review.**
+
+What it is not: an acceptance, a gate, or a fix for `W-7`. Gate A remains **Not Run**, GA-11 unevaluated,
+deduplication-triggered closure **disabled**, `stackCompatibility` not-established, decision **D4 open**,
+evidence stays in the existing store, and `W-7`, the stage-sequence straddle and the post-close containment
+refusal all remain **unresolved with no cause demonstrated** — so no probe, deadline, retry allowance, close
+code, refusal wording or sample boundary was moved. Phase 3 remains **In Review**.
