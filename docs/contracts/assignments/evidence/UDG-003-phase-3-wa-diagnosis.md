@@ -582,3 +582,28 @@ is additive. Nothing in this file has been applied to `impairment-population.ts`
 `runtime.test.ts`, the policy or the server: `W-7`'s cause is demonstrated for one of its two signatures, and
 both `W-7` sightings remain **open** until the fix lands and the declared repeatability streak is re-run on
 top of it.
+
+## 19. The repair landed, and the four defects are still four
+
+Reviewer-directed, harness and instrumentation only, on the cause §17 demonstrated: `ga6cEpisodeDeadline` now
+takes one snapshot (`epEpisodeEnd`) at the policy-defined episode end — the client's own close under the
+4000 ms episode deadline — in the same synchronous region as the counter sample, before
+`ep.controller.restore()` and before the seat is asked to leave, and every episode field the accepted case reads
+is derived from it. The teardown's readings are retained beside it as `cleanup`, where the case cannot reach
+them. The harness gained one counter field, `restored`, because `silencing` cannot date a reading: the layer
+keeps reporting the silence after it has been taken off the socket. Implementation, controls and the rerun
+streak: [`UDG-003-phase-3-wa-repair.md`](UDG-003-phase-3-wa-repair.md).
+
+What that changes in this diagnosis, and what it does not:
+
+| defect | status after the repair | why |
+| --- | --- | --- |
+| `W-7`, `stateApplicationsDuringTheEpisode` signature | **cause demonstrated, measurement repaired, case still open** | the reading is now taken inside the window it names; the retained contradictory artefact and the pinned `leave()`/`leaveCode` behaviour stand independently of any rerun |
+| `W-7`, `deliveriesReachingTheSeatDuringTheEpisode` signature (`44191978254`) | **unclassified, untouched** | a non-zero delivery count requires the wrapper to deliver while `silencing` is set (`impairment.mjs:142` re-checks at delivery time); no accepted path does that, and this repair does not go near the wrapper's delivery logic |
+| `mappingMatchesTheAuthoritysOwnRecord` (`44206639883`) | **separate, unclassified** | a different producer's mid-window sample (`phase-2-stage-sequence`); the repair changes no sample in that file |
+| `noInputReachedTheRoomAfterTheEpisodeClosed` (`44211208860`) | **separate, unclassified** | a containment reading about frames reaching the *room* after close; the repair only changes when the *client's* tallies are read, and the post-close observations it used to provide are retained as `cleanup` |
+| `P-2b` two refusal wordings | **separate, untouched** | two server-side branches of one rejoin (`MatchMaker.mjs:151`, `Transport.mjs:130` via `Room.mjs:449`); matching is unchanged by direction |
+
+A green streak is not a cause. The ten passes say the repaired measurement is stable under the declared load and
+order and that nothing else about the case moved; the cause rests on the bytes in §17 and on the pinned
+dependency's behaviour, which were established before any rerun and would not be undone by one.

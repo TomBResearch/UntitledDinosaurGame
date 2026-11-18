@@ -26,7 +26,10 @@ retained hosted bytes on 2026-11-17** (run `44191978254`, a documents-only push,
 suite invocations), which is why a red inside another task's capture bundle is not that task's failure. The
 reviewer's first two directives were implemented on 2026-11-18: the whole-task capture now retains the artefacts
 a failing case actually read (`W-A-3`), and the CI capture loop attempts every plan instead of aborting at the
-first red one (`WA-6`) — a red that deletes other tasks' evidence is not evidence. Every task after
+first red one (`WA-6`) — a red that deletes other tasks' evidence is not evidence. The first of those decisions
+was reviewed and accepted at `41934a1` (CI `44287836166`), and `W-7`'s episode tallies are now read at the
+episode end, before the harness is restored or cleanup starts, with cleanup observations retained separately and
+controls proving a cleanup callback cannot move an episode result. Every task after
 UDG-004 stays unassigned. Refinements P04, P05 and P07 to P10 remain pending (P03 was approved 2026-11-09).
 The planning contracts and their [adoption status](docs/contracts/adoption.md) remain the authority for what may be built next.
 

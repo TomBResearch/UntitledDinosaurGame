@@ -482,3 +482,80 @@ Status is unchanged: **In Review**, Gate A/B/C **Not Run**, GA-11 unevaluated, d
 **disabled**, `D4` **open**, `W-7` and `P-2b` **unresolved**, and the declared W-A repeatability streak stands
 on the tree it was run on (`142b080…`), not on this head — if the reviewer accepts any of the three remedies,
 the streak must be re-run on top of it.
+
+---
+
+## 9. After the first review: the `W-7` measurement repair, rerun under the declared streak
+
+Reviewed and accepted at `41934a1` (CI `44287836166`): **W-A-3**, the **capture-loop** change and the
+corresponding **UDG-001** assertion update. Phase 3 stays **In Review**; nothing below accepts a gate.
+
+### 9.1 The change
+
+`ga6cEpisodeDeadline` takes one consistent snapshot of every episode tally at the policy-defined episode end —
+the client's own close under the 4000 ms episode deadline — before the impairment layer is restored and before
+the seat is asked to leave, and every field the accepted case reads is derived from it. The teardown's readings
+are retained separately as `ga6Ga7.ga6cEpisodeDeadline.cleanup`. The harness gained one counter field,
+`restored`, because `silencing` cannot date a reading. Harness and producer instrumentation only: no deadline,
+retry limit, close code, probe, refusal wording, policy sample or accepted assertion moved, and every asserted
+value is the value it always required.
+
+Why: §17's retained artefact records `stateApplicationsDuringTheEpisode: 1` beside
+`freshAuthoritativeSnapshotArrived: false` — one tally read at two instants with `restore()` and an in-flight
+`leave(true)` between them, and the pinned SDK dispatches frames until the close actually lands
+(`Room.mjs:488`, `:611-612`).
+
+### 9.2 The controls, both of them, plus the ones that keep the repair honest
+
+| control | what it refuses or permits |
+| --- | --- |
+| `wa-cleanup-window.test.ts` (3) | with the accepted harness: callbacks do fire after `restore()`, the delivery counter records none of them, the episode snapshot is unmoved; and `snapshotAbsence` structurally cannot read the live tally |
+| falsification: cleanup activity | teardown recording 3 applications, a delivery, 16 swallowed publications and a moved watermark/epoch leaves the audit **green** — cleanup cannot alter the episode result |
+| falsification: application inside the episode | still fails, and is named as an episode movement (accepted check red, recomputation green) |
+| falsification: teardown value folded into the episode tally | refused twice — by the accepted reading and by `w7-state-applications-recompute-from-snapshot`, because the audit recomputes the delta itself |
+| falsification: snapshot taken after `restore()`, or no longer silenced | refused (`w7-episode-end-before-restore`, `w7-episode-end-still-silenced`) |
+| falsification: pre-repair artefact | claimed by none of the seven new checks: 84/84 on the pinned control, and the historical red artefact is still named by exactly `w7-state-applications` |
+
+Audit: 84 → 91 checks over repaired bytes. `wa-audit-falsification.test.ts` 9 → 14 tests. Phase 3 unit + system
+suites 186 passed. Full local `pnpm test`: only the four known container reds. Accepted phase-2 runtime suite
+14/14.
+
+### 9.3 The declared ten-pass checks, rerun on the repaired implementation
+
+Declaration unchanged, and unchanged before the streak. Clean tree
+`79984f9e271b5f1615a17081f0a215c2d9a5a6db`, four busy-spinner processes, full `pnpm test` order, scored per case
+id out of each iteration's own junit.
+
+| | |
+| --- | --- |
+| `W-7` | **10/10** consecutive, `firstRedIteration: null` |
+| `P-2b` | **10/10** consecutive, `firstRedIteration: null` |
+| per-assertion audit | 91/91 in all ten iterations |
+| wall | 11 m 33 s → 18 m 34 s elapsed, 110.5-112.4 s per iteration |
+| suite exit | non-zero in all ten: the four known container reds (Node pin, foreign register, and their two UDG-002 cascades) |
+| retained | `UDG-003-phase-3-wa-streak.json` plus `iter-01…10/junit.xml` and `…/wa-assertion-audit.json`; the pre-repair streak preserved verbatim as `UDG-003-phase-3-wa-streak-142b080.json` |
+
+**A passing rerun does not establish the cause**, and this record does not claim it does: the cause stands on the
+retained contradictory artefact and the pinned dependency behaviour. What ten green iterations establish is that
+the repaired measurement is stable under the declared load and order and that nothing else about the accepted
+case moved.
+
+### 9.4 Capture retention, and whether hosted CI has exercised the new path yet
+
+The controls in force for capture retention are unchanged and still the ones the reviewer reviewed:
+`tests/unit/udg-003/capture-loop.test.ts` (drives `tools/ci/capture-plans.sh` through the `44215794779` shape —
+all five plans attempted, every bundle retained including `UDG-003-TASK`, step exits 1),
+`tests/unit/udg-003/task-case-artefacts.test.ts`, and
+`UDG-003-phase-3-wa3-local-capture.md`. **No hosted failure has yet exercised the new capture path**: every
+hosted run since the loop fix has been green, so the failure-shape retention is demonstrated by those controls
+and by the absence-shape of `44215794779`, not yet by a hosted red. If this submission's own run fails, that
+run becomes the first such exercise and will be classified from its retained artifact rather than from step
+names, as every previous one was.
+
+### 9.5 Status
+
+**In Review**, acceptance with the reviewer. Gate A/B/C **Not Run**, GA-11 unevaluated,
+deduplication-triggered closure **disabled**, `D4` **open**, evidence stays in the existing store. `W-7`
+remains open as a case: one signature's measurement is repaired, its cause is documented, and the
+delivery-count sighting, the stage-sequence mapping mismatch, the post-close input observation and `P-2b` remain
+**separate and unclassified**, each untouched by this change.

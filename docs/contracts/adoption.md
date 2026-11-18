@@ -915,3 +915,34 @@ leave; record the tail); **none was applied**, because two of them change what a
 The `deliveriesReachingTheSeatDuringTheEpisode` sighting stays **unclassified** — no accepted code path delivers
 while `silencing` is set — and `W-7` stays open, with the declared ten-pass W-A streak still standing on the
 tree it was run on rather than on this head.
+
+### UDG-003 Phase 3 — first review decisions recorded, and the `W-7` measurement repair landed (dated by commit)
+
+The integration owner reviewed `41934a1` (CI `44287836166`) and **approved W-A-3, the capture-loop change and
+the corresponding UDG-001 assertion update**, leaving Phase 3 **In Review** with acceptance reserved. The one
+`W-7` signature whose cause had been demonstrated was then repaired, in scope exactly as directed: harness and
+producer instrumentation only. `ga6cEpisodeDeadline` takes one consistent snapshot at the policy-defined episode
+end, before delivery is restored or cleanup starts, and every episode field the accepted case reads derives from
+it; cleanup observations are retained separately instead of standing in for episode readings. Deadlines
+(`500`/`4000`), the retry allowance (`2`), the close codes (`4100`/`4101`/`4102`) and every accepted assertion
+are unmoved, and each asserted value is the value it has always required.
+
+Both requested controls exist and fail for the right reasons: teardown activity of the exact demonstrated shape
+leaves the audit green, while the accepted harness itself proves callbacks fire after `restore()` with the
+delivery counter recording none of them; an application *inside* the episode still fails and is attributed to
+the episode; and a teardown value written into the episode tally is refused twice over, because the per-assertion
+audit now recomputes the deltas from the published snapshot instead of trusting them. The audit goes 84 → 91
+checks on repaired bytes and stays at 84 on every artefact captured before the repair, so no historical bundle or
+retained artefact is judged by a rule that did not exist when it was written.
+
+The declared ten-pass checks were rerun on the repaired implementation: **`W-7` 10/10 and `P-2b` 10/10**,
+scored per case id out of each iteration's own junit, audit 91/91 in all ten, four known container reds in every
+iteration, with the pre-repair streak preserved verbatim alongside the new record. This is reported as stability
+under the declared load and order and explicitly **not** as proof of cause — the owner's own instruction.
+`W-7` remains open as a case; the `deliveriesReachingTheSeatDuringTheEpisode` sighting, the
+`mappingMatchesTheAuthoritysOwnRecord` mismatch, the post-close input observation and `P-2b` remain four
+**separate, unclassified** defects, none of them reachable by this repair and none of them touched. Gate A
+remains **Not Run**, deduplication-triggered closure stays **disabled**, `D4` stays **open**, and no hosted
+failure has yet exercised the new capture-retention path because every hosted run since the loop fix has been
+green.
+
