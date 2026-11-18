@@ -457,7 +457,7 @@
     "TypeScript is pinned to 5.9.3. TypeScript 7.x exists on the registry but the installed typescript-eslint release declares peer typescript \">=4.8.4 <6.1.0\", so the newer compiler line is deferred until the lint toolchain supports it. Changing the compiler line is a dependency-pin decision, not a routine edit.",
     "Deferred game libraries carry a derived status: selected only when the owning task has actually declared the package, absent otherwise (clarification C-02).",
     "onlyBuiltDependencies in pnpm-workspace.yaml is the allowlist for dependency build scripts; an unlisted build script fails the install.",
-    "Every actions/* reference in .github/workflows/ci.yml is pinned to an immutable commit sha (actions/checkout, actions/setup-node, actions/upload-artifact)."
+    "Every actions/* reference in .github/workflows/ci.yml is pinned to an immutable commit sha (actions/checkout, actions/setup-node)."
   ],
   "ciActions": [
     {
@@ -470,12 +470,6 @@
       "repo": "actions/setup-node",
       "ref": "949feb2413d6458794dcd2491c4babbbce0c15c1",
       "pinnedCommit": "949feb2413d6458794dcd2491c4babbbce0c15c1",
-      "pinnedByCommitSha": true
-    },
-    {
-      "repo": "actions/upload-artifact",
-      "ref": "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
-      "pinnedCommit": "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
       "pinnedByCommitSha": true
     }
   ],

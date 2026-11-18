@@ -242,6 +242,13 @@ jobs:
       - name: Install from the frozen lockfile
         run: pnpm install --frozen-lockfile
 
+      # `pnpm test:unit` builds the workspace libraries, but not the checker CLI — and several unit suites
+      # import `tools/checks/dist/evidence.js` directly (the Phase 3 case-artefact, capture-refusal, vector and
+      # UDG-004 evidence-gate suites all do). A lane that starts from a clean checkout has no dist, so this
+      # step is the lane's prerequisite, not a convenience.
+      - name: Build the checker CLI the suites import
+        run: pnpm --filter @udg/checks build
+
       # The unit suite launches the pinned chromium itself: `tests/unit/udg-004/evidence-gates.test.ts`
       # proves the PNG portability rules against a real screenshot, so it cannot run without a browser. It
       # does not need the camera suite's artefacts — those belong to the camera and full-suite lanes.
@@ -255,7 +262,9 @@ jobs:
     if: ${{ needs.route.outputs.camera == 'true' }}
     name: routine / camera (browser suite and the UDG-004 gate over its artefacts)
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # A lane's timeout is the wall-clock budget it is allowed to consume, and a cancelled lane fails the
+    # outcome just as a failed one does. 20 minutes is this suite plus its gate plus a cold install.
+    timeout-minutes: 20
     steps:
       - name: Check out the exact commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -274,6 +283,13 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Install the pinned Playwright chromium
         run: pnpm exec playwright install --with-deps chromium
+
+      # The client the suite drives resolves `@udg/protocol` and `@udg/config` through the workspace, so the
+      # dev server `playwright.config.ts` starts cannot serve them until they are built. The acceptance job
+      # gets this for free from `pnpm typecheck`, which builds the libraries first; a lane that skips it does
+      # not fail fast, it hangs in the web-server wait — so the build belongs here, before the suite.
+      - name: Build the libraries the dev server resolves
+        run: pnpm build:libraries
 
       # The order is the acceptance job's order, kept: `tests/contracts/UDG-004.test.ts` gates the artefacts
       # the camera suite writes, so a camera run that never happened has to stop this lane rather than be
@@ -348,8 +364,13 @@ jobs:
           pnpm --version
       - name: Install from the frozen lockfile
         run: pnpm install --frozen-lockfile
-      - name: Build the shared libraries the suites assert against
-        run: pnpm build:libraries
+
+      # The whole workspace, not just the libraries: `tests/reference/flat-direct-step.ts` imports
+      # `apps/server/dist/authority/step.js`, so the AC-1 trace needs the server emitted, and the system
+      # suites drive the same code. This is the acceptance job's prerequisite too — its `pnpm build` step
+      # precedes every runtime step there for the same reason.
+      - name: Build the workspace the runtime suites execute
+        run: pnpm build
 
       # A server or authority change has to be *executed*, not merely compiled: AC-1's 200-tick reference
       # trace first (it is the movement baseline the numeric claims are read against), then the system suites,
@@ -444,6 +465,10 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Install the pinned Playwright chromium
         run: pnpm exec playwright install --with-deps chromium
+      # Same reason as the camera lane: `pnpm test` builds the checker and the libraries itself, but the camera
+      # step that runs before it needs the libraries already emitted.
+      - name: Build the libraries the dev server resolves
+        run: pnpm build:libraries
       - name: Run the UDG-004 camera suite
         env:
           UDG_BROWSER_OUT: artifacts/.routine/camera

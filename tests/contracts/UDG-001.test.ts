@@ -421,6 +421,30 @@ describe('workspace shape', () => {
     record('dependencyRegister.ciActionsPinned', register.ciActions.length);
   });
 
+    it('records one CI action entry per distinct pin, not one per job', () => {
+    // The routine workflow is one job per routed lane, and every lane checks out and sets up Node. Recording
+    // one entry per `uses:` occurrence put the same two pins in the register once per job, and turned the
+    // register's own derived claim — "every actions/* reference in ci.yml is pinned to an immutable commit sha,
+    // namely …" — into a nineteen-item list. The set of pins is the thing a reviewer checks, so that is what
+    // the register records; this test is what stops the dedupe being mistaken for a lost pin.
+    const register = json<DependencyRegister>('docs/integration/dependencies.json');
+    const fresh = buildDependencyRegister(ROOT, 'tests/contracts/UDG-001.test.ts');
+    const keys = (entries: DependencyRegister['ciActions']): string[] =>
+      entries.map((entry) => `${entry.repo}@${entry.pinnedCommit}`);
+
+    const derived = keys(fresh.ciActions);
+    expect(derived.length, 'the register lists a pin twice').toBe(new Set(derived).size);
+    expect(keys(register.ciActions)).toEqual(derived);
+
+    const workflow = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
+    const occurrences = [...workflow.matchAll(/uses:\s*([^\s@]+)@([^\s#]+)/gu)].map((match) => `${match[1]}@${match[2]}`);
+    expect(new Set(occurrences), 'the register does not name every pin ci.yml uses').toEqual(new Set(derived));
+    expect(occurrences.length, 'a single-job workflow would not exercise this rule').toBeGreaterThan(derived.length);
+    for (const entry of fresh.ciActions) {
+      expect(entry.pinnedByCommitSha, entry.repo).toBe(true);
+    }
+  });
+
   it('verifies the register on a foreign host while still refusing real drift (CI regression)', () => {
     // GitHub-hosted runners are linux/x64; a developer checkout may be linux/arm64 or macOS. The
     // register describes the repository, so only the recording host may differ between them.

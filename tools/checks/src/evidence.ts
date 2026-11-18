@@ -3034,10 +3034,19 @@ const parseCiActions = (root: string): GithubActionEntry[] => {
   const raw = readOptional(join(root, '.github', 'workflows', 'ci.yml'));
   if (raw === undefined) return [];
   const entries: GithubActionEntry[] = [];
+  // One entry per **distinct pin**, not one per occurrence. The routine workflow is a job per routed lane, and
+  // every lane checks out and sets up Node, so an entry per occurrence recorded the same two pins once per job
+  // — nineteen entries for two actions — and turned the register's derived claim ("every actions/* reference in
+  // ci.yml is pinned to an immutable commit sha, namely …") into a list no reviewer can read. What the register
+  // means is the set of pins a reviewer has to check, and a pin appearing twice is one pin appearing twice.
+  const seen = new Set<string>();
   for (const match of raw.matchAll(/^\s*(?:-\s*)?uses:\s*([^\s@]+)@([^\s#]+)/gm)) {
     const repo = match[1];
     const reference = match[2];
     if (repo === undefined || reference === undefined) continue;
+    const key = `${repo}@${reference}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     entries.push({
       repo,
       ref: reference,

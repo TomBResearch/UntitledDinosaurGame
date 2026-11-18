@@ -120,6 +120,7 @@ describe('CI workflows — one policy across both files', () => {
 
   it('pins every third-party action by commit sha and reads the toolchain pins from the same place', () => {
     const shas = new Set<string>();
+    const acceptancePins: string[] = [];
     for (const entry of files) {
       const uses = [...entry.text.matchAll(/uses:\s*([^\s@]+)@([^\s#]+)/gu)];
       expect(uses.length, entry.file).toBeGreaterThan(2);
@@ -128,6 +129,7 @@ describe('CI workflows — one policy across both files', () => {
         const sha = use[2] as string;
         expect(sha, `${entry.file} ${repo}`).toMatch(/^[0-9a-f]{40}$/u);
         shas.add(`${repo}@${sha}`);
+        if (entry.file === ACCEPTANCE_FILE) acceptancePins.push(repo);
       }
       expect(entry.text, `${entry.file} Node pin`).toContain('24.22.2');
       expect(entry.text, `${entry.file} pnpm pin`).toContain('12.18.0');
@@ -136,18 +138,39 @@ describe('CI workflows — one policy across both files', () => {
       expect(entry.text, `${entry.file} must not keep credentials`).toContain('persist-credentials: false');
     }
 
-    // The dependency register still reads only ci.yml (R-2), so the acceptance workflow's pins are asserted
-    // against the recorded set rather than left outside `pnpm dependencies:verify`.
+    // The dependency register reads only `ci.yml` (R-2 stays deferred), so an action that appears solely in
+    // the acceptance workflow cannot be recorded there. That gap is closed here rather than left open: the pin
+    // is written out below, and a bump to it fails this test until the reviewer says so in the same change.
+    const acceptanceOnlyPins: Readonly<Record<string, string>> = {
+      'actions/upload-artifact': 'cf430e030ddbb5b0abf93d22962f4752f3646cd9',
+    };
     const register = JSON.parse(read('docs/integration/dependencies.json')) as {
       ciActions: readonly { repo: string; pinnedCommit: string; pinnedByCommitSha: boolean }[];
     };
     const recorded = new Set(register.ciActions.map((entry) => `${entry.repo}@${entry.pinnedCommit}`));
+    // One entry per distinct pin, in the routine workflow too: the register is the reviewer's list, and eleven
+    // lanes installing the same two actions is two pins, not twenty-two records of them.
+    expect(register.ciActions.length, 'the register repeats a pin').toBe(recorded.size);
     for (const entry of register.ciActions) {
       expect(entry.pinnedByCommitSha, entry.repo).toBe(true);
     }
+    const routinePins = new Set([...routine.matchAll(/uses:\s*([^\s@]+)@([^\s#]+)/gu)].map((use) => `${use[1]}@${use[2]}`));
+    expect(recorded, 'the register is not the set of pins ci.yml uses').toEqual(routinePins);
     for (const sha of shas) {
+      const repo = sha.split('@')[0] as string;
+      const pin = sha.split('@')[1] as string;
+      if (Object.hasOwn(acceptanceOnlyPins, repo)) {
+        expect(acceptanceOnlyPins[repo], `${repo} is pinned to a different sha than this file records`).toBe(pin);
+        continue;
+      }
       expect([...recorded], sha).toContain(sha);
     }
+    // The allow-list must not quietly grow into the place pins go to escape being checked: it holds exactly the
+    // actions that appear in the acceptance workflow and nowhere in `ci.yml`, and nothing else.
+    const onlyInAcceptance = [...new Set(acceptancePins)].filter(
+      (repo) => ![...routinePins].some((pin) => pin.startsWith(`${repo}@`)),
+    );
+    expect(onlyInAcceptance.sort()).toEqual(Object.keys(acceptanceOnlyPins).sort());
   });
 });
 
