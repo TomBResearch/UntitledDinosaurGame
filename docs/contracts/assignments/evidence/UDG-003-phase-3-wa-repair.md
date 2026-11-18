@@ -28,7 +28,7 @@ taken it off the socket. That is asserted, not assumed, in `wa-cleanup-window.te
 
 **A callback during cleanup cannot alter the episode result.**
 
-- `tests/system/udg-003-phase-3/wa-cleanup-window.test.ts` (3 tests) drives the **accepted harness** over a
+- `tests/system/udg-003-phase-3/wa-cleanup-window.test.ts` (4 tests) drives the **accepted harness** over a
   stand-in connection — no room, no network, no timers. It takes one snapshot while the layer is still on the
   socket, then restores and lets three more frames through: the callbacks really do fire
   (`applied` +3), the delivery counter records **none** of them (`+0`, because it is off the socket), and the

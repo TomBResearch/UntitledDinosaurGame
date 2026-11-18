@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "task": "UDG-003",
+  "phase": "phase-3",
+  "kind": "hosted-first-attempt-on-the-wa-repair",
+  "recordedAt": "2026-11-18T12:35:00.000Z",
+  "runId": 44299429735,
+  "url": "https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44299429735",
+  "submissionHeadSha": "74aa8dabbef7fcae5c455c24dfb326c2a57f6be2",
+  "implementationSha": "79984f9e271b5f1615a17081f0a215c2d9a5a6db",
+  "attempt": 1,
+  "status": "completed",
+  "conclusion": "success",
+  "jobStartedAt": "2026-11-18T11:57:57Z",
+  "jobCompletedAt": "2026-11-18T12:29:31Z",
+  "jobWallMinutes": 31.6,
+  "captureStepMinutes": 20.8,
+  "verifyStepSeconds": 18,
+  "stepsFailed": [],
+  "bundles": [
+    {
+      "dir": "UDG-001-2026-11-18T12-08-19-526Z-74aa8dab",
+      "status": "PASS",
+      "cases": 665,
+      "failures": 0
+    },
+    {
+      "dir": "UDG-002-2026-11-18T12-11-18-145Z-74aa8dab",
+      "status": "PASS",
+      "cases": 665,
+      "failures": 0
+    },
+    {
+      "dir": "UDG-003-2026-11-18T12-14-37-775Z-74aa8dab",
+      "status": "PASS",
+      "cases": 665,
+      "failures": 0
+    },
+    {
+      "dir": "UDG-003-TASK-2026-11-18T12-19-21-870Z-74aa8dab",
+      "status": "PASS",
+      "cases": 665,
+      "failures": 0
+    },
+    {
+      "dir": "UDG-004-2026-11-18T12-24-10-286Z-74aa8dab",
+      "status": "PASS",
+      "cases": 665,
+      "failures": 0
+    }
+  ],
+  "repairVisibleInHostedBytes": {
+    "caseArtefactManifestImplementationSha": "74aa8dabbef7fcae5c455c24dfb326c2a57f6be2",
+    "readByCommand": "test",
+    "reproduction": false,
+    "snapshotAbsence": {
+      "freshAuthoritativeSnapshotArrived": false,
+      "deliveriesReachingTheSeatDuringTheEpisode": 0,
+      "publicationsSwallowedAtTheWrapper": 44,
+      "stateApplicationsDuringTheEpisode": 0,
+      "resolvedThroughAtSilence": 2,
+      "resolvedThroughAtClose": 2,
+      "epochAtSilence": 11,
+      "epochAtClose": 11,
+      "recoveryEvents": 0
+    },
+    "episodeEndSnapshotPresent": true,
+    "cleanupBlockPresent": true,
+    "cleanup": {
+      "wrapperRestoredBeforeEpisodeSnapshot": false,
+      "stateApplicationsAtEpisodeEnd": 1,
+      "stateApplicationsObservedDuringCleanup": 0,
+      "deliveriesObservedDuringCleanup": 0,
+      "swallowedObservedDuringCleanup": 16,
+      "socketClosesObservedDuringCleanup": 0,
+      "resolvedThroughObservedDuringCleanup": 0,
+      "sessionEpochObservedDuringCleanup": 0,
+      "wrapperSilencingAtEpisodeEnd": true
+    },
+    "auditOfRetainedBytes": "91/91 checks pass, failing: none",
+    "retainedVersusReproduction": [
+      {
+        "file": "transport-impairment.json",
+        "case": "4ae00774cb7a",
+        "reproduction": "b42040607963"
+      },
+      {
+        "file": "buffer-depth.csv",
+        "case": "4ea9b553cf01",
+        "reproduction": "ee9cff456b95"
+      }
+    ],
+    "reading": "The hosted bundle carries the episode-end snapshot and the separate cleanup block in the bytes the test invocation read, and the per-assertion audit over them is 91/91. The cleanup block also shows the teardown doing what \u00a717 said it does \u2014 16 publications reaching the seat after the wrapper came off, while the episode tallies stay at zero."
+  },
+  "captureRetentionFailurePathExercised": false,
+  "captureRetentionNote": "Every hosted run since the capture-loop fix has been green, so no hosted failure has yet exercised the new retention path. The proof in force is tests/unit/udg-003/capture-loop.test.ts (drives the loop through the run-44215794779 shape: all five plans attempted, every bundle retained including UDG-003-TASK, step exits 1) plus tests/unit/udg-003/task-case-artefacts.test.ts and UDG-003-phase-3-wa3-local-capture.md.",
+  "ciCost": {
+    "baselineBeforePhase3": {
+      "jobMinutes": 24.6,
+      "captureStepMinutes": 16.6
+    },
+    "observations": [
+      {
+        "run": 44183269571,
+        "job": 34.6,
+        "capture": 25.1
+      },
+      {
+        "run": 44201132927,
+        "job": 30.8,
+        "capture": 19.7
+      },
+      {
+        "run": 44273118486,
+        "job": 33.5,
+        "capture": 20.2
+      },
+      {
+        "run": 44282688256,
+        "job": 29.8,
+        "capture": 21.7
+      },
+      {
+        "run": 44287836166,
+        "job": 27.2,
+        "capture": null
+      },
+      {
+        "run": 44299429735,
+        "job": 31.6,
+        "capture": 20.8
+      }
+    ],
+    "measuredDeltaMinutes": "roughly +6 to +10 of job time against the 24.6 min baseline, not the 4-5 the assignment estimated; the two steps the repair added (case-artefacts, case-audit) cost under a second each, so the delta is the whole-task plan's own suite run, not the new instrumentation"
+  },
+  "w7Fired": false,
+  "p2bFired": false,
+  "limits": [
+    "A green hosted run does not establish the cause, and is not offered as if it did: the cause stands on the retained contradictory artefact and the pinned dependency behaviour.",
+    "No hosted red has yet been observed with the retained case bytes attached, so the repair's payoff on a live red is still unexercised in hosted evidence.",
+    "The delivery-count sighting, the mapping mismatch, the post-close input observation and P-2b are untouched and remain open."
+  ]
+}

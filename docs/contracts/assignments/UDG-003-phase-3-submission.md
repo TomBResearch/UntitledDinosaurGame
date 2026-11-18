@@ -509,7 +509,7 @@ Why: §17's retained artefact records `stateApplicationsDuringTheEpisode: 1` bes
 
 | control | what it refuses or permits |
 | --- | --- |
-| `wa-cleanup-window.test.ts` (3) | with the accepted harness: callbacks do fire after `restore()`, the delivery counter records none of them, the episode snapshot is unmoved; and `snapshotAbsence` structurally cannot read the live tally |
+| `wa-cleanup-window.test.ts` (4) | with the accepted harness: callbacks do fire after `restore()`, the delivery counter records none of them, the episode snapshot is unmoved; `snapshotAbsence` structurally cannot read the live tally; and a publication that reaches the seat between the samples makes both tallies 1, so the negative control is live at harness level and not only audited |
 | falsification: cleanup activity | teardown recording 3 applications, a delivery, 16 swallowed publications and a moved watermark/epoch leaves the audit **green** — cleanup cannot alter the episode result |
 | falsification: application inside the episode | still fails, and is named as an episode movement (accepted check red, recomputation green) |
 | falsification: teardown value folded into the episode tally | refused twice — by the accepted reading and by `w7-state-applications-recompute-from-snapshot`, because the audit recomputes the delta itself |
@@ -559,3 +559,36 @@ deduplication-triggered closure **disabled**, `D4` **open**, evidence stays in t
 remains open as a case: one signature's measurement is repaired, its cause is documented, and the
 delivery-count sighting, the stage-sequence mapping mismatch, the post-close input observation and `P-2b` remain
 **separate and unclassified**, each untouched by this change.
+
+### 9.6 First-attempt hosted CI on the exact submission, and the measured cost
+
+Run [`44299429735`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44299429735) — first
+attempt on the submitted head `74aa8dabbef7fcae5c455c24dfb326c2a57f6be2` (implementation
+`79984f9e271b5f1615a17081f0a215c2d9a5a6db`, records only on top) — **completed / success**, every step green:
+
+```
+job      11:57:57Z → 12:29:31Z   31.6 min
+capture  12:08:16Z → 12:29:06Z   20.8 min      verify 18 s
+bundles  UDG-001, UDG-002, UDG-003, UDG-003-TASK, UDG-004   all PASS, 665 cases, 0 failures each
+```
+
+and the `UDG-003-TASK` bundle carries the repair in the bytes the test invocation read:
+`snapshotAbsence.episodeEndSnapshot` and `ga6cEpisodeDeadline.cleanup` present, the case manifest bound to
+`74aa8dab…` with `readByCommand: test` and `reproduction: false`, the per-assertion audit at **91/91**, and the
+retained impairment artefact differing again from the same run's reproduction (`4ae00774cb7a` against
+`b42040607963`). The cleanup block on hosted bytes shows the teardown doing exactly what §17 described —
+`swallowedObservedDuringCleanup: 16`, sixteen publications reaching the seat after the wrapper came off — while
+the episode tallies stay at zero. Full record:
+[`UDG-003-phase-3-hosted-green-run-44299429735.json`](evidence/UDG-003-phase-3-hosted-green-run-44299429735.json).
+
+Measured CI cost across the six runs since the whole-task plan landed — `34.6 / 30.8 / 33.5 / 29.8 / 27.2 / 31.6`
+minutes of job time against the recorded `24.6` minute baseline, capture step `25.1 / 19.7 / 20.2 / 21.7 / — /
+20.8` against `16.6`: **about +6 to +10 minutes**, still not the 4-5 the assignment estimated. The repair's own
+two capture steps cost under a second each, so the delta is the whole-task plan's suite run and not the new
+instrumentation.
+
+**No hosted failure has exercised the new capture-retention path yet** — every hosted run since the loop fix has
+been green. That is stated rather than smoothed over: the retention guarantee currently rests on
+`tests/unit/udg-003/capture-loop.test.ts`, `tests/unit/udg-003/task-case-artefacts.test.ts` and the local
+capture record, and the first hosted red after `350ff27` will be the first real exercise of it.
+

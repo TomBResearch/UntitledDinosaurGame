@@ -116,6 +116,36 @@ describe('UDG-003 Phase 3 W-A repair — the episode snapshot is taken where cle
       .toBe(0);
   });
 
+  it('still counts an application that reaches the seat inside the episode, so the negative control is live', () => {
+    // The mirror of the control above, at harness level: the tallies the accepted case reads are the wrapper's
+    // counters and the seat's own application tally. With a delivery that reaches the seat between the two
+    // samples, the deltas the case asserts on are 1 and 1 — the shape that made the accepted case red — and the
+    // snapshot records them rather than hiding them. Nothing about the repair makes an in-episode application
+    // invisible; it makes the reading honest about when it was taken.
+    const seat = standInSeat();
+    const controller = installImpairment({ connection: seat.connection } as never, { seed: 2 });
+    controller.arm();
+    seat.tell('accepted-before-the-episode');
+
+    const atSilence = controller.counters();
+    const appliedAtSilence = seat.applied.length;
+
+    // An episode in which one publication does reach the seat, instead of being swallowed.
+    controller.silenceInbound();
+    controller.resumeInbound();
+    seat.tell('reached-the-seat-during-the-episode');
+    controller.silenceInbound();
+    for (let publication = 0; publication < 3; publication += 1) seat.tell(`swallowed-${String(publication)}`);
+
+    const atEpisodeEnd = controller.counters();
+    const deliveriesInEpisode = atEpisodeEnd.inboundDelivered - atSilence.inboundDelivered;
+    const applicationsInEpisode = seat.applied.length - appliedAtSilence;
+    expect(deliveriesInEpisode, 'the delivery tally the case asserts on is one').toBe(1);
+    expect(applicationsInEpisode, 'and so is the application tally — runtime.test.ts:702 and :704 both refuse')
+      .toBe(1);
+    expect(atEpisodeEnd.restored, 'and that happened while the layer was still on the socket, so it is claimed').toBe(false);
+  });
+
   it('keeps the accepted harness behaviour the repair depends on, byte for byte in its own words', () => {
     // The repair is only honest if `restore()` still hands the handler back rather than swallowing: that is the
     // behaviour that made the teardown a source of callbacks at all. Read from the source, because the

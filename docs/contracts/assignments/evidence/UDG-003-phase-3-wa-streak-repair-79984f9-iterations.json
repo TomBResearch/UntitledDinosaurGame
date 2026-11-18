@@ -1,0 +1,212 @@
+{
+  "schemaVersion": 1,
+  "task": "UDG-003",
+  "phase": "phase-3",
+  "kind": "wa-streak-per-iteration-digest",
+  "implementationSha": "79984f9e271b5f1615a17081f0a215c2d9a5a6db",
+  "declarationFile": "docs/contracts/assignments/evidence/UDG-003-phase-3-wa-declaration.json",
+  "summaryFile": "docs/contracts/assignments/evidence/UDG-003-phase-3-wa-streak.json",
+  "fullEvidence": "artifacts/udg-003-phase-3/wa-streak/iter-01..10/{junit.xml,wa-assertion-audit.json} on the implementer container (artifacts/ is gitignored; the durable record is this digest plus the summary above)",
+  "scoring": "per case id out of each iteration's own junit, never the suite exit code (D-P3-WA-junit-scoring)",
+  "iterations": [
+    {
+      "iteration": 1,
+      "suiteExit": 1,
+      "seconds": 112,
+      "w7": "passed",
+      "p2b": "passed",
+      "probeVerdict": "pass",
+      "probeControlsFailing": [],
+      "auditChecks": 91,
+      "auditFailing": [],
+      "spinners": 4
+    },
+    {
+      "iteration": 2,
+      "suiteExit": 1,
+      "seconds": 111,
+      "w7": "passed",
+      "p2b": "passed",
+      "probeVerdict": "pass",
+      "probeControlsFailing": [],
+      "auditChecks": 91,
+      "auditFailing": [],
+      "spinners": 4
+    },
+    {
+      "iteration": 3,
+      "suiteExit": 1,
+      "seconds": 111.7,
+      "w7": "passed",
+      "p2b": "passed",
+      "probeVerdict": "pass",
+      "probeControlsFailing": [],
+      "auditChecks": 91,
+      "auditFailing": [],
+      "spinners": 4
+    },
+    {
+      "iteration": 4,
+      "suiteExit": 1,
+      "seconds": 111.4,
+      "w7": "passed",
+      "p2b": "passed",
+      "probeVerdict": "pass",
+      "probeControlsFailing": [],
+      "auditChecks": 91,
+      "auditFailing": [],
+      "spinners": 4
+    },
+    {
+      "iteration": 5,
+      "suiteExit": 1,
+      "seconds": 110.7,
+      "w7": "passed",
+      "p2b": "passed",
+      "probeVerdict": "pass",
+      "probeControlsFailing": [],
+      "auditChecks": 91,
+      "auditFailing": [],
+      "spinners": 4
+    },
+    {
+      "iteration": 6,
+      "suiteExit": 1,
+      "seconds": 111.3,
+      "w7": "passed",
+      "p2b": "passed",
+      "probeVerdict": "pass",
+      "probeControlsFailing": [],
+      "auditChecks": 91,
+      "auditFailing": [],
+      "spinners": 4
+    },
+    {
+      "iteration": 7,
+      "suiteExit": 1,
+      "seconds": 112.4,
+      "w7": "passed",
+      "p2b": "passed",
+      "probeVerdict": "pass",
+      "probeControlsFailing": [],
+      "auditChecks": 91,
+      "auditFailing": [],
+      "spinners": 4
+    },
+    {
+      "iteration": 8,
+      "suiteExit": 1,
+      "seconds": 110.5,
+      "w7": "passed",
+      "p2b": "passed",
+      "probeVerdict": "pass",
+      "probeControlsFailing": [],
+      "auditChecks": 91,
+      "auditFailing": [],
+      "spinners": 4
+    },
+    {
+      "iteration": 9,
+      "suiteExit": 1,
+      "seconds": 111.9,
+      "w7": "passed",
+      "p2b": "passed",
+      "probeVerdict": "pass",
+      "probeControlsFailing": [],
+      "auditChecks": 91,
+      "auditFailing": [],
+      "spinners": 4
+    },
+    {
+      "iteration": 10,
+      "suiteExit": 1,
+      "seconds": 111.1,
+      "w7": "passed",
+      "p2b": "passed",
+      "probeVerdict": "pass",
+      "probeControlsFailing": [],
+      "auditChecks": 91,
+      "auditFailing": [],
+      "spinners": 4
+    }
+  ],
+  "failingCases": [
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    []
+  ],
+  "redCases": [
+    {
+      "name": "tests/contracts/UDG-001.test.ts > toolchain pins (owner clarification C-01) > pins Node 24.22.2 and pnpm 12.18.0 exactly, and runs on them",
+      "iterations": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "iterationsObserved": 10
+    },
+    {
+      "name": "tests/contracts/UDG-001.test.ts > workspace shape > verifies the register on a foreign host while still refusing real drift (CI regression)",
+      "iterations": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "iterationsObserved": 10
+    },
+    {
+      "name": "tests/contracts/UDG-002.test.ts > measured thresholds > records the pinned toolchain and schema dependency the plan thresholds name",
+      "iterations": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "iterationsObserved": 10
+    },
+    {
+      "name": "tests/contracts/UDG-002.test.ts > regression and scope > keeps the UDG-001 suite green and the committed records in sync",
+      "iterations": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "iterationsObserved": 10
+    }
+  ],
+  "note": "Every red below is the known container/toolchain pair or its cascade: this container runs Node v24.22.3 against a pin of 24.22.2 and holds a register recorded on another host. Neither affected case appears."
+}
