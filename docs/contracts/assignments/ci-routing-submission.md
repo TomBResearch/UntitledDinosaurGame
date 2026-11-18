@@ -212,9 +212,11 @@ that the router **selected** and that reported `skipped` was a pass. The new rul
 | a lane the router selected whose result is not `success` | the shape this repository already has a unit test for — `tests/unit/udg-003/capture-loop.test.ts` was written because a CI step quietly stopped running |
 | a lane the router did not select whose result is not `skipped` | a lane running off the table is the other half of the drift the table↔job-list assertions watch for |
 
-The first submission's refusal of "a run that checked nothing" stays. Judged locally over six cases before
-pushing, all six as expected: selected+`skipped` red, selected+`cancelled` red, selected+`success` green,
-unselected+`skipped` green, unselected+`success` red, router-`failure` red, nothing-selected red.
+The first submission's refusal of "a run that checked nothing" stays. The step was extracted from the YAML and run
+locally first, six invocations covering seven assertions, all as expected: selected+`skipped` red,
+selected+`cancelled` red, selected+`success` green, unselected+`skipped` green (the same run as the previous case —
+a route that selects `records` leaves eight lanes skipped and the outcome green), unselected-but-ran red,
+router-`failure` red, and nothing-selected red.
 
 Both controls were then run hosted, as pull requests closed without merging:
 
@@ -235,7 +237,7 @@ before any capture**, so a refused dispatch writes no bundle:
 
 | Case | Evidence | Result |
 | --- | --- | --- |
-| blank candidate | dispatch attempt, 2026-11-18 21:31 UTC | never becomes a run: `HTTP 422: Required input 'candidate_sha' not provided` — GitHub refuses it before a runner is hired |
+| blank candidate | dispatch attempt, 2026-11-18 — no run was created, so there is no run id to cite | `HTTP 422: Required input 'candidate_sha' not provided`: GitHub refuses the dispatch before a runner is hired, which is the strongest form this control can take |
 | short candidate (`45b787b8`) | [`44403714403`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44403714403) | red in 10 s: `candidate_sha must be a full 40-character sha; 8 character(s) received`; artefacts `[]` |
 | full candidate that is not the checkout | [`44403926011`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44403926011) | red in 24 s: `this run checked out 6d91c618790f52faa38a5b725636a728a2bc118e but was asked to verify 45b787b8d39b8ebd22b79b3ce989b9e4d6d1e1f0`; artefacts `[]` |
 | correct candidate, bound end to end | [`44404109207`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44404109207) | green in 38 min 49 s on `6d91c618790f52faa38a5b725636a728a2bc118e`: `candidate confirmed` first, then `all 5 bundle(s) bound to the candidate 6d91c618790f…` after capture, five bundles verified PASS and published |
