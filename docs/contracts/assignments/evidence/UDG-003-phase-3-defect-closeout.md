@@ -170,6 +170,16 @@ Verified** under the amended criteria. The full acceptance entry is
 [`adoption.md`](../../adoption.md); the assignment's own record of it is
 [`UDG-003-phase-3.md`](../UDG-003-phase-3.md) §9.2.
 
+```text
+acceptance commit        4f567ae4596b1a5b99e35a3b48d7d9b728c2863d (2026-11-18, main)
+its CI                   44325176142 — success on the first attempt, 34.0 min job, every step green, all five
+                         capture bundles verified PASS at 666 cases with 0 failures each (the +1 against the
+                         submission run's 665 is wa-cleanup-window.test.ts's fourth control, added in
+                         bc6879172885 and inside the reviewed closeout range; nothing removed, skipped or renamed)
+this line added by       the records commit that follows the acceptance commit, per the convention this repository
+                         uses for acceptance blocks
+```
+
 What the acceptance does **not** do: it passes no gate — Gates A, B and C remain **Not Run**, GA-11 unevaluated,
 `stackCompatibility` **not-established**; it does not establish task scope completion; it does not enable
 deduplication-triggered closure, which stays **disabled**; it leaves **D4 open** with evidence in the existing

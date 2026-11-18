@@ -639,6 +639,9 @@ closeout reviewed            5bec5ff665389e3c95946336b2df4275ebb2404f, CI 443162
 amendments approved          A-P3-5, A-P3-6, A-P3-7 — bounded, recorded in UDG-003-phase-3.md §9.1
 carried forward              CF-1 … CF-4, evidence/UDG-003-phase-3-defect-closeout.md §0 (owners and reopening
                              conditions named; all four still unclassified where no cause was demonstrated)
+acceptance commit            4f567ae4596b1a5b99e35a3b48d7d9b728c2863d — CI 44325176142, success on the first attempt
+                             (34.0 min, five bundles PASS at 666 cases, 0 failures each); the line is written by the
+                             records commit that follows it, as every acceptance block here does
 ```
 
 The owner's three conditions are recorded with the acceptance, in their own words: the ten-run results show

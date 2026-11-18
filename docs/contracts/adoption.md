@@ -943,9 +943,27 @@ Carried forward, open and unclassified        CF-1 W-7's delivery count (GA-6c),
                                               mapping (AC-6's M half, P' half at UDG-007), CF-3 the post-close
                                               input observation (containment, GA-6c/GA-7), CF-4 P-2b's refusal
                                               wording (GA-7's branch attribution)
-Acceptance commit                             Added by the records commit that follows this one: a block cannot
-                                              carry its own commit's hash. Same procedure as UDG-003's phase
-                                              acceptances and UDG-004's acceptance.
+Acceptance commit                             4f567ae4596b1a5b99e35a3b48d7d9b728c2863d, 2026-11-18, pushed to main.
+                                              Its CI run 44325176142 was created 2026-11-18T14:31:26Z and completed
+                                              2026-11-18T15:05:30Z: **success on the first attempt**, 34.0 min job,
+                                              every step green, and all five capture bundles verified PASS in that
+                                              run — UDG-001-…14-44-41-201Z-4f567ae4, UDG-002-…14-47-32-510Z-4f567ae4,
+                                              UDG-003-…14-50-46-368Z-4f567ae4,
+                                              UDG-003-TASK-…14-55-27-443Z-4f567ae4 and
+                                              UDG-004-…15-00-13-496Z-4f567ae4 — 666 cases, 0 failures each.
+                                              A block cannot carry its own commit's hash, so these lines were added
+                                              by the records commit that follows the acceptance commit above: the
+                                              same procedure UDG-003's phase acceptances and UDG-004's acceptance
+                                              used.
+Case-count note                               The submission run carried 665 cases and the acceptance run 666. The
+                                              difference is one test in
+                                              tests/system/udg-003-phase-3/wa-cleanup-window.test.ts: the accepted
+                                              repair at 74aa8dab shipped three controls, and the fourth — the live
+                                              harness-level negative control, a publication that really reaches the
+                                              seat between the two samples making both asserted tallies 1 — landed in
+                                              bc6879172885 and is inside the reviewed closeout range. No test was
+                                              removed, skipped or renamed between those runs, and the per-file
+                                              comparison of the two runs' junit reports this as the only difference.
 ```
 
 Three conditions the owner attached, recorded as written rather than paraphrased: **the ten-run results show
