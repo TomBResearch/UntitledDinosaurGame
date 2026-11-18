@@ -466,3 +466,7 @@ Verified status is affected; that any gate moves. Gates A, B and C remain **Not 
 `stackCompatibility` not-established, deduplication-triggered closure disabled, **D4 open**, CF-1 … CF-4 open
 and unclassified, and no task from UDG-005 onward is assigned. Implementation waits for the owner's build
 instruction.
+
+<!-- CI control (C-07 closeout): a deliberately unselected suite. This file changes nothing else; the
+     router should select `records` only, every other lane should report `skipped`, and `routine outcome` should
+     still pass. Closed without merging. -->
