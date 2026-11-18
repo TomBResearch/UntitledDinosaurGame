@@ -97,6 +97,34 @@ describe('CI workflows — the routing table and the job list are one design', (
     }
   });
 
+  it('keeps every shell continuation a continuation, in either file', () => {
+    // `#` inside a backslash-continued command does not comment the line out, it ends the command there. An
+    // explanatory comment placed in the middle of a multi-line `pnpm evidence:summary …` invocation therefore
+    // turns the next argument into a command name: `44374610247` failed after five bundles had been captured and
+    // verified, with `--ci-status: command not found`. Thirty-five minutes for a comment.
+    const problems: string[] = [];
+    for (const entry of files) {
+      const lines = entry.text.split('\n');
+      let inRun = false;
+      let runIndent = 0;
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index] as string;
+        const runKey = /^(\s*)run:\s*[|>]/u.exec(line);
+        if (runKey?.[1] !== undefined) {
+          inRun = true;
+          runIndent = runKey[1].length;
+          continue;
+        }
+        const indent = line.search(/\S/u);
+        if (inRun && line.trim() !== '' && indent <= runIndent) inRun = false;
+        if (!inRun || !line.trimEnd().endsWith('\\')) continue;
+        const next = (lines[index + 1] ?? '').trim();
+        if (next.startsWith('#')) problems.push(`${entry.file} line ${String(index + 2)}: ${next.slice(0, 60)}`);
+      }
+    }
+    expect(problems, 'a comment inside a continued shell command ends that command').toEqual([]);
+  });
+
   it('fetches the whole history in every lane that checks the repository out', () => {
     // Not caution: `44371657860` failed two lanes because a shallow checkout could not resolve
     // `git show <sha>:docs/interfaces/movement-authority.md` (UDG-003) or `git cat-file` a cited prerequisite

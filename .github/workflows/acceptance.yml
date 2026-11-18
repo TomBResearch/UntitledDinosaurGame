@@ -21,9 +21,15 @@
 # commit: dispatch it with
 #
 #   gh workflow run acceptance.yml --repo TomBResearch/UntitledDinosaurGame \
-#     --ref "$CANDIDATE" -f candidate_sha="$CANDIDATE"
+#     --ref main -f candidate_sha="$(git rev-parse HEAD)"          # candidate = branch tip
+#   gh workflow run acceptance.yml --repo TomBResearch/UntitledDinosaurGame \
+#     --ref "$BRANCH" -f candidate_sha="$HEAD_SHA"                 # candidate = pull request head
 #
-# and the first step refuses the run if the checkout is not that commit.
+# `--ref` is a ref *name*: GitHub resolves it before the workflow starts and answers
+# `HTTP 422: No ref found for: <sha>` to a bare commit sha (measured 2026-11-18). That is exactly why the
+# candidate needs a second, independent assertion. The first step compares `candidate_sha` with `github.sha`
+# and refuses the run when they differ, so a branch that moved between naming the candidate and starting the
+# run produces a red run instead of evidence about a different commit.
 
 name: ci (acceptance — full evidence capture)
 
@@ -419,11 +425,14 @@ jobs:
             run_rel="$(tr -d '\r\n' < "$pointer")"
             task="$(basename "$pointer" | sed 's/^latest-//; s/\.txt$//')"
             pnpm evidence:verify -- --run "$run_rel"
-            pnpm evidence:summary -- --run "$run_rel" \
+          # The lane is named inside the summary, so a committed `*-evidence.json` says which workflow produced
+          # it: an acceptance bundle and a routine run are not interchangeable evidence. The sentence sits above
+          # the command, not inside a continuation — a `#` in the middle of a backslash-continued command ends
+          # the command there, and `44374610247` paid for that with `--ci-status: command not found` after five
+          # bundles had been captured, bound to the candidate and verified.
+          pnpm evidence:summary -- --run "$run_rel" \
               --out "artifacts/${task}-ci-summary.json" \
               --storage "$run_rel" \
-              # The lane is named inside the summary, so a committed `*-evidence.json` says which workflow
-              # produced it: an acceptance bundle and a routine run are not interchangeable evidence.
               --ci-status "success (acceptance capture, GitHub-hosted ${RUNNER_OS:-Linux}, ${RUNNER_ARCH:-X64})" \
               --ci-url "${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           done
