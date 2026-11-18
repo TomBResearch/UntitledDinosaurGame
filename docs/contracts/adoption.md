@@ -1048,7 +1048,8 @@ green.
 
 ## CI routing: routine checks and acceptance capture separated (2026-11-18, dated by commit)
 
-**In Review — no task, phase, gate or milestone is accepted, Verified or closed by this entry.** The integration
+**Accepted 2026-11-18 — see the acceptance entry at the end of this file.** No task, phase, gate or milestone is
+accepted, Verified or closed by this entry; what was accepted is the CI routing change and its records. The integration
 owner approved [clarification C-07](assignments/ci-routing-proposal.md) and amendment **A-P3-8**
 (`UDG-003-phase-3.md` §9.3) on 2026-11-18; the implementation and its hosted proof are recorded in
 [assignments/ci-routing-submission.md](assignments/ci-routing-submission.md), and the measurements are in
@@ -1118,7 +1119,8 @@ to.
 
 ## CI routing closeout: the outcome, the candidate, the pins and the browser (2026-11-18, dated by commit)
 
-**In Review — no task, phase, gate or milestone is accepted, Verified or closed by this entry.** Four closeout
+**Accepted 2026-11-18 — see the acceptance entry at the end of this file.** No task, phase, gate or milestone is
+accepted, Verified or closed by this entry; what was accepted is the CI routing change and its records. Four closeout
 items on **C-07**, no new clarification; implementation `6d91c61`, evidence in
 [assignments/ci-routing-submission.md](assignments/ci-routing-submission.md) §9.
 
@@ -1169,3 +1171,34 @@ afterwards by a 14 927-file `path|size|mtime` manifest hash
 Unchanged by this entry: `main` remains unprotected and requiring the check named `routine outcome` stays the
 owner's action; the four root commands a **task** must run; the evidence requirements, definition of done, bundle
 schema and every retained bundle. A routine green is still not evidence.
+
+
+## CI routing accepted (2026-11-18, dated by commit)
+
+**The integration owner accepted the CI routing change at `6d91c618790f52faa38a5b725636a728a2bc118e`**, with the
+full acceptance run [`44404109207`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44404109207)
+and the closeout reviewed through records commit `a87d039`. The two entries above move from In Review to Accepted by
+this paragraph; the full decision is
+[assignments/ci-routing-submission.md](assignments/ci-routing-submission.md) §12, and clarification **C-07** with
+amendment **A-P3-8** remain the authority for what the split is.
+
+| Cited in the acceptance | Value |
+| --- | --- |
+| Candidate | `6d91c618790f52faa38a5b725636a728a2bc118e` — named as an input to the dispatch, confirmed against the checkout before any capture, and re-asserted against every captured `report.json` afterwards |
+| Full acceptance run | `44404109207` — 38 min 49 s, five capture plans, all five bundles verified PASS and published, `all 5 bundle(s) bound to the candidate 6d91c618790f…` |
+| Records timing | **58 s** for a records-only push (`44411151289`), against the 35 min 38 s baseline the owner named (`44332154300`) — the same change shape, 36.9× |
+| Camera timing | **2 min 50 s** for a camera change (`44400801523`), inside the five-minute target; 8 min 31 s at `44374825713` before the closeout, where 6 min 47 s of it was an apt fetch that changed nothing |
+| Verifier comparison | [assignments/evidence/ci-routing-verifier-parity.tsv](assignments/evidence/ci-routing-verifier-parity.tsv) — **228** retained bundle directories, both verifiers (built at `b2efee21` and at `6d91c61`), 193 PASS / 35 FAIL on each side, **0 changed verdicts**, historical failures reported with their original issue codes, store proven byte-identical afterwards |
+
+Three settlements recorded with the acceptance, so they are not carried as open work: **branch protection remains a
+separate owner decision** and this entry does not exercise it — `main` is still unprotected, and the single name to
+require if that changes is `routine outcome`; **the camera target was met without a cache action**, so
+`actions/cache@v5` (`1bd7e1b8f7303f4b84b6b491836e44fb3b77f52e`) is closed as unnecessary rather than deferred; and
+**further optimisation of full capture is deferred, not rejected** — R-1 stands, because reusing work between the
+five capture plans would change what each bundle's `commands.json` asserts about how it was produced.
+
+**This authorises acceptance records only.** These runs may be cited as the accepted state of CI routing. Nothing
+here accepts a task, phase, gate or milestone; a routine green is still not evidence; no retained bundle is
+re-opened, re-judged or re-run (a recorded FAIL stays FAIL, A-P3-7); no evidence requirement, threshold or
+definition-of-done item moves. Gates A, B and C remain **Not Run**, `stackCompatibility` remains
+**not-established**, and every task after UDG-004 stays Not Started.

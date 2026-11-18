@@ -7,7 +7,7 @@
   ],
   "files": {
     "AGENTS.md": "09f283643fbc9db3d9192d7ae227207452eac756b3503dfa04d4bd875580fec3",
-    "README.md": "bfafe4d36a57b5ea2fc225a891c15df9b9e29d9fe68c4d512082ba871c10174d",
+    "README.md": "976ef50426121a3793e8391f855fc31df52d3a4ff24657cc715216eb56501321",
     "apps/client/AGENTS.md": "572516ef3ef5ca07b9477129bd5fab5fd12c5ca1b9d3578652a0a1a28849f7dd",
     "apps/server/AGENTS.md": "5867f7487b1124d63be75b3e8c969fc97541d1df8753763511d39b31f3daf3fe",
     "assets/AGENTS.md": "15c1871247241eaef1a36a3be4daddbc3a44711e9317ccf2d62c2c874d675d3e",
@@ -32,7 +32,7 @@
     "docs/contracts/UDG-SPIKE-001.md": "8af4e270935da75b15207e5e5d82e94b1f054626820b04cb5baf06970d991e99",
     "docs/contracts/UDG-SPIKE-002.md": "7172cd91e7f93730e4755322bedeaf35403e4485d03732391463b3150a466de9",
     "docs/contracts/UDG-SPIKE-003.md": "df65add7bbd2c1d4d1953f17ea0644a60430cea5d69e051a63a04ebc4f6caf99",
-    "docs/contracts/adoption.md": "5ae14e50b16d86549759b804a1c0afa00e388b0ba94657fa4c700c6cb210987d",
+    "docs/contracts/adoption.md": "de49e1908aeda12a5b68a81c38cca946858346474ad66d3d99407cdb01f1b4e8",
     "docs/contracts/definition-of-done.md": "3721f7ad7ae1c8865d13e2d6c9340f74d99e1bede563b4801a233d3b84449606",
     "docs/contracts/ownership.md": "0927c6d2617781abebb082fc1d027409d5afc3220bdaaedb823620bcffaca0ea",
     "docs/contracts/protocol-v1.md": "c26125cf1df214d279b11cff47fd240c83fb9bcbfdf2036b5cb457d425deb013",

@@ -140,7 +140,11 @@ zero discovered tests.
 ## Continuous integration
 
 CI is two workflows with two names, so a reviewer can tell from a check name which kind of green they are
-looking at (owner clarification C-07, [proposal](docs/contracts/assignments/ci-routing-proposal.md)):
+looking at (owner clarification C-07, [proposal](docs/contracts/assignments/ci-routing-proposal.md)). The split was
+**accepted by the owner on 2026-11-18** at `6d91c618790f52faa38a5b725636a728a2bc118e`, full acceptance run
+[`44404109207`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44404109207) — the decision and
+its scope, including that a routine green is still not evidence, are in
+[the submission record](docs/contracts/assignments/ci-routing-submission.md) §12:
 
 | Workflow | What it is | Evidence |
 | --- | --- | --- |

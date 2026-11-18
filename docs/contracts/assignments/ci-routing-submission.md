@@ -1,16 +1,22 @@
-# CI routing — implementation submission (In Review)
+# CI routing — implementation submission (Accepted 2026-11-18)
 
-**Status: In Review.** Routine CI, acceptance CI, the routing table, the amended policy suites and the hosted
-demonstrations are all in place on `main`; nothing in this record claims acceptance of anything. The owner's
-approval of the plan is [clarification **C-07**](../adoption.md) with [amendment **A-P3-8**](UDG-003-phase-3.md);
-the plan itself is [ci-routing-proposal.md](ci-routing-proposal.md).
+**Status: Accepted.** The owner accepted the CI routing change at candidate
+**`6d91c618790f52faa38a5b725636a728a2bc118e`**, with the full acceptance run
+[`44404109207`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44404109207) and the closeout
+reviewed through records commit `a87d039`, on 2026-11-18. §12 records the decision and its scope; the short version
+is that the acceptance covers **this change and its records**, and accepts no task, phase, gate or milestone. The
+owner's approval of the plan is [clarification **C-07**](../adoption.md) with [amendment
+**A-P3-8**](UDG-003-phase-3.md); the plan itself is [ci-routing-proposal.md](ci-routing-proposal.md).
 
 | | |
 | --- | --- |
 | Baseline the owner named | records commit `b2efee21caca6a4a7fe4be15d6b40e2ae6edd66a`, CI [`44332154300`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44332154300) — 35 min 38 s |
-| Implementation commits | `f0b943e` proposal · `437d81e` router + tests · `08e6744` the split (C-07, A-P3-8) · `5e96cf7` lane build prerequisites · `7c8e68a` full history + lane budgets · `692e34d` dispatch-command correction (records-only) · **`45b787b8d39b8ebd22b79b3ce989b9e4d6d1e1f0`** the candidate |
-| Routine CI on the candidate | [`44380381929`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44380381929) — green, 11 min 13 s wall, all nine groups |
-| Acceptance CI on the candidate | [`44380502646`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44380502646) — green, 29 min 56 s, five bundles, all verified PASS |
+| Implementation commits | `f0b943e` proposal · `437d81e` router + tests · `08e6744` the split (C-07, A-P3-8) · `5e96cf7` lane build prerequisites · `7c8e68a` full history + lane budgets · `692e34d` dispatch-command correction (records-only) · `45b787b8d39b8ebd22b79b3ce989b9e4d6d1e1f0` first candidate · records `43cc35d` · **`6d91c618790f52faa38a5b725636a728a2bc118e`** the closeout candidate, **the accepted commit** |
+| Records after acceptance | `850006e` (closeout record), `a87d039` (records-only number), and the acceptance entry — all docs-only, all routed to the `records` lane alone |
+| Routine CI on the accepted commit | [`44399821028`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44399821028) — green, 5 min 00 s, all nine groups; [`44411151289`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44411151289) — green, **58 s**, a records-only push (`45b787b8` comparison: [`44380381929`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44380381929), 11 min 13 s all groups) |
+| Acceptance CI on the accepted commit | [`44404109207`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44404109207) — green, 38 min 49 s, `all 5 bundle(s) bound to the candidate 6d91c618790f…`, five bundles verified PASS and published (`45b787b8`'s equivalent: [`44380502646`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44380502646)) |
+| The two timings the owner asked to see | records-only push **58 s** ([`44411151289`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44411151289), against 35 min 38 s at the named baseline) and a camera change **2 min 50 s** ([`44400801523`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44400801523), inside the five-minute target) |
+| Verifier parity over retained evidence | 228 bundle directories, both verifiers, **0 changed verdicts** — [evidence/ci-routing-verifier-parity.tsv](evidence/ci-routing-verifier-parity.tsv) |
 | Measurements | [evidence/ci-routing-timings.tsv](evidence/ci-routing-timings.tsv) |
 
 ## 1. What shipped
@@ -338,9 +344,43 @@ store it read is byte-for-byte what it was.
 
 ## 11. What this record does not claim
 
-No task, phase, gate or milestone is accepted, Verified or closed by anything here, and no historical bundle was
+The owner's acceptance (§12) is of the CI routing change and its records. **No task, phase, gate or milestone is
+accepted, Verified or closed by anything here**, no evidence requirement moved, and no historical bundle was
 re-run, re-judged or removed. The routine lane is green on the candidate, the acceptance lane is green on the
 candidate, and the two red-to-green iterations above are part of the record rather than hidden from it. UDG-001's
 suite has two failures in this container (`v24.22.3` against the pinned `v24.22.2`, and the register check that
 reads that version) and they are the container, not the repository: both pass on the pinned hosted runners in every
 run linked above.
+
+
+## 12. Owner acceptance (2026-11-18, dated by commit)
+
+The integration owner accepted the CI routing change on 2026-11-18. The decision, in the terms it was given:
+
+| | |
+| --- | --- |
+| Accepted at | **`6d91c618790f52faa38a5b725636a728a2bc118e`** — the closeout candidate, the commit whose routine lanes, outcome rule, candidate guard and pin assertions were all measured hosted |
+| Full acceptance run | [`44404109207`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44404109207) — dispatched explicitly against that candidate, 38 min 49 s, five capture plans, `candidate confirmed: 6d91c618790f…` before any capture and `all 5 bundle(s) bound to the candidate 6d91c618790f…` after, all five verified PASS and published |
+| Closeout reviewed through | records commit `a87d039`, i.e. §9 of this record and the evidence files it cites |
+| Records timing cited | **58 s** for a records-only push (`44411151289`) — the change shape of the baseline the owner named, which measured 35 min 38 s at `44332154300` |
+| Camera timing cited | **2 min 50 s** for a camera change (`44400801523`), inside the five-minute target the owner set; the same change measured 8 min 31 s before the closeout (`44374825713`) |
+| Verifier comparison cited | [`evidence/ci-routing-verifier-parity.tsv`](evidence/ci-routing-verifier-parity.tsv) — **228** retained bundle directories verified by both the baseline verifier (built at `b2efee21`) and the accepted verifier (built at `6d91c61`): 193 PASS and 35 FAIL on each side, **0 changed verdicts**, the 35 historical failures carried with their original issue codes, and the store proved byte-identical afterwards by a 14 927-file manifest hash |
+
+Three things the owner settled alongside it, recorded so nobody reopens them as open questions:
+
+- **Branch protection stays a separate owner decision.** This entry does not touch it. `main` remains unprotected
+  and `GET /branches/main/protection` still answers `404`; if the routine lane is ever made required, the name to
+  require is `routine outcome`, not the individual lanes, which appear and disappear with the route.
+- **The camera target was met by measurement, not by a new dependency.** No cache action is adopted and nothing new
+  is pinned; `actions/cache@v5` (`1bd7e1b8f7303f4b84b6b491836e44fb3b77f52e`) is closed as unnecessary rather than
+  deferred, because the browser install it would have cached now costs 8 s.
+- **Further optimisation of full capture is deferred, not rejected.** R-1 in §8 stands unchanged: the five capture
+  plans still re-run the same prefix, and reusing work between bundles would change what each bundle's
+  `commands.json` asserts about how it was produced. It stays a separate proposal with its own measurement.
+
+**What this acceptance authorises: acceptance records only.** It authorises citing these runs as the accepted
+state of CI routing. It does not accept a task, phase, gate or milestone; does not make a routine green into
+evidence; does not re-open, re-judge or re-run any retained bundle (A-P3-7 still stands — a recorded FAIL stays
+FAIL); does not move an evidence requirement, a threshold or the definition of done; and does not decide branch
+protection. Gates A, B and C remain **Not Run**, `stackCompatibility` remains **not-established**, and every task
+after UDG-004 stays Not Started.

@@ -393,3 +393,11 @@ it. It amends the **schedule** of capture, not what capture proves.
 matching, policy sample boundary or artefact byte moves. The five capture plans, the verifier, the bundle schema
 and the evidence store are untouched by the split; every bundle retained before it keeps its bytes and its
 verification outcome.
+
+The implementation of C-07 was **accepted by the owner on 2026-11-18** at
+`6d91c618790f52faa38a5b725636a728a2bc118e` (full acceptance run
+[`44404109207`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44404109207); record
+[ci-routing-submission.md](ci-routing-submission.md) §12). That acceptance is of the CI schedule change and its
+records: it moves nothing in this assignment's evidence requirements, thresholds or close codes, and it changes
+neither the rule that an acceptance run missing the whole-task bundle is red by design nor the rule that a routine
+green is not evidence.
