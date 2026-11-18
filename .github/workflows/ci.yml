@@ -230,7 +230,10 @@ jobs:
           # The plan list stays named here: the loop is driven by it, and this step prints which tasks this
           # run is expected to produce evidence for, so a plan that silently disappears is visible in the log.
           echo "capture plans for this run: $(node tools/checks/dist/evidence.js plans | tr '\n' ' ')"
-          bash tools/ci/capture-plans.sh
+          # The invocation is named here rather than defaulted inside the script, so that the accepted
+          # requirement on this step — that it runs `pnpm evidence:capture` — is checked against this file.
+          # TASK is substituted per plan; the loop is driven by the plan list, not by a second copy of it.
+          bash tools/ci/capture-plans.sh --capture-cmd 'pnpm evidence:capture -- --task TASK --out artifacts --keep-going'
 
       - name: Assert the required evidence artefacts exist
         if: ${{ !cancelled() }}

@@ -141,15 +141,19 @@ describe('UDG-003 Phase 3 W-C — the capture loop attempts every plan and still
     expect(`${empty.stdout}${empty.stderr}`).toContain('no task has a capture plan');
   });
 
-  it('is the loop CI actually runs, with the production commands as defaults', () => {
+  it('is the loop CI actually runs, and CI names the invocation the accepted contract requires', () => {
     const workflow = readFileSync(CI, 'utf8');
     expect(workflow, 'CI must call the loop rather than an inline abort-on-first-failure loop')
       .toContain('bash tools/ci/capture-plans.sh');
-    expect(workflow, 'and CI must not set the stub flags: the defaults are the production commands')
-      .not.toContain('capture-plans.sh --capture-cmd');
+    // CI names the per-plan invocation in the step, because the accepted UDG-001 requirement that the capture
+    // step runs `pnpm evidence:capture` is checked against ci.yml and not against this script. It must be the
+    // production invocation — the same one the script falls back to — with TASK substituted per plan.
+    const invocation = workflow.match(/--capture-cmd '([^']+)'/)?.[1] ?? '';
+    expect(invocation).toBe('pnpm evidence:capture -- --task TASK --out artifacts --keep-going');
     const script = readFileSync(LOOP, 'utf8');
     expect(script).toContain("plans_cmd='node tools/checks/dist/evidence.js plans'");
     expect(script).toContain("capture_cmd='pnpm evidence:capture'");
+    expect(workflow, 'the stub is never reachable from CI').not.toMatch(/UDG_CI_(STUB|FAIL_BEFORE|PASS_BEFORE|PASS_AFTER)/);
     expect(script, 'the script must not abort the loop on the first non-zero capture').not.toMatch(/^set -euo/m);
   });
 });

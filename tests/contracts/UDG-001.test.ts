@@ -1370,10 +1370,26 @@ describe('CI workflow failure policy', () => {
     const capture = stepNamed('Capture the evidence bundles');
     expect(capture?.run).toContain('pnpm evidence:capture');
     expect(capture?.run).toContain('--keep-going'); // full diagnostics on a failing run
-    // Capture iterates the plans, so a task that gains a plan is captured without editing the workflow,
-    // and a workflow that captures nothing at all is an error rather than a quiet success.
+    // Capture is driven by the plan list, so a task that gains a plan is captured without editing the
+    // workflow, and a run that captures nothing at all is an error rather than a quiet success.
     expect(capture?.run).toContain('evidence.js plans');
-    expect(capture?.run).toContain('for task in');
+    // AMENDED by UDG-003 Phase 3 W-A-3. This assertion read `expect(capture?.run).toContain('for task in')`,
+    // which pinned the *mechanism* — the iteration written inline in the step — and that mechanism cannot
+    // satisfy the requirement this suite also states two lines above. A step runs under `set -euo pipefail`
+    // and no step may be given `continue-on-error` (asserted below), so an inline loop aborts on the first
+    // failing plan and every later plan's evidence never comes into existence: hosted run 44215794779 lost
+    // the UDG-003 and UDG-003-TASK bundles that way. The iteration now lives in tools/ci/capture-plans.sh,
+    // which attempts every plan, retains what each produced, and exits non-zero if any failed. The
+    // assertions are unchanged in substance — they are read from the script CI executes instead of from
+    // this file, so the loop cannot regress without failing here.
+    expect(capture?.run).toContain('bash tools/ci/capture-plans.sh');
+    const loop = readFileSync(join(ROOT, 'tools/ci/capture-plans.sh'), 'utf8');
+    expect(loop).toContain('for task in');
+    expect(loop).toContain('evidence.js plans');
+    expect(loop).toContain('pnpm evidence:capture');
+    expect(loop).toContain('--keep-going');
+    expect(loop, 'the loop must not abort on the first failing plan').not.toMatch(/^set -euo/m);
+    expect(loop, 'a failed capture must still fail the step').toMatch(/^\s*exit 1\s*$/m);
 
     const verify = stepNamed('Verify the captured evidence bundles');
     expect(verify?.run).toContain('set -euo pipefail');
