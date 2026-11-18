@@ -832,7 +832,9 @@ capture bundle, the other four bundles clean — and two further reds were **Pha
 been written to require the live impairment artefact to audit clean. That third defect (WA-5) amplified the
 one this phase was sent to diagnose, and is fixed in the head carrying this entry: controls moved onto a
 pinned known-clean artefact, the live artefact is now audited and *reported* rather than required, and
-`tests/system/udg-003-phase-3/wa-no-amplification.test.ts` fails if the dependency ever returns. `W-7` and
+`tests/system/udg-003-phase-3/wa-no-amplification.test.ts` fails if the dependency ever returns. The fixed
+head's own first hosted attempt ([`44201132927`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44201132927))
+was green in 30.8 min with all five bundles verifying. `W-7` and
 `P-2b` remain **unresolved**, no accepted assertion, deadline, allowance, close code or harness behaviour was
 changed, and the phase's assertions are proposed for the reviewer rather than taken: accept the second
 refusal wording, pin the post-close samples, or point the case's artefact into the bundle (W-A-3).

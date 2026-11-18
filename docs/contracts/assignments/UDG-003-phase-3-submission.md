@@ -267,10 +267,15 @@ test's support bytes belong, and `UDG-001` is back to the two reds this containe
 
 * **Submission evidence stands as §2 records it**: the first attempt on the exact submitted head
   `f3d30626525688e8971c8c393552c91c9624d032` was green, run `44183269571`, 30 steps, zero failures, zero skips.
-* That head is **not** the head of this record. The head carrying this file adds the WA-5 fix, and its own
-  first attempt is reported by the next records commit — including, whatever it says, the possibility that
-  `W-7` fires again. It has now been seen to fire on a job that changed nothing but documents; a red that
-  arrives here is the defect, not a regression, and §8.1 is the method for telling which it is.
+* The head carrying the WA-5 fix, `b23176c5b7c6` and later, was then run and its **first attempt was green**:
+  [`44201132927`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44201132927),
+  job **30.8 min**, capture step **19.7 min**, every step success, all five bundles verifying. `W-7` did not
+  fire in that job. It is reported here rather than by a further commit, because the records for that head are
+  this file and there is no third head to write them into.
+* Two hosted data points now exist for the added whole-task plan, against the 24.6 min / 16.6 min baseline:
+  **34.6 min / 25.1 min** and **30.8 min / 19.7 min**, i.e. **+6 to +10 minutes on the job** for the fifth
+  capture plan, against the ≈4–5 minute estimate the assignment carried. The estimate was low; the spread is
+  hosted-runner variance, and the capture step is where all of it lands.
 * **Nothing about `W-7` or `P-2b` was fixed**, no accepted assertion, deadline, allowance, close code or
   harness behaviour was changed, Gate A/B/C stay Not Run, GA-11 stays unevaluated, deduplication-triggered
   closure stays disabled, D4 stays open, and the task stays **In Review** awaiting the reviewer.
