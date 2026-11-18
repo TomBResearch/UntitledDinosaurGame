@@ -18,6 +18,10 @@ import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+interface DependencyRegisterCiActions {
+  readonly ciActions: readonly { readonly repo: string; readonly pinnedCommit: string; readonly pinnedByCommitSha: boolean }[];
+}
+
 import { ROUTE_FLAGS } from '../../../tools/ci/route-checks.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
@@ -37,8 +41,8 @@ const jobIds = (text: string): string[] => {
   const jobsBlock = text.slice(text.indexOf('\njobs:\n'));
   const ids: string[] = [];
   for (const line of jobsBlock.split('\n')) {
-    const job = /^ {2}([a-z][\w-]*):\s*$/u.exec(line);
-    if (job?.[1] !== undefined) ids.push(job[1]);
+    const key = /^ {2}([a-z][\w-]*):\s*$/u.exec(line);
+    if (key?.[1] !== undefined) ids.push(key[1]);
   }
   return ids;
 };
@@ -48,6 +52,58 @@ const gatedGroups = (text: string): string[] =>
   [...text.matchAll(/needs\.route\.outputs\.([A-Za-z]+)\s*==\s*'true'/gu)].map((match) => match[1] as string);
 
 const workflowName = (text: string): string => /^name:\s*(.+)$/mu.exec(text)?.[1]?.trim() ?? '';
+
+/** One job's YAML text, from its key to the next job's key. */
+const job = (text: string, id: string): string => {
+  const start = text.indexOf(`\n  ${id}:\n`);
+  expect(start, `no job ${id} in the workflow`).toBeGreaterThan(-1);
+  const rest = text.slice(start + 1);
+  const next = /^ {2}[a-z][\w-]*:$/mu.exec(rest.slice(1))?.index;
+  return next === undefined ? rest : rest.slice(0, next + 1);
+};
+
+/**
+ * The actions the acceptance workflow references that the dependency register cannot see, pinned here by sha.
+ *
+ * `pnpm dependencies:record` reads `.github/workflows/ci.yml` and nothing else (R-2 stays deferred), so an action
+ * that lives only in `acceptance.yml` is outside `pnpm dependencies:verify`'s reach. This map is where such an
+ * action is approved instead: adding an action to a workflow without adding it here fails
+ * `reports an acceptance-only action that is not on the allow-list`, and the entry itself names the sha, so a pin
+ * bump has to be a deliberate edit in a reviewable place.
+ */
+const ACCEPTANCE_ONLY_PINS: Readonly<Record<string, string>> = {
+  'actions/upload-artifact': 'cf430e030ddbb5b0abf93d22962f4752f3646cd9',
+};
+
+interface PinRules {
+  readonly registered: ReadonlySet<string>;
+  readonly acceptanceOnly: Readonly<Record<string, string>>;
+  readonly file: string;
+}
+
+/**
+ * Every `uses:` reference in `text`, checked as a pin and as an approved pin. Returns human-readable violations;
+ * an empty array means the workflow's third-party actions are all 40-hex and all approved.
+ */
+const pinViolations = (text: string, rules: PinRules): string[] => {
+  const violations: string[] = [];
+  const refs = [...text.matchAll(/uses:\s*([^\s@]+)@([^\s#]+)/gu)].map((match) => ({
+    repo: match[1] as string,
+    sha: match[2] as string,
+  }));
+  for (const ref of refs) {
+    if (!/^[0-9a-f]{40}$/u.test(ref.sha)) {
+      violations.push(`${rules.file}: ${ref.repo}@${ref.sha} is not pinned to a 40-character commit sha`);
+      continue;
+    }
+    if (rules.registered.has(`${ref.repo}@${ref.sha}`)) continue;
+    if (rules.acceptanceOnly[ref.repo] === ref.sha) continue;
+    violations.push(
+      `${rules.file}: ${ref.repo}@${ref.sha} is neither recorded by the dependency register nor approved as an acceptance-only pin`,
+    );
+  }
+  return violations;
+};
 
 describe('CI workflows — the routing table and the job list are one design', () => {
   it('has exactly one conditional job per group the router can emit', () => {
@@ -76,14 +132,35 @@ describe('CI workflows — the routing table and the job list are one design', (
     }
   });
 
-  it('gates the final outcome on every lane, and refuses a run that checked nothing', () => {
-    const outcome = routine.slice(routine.indexOf('  outcome:'));
+  it('gates the outcome on the router, on every selected lane passing, and on unselected lanes staying skipped', () => {
+    const outcome = job(routine, 'outcome');
     const needs = /needs:\s*\[([^\]]+)\]/u.exec(outcome)?.[1] ?? '';
     for (const id of jobIds(routine).filter((job) => job !== 'outcome')) {
       expect(needs, `outcome does not wait on ${id}`).toContain(id);
     }
-    expect(outcome).toContain('if: ${{ always() }}');
-    expect(outcome).toContain('failure|cancelled');
+    expect(routine.slice(routine.indexOf('  outcome:'))).toContain('if: ${{ always() }}');
+
+    // (a) the router itself has to have succeeded: every lane condition is one of its outputs, so a router that
+    // failed means nothing was routed, and "nothing routed, nothing failed" must not read as green.
+    expect(outcome).toContain('RESULT_ROUTE: ${{ needs.route.result }}');
+    expect(outcome).toContain('"${RESULT_ROUTE}" != "success"');
+    expect(outcome).toContain('nothing was routed');
+
+    // (b) a lane the router selected must report `success` — `skipped` included. This is the assertion that turns
+    // "the route asked for the camera suite and the camera suite did not happen" into a red run.
+    for (const flag of ROUTE_FLAGS) {
+      const env = flag === 'fullSuite' ? 'SELECTED_FULL_SUITE' : `SELECTED_${flag.toUpperCase()}`;
+      expect(outcome, `outcome does not read the route's ${flag} decision`).toContain(`${env}: \${{ needs.route.outputs.${flag} }}`);
+    }
+    expect(outcome).toContain('was selected by the route but did not pass');
+    expect(outcome).toContain('a selected check that did not run is not a pass');
+
+    // (c) a lane the router did NOT select must be `skipped` — running off-table is the other half of the same
+    // drift the table/job-list assertions above watch for.
+    expect(outcome).toContain('was not selected by the route but reported');
+    expect(outcome).toContain('an unselected lane must be skipped');
+
+    // (d) a run that selected nothing at all is still refused, and the run still says what it did not do.
     expect(outcome).toContain('nothing was checked');
     expect(outcome).toContain('no evidence was captured on this route');
   });
@@ -180,12 +257,6 @@ describe('CI workflows — one policy across both files', () => {
       expect(entry.text, `${entry.file} must not keep credentials`).toContain('persist-credentials: false');
     }
 
-    // The dependency register reads only `ci.yml` (R-2 stays deferred), so an action that appears solely in
-    // the acceptance workflow cannot be recorded there. That gap is closed here rather than left open: the pin
-    // is written out below, and a bump to it fails this test until the reviewer says so in the same change.
-    const acceptanceOnlyPins: Readonly<Record<string, string>> = {
-      'actions/upload-artifact': 'cf430e030ddbb5b0abf93d22962f4752f3646cd9',
-    };
     const register = JSON.parse(read('docs/integration/dependencies.json')) as {
       ciActions: readonly { repo: string; pinnedCommit: string; pinnedByCommitSha: boolean }[];
     };
@@ -198,21 +269,51 @@ describe('CI workflows — one policy across both files', () => {
     }
     const routinePins = new Set([...routine.matchAll(/uses:\s*([^\s@]+)@([^\s#]+)/gu)].map((use) => `${use[1]}@${use[2]}`));
     expect(recorded, 'the register is not the set of pins ci.yml uses').toEqual(routinePins);
-    for (const sha of shas) {
-      const repo = sha.split('@')[0] as string;
-      const pin = sha.split('@')[1] as string;
-      if (Object.hasOwn(acceptanceOnlyPins, repo)) {
-        expect(acceptanceOnlyPins[repo], `${repo} is pinned to a different sha than this file records`).toBe(pin);
-        continue;
-      }
-      expect([...recorded], sha).toContain(sha);
+
+    // Both files, one rule: every third-party reference is a 40-hex sha, and every sha is either recorded by the
+    // register or approved as an acceptance-only pin at exactly the recorded sha.
+    for (const entry of files) {
+      expect(
+        pinViolations(entry.text, { registered: recorded, acceptanceOnly: ACCEPTANCE_ONLY_PINS, file: entry.file }),
+        entry.file,
+      ).toEqual([]);
     }
     // The allow-list must not quietly grow into the place pins go to escape being checked: it holds exactly the
     // actions that appear in the acceptance workflow and nowhere in `ci.yml`, and nothing else.
     const onlyInAcceptance = [...new Set(acceptancePins)].filter(
       (repo) => ![...routinePins].some((pin) => pin.startsWith(`${repo}@`)),
     );
-    expect(onlyInAcceptance.sort()).toEqual(Object.keys(acceptanceOnlyPins).sort());
+    expect(onlyInAcceptance.sort()).toEqual(Object.keys(ACCEPTANCE_ONLY_PINS).sort());
+    expect(shas.size).toBeGreaterThan(2);
+  });
+
+  it('refuses an acceptance-only action that nobody approved (failing control)', () => {
+    // A guard nobody has seen fail is a guard that may be vacuous. This feeds the pin rule workflows it has to
+    // refuse: an action outside the register and outside the allow-list, a ref that is a tag rather than a sha, and
+    // an allow-listed action pinned to a sha that is not the approved one. The same rule then has to accept the
+    // real files, which the test above asserts — so the rule is known to discriminate, in both directions.
+    const register = JSON.parse(read('docs/integration/dependencies.json')) as DependencyRegisterCiActions;
+    const recorded = new Set(register.ciActions.map((entry) => `${entry.repo}@${entry.pinnedCommit}`));
+    const approved = recorded.values().next().value as string;
+    const [approvedRepo, approvedSha] = (approved as string).split('@');
+    const rules = { registered: recorded, acceptanceOnly: ACCEPTANCE_ONLY_PINS, file: 'control.yml' };
+
+    expect(pinViolations(`      - uses: ${approvedRepo}@${approvedSha}\n`, rules), 'a recorded pin must pass').toEqual([]);
+
+    const unapproved = pinViolations('      - uses: actions/cache@d2cb44f01f20cb1b854a620e9d91747669c107e4\n', rules);
+    expect(unapproved).toHaveLength(1);
+    expect(unapproved[0]).toContain('actions/cache@');
+    expect(unapproved[0]).toContain('neither recorded by the dependency register nor approved as an acceptance-only pin');
+
+    const unpinned = pinViolations('      - uses: actions/checkout@v5\n', rules);
+    expect(unpinned).toHaveLength(1);
+    expect(unpinned[0]).toContain('not pinned to a 40-character commit sha');
+
+    const rebased = pinViolations(`      - uses: actions/upload-artifact@${'0'.repeat(40)}\n`, rules);
+    expect(rebased, 'an allow-listed action at a different sha is not an approved pin').toHaveLength(1);
+
+    // And the control is only meaningful because the real acceptance workflow passes the same rule.
+    expect(pinViolations(acceptance, { ...rules, file: ACCEPTANCE_FILE })).toEqual([]);
   });
 });
 
@@ -223,9 +324,28 @@ describe('CI workflows — full capture is an explicit act, and a routine run is
     for (const forbidden of ['push:', 'pull_request:', 'schedule:', 'repository_dispatch:', 'release:']) {
       expect(triggers, `acceptance must not be triggerable by ${forbidden}`).not.toContain(forbidden);
     }
-    expect(acceptance).toContain('candidate_sha');
     expect(acceptance).toContain('Assert the exact candidate commit');
     expect(acceptance).toContain('Assert every bundle names the candidate');
+
+    // The candidate is an argument that must be given, not a blank that means "whatever the branch is now". The
+    // entry is read as its own block, because `purpose` below it is allowed to have a default and this one is not.
+    const inputs = acceptance.slice(acceptance.indexOf('  workflow_dispatch:'), acceptance.indexOf('\npermissions:'));
+    const candidateInput = inputs.slice(inputs.indexOf('candidate_sha:'), inputs.indexOf('purpose:'));
+    expect(candidateInput, 'candidate_sha must be required').toContain('required: true');
+    expect(candidateInput, 'candidate_sha must not default to blank').not.toContain('default:');
+    expect(candidateInput.toLowerCase()).toContain('required');
+
+    const guard = acceptance.slice(acceptance.indexOf('- name: Assert the exact candidate commit'));
+    // blank, wrong shape, and mismatch are three different refusals, all before install and before capture —
+    // a refused dispatch has to write no bundle, which is what the retained refusal runs show.
+    expect(guard).toContain('-z "${REQUESTED}"');
+    expect(guard).toContain('candidate_sha is required');
+    expect(guard).toContain('^[0-9a-f]{40}$');
+    expect(guard).toContain('must be a full 40-character sha');
+    expect(guard).toContain('"${REQUESTED}" != "${checked_out}"');
+    expect(guard.indexOf('candidate_sha is required')).toBeLessThan(guard.indexOf('exit 1'));
+    const capture = acceptance.indexOf('- name: Capture the evidence bundles');
+    expect(acceptance.indexOf('- name: Assert the exact candidate commit')).toBeLessThan(capture);
     // A discarded capture retains nothing; two candidates are two pieces of evidence.
     expect(acceptance).toContain('cancel-in-progress: false');
   });
@@ -251,16 +371,7 @@ describe('CI workflows — full capture is an explicit act, and a routine run is
   });
 
   it('routes the cross-suite command and the runtime suites, and refuses a zero-test pass there', () => {
-    const job = (id: string): string => {
-      const start = routine.indexOf(`\n  ${id}:\n`);
-      expect(start, `no job ${id} in ${ROUTINE_FILE}`).toBeGreaterThan(-1);
-      // Skip the job's own key line before looking for the next one, or the slice is empty.
-      const rest = routine.slice(start + 1);
-      const next = /^ {2}[a-z][\w-]*:$/mu.exec(rest.slice(1))?.index;
-      return next === undefined ? rest : rest.slice(0, next + 1);
-    };
-
-    const fullSuite = job('full-suite');
+    const fullSuite = job(routine, 'full-suite');
     expect(fullSuite).toContain('pnpm test');
     expect(fullSuite).toContain('pnpm test:e2e -- --suite camera');
 
@@ -268,17 +379,36 @@ describe('CI workflows — full capture is an explicit act, and a routine run is
     // this the slow way: without the libraries emitted, the dev server the camera suite drives never serves the
     // client, and the lane waited out its whole timeout instead of failing.
     for (const id of ['unit', 'camera', 'runtime', 'full-suite']) {
-      const body = job(id);
+      const body = job(routine, id);
       expect(body, `${id} runs a suite before building what it reads`).toContain(
         id === 'camera' || id === 'full-suite' ? 'run: pnpm build:libraries' : 'run: pnpm build\n',
       );
     }
 
-    const runtime = job('runtime');
+    const runtime = job(routine, 'runtime');
     expect(runtime).toContain('node tests/reference/flat-direct-step.ts');
     expect(runtime).toContain('pnpm exec vitest run tests/system');
     expect(runtime).toContain('system-junit.xml');
     expect(runtime).toContain('discovered zero cases');
+  });
+
+  it('installs the browser in the lanes that need it and leaves the system-package install to acceptance', () => {
+    // Measured on `44374825713`: `playwright install --with-deps chromium` cost 7 min 38 s, of which 6 min 47 s
+    // was apt fetching 32.1 MB at 78.8 kB/s for fonts and mesa updates on an image that already ships the pinned
+    // chromium and its libraries (the browser itself was never downloaded). The routine lanes that select a browser
+    // are unit, camera and full-suite; they now install the browser only. Acceptance keeps `--with-deps`, so the
+    // invocation the retained bundles record is unchanged.
+    for (const id of ['unit', 'camera', 'full-suite']) {
+      const runs = job(routine, id)
+        .split('\n')
+        .filter((line) => line.trim().startsWith('run: '))
+        .join('\n');
+      expect(runs, `${id} drives a browser but never installs it`).toContain('run: pnpm exec playwright install chromium');
+      expect(runs, `${id} still pays for --with-deps`).not.toContain('--with-deps');
+    }
+    // The acceptance lane's invocation is what the retained bundles record, so it is asserted unchanged rather
+    // than optimised: one 30-minute job can afford the apt traffic three parallel lanes cannot.
+    expect(acceptance).toContain('run: pnpm exec playwright install --with-deps chromium');
   });
 
   it('names the invocation it runs probes under, differently from the acceptance job', () => {

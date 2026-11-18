@@ -37,9 +37,8 @@ on:
   workflow_dispatch:
     inputs:
       candidate_sha:
-        description: 'Full 40-character sha this run must verify (blank = the commit the run was dispatched on)'
-        required: false
-        default: ''
+        description: 'REQUIRED. Full 40-character sha this run must verify and bind every bundle to. Blank is refused, not defaulted: a capture that does not name its candidate is not evidence for one.'
+        required: true
       purpose:
         description: 'What is being submitted — a task, a phase, a milestone (recorded in the run log only)'
         required: false
@@ -83,12 +82,29 @@ jobs:
         run: |
           set -euo pipefail
           checked_out="$(git rev-parse HEAD)"
-          echo "candidate requested: ${REQUESTED:-<none: the dispatched commit>}"
+          echo "candidate requested: ${REQUESTED:-<blank>}"
           echo "checked out:         ${checked_out}"
           echo "ref:                 ${GITHUB_REF}"
           echo "purpose:             ${PURPOSE:-<not stated>}"
           echo "short sha:           $(git rev-parse --short=8 HEAD)"
-          if [ -n "${REQUESTED}" ] && [ "${REQUESTED}" != "${checked_out}" ]; then
+
+          # The candidate is required, and it is required to be a full sha. Neither refusal is a formality: a blank
+          # candidate would let a run capture whatever the branch happened to move to, and a short sha cannot be
+          # compared with a checkout unambiguously. Both are refused here, before anything is installed or captured,
+          # so a refused dispatch writes no bundle at all.
+          if [ -z "${REQUESTED}" ]; then
+            echo "::error::candidate_sha is required. An acceptance run that does not name the commit it verifies"
+            echo "::error::cannot bind a bundle to a candidate, so nothing may be captured. Pass"
+            echo "::error::  -f candidate_sha=\$(git rev-parse HEAD)   (a full 40-character sha)"
+            exit 1
+          fi
+          if ! [[ "${REQUESTED}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::candidate_sha must be a full 40-character sha; ${#REQUESTED} character(s) received"
+            echo "::error::(${REQUESTED}). A short sha cannot be compared with a checkout unambiguously, and an"
+            echo "::error::ambiguous candidate is not evidence."
+            exit 1
+          fi
+          if [ "${REQUESTED}" != "${checked_out}" ]; then
             echo "::error::this run checked out ${checked_out} but was asked to verify ${REQUESTED}. A capture of"
             echo "::error::a commit other than the candidate is not evidence for it, so the run stops here."
             exit 1
@@ -97,6 +113,7 @@ jobs:
             echo "::error::HEAD is not a 40-character sha; the candidate cannot be named"
             exit 1
           fi
+          echo "candidate confirmed: ${REQUESTED} — every bundle this run writes must name it" 
 
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

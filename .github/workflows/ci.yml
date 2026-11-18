@@ -269,8 +269,16 @@ jobs:
       # The unit suite launches the pinned chromium itself: `tests/unit/udg-004/evidence-gates.test.ts`
       # proves the PNG portability rules against a real screenshot, so it cannot run without a browser. It
       # does not need the camera suite's artefacts — those belong to the camera and full-suite lanes.
+      # No `--with-deps` here, and that is measured rather than assumed: `44374825713` spent 7 min 38 s on this
+      # step, of which 6 min 47 s was `apt-get` fetching 32.1 MB at 78.8 kB/s to install fonts and mesa updates on
+      # top of an image that already ships the pinned chromium and its libraries — and the browser itself was never
+      # downloaded, because the image has it. The suite that needs a browser here (`tests/unit/udg-004/
+      # evidence-gates.test.ts`) compares PNG bytes against ones it produced in the same run and decodes them in
+      # the same chromium build, so it is not reading a golden rendering that installed fonts could shift.
+      # The acceptance workflow keeps `--with-deps`: its invocation stays exactly what the retained bundles say it
+      # was, and one 30-minute job can afford the apt traffic that three parallel lanes cannot.
       - name: Install the pinned Playwright chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm exec playwright install chromium
       - name: Run the unit suites
         run: pnpm test:unit
 
@@ -302,8 +310,16 @@ jobs:
           pnpm --version
       - name: Install from the frozen lockfile
         run: pnpm install --frozen-lockfile
+      # No `--with-deps` here, and that is measured rather than assumed: `44374825713` spent 7 min 38 s on this
+      # step, of which 6 min 47 s was `apt-get` fetching 32.1 MB at 78.8 kB/s to install fonts and mesa updates on
+      # top of an image that already ships the pinned chromium and its libraries — and the browser itself was never
+      # downloaded, because the image has it. The suite that needs a browser here (`tests/unit/udg-004/
+      # evidence-gates.test.ts`) compares PNG bytes against ones it produced in the same run and decodes them in
+      # the same chromium build, so it is not reading a golden rendering that installed fonts could shift.
+      # The acceptance workflow keeps `--with-deps`: its invocation stays exactly what the retained bundles say it
+      # was, and one 30-minute job can afford the apt traffic that three parallel lanes cannot.
       - name: Install the pinned Playwright chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm exec playwright install chromium
 
       # The client the suite drives resolves `@udg/protocol` and `@udg/config` through the workspace, so the
       # dev server `playwright.config.ts` starts cannot serve them until they are built. The acceptance job
@@ -498,8 +514,16 @@ jobs:
           pnpm --version
       - name: Install from the frozen lockfile
         run: pnpm install --frozen-lockfile
+      # No `--with-deps` here, and that is measured rather than assumed: `44374825713` spent 7 min 38 s on this
+      # step, of which 6 min 47 s was `apt-get` fetching 32.1 MB at 78.8 kB/s to install fonts and mesa updates on
+      # top of an image that already ships the pinned chromium and its libraries — and the browser itself was never
+      # downloaded, because the image has it. The suite that needs a browser here (`tests/unit/udg-004/
+      # evidence-gates.test.ts`) compares PNG bytes against ones it produced in the same run and decodes them in
+      # the same chromium build, so it is not reading a golden rendering that installed fonts could shift.
+      # The acceptance workflow keeps `--with-deps`: its invocation stays exactly what the retained bundles say it
+      # was, and one 30-minute job can afford the apt traffic that three parallel lanes cannot.
       - name: Install the pinned Playwright chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm exec playwright install chromium
       # Same reason as the camera lane: `pnpm test` builds the checker and the libraries itself, but the camera
       # step that runs before it needs the libraries already emitted.
       - name: Build the libraries the dev server resolves
@@ -531,9 +555,18 @@ jobs:
       - name: Decide the outcome
         env:
           ANY: ${{ needs.route.outputs.any }}
-          GROUPS: ${{ needs.route.outputs.groups }}
+          ROUTE_GROUPS: ${{ needs.route.outputs.groups }}
           REASON: ${{ needs.route.outputs.reason }}
           RESULT_ROUTE: ${{ needs.route.result }}
+          SELECTED_RECORDS: ${{ needs.route.outputs.records }}
+          SELECTED_STATIC: ${{ needs.route.outputs.static }}
+          SELECTED_PROTOCOL: ${{ needs.route.outputs.protocol }}
+          SELECTED_UNIT: ${{ needs.route.outputs.unit }}
+          SELECTED_CAMERA: ${{ needs.route.outputs.camera }}
+          SELECTED_SERVER: ${{ needs.route.outputs.server }}
+          SELECTED_RUNTIME: ${{ needs.route.outputs.runtime }}
+          SELECTED_TOOLING: ${{ needs.route.outputs.tooling }}
+          SELECTED_FULL_SUITE: ${{ needs.route.outputs.fullSuite }}
           RESULT_RECORDS: ${{ needs.records.result }}
           RESULT_STATIC: ${{ needs.static.result }}
           RESULT_PROTOCOL: ${{ needs.protocol.result }}
@@ -546,27 +579,51 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "route: ${GROUPS:-<none>} (reason: ${REASON:-unknown})"
+          # Deliberately not named GROUPS: bash initialises GROUPS from the process group ids and does not import
+          # it from the environment, so a variable holding the routed groups under that name can print a uid list
+          # instead of the route. The decisions below come from SELECTED_* regardless; this is the line a reviewer
+          # reads first, so it has to be the route.
+          echo "route: ${ROUTE_GROUPS:-<none>} (reason: ${REASON:-unknown})"
+
+          # The router is not a check that may fail. Every lane's condition is an output of this job, so a router
+          # that failed produced no routing at all, and "nothing was routed, so nothing failed" must never read as
+          # green. This is also what a `cancelled` router means here: the diff was never resolved.
+          if [ "${RESULT_ROUTE}" != "success" ]; then
+            echo "::error::the router did not succeed (${RESULT_ROUTE}); nothing was routed, so no lane's result means anything"
+            exit 1
+          fi
+
           failed=0
-          for pair in \
-            "route=${RESULT_ROUTE}" \
-            "records=${RESULT_RECORDS}" \
-            "static=${RESULT_STATIC}" \
-            "protocol=${RESULT_PROTOCOL}" \
-            "unit=${RESULT_UNIT}" \
-            "camera=${RESULT_CAMERA}" \
-            "server=${RESULT_SERVER}" \
-            "runtime=${RESULT_RUNTIME}" \
-            "tooling=${RESULT_TOOLING}" \
-            "full-suite=${RESULT_FULL_SUITE}"; do
-            name="${pair%%=*}"
-            result="${pair##*=}"
-            printf '  %-12s %s\n' "$name" "$result"
-            case "$result" in
-              failure|cancelled) echo "::error::$name did not pass (${result})"; failed=1 ;;
-              *) : ;;
-            esac
-          done
+          # Every lane is judged against what the router said about it. A selected lane must report `success` —
+          # `skipped`, `cancelled`, `neutral` and the rest are all "this check did not pass", and a check that was
+          # asked for and did not run is the exact failure mode `tests/unit/udg-003/capture-loop.test.ts` exists
+          # because this repository once had. An unselected lane must report `skipped`: if it ran when the router
+          # said it should not, the routing and the job list have come apart, and a lane running off-table is not
+          # evidence about the change either.
+          check_lane() {
+            local name="$1" selected="$2" result="$3"
+            printf '  %-12s selected=%-5s %s\n' "$name" "$selected" "$result"
+            if [ "$selected" = "true" ]; then
+              if [ "$result" != "success" ]; then
+                echo "::error::$name was selected by the route but did not pass ($result); a selected check that did not run is not a pass"
+                failed=1
+              fi
+            elif [ "$result" != "skipped" ]; then
+              echo "::error::$name was not selected by the route but reported $result; an unselected lane must be skipped, or the routing and the job list have drifted apart"
+              failed=1
+            fi
+          }
+
+          check_lane records     "${SELECTED_RECORDS}"     "${RESULT_RECORDS}"
+          check_lane static      "${SELECTED_STATIC}"      "${RESULT_STATIC}"
+          check_lane protocol    "${SELECTED_PROTOCOL}"    "${RESULT_PROTOCOL}"
+          check_lane unit        "${SELECTED_UNIT}"        "${RESULT_UNIT}"
+          check_lane camera      "${SELECTED_CAMERA}"      "${RESULT_CAMERA}"
+          check_lane server      "${SELECTED_SERVER}"      "${RESULT_SERVER}"
+          check_lane runtime     "${SELECTED_RUNTIME}"     "${RESULT_RUNTIME}"
+          check_lane tooling     "${SELECTED_TOOLING}"     "${RESULT_TOOLING}"
+          check_lane full-suite  "${SELECTED_FULL_SUITE}"  "${RESULT_FULL_SUITE}"
+
           if [ "$failed" -ne 0 ]; then
             exit 1
           fi
@@ -574,5 +631,5 @@ jobs:
             echo "::error::the router selected no group, so nothing was checked; a run that checked nothing cannot be green"
             exit 1
           fi
-          echo "routine checks passed for: ${GROUPS}"
+          echo "routine checks passed for: ${ROUTE_GROUPS}"
           echo "no evidence was captured on this route; milestone acceptance requires a dispatched acceptance run"
