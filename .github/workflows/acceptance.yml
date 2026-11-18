@@ -1,0 +1,446 @@
+# ACCEPTANCE CI for the Untitled Dinosaur Game monorepo — the full evidence capture (C-07).
+#
+# This is the job that used to be `ci`, moved here so that a routine push and a milestone submission are no
+# longer the same green tick. It runs exactly the local command sequence on a clean checkout with a frozen
+# installation and publishes machine-readable results even when a step fails, while every failed required
+# check - including evidence capture, evidence verification and artefact publication - fails the run.
+# Third-party actions are pinned to immutable commit shas; the ref comment records the tag those shas
+# came from, verified through the GitHub git-refs API on 2026-11-08 and recorded in
+# docs/integration/dependencies.json.
+#
+# Owner clarification C-05: this workflow is the CI half of the UDG-001 acceptance evidence. Until
+# it has actually run on a pushed commit, UDG-001 stays In Review and the CI reproduction criterion
+# is reported as pending, not as passed.
+#
+# Owner clarification C-07 and amendment A-P3-8: **every acceptance run** captures and verifies all five
+# bundles — the plans loop here stays unconditional, with no `continue-on-error` and no routing. A routine
+# run captures nothing by design and can never support a Verified claim; an acceptance run whose whole-task
+# bundle is absent is red by design, exactly as §5.4 of the Phase 3 assignment always required.
+#
+# There is deliberately no `push` or `pull_request` trigger. Full capture is an explicit act against a named
+# commit: dispatch it with
+#
+#   gh workflow run acceptance.yml --repo TomBResearch/UntitledDinosaurGame \
+#     --ref "$CANDIDATE" -f candidate_sha="$CANDIDATE"
+#
+# and the first step refuses the run if the checkout is not that commit.
+
+name: ci (acceptance — full evidence capture)
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: 'Full 40-character sha this run must verify (blank = the commit the run was dispatched on)'
+        required: false
+        default: ''
+      purpose:
+        description: 'What is being submitted — a task, a phase, a milestone (recorded in the run log only)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  # Grouped per candidate commit and NOT cancelling: a full capture that is thrown away at minute 25 keeps
+  # nothing, and two submissions of two different commits are two different pieces of evidence.
+  group: acceptance-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    name: acceptance full capture UDG-001 UDG-002 UDG-003 UDG-003-TASK UDG-004 (Node 24.22.2, pnpm 12.18.0)
+    runs-on: ubuntu-24.04
+    # Raised from 30 to 45 when UDG-004 added the chromium download and the camera suite. A timeout that fires
+    # because the job legitimately grew is a red run that says nothing about the change under review.
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The contract suite proves the reviewed prerequisite commit exists in history, so the
+          # checkout must not be shallow.
+          fetch-depth: 0
+
+      # The candidate is asserted before any work happens, so a run that resolved to the wrong commit is red
+      # inside the first minute instead of thirty minutes later as a mis-cited record. `report.json` already
+      # binds every bundle to `git rev-parse HEAD`; the assertion below closes the loop after capture by
+      # re-reading each bundle, so "bound to the candidate" is checked rather than assumed.
+      - name: Assert the exact candidate commit
+        env:
+          REQUESTED: ${{ inputs.candidate_sha }}
+          PURPOSE: ${{ inputs.purpose }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked_out="$(git rev-parse HEAD)"
+          echo "candidate requested: ${REQUESTED:-<none: the dispatched commit>}"
+          echo "checked out:         ${checked_out}"
+          echo "ref:                 ${GITHUB_REF}"
+          echo "purpose:             ${PURPOSE:-<not stated>}"
+          echo "short sha:           $(git rev-parse --short=8 HEAD)"
+          if [ -n "${REQUESTED}" ] && [ "${REQUESTED}" != "${checked_out}" ]; then
+            echo "::error::this run checked out ${checked_out} but was asked to verify ${REQUESTED}. A capture of"
+            echo "::error::a commit other than the candidate is not evidence for it, so the run stops here."
+            exit 1
+          fi
+          if ! [[ "${checked_out}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::HEAD is not a 40-character sha; the candidate cannot be named"
+            exit 1
+          fi
+
+      - name: Set up Node 24.22.2
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.2
+
+      - name: Enable the pinned pnpm 12.18.0 through corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@12.18.0 --activate
+          corepack pnpm --version
+          pnpm --version
+
+      - name: Install from the frozen lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck every populated workspace
+        run: pnpm typecheck
+
+      - name: Lint sources and dependency boundaries
+        run: pnpm lint
+
+      # UDG-004's browser suite and the pinned chromium. Order matters twice over here: the chromium has to be
+      # installed before `pnpm test`, because `tests/unit/udg-004/evidence-gates.test.ts` proves the PNG
+      # portability rules against a real screenshot, and the camera suite has to run **before** `pnpm test`,
+      # because `tests/contracts/UDG-004.test.ts` gates the browser artefacts that command then reads. A camera
+      # run that never happened therefore stops the acceptance command rather than being noticed in review.
+      - name: Install the pinned Playwright chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run the UDG-004 camera suite
+        env:
+          # Written where the evidence upload below publishes it, and where the contract suite looks. The suite
+          # starts its own loopback dev server through playwright.config.ts; nothing here publishes a port.
+          UDG_BROWSER_OUT: artifacts/udg-004-browser
+        run: pnpm test:e2e -- --suite camera
+
+      - name: Run the unit and Node integration suites
+        env:
+          # The full suite includes the UDG-003 contract suite, which builds and runs the probes. This is
+          # the job's first probe invocation, and it is named so that the later ones cannot be mistaken
+          # for it - or, worse, be mistaken for it by a reader of the retained artefacts.
+          UDG_PROBE_INVOCATION: ci-full-test
+          # The camera artefacts this command gates were written by the step above, in this job, on this commit.
+          UDG_BROWSER_OUT: artifacts/udg-004-browser
+        run: pnpm test
+
+      - name: Build shared libraries, tools and apps
+        run: pnpm build
+
+      # ADR-0002 excepts declaration checking in the two apps/server projects. This step is one of the
+      # conditions attached to that exception: UDG's own emitted declarations stay under
+      # `skipLibCheck: false`, and the project deliberately never imports @colyseus/core, @colyseus/sdk or
+      # @colyseus/ws-transport, so a mistake in the type surface UDG publishes cannot hide behind the exception.
+      - name: Typecheck UDG-owned emitted declarations strictly (ADR-0002)
+        run: pnpm run declarations:strict
+
+      - name: Run the unit suites
+        run: pnpm test:unit
+
+      - name: Run positive and negative dependency fixtures
+        run: pnpm test:boundaries
+
+      - name: Validate fixture manifests and pinned hashes
+        run: pnpm test:fixtures
+
+      - name: Run the UDG-001 task suite
+        run: pnpm test:contract -- --task UDG-001
+
+      - name: Run the UDG-002 task suite
+        run: pnpm test:contract -- --task UDG-002
+
+      # UDG-004's own suite: the pins and surfaces it was assigned, the per-suite dispatcher refusals, the
+      # absence of the development seam from the built client, and the browser/lifecycle/screenshot gate over
+      # the artefacts the camera step wrote.
+      - name: Run the UDG-004 task suite
+        env:
+          UDG_BROWSER_OUT: artifacts/udg-004-browser
+        run: pnpm test:contract -- --task UDG-004
+
+      # UDG-003 Phase 0 measures the pinned third-party stack, and the suite builds what it asserts:
+      # this step emits the probe project, runs each probe in its own process and checks the recorded
+      # results, so the api map in docs/integration/colyseus-0.18-api-map.md is backed by this commit
+      # rather than quoted. The results directory is uploaded with the evidence below.
+      - name: Run the UDG-003 Phase 0 probe suite
+        env:
+          UDG_PROBE_OUT: artifacts/probes
+          # Named, because evidence capture runs the probe suite a second time in this job. Each
+          # invocation now writes its own attributed directory, so a later passing run can no longer
+          # overwrite a failing one - which is what CI run 43053089415 published without saying.
+          UDG_PROBE_INVOCATION: ci-test-step
+        run: pnpm test:contract -- --task UDG-003
+
+      # Phase 1's own evidence, separate from the UDG-001 and UDG-002 bundles below: the vectors are the
+      # machine-readable form of the Phase 1 acceptance list and of the three reviewer corrections. The suite
+      # writes them, the tool then gates them, and a missing, empty, altered or unattributable artefact fails
+      # this step. A green UDG-001 or UDG-002 bundle is not evidence for Phase 1, and nothing here passes a
+      # gate: Gates A, B and C remain Not Run and stackCompatibility remains not-established.
+      - name: Record and gate the UDG-003 Phase 1 vectors
+        if: ${{ !cancelled() }}
+        env:
+          UDG_VECTORS_OUT: artifacts/udg-003-phase-1
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run tests/unit/udg-003/vectors.test.ts
+          pnpm --filter @udg/checks build
+          node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-1
+
+      # Phase 2's own evidence, alongside Phase 1's and never in place of it (§8.2.1): the runtime
+      # scripts write the population and recovery artefacts, the vectors suite writes the pure half
+      # and the manifest that names all fifteen, and the tool then gates the directory against the
+      # gate's OWN Phase 2 list. A half-run — the pure files without the runtime files — fails the
+      # manifest, exactly as an empty directory would.
+      - name: Record and gate the UDG-003 Phase 2 vectors
+        if: ${{ !cancelled() }}
+        env:
+          UDG_VECTORS_OUT: artifacts/udg-003-phase-2
+        shell: bash
+        run: |
+          set -euo pipefail
+          # AC-1's 200-tick reference trace first: it is the movement baseline the rest of the phase's
+          # numeric claims are read against, and it is pure simulation, so it also fails fast if the
+          # authority output this workflow just built cannot be driven at all.
+          node tests/reference/flat-direct-step.ts
+          node tests/runtime/udg-003-phase-2/abuse-population.ts
+          node tests/runtime/udg-003-phase-2/recovery-scenarios.ts
+          # GA-9 + AC-7: solo vs population projections and the malformed-message isolation check.
+          node tests/runtime/udg-003-phase-2/projection-isolation.ts
+          # The replay reads PR-14's journal out of its probe result, and the path is named rather than
+          # searched: an earlier draft re-ran the probe here, and CI refused, because the re-run wrote
+          # unattributed bytes over the contract suite's attributed PR-14 result. The suite's own run on
+          # this commit is the input, and it is the same file the bundle copies into probes/.
+          UDG_PR14_RESULT=artifacts/probes/PR-14.probe-result.json node tests/runtime/udg-003-phase-2/journal-replay.ts
+          pnpm exec vitest run tests/unit/udg-003-phase-2/vectors.test.ts
+          pnpm --filter @udg/checks build
+          node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-2 --expect-phase phase-2
+
+      # Phase 3's own set (UDG-003 Phase 3 §5 W-B/W-C): the W-A load/order declaration and the retained
+      # streak reading, the audit's falsification result, the task-level abuse and buffer-depth reading, the
+      # whole-task attribution and the non-claims register. It reads the phase artefacts the step above
+      # wrote, so it runs after them, and the tool gates the directory against the gate's OWN Phase 3 list:
+      # a half-run fails the manifest rather than passing as a smaller set.
+      - name: Record and gate the UDG-003 Phase 3 task vectors
+        if: ${{ !cancelled() }}
+        env:
+          UDG_VECTORS_OUT: artifacts/udg-003-phase-3
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run tests/unit/udg-003/task-vectors.test.ts
+          pnpm --filter @udg/checks build
+          node tools/checks/dist/evidence.js vectors --dir artifacts/udg-003-phase-3 --expect-phase phase-3
+
+      # Probe evidence is only evidence if it can say which invocation wrote it. This step checks every
+      # invocation the job produced - including a failing one - and fails on unattributed bytes, on a
+      # result file attributed to the wrong invocation, and on any failed invocation that the latest index
+      # does not disclose. It runs even after an earlier failure, so the attribution check is never the
+      # thing that got skipped.
+      - name: Verify probe invocation attribution
+        if: ${{ !cancelled() }}
+        run: pnpm evidence:probes -- --dir artifacts/probes
+
+      - name: Verify the contract checksum manifest is in sync
+        run: pnpm contracts:checksums
+
+      - name: Verify the committed dependency register
+        run: pnpm dependencies:verify
+
+      # Evidence steps are required checks, so they must be able to fail the run. They keep
+      # `if: !cancelled()` only so they still execute after an earlier step failed, which is what
+      # makes a failing check produce diagnostics instead of a silent skip. No step in this job may
+      # set continue-on-error; tests/contracts/UDG-001.test.ts enforces that and executes the
+      # artefact assertion below against empty, incomplete and complete bundles.
+      - name: Capture the evidence bundles
+        if: ${{ !cancelled() }}
+        shell: bash
+        # Every plan in `evidence.js plans` is attempted and its bundle retained, whatever happened before it;
+        # the step still exits non-zero if any plan failed, and the verification step below remains a separate
+        # gate. `tools/ci/capture-plans.sh` carries the reason: a `set -e` loop here cost three jobs their
+        # whole-task evidence on 2026-11-18, because a records-only push died in the second plan and the fourth
+        # plan — the one that retains the artefacts the red case read — never ran.
+        run: |
+          set -euo pipefail
+          pnpm --filter @udg/checks build
+          # The plan list stays named here: the loop is driven by it, and this step prints which tasks this
+          # run is expected to produce evidence for, so a plan that silently disappears is visible in the log.
+          echo "capture plans for this run: $(node tools/checks/dist/evidence.js plans | tr '\n' ' ')"
+          # The invocation is named here rather than defaulted inside the script, so that the accepted
+          # requirement on this step — that it runs `pnpm evidence:capture` — is checked against this file.
+          # TASK is substituted per plan; the loop is driven by the plan list, not by a second copy of it.
+          bash tools/ci/capture-plans.sh --capture-cmd 'pnpm evidence:capture -- --task TASK --out artifacts --keep-going'
+
+      - name: Assert the required evidence artefacts exist
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          pointers=(artifacts/latest-*.txt)
+          if [ ${#pointers[@]} -eq 0 ]; then
+            echo "::error::evidence capture wrote no run pointer (artifacts/latest-*.txt); no evidence exists to verify"
+            exit 1
+          fi
+          assert_bundle() {
+            pointer="$1"
+            if [ ! -s "$pointer" ]; then
+              echo "::error::evidence capture wrote an empty run pointer ($pointer); no evidence exists to verify"
+              return 1
+            fi
+            run_rel="$(tr -d '\r\n' < "$pointer")"
+            # The pointer is repository-relative (artifacts/RUN_ID); normalise to one directory.
+            bundle="artifacts/${run_rel#artifacts/}"
+            echo "evidence run directory: $bundle"
+            local failed=0
+            # The universal floor: any task's bundle carries these, whatever its plan declares.
+            for required in report.json environment.json commands.json junit.xml build.log checksums.sha256; do
+              if [ ! -s "$bundle/$required" ]; then
+                echo "::error::required evidence artefact missing or empty: $required ($pointer)"
+                failed=1
+              fi
+            done
+            # Task-specific requirements are read from the bundle itself, so a plan that gains an artefact
+            # cannot slip past this step for want of a hardcoded list somewhere else.
+            if [ -s "$bundle/report.json" ]; then
+              if ! required_from_report="$(node -e '
+                const fs = require("node:fs");
+                const report = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+                if (typeof report.taskId !== "string" || report.taskId === "") {
+                  console.error("report.json declares no taskId; cannot derive its requirements");
+                  process.exit(1);
+                }
+                if (!Array.isArray(report.files)) {
+                  console.error("report.json has no files array; cannot derive its requirements");
+                  process.exit(1);
+                }
+                for (const file of report.files) {
+                  if (file.required === true && typeof file.path === "string") console.log(file.path);
+                }
+              ' "$bundle/report.json")"; then
+                return 1
+              fi
+              while IFS= read -r required; do
+                [ -z "$required" ] && continue
+                if [ ! -s "$bundle/$required" ]; then
+                  echo "::error::required evidence artefact missing or empty: $required (declared by report.json)"
+                  failed=1
+                fi
+              done <<< "$required_from_report"
+            else
+              echo "::error::report.json is absent, so no artefact requirement can be derived"
+              failed=1
+            fi
+            if [ -z "$(find "$bundle/logs" -type f -size +0 -print -quit 2>/dev/null || true)" ]; then
+              echo "::error::no non-empty command log under $bundle/logs"
+              failed=1
+            fi
+            return "$failed"
+          }
+          missing=0
+          for pointer in "${pointers[@]}"; do
+            if ! assert_bundle "$pointer"; then
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          echo "all required evidence artefacts present"
+
+      # C-07: the candidate is not only checked out, it is checked *bound*. `report.json.implementationSha` is
+      # `git rev-parse HEAD` at capture time, so every bundle this job writes names this commit; re-reading it
+      # here means a bundle attributed to a different tree stops the run rather than reaching a reviewer as a
+      # citation. It runs even after a failed capture, because a failed bundle is still evidence and still has
+      # to say which commit it is evidence about.
+      - name: Assert every bundle names the candidate
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          candidate="$(git rev-parse HEAD)"
+          pointers=(artifacts/latest-*.txt)
+          if [ ${#pointers[@]} -eq 0 ]; then
+            echo "::error::no evidence bundle exists, so nothing is bound to ${candidate}"
+            exit 1
+          fi
+          bound=0
+          for pointer in "${pointers[@]}"; do
+            task="$(basename "$pointer" | sed 's/^latest-//; s/\.txt$//')"
+            run_rel="$(tr -d '\r\n' < "$pointer")"
+            bundle="artifacts/${run_rel#artifacts/}"
+            sha="$(node -e 'const fs=require("node:fs");const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(typeof r.implementationSha!=="string"){console.error("no implementationSha");process.exit(1)}console.log(r.implementationSha)' "$bundle/report.json")"
+            status="$(node -e 'const fs=require("node:fs");console.log(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).status)' "$bundle/report.json")"
+            if [ "$sha" != "$candidate" ]; then
+              echo "::error::bundle for $task names $sha, not the candidate $candidate"
+              exit 1
+            fi
+            echo "bundle $task: $bundle — implementationSha $sha, status $status"
+            bound=$((bound + 1))
+          done
+          expected=$(node tools/checks/dist/evidence.js plans | wc -l | tr -d ' ')
+          if [ "$bound" -ne "$expected" ]; then
+            echo "::error::$bound bundle(s) retained, but $expected capture plans exist: an acceptance run is"
+            echo "::error::incomplete if a plan produced no bundle, whatever else in it passed"
+            exit 1
+          fi
+          echo "all $bound bundle(s) bound to the candidate $candidate"
+
+      - name: Verify the captured evidence bundles
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          pointers=(artifacts/latest-*.txt)
+          if [ ${#pointers[@]} -eq 0 ]; then
+            echo "::error::there is no evidence bundle to verify (no artifacts/latest-*.txt pointer exists)"
+            exit 1
+          fi
+          for pointer in "${pointers[@]}"; do
+            if [ ! -s "$pointer" ]; then
+              echo "::error::run pointer $pointer is empty; nothing to verify"
+              exit 1
+            fi
+            run_rel="$(tr -d '\r\n' < "$pointer")"
+            task="$(basename "$pointer" | sed 's/^latest-//; s/\.txt$//')"
+            pnpm evidence:verify -- --run "$run_rel"
+            pnpm evidence:summary -- --run "$run_rel" \
+              --out "artifacts/${task}-ci-summary.json" \
+              --storage "$run_rel" \
+              # The lane is named inside the summary, so a committed `*-evidence.json` says which workflow
+              # produced it: an acceptance bundle and a routine run are not interchangeable evidence.
+              --ci-status "success (acceptance capture, GitHub-hosted ${RUNNER_OS:-Linux}, ${RUNNER_ARCH:-X64})" \
+              --ci-url "${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          done
+
+      # Diagnostics are published after failures (if: !cancelled()) but an absent artefact is itself
+      # a failure: a green run must always carry the evidence it claims.
+      - name: Publish logs and machine-readable results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: udg-evidence
+          path: |
+            artifacts/latest-*.txt
+            artifacts/UDG-*-*
+            artifacts/*-ci-summary.json
+            artifacts/probes
+            artifacts/udg-003-phase-1
+            artifacts/udg-004-browser
+          if-no-files-found: error
+          retention-days: 30

@@ -1842,7 +1842,11 @@ describe('UDG-003 Phase 1 — what the authority source may not contain', () => 
 describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a sentence', () => {
   const evidenceSource = readFileSync(join(ROOT, 'tools', 'checks', 'src', 'evidence.ts'), 'utf8');
   const vectorsSource = readFileSync(join(ROOT, 'tests', 'unit', 'udg-003', 'vectors.test.ts'), 'utf8');
-  const workflow = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  // C-07: the phase-vector producer steps and the capture plan list belong to the **acceptance** workflow —
+  // the job that captures evidence. The routine workflow is asserted below not to contain them, so this suite
+  // cannot be satisfied by a phase gate that only runs on pushes and never on a submission.
+  const workflow = readFileSync(join(ROOT, '.github', 'workflows', 'acceptance.yml'), 'utf8');
+  const routineWorkflow = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
 
   const literalList = (text: string, declaration: string): string[] => {
     const start = text.indexOf(declaration);
@@ -2031,8 +2035,12 @@ describe('UDG-003 Phase 1 — the phase evidence is gated by the tool, not by a 
     // second source of truth naming the task.
     expect(workflow).toContain('node tools/checks/dist/evidence.js plans');
     // No step may swallow a failure, and the phase step is not an exception to that rule. The prohibition is
-    // also written as prose in the workflow, so the assertion is about the key, not the word.
+    // also written as prose in the workflow, so the assertion is about the key, not the word. Since C-07 there
+    // are two workflow files and the rule binds both.
     expect(/^[ \t]*continue-on-error[ \t]*:/m.test(workflow)).toBe(false);
+    expect(routineWorkflow, 'the routine workflow inherits the same prohibition').not.toMatch(/^[ \t]*continue-on-error[ \t]*:/m);
+    expect(routineWorkflow, 'the phase gate is acceptance evidence; it does not run on a routine push')
+      .not.toContain('evidence.js vectors --dir artifacts/udg-003-phase-1');
     const phaseStep = workflow.slice(
       workflow.indexOf('Record and gate the UDG-003 Phase 1 vectors'),
       workflow.indexOf('- name: Verify the contract checksum manifest is in sync'),

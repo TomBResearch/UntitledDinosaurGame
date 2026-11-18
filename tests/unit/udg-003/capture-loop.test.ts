@@ -24,7 +24,10 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
 const LOOP = join(ROOT, 'tools', 'ci', 'capture-plans.sh');
-const CI = join(ROOT, '.github', 'workflows', 'ci.yml');
+// C-07 moved full evidence capture into its own dispatched workflow, so the loop CI actually runs lives in
+// `acceptance.yml`. `ci.yml` is read too, to prove the routine lane cannot reach the loop at all.
+const CI = join(ROOT, '.github', 'workflows', 'acceptance.yml');
+const ROUTINE_CI = join(ROOT, '.github', 'workflows', 'ci.yml');
 const scratch: string[] = [];
 
 const temporary = (): string => {
@@ -153,6 +156,11 @@ describe('UDG-003 Phase 3 W-C — the capture loop attempts every plan and still
     const script = readFileSync(LOOP, 'utf8');
     expect(script).toContain("plans_cmd='node tools/checks/dist/evidence.js plans'");
     expect(script).toContain("capture_cmd='pnpm evidence:capture'");
+    // The routine lane is capture-free by construction: no routing, no dispatch and no comment can bring the
+    // loop back into it, because a routine green must never be mistaken for captured evidence (A-P3-8).
+    const routine = readFileSync(ROUTINE_CI, 'utf8');
+    expect(routine, 'ci.yml must not run the capture loop').not.toContain('capture-plans.sh');
+    expect(routine, 'ci.yml captures no bundles').not.toContain('evidence:capture');
     expect(workflow, 'the stub is never reachable from CI').not.toMatch(/UDG_CI_(STUB|FAIL_BEFORE|PASS_BEFORE|PASS_AFTER)/);
     expect(script, 'the script must not abort the loop on the first non-zero capture').not.toMatch(/^set -euo/m);
   });

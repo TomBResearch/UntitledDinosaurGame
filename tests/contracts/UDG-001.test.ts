@@ -1295,8 +1295,20 @@ describe('CI workflow failure policy', () => {
     return steps;
   };
 
-  const workflow = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
+  // C-07 split the CI into two workflows, and every policy below is now asserted against **both** files:
+  // a second workflow must not become a place where a step may fail silently or an action floats unpinned.
+  // The evidence policy — capture, the artefact assertion, verification, publication — is asserted against
+  // the file that actually captures, `acceptance.yml`, and its *absence* is asserted against `ci.yml`.
+  const ROUTINE_FILE = '.github/workflows/ci.yml';
+  const ACCEPTANCE_FILE = '.github/workflows/acceptance.yml';
+  const routine = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const workflow = readFileSync(join(ROOT, '.github', 'workflows', 'acceptance.yml'), 'utf8');
+  const WORKFLOWS = [
+    { file: ROUTINE_FILE, text: routine },
+    { file: ACCEPTANCE_FILE, text: workflow },
+  ] as const;
   const steps = parseWorkflowSteps(workflow);
+  const routineSteps = parseWorkflowSteps(routine);
   const stepNamed = (name: string): WorkflowStep | undefined => steps.find((step) => step.name === name);
   const jobConclusion = (failures: Readonly<Record<string, number>>): 'success' | 'failure' => {
     for (const step of steps) {
@@ -1317,7 +1329,14 @@ describe('CI workflow failure policy', () => {
   ] as const;
 
   it('parses the real workflow step list', () => {
+    // Both files are parsed by the same reader, so neither can be restructured into an empty step list that
+    // would let the policy assertions below pass vacuously.
+    expect(routineSteps.length).toBeGreaterThan(12);
     expect(steps.length).toBeGreaterThan(12);
+    for (const entry of WORKFLOWS) {
+      expect(parseWorkflowSteps(entry.text).length, entry.file).toBeGreaterThan(8);
+      expect(readFileSync(join(ROOT, entry.file), 'utf8'), entry.file).toContain('runs-on:');
+    }
     expect(stepNamed('Install from the frozen lockfile')?.run).toBe('pnpm install --frozen-lockfile');
     // A block scalar must survive as a script body, not disappear into a mapping key.
     expect(stepNamed('Enable the pinned pnpm 12.18.0 through corepack')?.run).toContain('corepack prepare pnpm@12.18.0 --activate');
@@ -1325,11 +1344,18 @@ describe('CI workflow failure policy', () => {
     record('ci.steps', steps.length);
   });
 
-  it('allows no step to fail without failing the run', () => {
+  it('allows no step to fail without failing the run, in either workflow', () => {
+    // The policy is per file, not per "the" workflow: a routine job that could fail softly would be a green
+    // tick over a red check, which is the exact failure this suite has guarded since UDG-001.
+    for (const entry of WORKFLOWS) {
+      const softFailures = parseWorkflowSteps(entry.text)
+        .filter((step) => step.continueOnError === true)
+        .map((step) => step.name);
+      expect(softFailures, `continue-on-error in ${entry.file} would let a required check fail silently`).toEqual([]);
+      // No step may declare the key at all, even though the file explains why it must not.
+      expect(entry.text, entry.file).not.toMatch(/^\s*continue-on-error:/mu);
+    }
     const softFailures = steps.filter((step) => step.continueOnError === true).map((step) => step.name);
-    expect(softFailures, 'continue-on-error would let a required check fail silently').toEqual([]);
-    // No step may declare the key at all, even though the file explains why it must not.
-    expect(workflow).not.toMatch(/^\s*continue-on-error:/mu);
 
     for (const name of EVIDENCE_STEPS) {
       const step = stepNamed(name);
@@ -1396,6 +1422,26 @@ describe('CI workflow failure policy', () => {
     expect(verify?.run).toContain('pnpm evidence:verify');
     expect(verify?.run).toContain('pnpm evidence:summary');
     expect(verify?.run).toContain('artifacts/latest-*.txt');
+    // C-07: the routine lane must not be able to produce evidence, and must not be able to publish a bundle.
+    // This is what makes "a routine green can never satisfy milestone acceptance" a checked property rather
+    // than a convention a reviewer has to remember.
+    for (const forbidden of ['evidence:capture', 'evidence:verify', 'evidence:summary', 'capture-plans.sh', 'upload-artifact']) {
+      expect(routine, `the routine workflow must not run ${forbidden}`).not.toContain(forbidden);
+    }
+    for (const name of EVIDENCE_STEPS) {
+      expect(routineSteps.find((step) => step.name === name), `${name} must not exist in ci.yml`).toBeUndefined();
+    }
+    // The candidate is asserted before the work and re-checked against the bundles after it. The requested
+    // sha reaches the step through its `env:` map, so both halves are asserted: the wiring and the guard.
+    const candidate = stepNamed('Assert the exact candidate commit');
+    expect(workflow, 'the dispatch input must reach the step').toContain('REQUESTED: ${{ inputs.candidate_sha }}');
+    expect(candidate?.run).toContain('REQUESTED');
+    expect(candidate?.run).toContain('git rev-parse HEAD');
+    expect(candidate?.run, 'a mismatch has to stop the run').toMatch(/exit 1/u);
+    const binding = stepNamed('Assert every bundle names the candidate');
+    expect(binding?.run).toContain('implementationSha');
+    expect(binding?.if, 'a failed capture still has to say which commit it is evidence about').toContain('!cancelled()');
+    expect(stepNamed('Verify the captured evidence bundles')?.run).toContain('success (acceptance capture');
     record('ci.artifactMissingPolicy', upload?.with['if-no-files-found'] ?? 'missing');
     record('ci.plansPublished', Object.keys(CAPTURE_PLANS).length);
   });
@@ -1688,17 +1734,32 @@ describe('planning records stay consistent with the implementation', () => {
     record('planning.readmeCommands', true);
   });
 
-  it('authorship: the CI workflow runs the same scripts and pins third-party actions', () => {
-    const workflow = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
-    for (const command of ['pnpm install --frozen-lockfile', 'pnpm typecheck', 'pnpm lint', 'pnpm test', 'pnpm build', 'pnpm test:boundaries', 'pnpm test:fixtures', 'pnpm test:contract', 'pnpm contracts:checksums', 'pnpm dependencies:verify', 'pnpm evidence:capture', 'pnpm evidence:verify', 'pnpm evidence:summary']) {
-      expect(workflow, command).toContain(command);
+  it('authorship: CI runs the same scripts and pins third-party actions, in both workflows', () => {
+    // "CI runs the same scripts as local" is a claim about the whole CI surface, so it is checked against both
+    // files together — and the evidence commands are then required to come from the file that captures, not
+    // from the one that routes.
+    const routineText = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
+    const acceptanceText = readFileSync(join(ROOT, '.github/workflows/acceptance.yml'), 'utf8');
+    const both = `${routineText}\n${acceptanceText}`;
+    const evidenceCommands = ['pnpm evidence:capture', 'pnpm evidence:verify', 'pnpm evidence:summary'];
+    for (const command of ['pnpm install --frozen-lockfile', 'pnpm typecheck', 'pnpm lint', 'pnpm test', 'pnpm build', 'pnpm test:boundaries', 'pnpm test:fixtures', 'pnpm test:contract', 'pnpm contracts:checksums', 'pnpm dependencies:verify', ...evidenceCommands]) {
+      expect(both, command).toContain(command);
     }
-    expect(workflow).toContain('24.22.2');
-    expect(workflow).toContain('12.18.0');
-    for (const match of workflow.matchAll(/uses:\s*([^\s@]+)@([^\s#]+)/g)) {
-      expect(match[2], match[1]).toMatch(/^[0-9a-f]{40}$/);
+    for (const command of evidenceCommands) {
+      expect(acceptanceText, command).toContain(command);
+      expect(routineText, `${command} belongs to an acceptance run`).not.toContain(command);
     }
-    expect(workflow).not.toMatch(/secrets\./);
+    for (const entry of [
+      { file: '.github/workflows/ci.yml', text: routineText },
+      { file: '.github/workflows/acceptance.yml', text: acceptanceText },
+    ]) {
+      expect(entry.text, `${entry.file} Node pin`).toContain('24.22.2');
+      expect(entry.text, `${entry.file} pnpm pin`).toContain('12.18.0');
+      for (const match of entry.text.matchAll(/uses:\s*([^\s@]+)@([^\s#]+)/g)) {
+        expect(match[2], `${entry.file} ${String(match[1])}`).toMatch(/^[0-9a-f]{40}$/);
+      }
+      expect(entry.text, entry.file).not.toMatch(/secrets\./);
+    }
     record('planning.ciMirrorsLocalCommands', true);
   });
 });

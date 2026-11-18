@@ -139,15 +139,35 @@ zero discovered tests.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs the same sequence above on `ubuntu-24.04` with Node `24.22.2`, the
-corepack-pinned pnpm `12.18.0`, a frozen installation, and third-party actions pinned to commit
-shas. Evidence capture, the artefact assertion, evidence verification and artefact publication are
-required checks: no step in the job sets `continue-on-error`, so a failure in any of them fails the
-run, while `if: !cancelled()` keeps them executing after an earlier failure so a red run still
-publishes its logs and machine-readable results. A missing artefact is an error
-(`if-no-files-found: error`), never a warning — a green run always carries the evidence it claims.
-`tests/contracts/UDG-001.test.ts` parses the workflow, maps every evidence failure to a failed job
-conclusion, and executes the assertion script against empty, incomplete and complete bundles.
+CI is two workflows with two names, so a reviewer can tell from a check name which kind of green they are
+looking at (owner clarification C-07, [proposal](docs/contracts/assignments/ci-routing-proposal.md)):
+
+| Workflow | What it is | Evidence |
+| --- | --- | --- |
+| `ci (routine)` — `.github/workflows/ci.yml` | routed checks on every push and pull request. One job resolves the changed paths for the whole push or PR (both sides of a rename, deletions included) and turns them into lanes: records, static, protocol, unit, camera, server, runtime, tooling, full suite. Unknown impact runs everything. | **none** — a routine run captures no bundle and can never satisfy a task's acceptance |
+| `ci (acceptance — full evidence capture)` — `.github/workflows/acceptance.yml` | the full command sequence, all five capture plans, artefact assertion, verification, summaries and publication. Dispatched explicitly at a task submission or milestone, on the exact candidate commit. | all five bundles, published for 30 days |
+
+Dispatch acceptance with the candidate named twice — once as the ref, once as the assertion:
+
+```bash
+CANDIDATE=$(git rev-parse HEAD)
+gh workflow run acceptance.yml --repo TomBResearch/UntitledDinosaurGame \
+  --ref "$CANDIDATE" -f candidate_sha="$CANDIDATE"
+```
+
+Its first step refuses a run whose checkout is not that commit, and a later step re-reads every captured
+`report.json` and refuses any bundle whose `implementationSha` is not the candidate.
+
+Both workflows run on `ubuntu-24.04` with Node `24.22.2`, the corepack-pinned pnpm `12.18.0`, a frozen
+installation, and third-party actions pinned to commit shas. Evidence capture, the artefact assertion, evidence
+verification and artefact publication are required checks: no step in either file sets `continue-on-error`, so a
+failure in any of them fails its run, while `if: !cancelled()` keeps the evidence steps executing after an
+earlier failure so a red acceptance run still publishes its logs and machine-readable results. A missing
+artefact is an error (`if-no-files-found: error`), never a warning — a green acceptance run always carries the
+evidence it claims. `tests/contracts/UDG-001.test.ts` parses both workflows, maps every evidence failure to a
+failed job conclusion, and executes the assertion script against empty, incomplete and complete bundles;
+`tests/unit/ci-routing/` tests the routing table and asserts that every group the router can emit has a lane to
+run in, in both directions.
 
 That policy was also demonstrated on the runner itself, in probe run [42509775271](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/42509775271)
 (three jobs on the now-deleted branch `udg-001-ci-negative-probe`, `main` untouched). A capture that
@@ -187,8 +207,9 @@ A run writes `artifacts/RUN_ID/` containing `report.json`, `environment.json`, `
 `junit.xml`, `boundary-report.json`, `build.log`, `logs/` and `checksums.sha256`, plus the artefacts
 its task declares — for UDG-002 the protocol field map, the round-trip results, the observed
 rejection codes and the live refusal probes. Each task's bundle is described by a capture plan
-(`node tools/checks/dist/evidence.js plans` lists them), and CI captures, asserts and verifies every
-plan it finds, so adding a task cannot silently drop evidence. `pnpm evidence:verify` re-checks the
+(`node tools/checks/dist/evidence.js plans` lists them), and an acceptance run captures, asserts and verifies
+every plan it finds — all five, unconditionally — so adding a task cannot silently drop evidence, and a
+routine run captures none. `pnpm evidence:verify` re-checks the
 report schema, required artefacts, non-empty and matching hashes, zero skipped or flaky tests,
 command exit codes, the task's own prerequisite commits, that task-declared JSON artefacts parse and
 carry that task's identity, and the absence of credentials or private machine paths. A PNG is copied

@@ -93,7 +93,7 @@ What this assignment is **not**:
 | **D-P3-1** assignment | **Decided 2026-11-17** | implementer Pi; reviewer `TomBResearch`; baseline `eafe3065…` CI `43965274365` success; build instruction separate; re-pin by the owner if `main` moves before start |
 | **D-P3-2** shared tooling turn | **Decided (publication sitting, §0 of the draft)** | Phase 3 takes the next single-writer turn on the six shared files after UDG-004's accepted first use; as second lander it rebases and re-runs `pnpm test:contract -- --task UDG-003`, `--task UDG-004` and `pnpm test:e2e -- --suite camera` on the integrated head (M-5/M-6) |
 | **D-P3-3** `W-7` remedy class | **Decided (publication sitting)** | option (i): fix inside UDG-003's own suite as W-A; keep-rerunning and CI reordering are rejected; the interim rerun-and-record discipline stands until W-A lands, with every red retained |
-| **D-P3-4** whole-task capture | **Ruled at finalisation — §5 W-C in full** | separate whole-task capture approved in principle with the selector `UDG-003-TASK`; the existing `UDG-003` phase plan and all historical bundles are preserved and keep verifying; the verifier selects plans by content (§5 W-C.2); CI runs the whole-task capture from the W-C landing commit on, every run, appended to the existing plans loop; the added CI runtime is stated up front (§5 W-C.4) |
+| **D-P3-4** whole-task capture | **Ruled at finalisation — §5 W-C in full** | separate whole-task capture approved in principle with the selector `UDG-003-TASK`; the existing `UDG-003` phase plan and all historical bundles are preserved and keep verifying; the verifier selects plans by content (§5 W-C.2); CI runs the whole-task capture from the W-C landing commit on, every run, appended to the existing plans loop; the added CI runtime is stated up front (§5 W-C.4) — *"every run"* bounded to every acceptance run by **A-P3-8** (§9.3) |
 | **D-P3-5 / D-P3-9** W-A repeatability | **Ruled at finalisation — §5 W-A** | ten consecutive passes per defect under the declared load and test order; declaration written before the streak and retained with results; first-attempt hosted green on the exact submitted commit; a targeted reproducer or failing control per defect; an unreproducible failure is reported from the retained evidence before any change is proposed |
 | **D-P3-6** harness grant | **Granted, bounded** | G-P3-2 reaches instrumenting and fixing a **demonstrated** cause in `tests/support/client-harness/**` only; the demonstration precedes the edit |
 | **D-P3-7** D4 | **Open — reconfirmed** | existing store only; no new release, tag, archive or storage location |
@@ -237,6 +237,11 @@ phase bundle's `UDG-003-<UTC>-<sha>` family, and all already covered by the exis
 
 ### 5.4 W-C — when CI runs the whole-task capture, and its cost, stated up front
 
+> **Quantifier bounded by A-P3-8 (§9.3, approved 2026-11-18 with clarification C-07).** "Every CI run" below
+> means every **acceptance** run — the dispatched `ci (acceptance — full evidence capture)` workflow, where the
+> plans loop stays unconditional. A routine `ci (routine)` push captures nothing by design. The clause text is
+> preserved unedited, above and below this pointer.
+
 CI's capture step iterates `evidence.js plans` (sorted keys), so **the plan key and everything it requires
 must land in one commit** — the W-C commit adds the plan, the producers that fill it, and the collector
 changes together; there is no intermediate state where the plan exists but its artefacts cannot exist. From
@@ -372,3 +377,19 @@ no archive, tag, release or second destination; it does not adopt Part B; and it
 **unclassified** where no cause was demonstrated, and stay visible wherever the guarantees they touch are evaluated.
 The acceptance entry, with the covering CI of the commit that records it, is
 [`adoption.md`](../adoption.md).
+
+### 9.3 A-P3-8 — the capture quantifier, as approved with clarification C-07 (2026-11-18)
+
+The CI split proposed in [ci-routing-proposal.md](ci-routing-proposal.md) was approved by the integration owner
+on 2026-11-18 (clarification **C-07** in [adoption](../adoption.md)) together with this amendment. It is recorded
+in the same practice as A-P3-5 … A-P3-7: the clause it bounds is quoted, unedited, and the bound is added beside
+it. It amends the **schedule** of capture, not what capture proves.
+
+| id | clause bounded | as approved | what it may **not** do |
+| --- | --- | --- | --- |
+| **A-P3-8** | §5.4 W-C.4 — *"From that commit onward **every CI run** captures and verifies the whole-task bundle — no conditionals, no `continue-on-error`: from W-C on, a run where the whole-task bundle is absent is red by design"*; and the §1 **D-P3-4** row — *"every run, appended to the existing plans loop"* | The quantifier is **every acceptance run**: the dispatched `ci (acceptance — full evidence capture)` workflow on the exact candidate commit, where all five plans (`UDG-001`, `UDG-002`, `UDG-003`, `UDG-003-TASK`, `UDG-004`) are captured, asserted, verified and published unconditionally, with no `continue-on-error` and no routing of the plans loop. A routine `ci (routine)` run captures nothing **by design** and is therefore not red for a missing bundle — and it can never support a Verified claim, a milestone record or a gate row. From W-C on, **an acceptance run whose whole-task bundle is absent is red by design**, and a milestone record that cites only routine checks is not evidence | It cannot reduce the plans, the artefacts or the checks an acceptance run performs; it cannot make a routine green count as evidence; it cannot re-open, re-judge or re-run a bundle captured before it (A-P3-7 still stands — recorded FAIL stays FAIL); and it cannot weaken §19.2's requirement of evidence from the exact submitted commit, which is what the acceptance workflow exists to produce |
+
+**Bounded** means: no threshold, accepted assertion, deadline, retry allowance, close code, probe, refusal
+matching, policy sample boundary or artefact byte moves. The five capture plans, the verifier, the bundle schema
+and the evidence store are untouched by the split; every bundle retained before it keeps its bytes and its
+verification outcome.
