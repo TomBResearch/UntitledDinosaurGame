@@ -6,7 +6,9 @@
  * and only on the server; a client never has a supported write path.
  *
  * Field order is significant — the codec assigns indices by declaration order, and the field-map
- * test pins both the names and the widths against docs/contracts/protocol-v1.md.
+ * test pins both the names and the widths against docs/contracts/protocol-v1.md. *
+ * CI routing probe (C-07, measurement only — close without merging): `packages/protocol/**` is read by both   * apps, so it is the shared-change case: the broad lane set, camera and server included.
+
  */
 
 import { schema, t } from '@colyseus/schema';
