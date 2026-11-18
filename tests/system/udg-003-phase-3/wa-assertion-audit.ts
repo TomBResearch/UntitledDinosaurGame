@@ -199,6 +199,43 @@ eq('w7-state-applications', 'W-7', at(ep, 'snapshotAbsence.stateApplicationsDuri
 eq('w7-watermark-held', 'W-7', at(ep, 'snapshotAbsence.resolvedThroughAtClose'), at(ep, 'snapshotAbsence.resolvedThroughAtSilence'));
 eq('w7-epoch-held', 'W-7', at(ep, 'snapshotAbsence.epochAtClose'), at(ep, 'snapshotAbsence.epochAtSilence'));
 eq('w7-recovery-events', 'W-7', at(ep, 'snapshotAbsence.recoveryEvents'), 0);
+
+// W-A repair controls, reviewer-directed after the cause was demonstrated (diagnosis §17): the case's episode
+// readings must come from ONE snapshot taken at the policy-defined episode end — before the impairment layer is
+// restored and before cleanup starts — and the teardown observations must be structurally unable to reach them.
+// The producer now publishes the snapshot it read, so these checks recompute the two `=== 0` tallies above from
+// that snapshot instead of trusting the number the producer chose to write: a state application folded in from
+// the teardown changes the recomputation and is named here. An artefact captured before the repair records
+// neither block, so nothing is claimed and nothing is retro-judged — the same rule that keeps 222 historical
+// bundles verifying exactly as they did.
+const episodeEnd = object(at(ep, 'snapshotAbsence.episodeEndSnapshot'));
+const cleanupBlock = object(at(ep, 'cleanup'));
+if (Object.keys(episodeEnd).length > 0) {
+  eq('w7-episode-end-before-restore', 'W-7', episodeEnd['wrapperRestored'], false);
+  eq('w7-episode-end-still-silenced', 'W-7', episodeEnd['wrapperSilencing'], true);
+  const recomputedDeliveries = typeof episodeEnd['deliveriesAtEpisodeEnd'] === 'number'
+    && typeof episodeEnd['deliveriesAtSilence'] === 'number'
+    ? (episodeEnd['deliveriesAtEpisodeEnd'] as number) - (episodeEnd['deliveriesAtSilence'] as number)
+    : null;
+  eq('w7-deliveries-recompute-from-snapshot', 'W-7', recomputedDeliveries,
+    at(ep, 'snapshotAbsence.deliveriesReachingTheSeatDuringTheEpisode'));
+  const recomputedApplications = typeof episodeEnd['stateApplicationsAtEpisodeEnd'] === 'number'
+    && typeof episodeEnd['stateApplicationsAtSilence'] === 'number'
+    ? (episodeEnd['stateApplicationsAtEpisodeEnd'] as number) - (episodeEnd['stateApplicationsAtSilence'] as number)
+    : null;
+  eq('w7-state-applications-recompute-from-snapshot', 'W-7', recomputedApplications,
+    at(ep, 'snapshotAbsence.stateApplicationsDuringTheEpisode'));
+}
+if (Object.keys(cleanupBlock).length > 0) {
+  // The teardown was observed *after* the snapshot, which is the ordering that makes the episode reading
+  // trustworthy, and the cleanup block agrees with that snapshot rather than replacing it.
+  eq('w7-cleanup-taken-after-episode-end', 'W-7', cleanupBlock['wrapperRestoredBeforeEpisodeSnapshot'], false);
+  eq('w7-cleanup-agrees-with-episode-end', 'W-7', cleanupBlock['stateApplicationsAtEpisodeEnd'],
+    episodeEnd['stateApplicationsAtEpisodeEnd']);
+  check('w7-cleanup-observations-recorded', 'W-7', 'a number, whatever the teardown did',
+    cleanupBlock['stateApplicationsObservedDuringCleanup'],
+    typeof cleanupBlock['stateApplicationsObservedDuringCleanup'] === 'number');
+}
 eq('w7-code-4102', 'W-7', at(ep, 'surfacedError.code'), 4102);
 eq('w7-expected-code', 'W-7', at(ep, 'surfacedError.expectedCode'), 4102);
 eq('w7-no-server-close', 'W-7', at(ep, 'surfacedError.serverClosedTheSeatAnywhereInThisCase'), false);

@@ -224,6 +224,10 @@ export const installImpairment = (room, options = {}) => {
                 inboundSilentlyDropped: state.inboundSilentlyDropped,
                 inboundSilenceMs: state.inboundSilenceMs,
                 silencing: state.silencing === true,
+                // UDG-003 Phase 3 W-A repair: whether `restore()` has already put the real handler back. A
+                // tally is only attributable to the window it claims if it was taken while the layer was
+                // still on the socket, and this is the reading that says so.
+                restored: state.restored === true,
                 inboundQueuedPeak: state.inboundQueuedPeak,
                 reconnectEvents: state.reconnectEvents,
                 socketOpenAtInstall: state.socketOpenAtInstall,

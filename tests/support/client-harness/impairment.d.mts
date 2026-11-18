@@ -42,6 +42,12 @@ export interface ImpairmentCounters {
     /** How long the seat has been silenced, in ms; null when it never was. */
     inboundSilenceMs: number | null;
     silencing: boolean;
+    /**
+     * Whether `restore()` has already taken the impairment layer off the socket. From that instant the SDK's
+     * own handler is back, so a counter can no longer see what the seat is being told — which is why a tally
+     * meant to describe a window has to be read while this is still `false`.
+     */
+    restored: boolean;
     inboundQueuedPeak: number;
     reconnectEvents: number;
     socketOpenAtInstall: boolean;

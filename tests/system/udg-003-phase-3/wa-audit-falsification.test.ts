@@ -45,6 +45,7 @@ interface AuditReport {
   checked: number;
   passed: number;
   failing: { id: string; defect: string; expectation: string; actual: unknown }[];
+  checks: { id: string; defect: string; passed: boolean }[];
 }
 
 /** Run the audit over a mutated copy and return its report. */
@@ -86,6 +87,87 @@ const auditCopy = (source: string): AuditReport => {
 };
 
 const auditClean = (): AuditReport => auditCopy(FIXTURE);
+
+/** Run the audit over an arbitrarily mutated copy and return the report **and** its exit status. */
+const auditOf = (source: string, mutate?: (artefact: Record<string, unknown>) => void): {
+  report: AuditReport;
+  status: number;
+} => {
+  const directory = mkdtempSync(join(tmpdir(), 'udg-wa-any-'));
+  directories.push(directory);
+  copyFileSync(source, join(directory, 'transport-impairment.json'));
+  const file = join(directory, 'transport-impairment.json');
+  if (mutate !== undefined) {
+    const artefact = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    mutate(artefact);
+    writeFileSync(file, `${JSON.stringify(artefact, null, 2)}\n`);
+  }
+  const executed = spawnSync(process.execPath, [AUDIT, '--dir', directory, '--out', join(directory, 'audit.json')], {
+    cwd: ROOT, encoding: 'utf8', timeout: 120_000,
+  });
+  return {
+    report: JSON.parse(readFileSync(join(directory, 'audit.json'), 'utf8')) as AuditReport,
+    status: executed.status ?? -1,
+  };
+};
+
+/**
+ * The repaired producer publishes the single episode-end snapshot its assertions are derived from, beside a
+ * separate `cleanup` block. These controls need bytes of that shape, so the pinned clean artefact is given the
+ * blocks the repair writes, with every reading taken from what that artefact already records — the recorded
+ * deltas are 0 deliveries and 0 applications, so at-silence and at-episode-end agree, and the swallow count,
+ * watermark, epoch and recovery count are copied. That keeps the control about *structure* (which reading the
+ * asserted number came from) rather than about inventing values, and it keeps the base pinned: the digest of
+ * `FIXTURE` is asserted elsewhere in this file.
+ */
+const repairedShape = (artefact: Record<string, unknown>): void => {
+  const ga = artefact['ga6Ga7'] as Record<string, unknown>;
+  const episode = ga['ga6cEpisodeDeadline'] as Record<string, unknown>;
+  const absence = episode['snapshotAbsence'] as Record<string, unknown>;
+  const swallowed = Number(absence['publicationsSwallowedAtTheWrapper']);
+  const watermark = Number(absence['resolvedThroughAtSilence']);
+  const epoch = Number(absence['epochAtSilence']);
+  const snapshot = {
+    takenAtMs: 14000,
+    wrapperRestored: false,
+    wrapperSilencing: true,
+    deliveriesAtSilence: 7,
+    deliveriesAtEpisodeEnd: 7,
+    swallowedAtEpisodeEnd: swallowed,
+    socketClosesAtEpisodeEnd: 0,
+    stateApplicationsAtSilence: 3,
+    stateApplicationsAtEpisodeEnd: 3,
+    resolvedThroughAtEpisodeEnd: watermark,
+    sessionEpochAtEpisodeEnd: epoch,
+    recoveryEventsAtEpisodeEnd: Number(absence['recoveryEvents']),
+    policyStateAtEpisodeEnd: 'closed',
+  };
+  absence['episodeEndSnapshot'] = snapshot;
+  episode['cleanup'] = {
+    wrapperRestoredBeforeEpisodeSnapshot: false,
+    stateApplicationsAtEpisodeEnd: snapshot['stateApplicationsAtEpisodeEnd'],
+    stateApplicationsObservedDuringCleanup: 0,
+    deliveriesObservedDuringCleanup: 0,
+    swallowedObservedDuringCleanup: 0,
+    socketClosesObservedDuringCleanup: 0,
+    resolvedThroughAtEpisodeEnd: watermark,
+    resolvedThroughObservedDuringCleanup: 0,
+    sessionEpochObservedDuringCleanup: 0,
+    wrapperSilencingAtEpisodeEnd: true,
+    whyThisIsSeparate: 'control fixture',
+  };
+};
+
+/** A temporary artefact file in the repaired shape, derived from the pinned clean base. */
+const repairedArtefact = (): string => {
+  const directory = mkdtempSync(join(tmpdir(), 'udg-wa-repaired-'));
+  directories.push(directory);
+  const file = join(directory, 'transport-impairment.json');
+  const artefact = JSON.parse(readFileSync(FIXTURE, 'utf8')) as Record<string, unknown>;
+  repairedShape(artefact);
+  writeFileSync(file, `${JSON.stringify(artefact, null, 2)}\n`);
+  return file;
+};
 
 const exists = (file: string): boolean => {
   try {
@@ -212,5 +294,89 @@ describe('UDG-003 Phase 3 W-A — the audit is falsifiable, per defect', () => {
     for (const entry of report.failing) {
       expect(['W-7', 'P-2b'], `a live failing check must be attributed to a defect, got ${entry.defect}`).toContain(entry.defect);
     }
+  });
+
+  // ── the repair's own controls ─────────────────────────────────────────────────────────────────────────
+  // The reviewer's direction: the episode readings come from one snapshot taken at the policy-defined episode
+  // end, before delivery is restored or cleanup starts; cleanup observations are retained separately; a
+  // callback during cleanup must not be able to alter the episode result; and an application *during* the
+  // episode must still fail. The cause this repairs is demonstrated in
+  // docs/contracts/assignments/evidence/UDG-003-phase-3-wa-diagnosis.md §17, on a retained artefact whose own
+  // two readings of one tally disagreed.
+
+  it('cannot be made red by a callback during cleanup, because cleanup is not what the episode reads', () => {
+    const base = repairedArtefact();
+    const activity = auditOf(base, (artefact) => {
+      // The teardown does everything the demonstrated defect does: applications fire, a delivery arrives,
+      // publications flow again, the row moves. It is recorded, and the episode does not consult it.
+      setAt(artefact, 'ga6Ga7.ga6cEpisodeDeadline.cleanup.stateApplicationsObservedDuringCleanup', 3);
+      setAt(artefact, 'ga6Ga7.ga6cEpisodeDeadline.cleanup.stateApplicationsAtEpisodeEnd', 3);
+      setAt(artefact, 'ga6Ga7.ga6cEpisodeDeadline.cleanup.deliveriesObservedDuringCleanup', 1);
+      setAt(artefact, 'ga6Ga7.ga6cEpisodeDeadline.cleanup.swallowedObservedDuringCleanup', 16);
+      setAt(artefact, 'ga6Ga7.ga6cEpisodeDeadline.cleanup.resolvedThroughObservedDuringCleanup', 1);
+      setAt(artefact, 'ga6Ga7.ga6cEpisodeDeadline.cleanup.sessionEpochObservedDuringCleanup', 1);
+    });
+    expect(activity.status, `cleanup activity must not fail the audit: ${JSON.stringify(activity.report.failing)}`).toBe(0);
+    expect(activity.report.failing).toEqual([]);
+    expect(activity.report.checked, 'the repair adds checks rather than removing any')
+      .toBeGreaterThan(auditClean().checked);
+  });
+
+  it('still fails on a state application during the episode, and names it as an episode movement', () => {
+    const base = repairedArtefact();
+    const inside = auditOf(base, (artefact) => {
+      // One application inside the window: the snapshot itself moves, so the asserted delta and the
+      // recomputation agree that this happened during the episode rather than in the teardown.
+      setAt(artefact, 'ga6Ga7.ga6cEpisodeDeadline.snapshotAbsence.episodeEndSnapshot.stateApplicationsAtEpisodeEnd', 4);
+      setAt(artefact, 'ga6Ga7.ga6cEpisodeDeadline.snapshotAbsence.stateApplicationsDuringTheEpisode', 1);
+      setAt(artefact, 'ga6Ga7.ga6cEpisodeDeadline.cleanup.stateApplicationsAtEpisodeEnd', 4);
+    });
+    const ids = inside.report.failing.map((entry) => entry.id);
+    expect(inside.status).toBe(1);
+    expect(ids, 'the accepted reading must still refuse an application in the window').toContain('w7-state-applications');
+    expect(ids, 'and the recomputation must agree that it happened inside the episode, not in cleanup')
+      .not.toContain('w7-state-applications-recompute-from-snapshot');
+  });
+
+  it('refuses a teardown application folded into the episode tally, by recomputing the delta itself', () => {
+    const base = repairedArtefact();
+    const folded = auditOf(base, (artefact) => {
+      // The shape the repair removes: the asserted number written from a teardown reading while the snapshot
+      // says the window was clean. The audit does not take the number on trust.
+      setAt(artefact, 'ga6Ga7.ga6cEpisodeDeadline.snapshotAbsence.stateApplicationsDuringTheEpisode', 1);
+      setAt(artefact, 'ga6Ga7.ga6cEpisodeDeadline.cleanup.stateApplicationsObservedDuringCleanup', 1);
+    });
+    const ids = folded.report.failing.map((entry) => entry.id);
+    expect(folded.status).toBe(1);
+    expect(ids).toContain('w7-state-applications');
+    expect(ids, 'a value that disagrees with the snapshot it claims to come from is named as well')
+      .toContain('w7-state-applications-recompute-from-snapshot');
+  });
+
+  it('refuses an episode snapshot taken after the impairment layer came off the socket', () => {
+    const base = repairedArtefact();
+    const late = auditOf(base, (artefact) => {
+      setAt(artefact, 'ga6Ga7.ga6cEpisodeDeadline.snapshotAbsence.episodeEndSnapshot.wrapperRestored', true);
+    });
+    expect(late.report.failing.map((entry) => entry.id)).toContain('w7-episode-end-before-restore');
+
+    const noisy = auditOf(base, (artefact) => {
+      setAt(artefact, 'ga6Ga7.ga6cEpisodeDeadline.snapshotAbsence.episodeEndSnapshot.wrapperSilencing', false);
+    });
+    expect(noisy.report.failing.map((entry) => entry.id)).toContain('w7-episode-end-still-silenced');
+  });
+
+  it('claims nothing of an artefact captured before the repair, and everything of one after it', () => {
+    const before = auditClean();
+    const newIds = ['w7-episode-end-before-restore', 'w7-deliveries-recompute-from-snapshot',
+      'w7-cleanup-taken-after-episode-end'];
+    for (const id of newIds) {
+      expect(before.checks.map((entry) => entry.id), 'a historical artefact is not retro-judged').not.toContain(id);
+    }
+    const after = auditOf(repairedArtefact());
+    for (const id of newIds) {
+      expect(after.report.checks.map((entry) => entry.id), `the repaired shape is checked by ${id}`).toContain(id);
+    }
+    expect(after.status, 'a repaired clean artefact audits clean').toBe(0);
   });
 });

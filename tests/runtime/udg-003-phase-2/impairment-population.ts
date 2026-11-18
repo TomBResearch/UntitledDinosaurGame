@@ -835,6 +835,39 @@ async function main(): Promise<void> {
   const epAllowanceRefusedBeforeClose = eventsOf(ep, 'allowance-refused').length;
   const epCountersAtClose = ep.controller.counters();
   const epStateAtClose = ep.policy.snapshot();
+  // W-A repair, reviewer-directed, cause demonstrated in
+  // docs/contracts/assignments/evidence/UDG-003-phase-3-wa-diagnosis.md §17: ONE consistent snapshot of every
+  // episode tally, taken at the policy-defined episode end — the client's own close under the 4000 ms episode
+  // deadline — and before delivery is restored or any cleanup starts. Everything the accepted case asserts
+  // about the episode is read here and nowhere else.
+  //
+  // Why it has to be here. Before this change the "after" reading of `ep.applied.length` was taken at artefact
+  // assembly, after `ep.controller.restore()` had put the SDK's own handler back on the socket and while
+  // `await ep.room.leave(true)` was still in flight; in the pinned stack a consented `leave()` does not set
+  // `leaveCode`, so frames arriving in that teardown are dispatched and fire `onStateChange` (`Room.mjs:488`,
+  // `:611-612`). A frame the delivery counter could no longer see therefore ticked the tally whose name claims
+  // to count the episode — retained evidence: UDG-003-2026-11-14T11-57-52-546Z-81a341fb records
+  // `stateApplicationsDuringTheEpisode: 1` beside `freshAuthoritativeSnapshotArrived: false`, the same tally
+  // read at two instants with the teardown between them.
+  //
+  // Nothing is dropped: the post-close and teardown readings that used to stand in for these values are
+  // recorded separately, below, as `cleanup`.
+  const epRowAtEpisodeEnd = ep.room.state.players?.get(ep.entityId);
+  const epEpisodeEnd = {
+    takenAtMs: epClose?.atMs ?? -1,
+    wrapperRestored: epCountersAtClose.restored === true,
+    wrapperSilencing: epCountersAtClose.silencing === true,
+    deliveriesAtSilence: epDeliveriesAtSilence,
+    deliveriesAtEpisodeEnd: epCountersAtClose.inboundDelivered,
+    swallowedAtEpisodeEnd: epCountersAtClose.inboundSilentlyDropped,
+    socketClosesAtEpisodeEnd: epCountersAtClose.socketClosedDuring,
+    stateApplicationsAtSilence: epAppliedAtSilence,
+    stateApplicationsAtEpisodeEnd: ep.applied.length,
+    resolvedThroughAtEpisodeEnd: epRowAtEpisodeEnd?.inputResolvedThrough ?? -1,
+    sessionEpochAtEpisodeEnd: epRowAtEpisodeEnd?.sessionEpoch ?? -1,
+    recoveryEventsAtEpisodeEnd: eventsOf(ep, 'recovered').length,
+    policyStateAtEpisodeEnd: epStateAtClose.state,
+  };
   const epCloseAgeFromEpisodeStartMs = epStall === undefined || epClose === undefined ? -1 : Math.round(epClose.atMs - epStall.atMs);
   const epCloseAgeFromLastDeliveryMs = epClose === undefined ? -1 : Math.round(epClose.atMs - epLastDeliveryBeforeSilence);
   await sleep(400);
@@ -855,25 +888,52 @@ async function main(): Promise<void> {
   const epFramesAfter = journalledClientFrames(ep.entityId);
   const epRefusalsAfter = journalledRefusals(ep.entityId);
   const epRoomTicksAfter = roomTicks();
+  // From here on the seat is closed and the episode is over: these are post-close observations, not episode
+  // readings, and the case's episode fields no longer consult them.
   const epCountersAfter = ep.controller.counters();
   const epStateAfter = ep.policy.snapshot();
   const epRowAfter = ep.room.state.players?.get(ep.entityId);
-  const epFreshSnapshotArrived = epCountersAfter.inboundDelivered !== epDeliveriesAtSilence
-    || ep.applied.length !== epAppliedAtSilence
-    || (epRowAfter?.inputResolvedThrough ?? -1) !== epResolvedThroughAtSilence;
+  const epFreshSnapshotArrived = epEpisodeEnd.deliveriesAtEpisodeEnd !== epEpisodeEnd.deliveriesAtSilence
+    || epEpisodeEnd.stateApplicationsAtEpisodeEnd !== epEpisodeEnd.stateApplicationsAtSilence
+    || epEpisodeEnd.resolvedThroughAtEpisodeEnd !== epResolvedThroughAtSilence;
   // The client tears its own socket after surfacing the error — which is the last thing this case needs,
   // because a wrapper counter sampled before the tear is what shows no server close was ever involved.
-  const epSocketClosedByClient = epCountersAfter.socketClosedDuring;
+  // No server close was involved, and the claim is read at the episode end where it is made; the later
+  // reading is kept beside it as a teardown observation rather than silently standing in for it.
+  const epSocketClosedByClient = epEpisodeEnd.socketClosesAtEpisodeEnd;
+  const epSocketClosesAfterPostCloseWaits = epCountersAfter.socketClosedDuring;
   ep.stopClock();
   ep.controller.restore();
   await ep.room.leave(true).catch(() => undefined);
+
+  // The teardown tail, recorded as the teardown. From `restore()` onward the impairment layer is off the
+  // socket, and until the leave actually lands the pinned SDK keeps dispatching frames (`Room.mjs:488`), so a
+  // callback can fire here and nothing measured in this window belongs to the episode. It is kept because it
+  // is the reading that explains a red, not because it may change one: the accepted case never consults it.
+  const epCleanupRow = ep.room.state.players?.get(ep.entityId);
+  const epCleanup = {
+    wrapperRestoredBeforeEpisodeSnapshot: epEpisodeEnd.wrapperRestored,
+    stateApplicationsAtEpisodeEnd: epEpisodeEnd.stateApplicationsAtEpisodeEnd,
+    stateApplicationsObservedDuringCleanup: ep.applied.length - epEpisodeEnd.stateApplicationsAtEpisodeEnd,
+    deliveriesObservedDuringCleanup: epCountersAfter.inboundDelivered - epEpisodeEnd.deliveriesAtEpisodeEnd,
+    swallowedObservedDuringCleanup: epCountersAfter.inboundSilentlyDropped - epEpisodeEnd.swallowedAtEpisodeEnd,
+    socketClosesObservedDuringCleanup: epSocketClosesAfterPostCloseWaits - epEpisodeEnd.socketClosesAtEpisodeEnd,
+    resolvedThroughAtEpisodeEnd: epEpisodeEnd.resolvedThroughAtEpisodeEnd,
+    resolvedThroughObservedDuringCleanup: (epRowAfter?.inputResolvedThrough ?? -1) - epEpisodeEnd.resolvedThroughAtEpisodeEnd,
+    sessionEpochObservedDuringCleanup: (epCleanupRow?.sessionEpoch ?? -1) - epEpisodeEnd.sessionEpochAtEpisodeEnd,
+    wrapperSilencingAtEpisodeEnd: epEpisodeEnd.wrapperSilencing,
+    whyThisIsSeparate:
+      'the episode ends when the policy closes the client; the wrapper is restored and the seat is asked to '
+      + 'leave after that, and the SDK keeps dispatching until the close lands. Anything that moves in that '
+      + 'window is a cleanup observation, so it is recorded here and the case does not read it.',
+  };
 
   const epControls = {
     episodeDeadlineExpiredWithNoFreshSnapshot: epEpisodeClosed
       && epClose?.reason === 'episode-deadline'
       && epCloseAgeFromEpisodeStartMs >= recoveryDeadlineMs
       && !epFreshSnapshotArrived
-      && epCountersAfter.inboundSilentlyDropped > 0,
+      && epEpisodeEnd.swallowedAtEpisodeEnd > 0,
     episodeDeadlineIsDistinctFromTheSnapshotDeadline: epStalled
       && epStall?.trigger === 'deadline'
       && epSnapshotDeadlineElapsedMs > 0
@@ -926,16 +986,20 @@ async function main(): Promise<void> {
     },
     snapshotAbsence: {
       freshAuthoritativeSnapshotArrived: epFreshSnapshotArrived,
-      deliveriesReachingTheSeatDuringTheEpisode: epCountersAfter.inboundDelivered - epDeliveriesAtSilence,
-      publicationsSwallowedAtTheWrapper: epCountersAfter.inboundSilentlyDropped,
-      stateApplicationsDuringTheEpisode: ep.applied.length - epAppliedAtSilence,
+      deliveriesReachingTheSeatDuringTheEpisode: epEpisodeEnd.deliveriesAtEpisodeEnd - epEpisodeEnd.deliveriesAtSilence,
+      publicationsSwallowedAtTheWrapper: epEpisodeEnd.swallowedAtEpisodeEnd,
+      stateApplicationsDuringTheEpisode: epEpisodeEnd.stateApplicationsAtEpisodeEnd - epEpisodeEnd.stateApplicationsAtSilence,
       resolvedThroughAtSilence: epResolvedThroughAtSilence,
-      resolvedThroughAtClose: epRowAfter?.inputResolvedThrough ?? -1,
+      resolvedThroughAtClose: epEpisodeEnd.resolvedThroughAtEpisodeEnd,
       epochAtSilence: epEpochAtSilence,
-      epochAtClose: epRowAfter?.sessionEpoch ?? -1,
+      epochAtClose: epEpisodeEnd.sessionEpochAtEpisodeEnd,
       rejoinsPerformedByTheHarness: 0,
-      recoveryEvents: eventsOf(ep, 'recovered').length,
+      recoveryEvents: epEpisodeEnd.recoveryEventsAtEpisodeEnd,
+      // The single snapshot these came from, published rather than described: the audit recomputes every delta
+      // above from these readings and refuses the artefact if they disagree (WA repair control).
+      episodeEndSnapshot: epEpisodeEnd,
     },
+    cleanup: epCleanup,
     surfacedError: {
       event: epClose ?? null,
       code: epClose?.code ?? null,
@@ -1454,7 +1518,7 @@ async function main(): Promise<void> {
     + `(of which GA-6a/6b/6c+GA-7 ${String(Object.values(ga6Ga7Controls).filter((value) => value === true).length)}/${String(Object.keys(ga6Ga7Controls).length)}, `
     + `GA-6c episode branch ${String(Object.values(epControls).filter((value) => value === true).length)}/${String(Object.keys(epControls).length)}) `
     + `(6b silent-server deadline: ${String(ga6Ga7Controls.ga6bDeadlineFiredWithNoServerEventAtAll)}, `
-    + `6c episode deadline ${String(epCloseAgeFromEpisodeStartMs)} ms -> ${String(epClose?.reason ?? 'none')} with ${String(epCountersAfter.inboundDelivered - epDeliveriesAtSilence)} deliveries and ${String(epFramesAfter - epFramesAtSilence)} room frames after, `
+    + `6c episode deadline ${String(epCloseAgeFromEpisodeStartMs)} ms -> ${String(epClose?.reason ?? 'none')} with ${String(epEpisodeEnd.deliveriesAtEpisodeEnd - epEpisodeEnd.deliveriesAtSilence)} deliveries and ${String(epFramesAfter - epFramesAtSilence)} room frames after, `
     + `7 close ${String(ga7Closure?.code ?? '-')} in ${String(ga7CloseElapsedMs)} ms (closed: ${String(ga7Closed)}, observation: ${String(ga7Observation !== null)}, retired ${String(ga7RetiredAtClose)}, refused ${String(ga7RefusalsForSeat)}, lossRecorded ${String(ga7LossRecorded)}, consumed ${String(ga7Observation?.['consumedCountAtClose'] ?? '-')}), recovered epoch ${String(ga7RecoveredEpoch)}\n`,
   );
   await Promise.race([server.close().catch(() => undefined), sleep(4_000)]);
