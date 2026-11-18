@@ -592,3 +592,35 @@ been green. That is stated rather than smoothed over: the retention guarantee cu
 `tests/unit/udg-003/capture-loop.test.ts`, `tests/unit/udg-003/task-case-artefacts.test.ts` and the local
 capture record, and the first hosted red after `350ff27` will be the first real exercise of it.
 
+---
+
+## 10. Closeout of the four defects that remain open (review turn, 2026-11-18)
+
+The reviewer **accepted** the `W-7` episode measurement repair and its controls at
+`74aa8dabbef7fcae5c455c24dfb326c2a57f6be2` (hosted CI [`44299429735`](https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44299429735),
+first attempt), kept Phase 3 **In Review**, accepted the controlled capture-retention proof as sufficient for
+review, and directed that no hosted failure be waited for or provoked to demonstrate it further.
+
+The remaining four defects are closed out individually — exact assertion, retained bytes, guarantee at risk, and
+one recommendation each — in
+[`evidence/UDG-003-phase-3-defect-closeout.md`](evidence/UDG-003-phase-3-defect-closeout.md). Summary of the
+recommendation, none of them blocking and all four still **unclassified** where no cause was demonstrated:
+
+| defect | assertion | guarantee at risk | recommendation |
+| --- | --- | --- | --- |
+| `W-7` delivery count | `runtime.test.ts:702` | GA-6c's "no fresh snapshot reaching the seat", and the three-limit map | carry forward to the reviewer; reopen on a retained case artefact or junit naming `:702` |
+| authority-to-client mapping | `stage-sequence.ts:497` (gate exit `2`), `runtime.test.ts:760`/`:761` | AC-6's `M` half as amended (`P`′ half is UDG-007's) | carry forward; reopen when a **case** read refuses, not only a reproduction; optional one-entry retention extension offered, not taken |
+| post-close input observation | `impairment-population.ts:958`, `runtime.test.ts:685` | containment, hence GA-6c/GA-7's "the seat stayed stopped" (UDG-008, UDG-SPIKE-001) | carry forward; reopen on `:685` or a retained `controls.…=false` |
+| `P-2b` refusal wording | `runtime.test.ts:577` (+`:573`, `:578`) | GA-7's branch attribution and recovery-path claim | carry forward; evidence is **quote only**, never reproduced; reopen on `:577` with a non-token message |
+
+Because §6.1 ends in *"one fix, chosen by the demonstrated cause"* while §7.3 requires *"W-A's §6 gate … met per
+defect"*, the closeout quotes both clauses and proposes three amendments instead of resolving the conflict
+quietly: **A-P3-5** close per assertion family (`:702` and `:704` have failed apart in one case, and junit reports
+only the first failure); **A-P3-6** the streak scores case ids, so a family-level carry-forward cannot inherit a
+case-level green; **A-P3-7** a producer refusal in the capture's reproduction, with every test case passing,
+FAILs that attempt's bundle and does not retro-FAIL the criterion for bundles holding a passing artefact.
+
+Nothing moved in the tree beyond records on this turn: no probe, harness, fixture, deadline, retry allowance,
+close code, refusal matching, policy sample or accepted assertion, and `stage-sequence.json` was deliberately not
+added to the retained case-artefact set. Gate A **Not Run**, GA-11 unevaluated, deduplication-triggered closure
+**disabled**, **D4 open**, acceptance reserved to the reviewer.

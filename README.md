@@ -29,7 +29,7 @@ a failing case actually read (`W-A-3`), and the CI capture loop attempts every p
 first red one (`WA-6`) — a red that deletes other tasks' evidence is not evidence. The first of those decisions
 was reviewed and accepted at `41934a1` (CI `44287836166`), and `W-7`'s episode tallies are now read at the
 episode end, before the harness is restored or cleanup starts, with cleanup observations retained separately and
-controls proving a cleanup callback cannot move an episode result. Every task after
+controls proving a cleanup callback cannot move an episode result. That repair was accepted at `74aa8dab` (CI `44299429735`), and the four defects still open — `W-7`'s delivery count, the authority-to-client mapping mismatch, the post-close input observation and `P-2b` — are now closed out individually with retained evidence, owners and reopening conditions rather than bundled as one flaky suite ([closeout](docs/contracts/assignments/evidence/UDG-003-phase-3-defect-closeout.md)). Every task after
 UDG-004 stays unassigned. Refinements P04, P05 and P07 to P10 remain pending (P03 was approved 2026-11-09).
 The planning contracts and their [adoption status](docs/contracts/adoption.md) remain the authority for what may be built next.
 

@@ -916,6 +916,38 @@ The `deliveriesReachingTheSeatDuringTheEpisode` sighting stays **unclassified** 
 while `silencing` is set — and `W-7` stays open, with the declared ten-pass W-A streak still standing on the
 tree it was run on rather than on this head.
 
+### UDG-003 Phase 3 — the `W-7` repair accepted, and the four open defects closed out individually (dated by commit)
+
+The integration owner reviewed `74aa8dabbef7` (CI `44299429735`, first attempt green) and **accepted the `W-7`
+episode measurement repair and its controls**, keeping Phase 3 **In Review** with acceptance reserved. The
+controlled capture-retention proof from the previous turn was accepted as sufficient for review, and it was
+directed that no hosted failure be waited for or provoked merely to demonstrate it.
+
+The four defects that remain were then closed out **individually** rather than as one flaky suite, in
+[`assignments/evidence/UDG-003-phase-3-defect-closeout.md`](assignments/evidence/UDG-003-phase-3-defect-closeout.md):
+each entry cites the exact assertion with file and line, the bytes actually retained, the guarantee the defect
+could affect, and exactly one recommendation — a blocking repair, or a carry-forward with a named owner and a
+byte-named condition for reopening. All four are carried forward, because none has a demonstrated cause and the
+assignment permits a fix only for a demonstrated cause: `W-7`'s delivery count (`runtime.test.ts:702`, GA-6c's
+premise that no fresh snapshot reached the seat), the authority-to-client mapping mismatch
+(`stage-sequence.ts:497`; `runtime.test.ts:760`/`:761`, AC-6's `M` half as amended, with `P`′ still UDG-007's), the
+post-close input observation (`impairment-population.ts:958`; `runtime.test.ts:685`, containment, owned onward by
+UDG-008 and UDG-SPIKE-001), and `P-2b`'s refusal wording (`runtime.test.ts:577`, GA-7's branch attribution —
+**quote only** in retained evidence, never reproduced in bytes). No unclassified cause was promoted, and the
+quarantine between the four holds: junit reports only the first failing assertion, so one case name can hide two
+independent readings.
+
+Where the assignment's own clauses collide — §6.1's *"one fix, chosen by the demonstrated cause"* against §7.3's
+*"W-A's §6 gate is met per defect"* — three amendments are **proposed** rather than assumed: **A-P3-5** closure per
+assertion family, **A-P3-6** the ten-pass streak scores case ids so a family-level carry-forward cannot inherit a
+case-level green, and **A-P3-7** a producer refusal in the capture's own reproduction FAILs that attempt's bundle
+without retro-invalidating bundles that hold a passing artefact.
+
+Nothing beyond records moved on this turn: no probe, harness, fixture, deadline, retry allowance, close code,
+refusal matching, policy sample or accepted assertion, and no historical bundle was re-judged. Gate A remains **Not
+Run**, GA-11 unevaluated, `stackCompatibility` not-established, deduplication-triggered closure **disabled**, `D4`
+**open**, and acceptance — task-level **Verified** included — remains the integration owner's alone.
+
 ### UDG-003 Phase 3 — first review decisions recorded, and the `W-7` measurement repair landed (dated by commit)
 
 The integration owner reviewed `41934a1` (CI `44287836166`) and **approved W-A-3, the capture-loop change and
