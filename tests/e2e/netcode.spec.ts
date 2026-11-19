@@ -776,7 +776,7 @@ const waitAuthorityTick = async (roomId: string, target: number, limitMs: number
   }
 };
 
-test('prediction slice: pinned prediction, two server-forced corrections at authority ticks 40/120, exactly-once replay, deadline recovery, read-only interpolation', async () => {
+test('prediction slice: pinned prediction, two server-forced corrections at the paced authority-tick windows around 40 and 120, exactly-once replay, deadline recovery, read-only interpolation', async () => {
   expect(fixture, 'the room fixture booted').toBeDefined();
   expect(roomClass, 'the live room class is reachable in-process').toBeDefined();
   const movementSpeed = fixture?.movementSpeed ?? 0;
@@ -997,7 +997,7 @@ test('prediction slice: pinned prediction, two server-forced corrections at auth
   const nonzero = corrections1.corrections.filter((row) => Math.abs(excess(row)) > 0.000001);
   const forced = nonzero.filter((row) => Math.abs(excess(row) - stepMetres) < 0.000001 && row.authorityTick >= 38 && row.authorityTick <= 48);
   const forced2 = nonzero.filter((row) => Math.abs(excess(row) - stepMetres) < 0.000001 && row.authorityTick >= 116 && row.authorityTick <= 128);
-  check('pred: exactly two UNEXPLAINED corrections in the whole raw trace — each exactly one predicted step, adopted at authority ticks 40 and 120 (genuine server refusals, induced through the public handle)',
+  check('pred: exactly two UNEXPLAINED corrections in the whole raw trace — each exactly one predicted step, adopted inside the paced windows 38-48 and 116-128 around authority ticks 40 and 120 (genuine server refusals, induced through the public handle; the exact consuming tick belongs to the authority, and the ledgers record which it was)',
     nonzero.length === 2 && forced.length === 1 && forced2.length === 1,
     { nonzero: nonzero.map((row) => ({ tick: row.authorityTick, raw: row.rawCorrectionZ, pending: row.pendingCount, excess: excess(row) })), stage1, stage2 });
   const everyForcedCorrectionIsAnAdoption = forced.length === 1 && forced2.length === 1
