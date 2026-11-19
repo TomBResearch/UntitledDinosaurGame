@@ -839,5 +839,112 @@ enforce-the-caller-restarting) rather than trusting the caller. Recorded, not im
 SDK-facing client surface is outside this round's grants.
 
 
+## 14. DPA-2: the WS-delay-proxy transport seam — measured, then reported (slice 6, 2026-11-19)
+
+DPA-2 (assignment §5) asks whether the development impairment proxy needs a dependency. The seam was
+built, driven by real browser seats and by pure-Node loops, and measured; nothing here is adopted —
+the decision returns to the delegated approver.
+
+**What was built (granted paths §3.1/§3.2, `tools/load-test/src/`, dependency-free).**
+`ws-delay-proxy.ts` — a transparent TCP-stream stall proxy: seeded (mulberry32 per direction, derived
+from the profile seed alone), **centred bounded uniform** one-way stall `halfRtt + U(−b/2, +b/2)`,
+single-in-flight FIFO pump per direction, backpressure-respecting writes, injectable `TimerDriver`
+(unit tests run it on a synthetic clock and reproduce the seeded schedule exactly), explicit `close()`
+that drains pending stalls **in order** before FIN, bounded buffers, and counters that make "zero"
+CHECKED (`chunksDropped` is structurally zero — the primitive has no drop path — and a hard close that
+would still find bytes queued marks the connection errored so a cut can never masquerade as a drain).
+`statistics.ts` — nearest-rank percentiles (sorted sample at `ceil(p·N)`), zero retention, the 100-ack
+insufficient-evidence floor, missing-samples failure, and the §2.2 achieved-network INVALID rule.
+`trace-writer.ts` — canonical key-ordered JSONL with stamped sequence numbers, reader-side gap
+re-derivation (a lost record FAILS the trace), append-after-close refusal, explicit drain/close.
+`run-spike.ts` — profile/seed/window guards (official cells need an adopted profile, a seed in
+{1001, 1002, 1003} and 20 s + 120 s; **a diagnostic label always demotes**), the §7.4 environment
+record, the epoch-aware `InputProducer` (restarts the generation sequence ONLY on a fresh issued
+epoch/snapshot — the A-2 regression written as code; it holds no timer, so a stall structurally cannot
+restart it), and a `--self-check` loopback measurement with a watchdog and a dangling-handle audit.
+
+**Measured behaviour (all on this container, pinned Node v24.22.2 / pnpm 12.18.0, chromium 158.0.8127.18).**
+
+| Measurement | Result |
+| --- | --- |
+| Pinned stack through the proxy | handshake, binary WS traffic and clean close complete; `@colyseus/ws-transport` → `ws@8.22.2` never observes the proxy (it is protocol-blind) |
+| Pure-Node self-check `lan` (30 RTs) | achieved p50 **4.06 ms** vs requested 4; achieved jitter (p95−p50) 2.04 vs budget 2; 0 order violations; 0 dropped; close drained; zero dangling handles |
+| Pure-Node self-check `elevated` (40 RTs) | achieved p50 **101.23 ms** vs requested 100; jitter 9.44 vs budget 20; valid; clean close |
+| Paired browser seats through the proxy (netcode suite, run 2026-11-19) | suite 109 checks / 0 failed (86 baseline + 23 impairment); observer saw the mover through both profiles; authority acked frames sent through the proxy; matched-ack ledger complete (one row per eligible ack, invalidated rows counted separately, coverage complete), zeros retained end to end (browser instrumenter zeros === Node retained zeros); trace files continuous |
+| Browser `lan` validity | achieved p50 2.80 vs requested 4 — **valid** |
+| Browser `elevated` calibration | achieved p50 96.17 vs 100 (median limb passes); achieved jitter **39.79 vs budget 20 → INVALID, recorded as INVALID** (see caveat below) |
+| Stalls are not a new domain (browser, A-2 over real impairment) | through ~1.4 s of 100/20 impairment: one epoch, generations 1..14, **zero restarts** |
+| Synthetic-clock unit tests | 5 proxy cases (exact per-chunk seeded stall reproduction, jitter-0 boundary, backpressure pause, bounded-buffer refusal, stall-never-drops byte fidelity) + 34 statistics/plan/trace cases — 39 total, deterministic |
+
+**Achieved-metric caveat the matrix must respect (honest, and it fired).** The proxy's achieved sample is the
+byte's real queue time inside the proxy, which includes any **backpressure drain wait** at the destination.
+The pure-Node elevated self-check (idle loopback) is valid at 9.44 ms jitter; the browser calibration on a
+loaded container page showed 39.79 — the renderer's bursty socket reads, not the stall model, widened the
+distribution. That is the §2.2 rule working: the run reported INVALID rather than a pass, and no rerun erased
+it. Consequences for the §4 matrix: run matrix cells on an unco-tenant runner, keep the raw
+requested/achieved pairs in the record (they are kept), and treat an INVALID cell as rerun-per-the-rule, never
+as a silent retry. An open DPA-2 sub-question for the approver: whether the record should ALSO carry an
+"achieved-at-fire" sample (schedule time before drain waiting) beside the end-to-end one; the harness can
+emit both without a model change — not added here because §7.4 asks for the end-to-end one and one number
+must own the verdict.
+
+**Why a TCP stall is not packet loss (the §2.2 documentation obligation).** A stall withholds bytes the
+connection has already guaranteed to deliver; a drop destroys a segment and leans on TCP recovery. This
+primitive only withholds — it never destroys a byte, forges a RST or exercises retransmission — so a run
+through it has an RTT/jitter distribution and **no loss distribution at all**. Any loss population over this
+path can only be the harness refusing to deliver an application message, and must be reported
+`dropModel: "application-layer delivery loss"`, `tcpLossModelled: false` (ADR-0003 §2.4); the harness names
+its own source via `impairmentSourceRecord` and `APP_LAYER_LOSS_LABEL`. Calling these stalls packet loss
+would overstate what the transport experienced, and the overstatement would travel into the gate evidence.
+
+**Dependency report (exact, per the instruction).** No dependency was added and the lockfile is unchanged
+(`pnpm dependencies:verify` green on this commit; no `tools/load-test/package.json` exists yet, so the
+workspace graph is untouched). The package that WOULD have sufficed for a message-level variant is the one
+already in the lockfile as the pinned transport's own dependency: **`ws@8.22.2`**, integrity
+`sha512-/rEZ2ejown2N5gxVTHUu9bVVC7ttu0/Tgzf5hbTOixR3Fs7mbbXgn2DbdbcKgJOmpQMtrIUWivtYuVMnp/W/yA==`
+(pnpm-lock.yaml), reached transitively via `@colyseus/ws-transport@0.18.4`; its scope of use would have
+been **test-only** (`@udg/load-test` devDependency, never shipped). It is NOT used and NOT adopted: a
+framing proxy adds a dependency between the measurement and the thing measured, re-encodes frames the
+server's TCP stack then sees differently, and buys nothing the TCP-level seam cannot do. If the approver
+later wants message-level impairment (e.g. per-message jitter for large patches), that is a T-9
+registration of exactly that package with that scope; the alternative kept here is the status quo:
+`node:net`, zero pins. **DPA-2 ask, precisely:** (1) accept `node:net` as the supported public transport
+seam — no new pin; (2) when the matrix slice wires the harness into the workspace graph (T-1/T-3),
+creating `tools/load-test/package.json` (zero external dependencies) will add one importer entry to
+`pnpm-lock.yaml` and one workspace row to `docs/integration/dependencies.json` (re-recorded by
+`pnpm dependencies:record`). That zero-dependency bookkeeping is the only lockfile touch this route needs;
+it is named here for the approver rather than performed.
+
+**First-run defects preserved as evidence (not hidden).** The first elevated self-check (18:25 UTC) hung in
+close and left a 39/40-record trace whose records carried `runLabel "official:elevated:1001"` — a labelling
+defect (`planSpikeRun` let a diagnostic-labelled run wear an official cell's clothes) and a harness defect
+(a `drain`-waited write could outlive its socket, so the pump never resumed). Both are fixed (diagnostic
+always demotes; a driver-time backstop collects a dead-peer pump; close now errors a connection whose
+queue was cut; output files are namespaced per profile/seed; the self-check carries a watchdog and a
+handle audit). The preserved artefacts live under `artifacts/.local/spike-001/dpa2/`
+(`first-elevated-self-check-stalls-INCOMPLETE.jsonl` + `README-first-run.md`), gitignored store, named here
+so the reviewer can ask for them.
+
+**Where the remaining Gate A cases attach (plan, not implementation).** All mount on this infrastructure in
+later slices; none is implemented here.
+
+| Case | Mounts on | How |
+| --- | --- | --- |
+| GA-5a/5b (dedupe followed / terminal dedupe) | `tests/spikes/spike-001.test.ts` via `run-spike` | loss is injected ONLY as application-layer delivery refusal (labelled); the stall proxy stays byte-complete; the named-gap reproduction stays with the harness envelope, never a "packet loss" claim |
+| GA-6a/6b/6c (stalled delivery, client-local deadline) | same, + the existing browser deadline-recovery evidence in `netcode.spec.ts` | the proxy is the natural stall generator for 6a/6b (stop forwarding a direction — a forward-stop is a stall, still not a drop); 6c rides the ADR ladder already proven in the browser suite |
+| GA-7 (final publication withheld) | spike harness | close-with-held-patch at the application layer with the §3.1 close record read from the authority ledger, attribution kept per CF-4 |
+| GA-11 (production settings measured) | `run-spike` matrix record | every population names its source (`impairmentSourceRecord`); achieved p99 RTT and jitter come from the RAW pairs the proxy keeps; the two inequalities evaluate only on declared-measured values; harness loss populations carry `dropModel`/`tcpLossModelled` beside every number |
+| GA-12 (PE-1…PE-5 positive evidence) | spike harness + the retirement ladder already in the browser suite | terminal dedupe stays outside the closure path; Codex reviews the GA-12 record against ADR-0003 before any Gate A decision (§2.4) |
+| CF-1 (W-7 delivery count vs GA-6c premise) | spike envelope | the spike's own envelope (this harness, its own ledgers) is the evidence; the UDG-003 harness numbers cannot close it — resolved with spike evidence or the gate blocks |
+| CF-3 (post-close input observation vs GA-6c/GA-7 containment) | spike envelope | same route: post-close send observation recorded from the spike's own client ledgers, never inferred |
+| CF-4 (P-2b refusal wording vs GA-7 branch attribution) | spike envelope | branch attribution read from the room's closure ledger through the harness, wording reproduced from the refusal actually raised |
+
+**What this section does not claim.** No p95 correction verdict (the smoke's populations deliberately fail
+the 100-ack floor and say so); no profile/seed/window above is an official matrix cell; `test:spike` dispatch
+(T-1b/T-2/T-3 wiring) is deliberately NOT exercised — the harness is a library plus smoke until the matrix
+slice wires it, and the accepted contract suite's "still refuses the spike command" assertion therefore
+remains true and green; Gate A remains **Not Run**; DPA-1 stands as measured earlier (§12); nothing here
+passes, adopts or freezes anything.
+
 [docs]: https://docs.colyseus.io/ 'Colyseus documentation (versionless URL; the pinned package is the authority)'
 [pinned]: https://www.npmjs.com/package/@colyseus/core/v/0.18.27 'pinned package page'

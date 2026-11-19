@@ -46,6 +46,11 @@ import { pathToFileURL } from 'node:url';
 
 import { chromium, expect, test, type Browser, type Page } from '@playwright/test';
 
+import { networkValidity, summarizeCorrections, summarizeDelays } from '../../tools/load-test/src/statistics.ts';
+import { captureEnvironmentRecord, impairmentSourceRecord, planSpikeRun } from '../../tools/load-test/src/run-spike.ts';
+import { createTraceWriter, readTrace } from '../../tools/load-test/src/trace-writer.ts';
+import { createWsDelayProxy } from '../../tools/load-test/src/ws-delay-proxy.ts';
+
 import { startHarnessServer } from '../support/client-harness/transport.mjs';
 
 const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '..', '..');
@@ -374,10 +379,13 @@ interface SeatSetup {
 const ADAPTER_URL = '/src/network/ColyseusPredictionAdapter.ts';
 const REMOTE_URL = '/src/network/RemotePresentation.ts';
 
-/** Join the seat inside the page, over the client modules the pipeline serves. */
+/** Join the seat inside the page, over the client modules the pipeline serves. `endpointOverride`
+ * exists for the impairment-proxy smoke: the seat joins the PROXY, and the proxy forwards to the
+ * fixture room; nothing else about the join path changes. */
 const joinSeat = async (
   page: Page,
   target: { mode: 'create'; roomName: string } | { mode: 'byId'; roomId: string },
+  endpointOverride?: string,
 ): Promise<SeatSetup> =>
   page.evaluate(async (args) => {
     const adapter = (await import(/* @vite-ignore */ args.adapterUrl)) as {
@@ -410,7 +418,7 @@ const joinSeat = async (
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
   }, {
-    endpoint: fixture?.endpoint ?? '',
+    endpoint: endpointOverride ?? fixture?.endpoint ?? '',
     join: target,
     presentation: fixture?.presentation ?? {},
     adapterUrl: ADAPTER_URL,
@@ -878,6 +886,18 @@ interface PredSeatWindow {
     readonly peerId: string;
     renders: { t: number; x: number; z: number; alpha: number; holding: boolean; fromTick: number; toTick: number }[];
     foldTimer: ReturnType<typeof setInterval> | null;
+  };
+  /** Impairment-proxy smoke (slice 6): the mover through the WS delay proxy. */
+  __udgImpSeat?: {
+    readonly transport: PredTransportSurface;
+    readonly predictor: PredPredictorSurface;
+    readonly roomId: string;
+    readonly sessionId: string;
+    generation: number;
+    /** Protocol §4.2 / A-2: the mover restarts its sequence ONLY when this changes. */
+    lastSeenEpoch: number;
+    restarts: number;
+    tickStop: boolean;
   };
 }
 
@@ -2425,6 +2445,359 @@ test('retirement overflow in the browser: EVENT 1 (offender closed through the A
   const retirementFailures = checks.filter((record) => record.name.startsWith('retirement') && !record.ok);
   expect.soft(retirementFailures, `failed retirement checks: ${JSON.stringify(retirementFailures.map((record) => record.name))}`).toEqual([]);
 });
+
+
+// --------------------------------------------------------------------------- impairment-proxy smoke (slice 6)
+
+/**
+ * DPA-2 feasibility, in the browser seat: two real contexts join the SAME pinned room through
+ * the `tools/load-test` WebSocket delay proxy — a TCP-stream stall primitive with seeded,
+ * centred, bounded jitter — and exchange movement. Two cells run, BOTH labelled diagnostic:
+ *
+ * 1. a **LAN-labelled baseline** (`lan` profile, seed 1001, short window): the proxy path must
+ *    be transparent — acks flow, the observer sees the mover travel, the proxy's own audit says
+ *    order preserved / nothing dropped / requested≈achieved, and the matched-ack correction
+ *    ledger survives the round trip through the proxy with zero retention and no missing samples;
+ * 2. a **labelled elevated calibration** (`elevated` profile, seed 1001, ~2 s of movement): the
+ *    §2.2 achieved-network rule is computed from the proxy's RAW requested/achieved samples and
+ *    reported, the mover proves at browser level that stalls are NOT a new domain (the A-2
+ *    producer rule: generations restart only on a fresh issued epoch, and a stall-filled run
+ *    must record zero restarts).
+ *
+ * What this is NOT: it is not a p95 gate, not a matrix cell, and not a correction verdict. The
+ * windows are seconds, not 20 s + 120 s, so every population here fails the 100-ack floor ON
+ * PURPOSE — the run asserts the rule FIRES (insufficient-evidence, and ONLY that) so the short
+ * run can never be misread as an eligible one. The official matrix attaches at the §4 Gate A
+ * layout; the room is the fixture's shared-kernel room, unchanged.
+ */
+interface ImpMovementReport {
+  readonly sent: number;
+  readonly restarts: number;
+  readonly epochs: readonly number[];
+  readonly generations: readonly number[];
+  readonly lastProcessed: number;
+}
+
+interface ImpLedger {
+  readonly stats: { measured: number; zero: number; anchored: number; invalidated: number; nonAdvancingDeliveries: number; adoptions: number; adoptionCoverageIncomplete: number };
+  readonly rows: readonly { atMs: number; authorityTick: number; epoch: number; ackFrom: number; ackTo: number; seqs: readonly number[]; status: string; correctionX: number; correctionZ: number; magnitude: number }[];
+}
+
+const joinImpSeat = async (
+  page: Page,
+  endpoint: string,
+  target: { mode: 'create'; roomName: string } | { mode: 'byId'; roomId: string },
+): Promise<SeatSetup> =>
+  page.evaluate(async (args) => {
+    const adapter = (await import(/* @vite-ignore */ args.adapterUrl)) as PredModuleSurface;
+    const joined = await adapter.createSdkSeatTransport({
+      endpoint: args.endpoint,
+      join: args.join,
+      presentation: args.presentation,
+      epochTimeoutMs: 15_000,
+    });
+    const predictor = new adapter.DirectMotionPredictor(joined.transport, {
+      speed: args.speed,
+      ledgerLimit: 20_000,
+      snapshotDeadlineMs: 500,
+    });
+    predictor.attach();
+    const raf = (): void => {
+      const seat = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+      if (seat === undefined || !seat.tickStop) predictor.tick(performance.now());
+      requestAnimationFrame(raf);
+    };
+    requestAnimationFrame(raf);
+    const epoch0 = joined.transport.issuedEpoch();
+    (globalThis as unknown as PredSeatWindow).__udgImpSeat = {
+      transport: joined.transport,
+      predictor,
+      roomId: joined.roomId,
+      sessionId: joined.sessionId,
+      generation: 0,
+      lastSeenEpoch: epoch0,
+      restarts: 0,
+      tickStop: false,
+    };
+    return { ok: true, roomId: joined.roomId, sessionId: joined.sessionId, epoch: epoch0 };
+  }, {
+    endpoint,
+    join: target,
+    presentation: fixture?.presentation ?? {},
+    adapterUrl: ADAPTER_URL,
+    speed: fixture?.movementSpeed ?? 4,
+  });
+
+const runImpMover = async (page: Page, frames: number, axis: 'x' | 'z'): Promise<ImpMovementReport> =>
+  page.evaluate(async (args) => {
+    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+    if (holder === undefined) throw new Error('the impairment mover is not joined');
+    const generations: number[] = [];
+    const epochs: number[] = [];
+    for (let i = 0; i < args.frames; i += 1) {
+      const epoch = holder.transport.issuedEpoch();
+      if (holder.lastSeenEpoch !== epoch) {
+        // A-2 rule: a fresh issued epoch/snapshot is the ONLY restart trigger. Stalls, late
+        // deliveries and wall-clock time have no path to this branch — there is no timer here.
+        holder.lastSeenEpoch = epoch;
+        holder.generation = 0;
+        holder.restarts += 1;
+      }
+      holder.generation += 1;
+      holder.predictor.send(
+        { generation: holder.generation, moveX: args.axis === 'x' ? 1 : 0, moveZ: args.axis === 'z' ? 1 : 0 },
+        true,
+      );
+      generations.push(holder.generation);
+      epochs.push(epoch);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return {
+      sent: generations.length,
+      restarts: holder.restarts,
+      epochs: [...new Set(epochs)],
+      generations,
+      lastProcessed: holder.transport.handle().lastProcessed,
+    };
+  }, { frames, axis });
+
+const readImpLedger = async (page: Page): Promise<ImpLedger> =>
+  page.evaluate(() => {
+    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+    if (holder === undefined) throw new Error('the impairment mover is not joined');
+    return { stats: holder.predictor.matchedInstrumentStats(), rows: holder.predictor.matchedCorrections() };
+  });
+
+/** Let every in-proxy stall drain (driver: real timers) before snapshotting proxy stats —
+ * byte-fidelity claims are only meaningful over a settled queue. */
+const settleProxy = async (proxy: { stats(): { c2s: { bufferedBytes: number }; s2c: { bufferedBytes: number } } }, maxMs = 5_000): Promise<void> => {
+  const started = Date.now();
+  while (Date.now() - started < maxMs) {
+    const snap = proxy.stats();
+    if (snap.c2s.bufferedBytes === 0 && snap.s2c.bufferedBytes === 0) return;
+    await sleep(50);
+  }
+};
+
+const closeImpSeat = async (page: Page): Promise<void> => {
+  await page.evaluate(async () => {
+    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+    if (holder === undefined) return;
+    holder.tickStop = true;
+    await holder.transport.close();
+  });
+};
+
+const consecutiveFromOne = (values: readonly number[]): boolean =>
+  values.every((value, index) => value === index + 1);
+
+test('impairment proxy smoke: paired browser seats through the WS delay proxy — LAN-labelled baseline and a labelled elevated calibration (both diagnostic; no p95 gate)', async () => {
+  expect(fixture, 'the room fixture booted').toBeDefined();
+  const roomPort = Number(new URL(fixture?.endpoint ?? 'http://127.0.0.1:0').port);
+  check('impairment: the proxy target port parses from the fixture endpoint', Number.isInteger(roomPort) && roomPort > 0, roomPort);
+  const kernelCallsBefore = kernelStepper?.kernelStepperSentinel.calls ?? 0;
+
+  const planLan = planSpikeRun({ profile: 'lan', seed: 1001, diagnostic: { reason: 'paired-browser-smoke' } });
+  const planElev = planSpikeRun({ profile: 'elevated', seed: 1001, diagnostic: { reason: 'paired-browser-elevated-calibration' } });
+  check('impairment: both smoke cells are LABELLED diagnostic and neither is an official matrix cell',
+    planLan.official === false && planElev.official === false && /diagnostic:/.test(planLan.label) && /diagnostic:/.test(planElev.label),
+    { lan: planLan.label, elevated: planElev.label });
+
+  // ============================ phase 1: LAN-labelled baseline through the proxy ============
+  const proxyLan = await createWsDelayProxy({ listenPort: 0, targetHost: '127.0.0.1', targetPort: roomPort, profile: planLan.impairment });
+  const proxyUrlLan = `http://127.0.0.1:${String(proxyLan.port)}`;
+
+  const pageM = await openSeatPage('imp-M', { bare: true });
+  const joinM = await joinImpSeat(pageM, proxyUrlLan, { mode: 'create', roomName: ROOM_NAME });
+  check('impairment: the mover seat joined the pinned room THROUGH the delay proxy', joinM.ok === true && typeof joinM.sessionId === 'string', joinM);
+  const roomIdImp = joinM.roomId ?? '';
+  const pageO = await openSeatPage('imp-O', { bare: true });
+  const joinO = await joinSeat(pageO, { mode: 'byId', roomId: roomIdImp }, proxyUrlLan);
+  check('impairment: the observer seat joined the SAME room through the SAME proxy', joinO.ok === true && joinO.roomId === roomIdImp, joinO);
+
+  const lanMove = await runImpMover(pageM, 8, 'x');
+  await settleProxy(proxyLan);
+  const lanLedger = await readImpLedger(pageM);
+  const lanObserver = await reportSeat(pageO);
+  const lanProxy = proxyLan.stats();
+  const trackOfMover = lanObserver.tracks.find((track) => track.sessionId === joinM.sessionId);
+
+  check('impairment[lan]: the observer saw the mover travel on +x through the proxy with no tick regression',
+    (trackOfMover?.delta.x ?? 0) > 0 && (trackOfMover?.tickRegressions ?? 1) === 0 && (trackOfMover?.epochChanges ?? 1) === 0,
+    { delta: trackOfMover?.delta, regressions: trackOfMover?.tickRegressions });
+  check('impairment[lan]: the authority acknowledged frames SENT THROUGH the proxy (lastProcessed > 0)', lanMove.lastProcessed > 0, lanMove);
+  check('impairment[lan]: per-direction order held and nothing was dropped on the stall path',
+    lanProxy.c2s.orderViolations === 0 && lanProxy.s2c.orderViolations === 0 && lanProxy.c2s.chunksDropped === 0 && lanProxy.s2c.chunksDropped === 0,
+    { c2sOrder: lanProxy.c2s.orderViolations, s2cOrder: lanProxy.s2c.orderViolations });
+  check('impairment[lan]: per-direction byte order held and requested/achieved raw stall pairs were recorded on both lanes',
+    lanProxy.c2s.orderViolations === 0 && lanProxy.s2c.orderViolations === 0 && lanProxy.c2s.delayPairs.length > 0 && lanProxy.s2c.delayPairs.length > 0,
+    { c2sPairs: lanProxy.c2s.delayPairs.length, s2cPairs: lanProxy.s2c.delayPairs.length });
+  const lanValidity = networkValidity({
+    requestedRttMs: planLan.profile.rttMs,
+    declaredJitterBudgetMs: planLan.profile.jitterBudgetMs,
+    achievedRttSamples: lanProxy.achievedRttSamples,
+  });
+  check('impairment[lan]: the achieved-network record satisfies the §2.2 validity rule over the proxy RAW samples',
+    lanValidity.valid, { requested: planLan.profile.rttMs, achieved: lanValidity.achieved, reasons: lanValidity.reasons });
+
+  // The matched-ack horizontal metric through the impaired path: exact rows, zero retention, and
+  // the insufficient-evidence floor FIRING (this is a seconds-long run — it must fail the 100-ack
+  // rule loudly, which is what proves a short run can never pass as an eligible one).
+  // The instrumenter's vocabulary: 'measured' rows are the eligible matched-ack population;
+  // 'anchored' is the one seed row per domain (excluded, never counted); invalidated rows carry
+  // NaN and fail coverage. The Node-side population is built from 'measured' rows ONLY, so the
+  // zero-retention comparison against stats.zero is like for like.
+  const lanMeasured = lanLedger.rows.filter((row) => row.status === 'measured');
+  const lanInvalidated = lanLedger.rows.filter((row) => row.status === 'invalidated-missing-frames');
+  const lanTrace = createTraceWriter(join(OUT_DIR, 'matched-ack-lan-diagnostic.jsonl'));
+  for (const row of lanLedger.rows) {
+    lanTrace.append({ runLabel: planLan.label, phase: 'lan-baseline', authorityTick: row.authorityTick, epoch: row.epoch, ackFrom: row.ackFrom, ackTo: row.ackTo, seqs: row.seqs, status: row.status, correctionX: Number.isFinite(row.correctionX) ? row.correctionX : null, correctionZ: Number.isFinite(row.correctionZ) ? row.correctionZ : null, magnitudeMetres: Number.isFinite(row.magnitude) ? row.magnitude : null });
+  }
+  const lanTraceSummary = await lanTrace.close();
+  const lanTraceRead = readTrace(join(OUT_DIR, 'matched-ack-lan-diagnostic.jsonl'));
+  const lanSummary = summarizeCorrections(lanMeasured.map((row) => ({ magnitudeMetres: row.magnitude })), lanLedger.stats.measured);
+  check('impairment[lan]: the matched-ack ledger has one row per eligible ack — NO missing samples — invalidated rows equal the invalidated counter, and coverage is complete',
+    lanMeasured.length === lanLedger.stats.measured && lanInvalidated.length === lanLedger.stats.invalidated && lanSummary.missing === 0 && lanLedger.stats.adoptionCoverageIncomplete === 0 && lanLedger.stats.measured > 0,
+    { measuredRows: lanMeasured.length, measured: lanLedger.stats.measured, invalidatedRows: lanInvalidated.length, invalidated: lanLedger.stats.invalidated, missing: lanSummary.missing, coverageIncomplete: lanLedger.stats.adoptionCoverageIncomplete });
+  check('impairment[lan]: zero corrections are RETAINED end to end — the browser instrumenter zero count equals the Node-side retained zeros over the same population',
+    lanSummary.zeroValues === lanLedger.stats.zero && lanSummary.zeroValues + lanSummary.nonzeroValues === lanSummary.measured,
+    { browserZeros: lanLedger.stats.zero, nodeZeros: lanSummary.zeroValues, measured: lanSummary.measured });
+  check('impairment[lan]: the short run FAILS the 100-ack floor with ONLY insufficient-evidence — the rule fires, so a diagnostic can never pose as eligible',
+    lanSummary.failures.length === 1 && lanSummary.failures[0] === 'insufficient-evidence',
+    { failures: lanSummary.failures, n: lanSummary.measured });
+  check('impairment[lan]: the written trace is continuous (no seq gaps, no reordering) and holds every row',
+    lanTraceRead.gaps.length === 0 && lanTraceRead.outOfOrder === false && lanTraceRead.records.length === lanTraceSummary.records && lanTraceSummary.records === lanLedger.rows.length,
+    { gaps: lanTraceRead.gaps, records: lanTraceSummary.records, rows: lanLedger.rows.length });
+
+  await closeImpSeat(pageM);
+  await closeSeat(pageO);
+  await proxyLan.close();
+  const lanProxyClosed = proxyLan.stats();
+  // Byte fidelity is asserted over the CLOSED stats: the room keeps patching while seats sit open,
+  // so a mid-run snapshot legitimately catches a stall in flight. After an explicit drained close
+  // every accepted byte has crossed, and a zero error count certifies no hard-close ever cut a
+  // queue — errors would be exactly that, and the check would fail with the numbers in detail.
+  check('impairment[lan]: explicit proxy close drained every stall in order — every accepted byte crossed, zero active connections, zero hard-close cuts',
+    lanProxyClosed.connections.active === 0 && lanProxyClosed.connections.errors === 0
+    && lanProxyClosed.c2s.bytesDelivered === lanProxyClosed.c2s.bytesReceived && lanProxyClosed.s2c.bytesDelivered === lanProxyClosed.s2c.bytesReceived,
+    {
+      connections: lanProxyClosed.connections,
+      c2s: { r: lanProxyClosed.c2s.bytesReceived, d: lanProxyClosed.c2s.bytesDelivered },
+      s2c: { r: lanProxyClosed.s2c.bytesReceived, d: lanProxyClosed.s2c.bytesDelivered },
+    });
+  await pageM.context().close();
+  await pageO.context().close();
+
+  // ==================== phase 2: labelled elevated calibration through a second proxy ========
+  const proxyElev = await createWsDelayProxy({ listenPort: 0, targetHost: '127.0.0.1', targetPort: roomPort, profile: planElev.impairment });
+  const proxyUrlElev = `http://127.0.0.1:${String(proxyElev.port)}`;
+  const pageM2 = await openSeatPage('imp-M2', { bare: true });
+  const joinM2 = await joinImpSeat(pageM2, proxyUrlElev, { mode: 'create', roomName: ROOM_NAME });
+  const pageO2 = await openSeatPage('imp-O2', { bare: true });
+  const joinO2 = await joinSeat(pageO2, { mode: 'byId', roomId: joinM2.roomId ?? '' }, proxyUrlElev);
+  check('impairment[elevated]: the calibration seats joined through the elevated-profile proxy', joinM2.ok === true && joinO2.ok === true, { m: joinM2, o: joinO2 });
+
+  const elevMove = await runImpMover(pageM2, 14, 'z');
+  await settleProxy(proxyElev, 8_000);
+  const elevLedger = await readImpLedger(pageM2);
+  const elevObserver = await reportSeat(pageO2);
+  const elevProxy = proxyElev.stats();
+  const trackElev = elevObserver.tracks.find((track) => track.sessionId === joinM2.sessionId);
+
+  check('impairment[elevated]: movement completes through the impaired path (observer sees +z, no regressions)',
+    (trackElev?.delta.z ?? 0) > 0 && (trackElev?.tickRegressions ?? 1) === 0, { delta: trackElev?.delta });
+  check('impairment[elevated]: STALLS ARE NOT A NEW DOMAIN — through ~1.4 s of 100/20 impairment the mover issued ONE epoch and its generations ran 1..N with ZERO restarts (the A-2 producer rule, proven over real impairment)',
+    elevMove.restarts === 0 && elevMove.epochs.length === 1 && consecutiveFromOne(elevMove.generations),
+    { restarts: elevMove.restarts, epochs: elevMove.epochs, generations: elevMove.generations });
+
+  const elevValidity = networkValidity({
+    requestedRttMs: planElev.profile.rttMs,
+    declaredJitterBudgetMs: planElev.profile.jitterBudgetMs,
+    achievedRttSamples: elevProxy.achievedRttSamples,
+  });
+  // Honest §2.2 handling on a short diagnostic calibration: the achieved record is stated RAW
+  // (requested, achieved p50/p95, the jitter statistic, the sample count) and the INVALID rule
+  // is EVALUATED and recorded — an INVALID calibration reports INVALID, it never re-runs into a
+  // claim. (Backpressure from a busy runner inflates achieved queue time over the pure stall;
+  // the official matrix will re-run per the rule, and this smoke proves the rule fires.)
+  check('impairment[elevated]: the calibration states its achieved record (requested p50/p95, achieved p50/p95, jitter statistic, sample count) and the §2.2 verdict is recorded as the ACTUAL verdict — pass or INVALID, never silent',
+    elevValidity.achieved !== null && elevValidity.achieved.n > 0 && typeof elevValidity.valid === 'boolean' && Array.isArray(elevValidity.reasons),
+    {
+      verdict: elevValidity.valid ? 'valid' : 'INVALID',
+      requested: planElev.profile.rttMs,
+      achievedP50: elevValidity.achieved?.p50,
+      achievedP95: elevValidity.achieved?.p95,
+      jitterP95P50: elevValidity.achievedJitterMs,
+      samples: elevValidity.achieved?.n ?? 0,
+      reasons: elevValidity.reasons,
+    });
+  check('impairment[elevated]: under impairment the order audit held and the stall path dropped nothing',
+    elevProxy.c2s.orderViolations === 0 && elevProxy.s2c.orderViolations === 0 && elevProxy.c2s.chunksDropped === 0,
+    { c2sOrder: elevProxy.c2s.orderViolations, s2cOrder: elevProxy.s2c.orderViolations });
+
+  const elevTrace = createTraceWriter(join(OUT_DIR, 'matched-ack-elevated-diagnostic.jsonl'));
+  for (const row of elevLedger.rows) {
+    elevTrace.append({ runLabel: planElev.label, phase: 'elevated-calibration', authorityTick: row.authorityTick, epoch: row.epoch, ackFrom: row.ackFrom, ackTo: row.ackTo, seqs: row.seqs, status: row.status, correctionX: Number.isFinite(row.correctionX) ? row.correctionX : null, correctionZ: Number.isFinite(row.correctionZ) ? row.correctionZ : null, magnitudeMetres: Number.isFinite(row.magnitude) ? row.magnitude : null });
+  }
+  const elevTraceSummary = await elevTrace.close();
+  const elevMeasuredRows = elevLedger.rows.filter((row) => row.status === 'measured');
+  const elevSummary = summarizeCorrections(elevMeasuredRows.map((row) => ({ magnitudeMetres: row.magnitude })), elevLedger.stats.measured);
+  check('impairment[elevated]: the elevated ledger is complete and its ONLY failure is the short-run floor (missing samples would be a different, failing reason)',
+    elevSummary.missing === 0 && elevSummary.measured === elevLedger.stats.measured && elevSummary.failures.length === 1 && elevSummary.failures[0] === 'insufficient-evidence' && elevTraceSummary.records === elevLedger.rows.length,
+    { missing: elevSummary.missing, failures: elevSummary.failures, records: elevTraceSummary.records });
+
+  await closeImpSeat(pageM2);
+  await closeSeat(pageO2);
+  await proxyElev.close();
+  const elevProxyClosed = proxyElev.stats();
+  check('impairment[elevated]: the elevated proxy stalled, never dropped — the CLOSED stats show every accepted byte crossed, zero active connections, zero hard-close cuts',
+    elevProxyClosed.connections.active === 0 && elevProxyClosed.connections.errors === 0
+    && elevProxyClosed.c2s.bytesDelivered === elevProxyClosed.c2s.bytesReceived && elevProxyClosed.s2c.bytesDelivered === elevProxyClosed.s2c.bytesReceived,
+    {
+      connections: elevProxyClosed.connections,
+      c2s: { r: elevProxyClosed.c2s.bytesReceived, d: elevProxyClosed.c2s.bytesDelivered },
+      s2c: { r: elevProxyClosed.s2c.bytesReceived, d: elevProxyClosed.s2c.bytesDelivered },
+    });
+
+  check('impairment: the impaired seats ran through the shared step kernel (the fixture room stepped more authority ticks)',
+    (kernelStepper?.kernelStepperSentinel.calls ?? 0) > kernelCallsBefore,
+    { before: kernelCallsBefore, after: kernelStepper?.kernelStepperSentinel.calls ?? 0 });
+
+  const impErrors = ['imp-M', 'imp-O', 'imp-M2', 'imp-O2'].flatMap((label) => pageErrorSinks.get(label) ?? []);
+  check('impairment: no unexpected page or console errors on any impaired seat', impErrors.length === 0, impErrors.slice(0, 4));
+
+  // The efficient local evidence for this slice: raw samples kept, not just the verdicts.
+  mkdirSync(dirname(RESULTS_FILE), { recursive: true });
+  writeFileSync(join(OUT_DIR, 'impairment-proxy-stats.json'), `${JSON.stringify({
+    schemaVersion: 1,
+    taskId: TASK_ID,
+    implementationSha: headSha(),
+    gate: 'Not Run — diagnostic infrastructure smoke; no p95 gate, no matrix verdict',
+    environment: { ...captureEnvironmentRecord(), browser: browser?.version() ?? 'unknown', headed: 'headless' },
+    impairmentSource: impairmentSourceRecord(true),
+    runs: {
+      lan: {
+        label: planLan.label, official: planLan.official, requested: { rttMs: planLan.profile.rttMs, jitterBudgetMs: planLan.profile.jitterBudgetMs, seed: planLan.seed },
+        requestedAchievedC2s: summarizeDelays(lanProxy.c2s.delayPairs),
+        requestedAchievedS2c: summarizeDelays(lanProxy.s2c.delayPairs),
+        validity: lanValidity, rawRttSamples: lanProxy.achievedRttSamples, proxyConnections: lanProxyClosed.connections,
+        matchedAck: { stats: lanLedger.stats, summary: lanSummary },
+      },
+      elevated: {
+        label: planElev.label, official: planElev.official, requested: { rttMs: planElev.profile.rttMs, jitterBudgetMs: planElev.profile.jitterBudgetMs, seed: planElev.seed },
+        requestedAchievedC2s: summarizeDelays(elevProxy.c2s.delayPairs),
+        requestedAchievedS2c: summarizeDelays(elevProxy.s2c.delayPairs),
+        validity: elevValidity, rawRttSamples: elevProxy.achievedRttSamples, proxyConnections: elevProxyClosed.connections,
+        matchedAck: { stats: elevLedger.stats, summary: elevSummary },
+        producerRule: elevMove,
+      },
+    },
+  }, null, 2)}\n`);
+});
+
+limitations.push('Impairment-proxy smoke (slice 6): BOTH cells are short DIAGNOSTIC runs (lan-labelled baseline and elevated calibration) — they certify the proxy primitive, the statistics, the trace semantics and the achieved-network rule, and they certify NOTHING about the p95 correction gate: the windows are seconds, every population here deliberately fails the 100-ack floor, and no profile/seed/window in this test matches an official matrix cell.');
+limitations.push('Impairment semantics: the proxy STALLS TCP streams (seeded, centred, bounded; byte order preserved) and models NO packet loss — any future loss population over this path is application-layer delivery loss by ADR-0003 §2.4 and travels labelled as such (dropModel set, tcpLossModelled false). A TCP stall is not packet loss: it withholds bytes the connection already guaranteed; it never destroys one.');
 
 limitations.push('Two-browser-context loopback smoke: it certifies nothing about the four-profile Gate A matrix, the seeds, impairment, forced corrections, or the 20-client ten-minute workload.');
 limitations.push('Gate A remains Not Run; the client compiler diagnostics are a separate claim in docs/integration/colyseus-0.18-api-map.md §12 and docs/adr/0004-client-declaration-checking-exception.md.');

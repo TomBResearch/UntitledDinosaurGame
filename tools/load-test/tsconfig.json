@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tsconfig.base.json",
+  "//": "UDG-SPIKE-001 spike harness package (assignment §3.1). Deliberately dependency-free: the DPA-2 measurement (docs/integration/colyseus-0.18-api-map.md §14) showed node:net alone carries the stall primitive, so no package.json / lockfile importer exists until the delegated approver decides DPA-2; until then this project is checked and built explicitly (tsc -p tools/load-test/tsconfig.json), not through the workspace graph, and the repository's accepted typecheck/lint gates still cover every file here through the importing suites.",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "lib": ["ES2024"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}
