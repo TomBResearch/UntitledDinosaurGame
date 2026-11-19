@@ -26,6 +26,10 @@ const peer = (tick: number, x: number): SeatObservation => ({
   movementMode: 1,
   movementModeName: 'direct',
   connected: true,
+  inputResolvedThrough: 0,
+  inputGapStart: 0,
+  inputGapEnd: 0,
+  inputRetiredUnrepresented: 0,
 });
 
 const snapshotOf = (peers: readonly SeatObservation[]): RegionSnapshot => ({

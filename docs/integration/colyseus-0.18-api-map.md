@@ -618,5 +618,34 @@ first-party error, an exception confined to one project and audited by a suite),
 public API works in two browsers. Neither statement may be read as the other, and `stackCompatibility` stays
 `not-established` until Gate A runs on an exact candidate.
 
+## 13. The seat-side predictor (UDG-SPIKE-001 slice 4): the public `predict` surface, and the one boundary it cannot move
+
+Slice 4 adds seat-side prediction on public primitives only. `ColyseusPredictionAdapter.ts` composes the SDK's
+published `Reconciler` — it does not re-implement prediction — behind a delivery guard that ADR-0003 owns. Names
+used, all from the package root (`@colyseus/sdk@0.18.9`):
+
+| name | declaration (installed tree) | how the seat uses it |
+| --- | --- | --- |
+| `new Reconciler(instance, options)` | `predict/reconciler.ts`: `class Reconciler<S extends object, I>`, `constructor(instance: object, opts: ReconcilerOptions<S, I>)` | constructed only after the guard's FIRST verified delivery, on the seat's issued epoch; `instance` is the seat's own replica row, `fields: ['x','z']`, `step` applies the shared flat relation with the advertised `dt` |
+| `ReconcilerOptions.input / step / fields / stepMs / stepSeconds / smoothMs` | `predict/rollback.ts` + `ReconcilerOptions` | `step` receives `ctx.dt` in seconds — the room's advertised `1/tickRate`; if the handle advertises no rate the seat REFUSES to construct (no guessed `dt`), asserted by `predictor.test.ts` and reported by the browser suite's missing-rate detector |
+| `reconciler.tick(now)` | `tick(now: number): void` | called by the seat's own frame loop and by nothing else; polls `input.lastProcessed` internally and reconciles at most one advance per call (`reconcileSeq` delta ≤ 1 asserted) |
+| `reconciler.state / .reconcileSeq / .value(field)` | `readonly state: S`; `readonly reconcileSeq: number`; `value(field)` | the raw-predicted reader, the exactly-once ledger, and the presentation reader — kept as distinct readers, never conflated with the replicated row |
+| `InputHandle.onSend(cb)`, `InputHandle.at(seq)` | `onSend(listener): () => void`; `at(seq): I \| undefined` (`undefined` outside the live window) | the pending journal observes every send through the handle, so a frame staged directly on the public handle enters the same journal; `at(seq)` is read inside the listener, where it is documented valid |
+
+Two measured properties define the guard's shape. **First**, the reconciler's reconcile boundary is
+`InputHandle.lastProcessed` and is not injectable: `RollbackOptions`/`ReconcilerOptions` accept no boundary hook,
+and `at(seq)` returns `undefined` for `seq <= lastProcessed` (eviction reproduced live in
+`tests/probes/colyseus-roundtrip.probe.ts`, `control_and_adverse_ledgers`). **Second**, on this room's compliant
+in-envelope stream `lastProcessed === inputResolvedThrough` on every paired delivery (same probe, and the browser
+suite's `pred: accepted delivery paired ack with resolution` check), so the public primitive reconciles exactly
+where the ADR permits it — and the disposition record, not the watermark, remains the retention and
+resynchronisation authority: the journal prunes by `inputResolvedThrough` only (`byAckWatermark` stays 0 by
+construction and is asserted so), unequal pairs never reach `tick`, and divergence follows ADR-0003 §3.2
+(stop-send, discard, hold, bounded rejoin, fresh snapshot) instead of replaying across it. The SDK's own
+"predicted value read BEFORE this frame's `input.send()`" frame-order warning was observed while the seat's
+presentation reader ran ahead of sends in the first tick loops; it is a smoothing-accuracy advisory for
+`value()` reads, not an error, and the seat now reads presentation after its tick in all measured paths.
+
+
 [docs]: https://docs.colyseus.io/ 'Colyseus documentation (versionless URL; the pinned package is the authority)'
 [pinned]: https://www.npmjs.com/package/@colyseus/core/v/0.18.27 'pinned package page'

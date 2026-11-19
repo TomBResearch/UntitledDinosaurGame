@@ -55,6 +55,10 @@ vi.mock('../../../apps/client/node_modules/@colyseus/sdk/build/index.mjs', () =>
       z: 0,
       movementMode: 1,
       connected: true,
+      inputResolvedThrough: 0,
+      inputGapStart: 0,
+      inputGapEnd: 0,
+      inputRetiredUnrepresented: 0,
     };
     const rows = recorder.scenario.kind === 'epoch-timeout' ? [] : [[row, sessionId] as const];
     const state = {
@@ -70,6 +74,7 @@ vi.mock('../../../apps/client/node_modules/@colyseus/sdk/build/index.mjs', () =>
         forEach: (callback: (value: typeof row, key: string) => void): void => {
           for (const [value, key] of rows) callback(value, key);
         },
+        get: (key: string): typeof row | undefined => rows.find(([, k]) => k === key)?.[0],
       },
     };
     const onStateChange = Object.assign(
@@ -95,11 +100,13 @@ vi.mock('../../../apps/client/node_modules/@colyseus/sdk/build/index.mjs', () =>
         if (recorder.scenario.kind === 'input-throws') throw new Error('input handle unavailable');
         let sentCount = 0;
         return {
-          data: {},
+          data: { sessionEpoch: 0, generation: 0, directIntent: false, moveX: 0, moveZ: 0, seq: 0 },
           send: (): number => {
             sentCount += 1;
             return sentCount;
           },
+          onSend: (): (() => void) => () => undefined,
+          at: (): undefined => undefined,
           get sentCount(): number {
             return sentCount;
           },

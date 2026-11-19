@@ -127,6 +127,12 @@ interface PageRemotePresentation {
   trackOf(sessionId: string): PagePeerTrack | undefined;
   issues(): readonly string[];
   observations(): number;
+  renderPose(sessionId: string, nowMs: number, delayMs: number): {
+    readonly sessionId: string; readonly x: number; readonly z: number;
+    readonly fromTick: number; readonly toTick: number; readonly alpha: number;
+    readonly holding: boolean; readonly howOldMs: number;
+  } | undefined;
+  renderStats(sessionId: string): { renders: number; maxRenderJump: number; maxHoldMs: number; holds: number } | undefined;
 }
 
 /** The window global one evaluate call installs, and the next ones read back. */
@@ -172,6 +178,8 @@ interface Fixture {
 
 let fixture: Fixture | undefined;
 let browser: Browser | undefined;
+/** The live room class, reached in-process, so correction pacing can watch authority ticks. */
+let roomClass: { liveRooms(): readonly { roomId?: string; evidence(): Record<string, unknown> }[] } | undefined;
 
 test.beforeAll(async () => {
   // The room module is the accepted pinned one; the harness boots it exactly as the UDG-003 suites do.
@@ -198,7 +206,9 @@ test.beforeAll(async () => {
   expect(existsSync(roomModulePath), `the pinned room module ${roomModulePath}`).toBe(true);
   const roomModule = (await import(pathToFileURL(roomModulePath).href)) as {
     defineOperatorRegionRoom: (options: { config?: unknown }) => unknown;
+    RegionRoom: unknown;
   };
+  roomClass = roomModule['RegionRoom'] as { liveRooms(): readonly { roomId?: string; evidence(): Record<string, unknown> }[] };
 
   // The harness loads the pinned packages the way `apps/server` sees them, and binds nothing by hand.
   const rooms = { [ROOM_NAME]: roomModule.defineOperatorRegionRoom({ config: overrides }) };
@@ -256,8 +266,16 @@ test.afterAll(async () => {
 /** Page errors collected per seat label, asserted at the end of the run. */
 const pageErrorSinks = new Map<string, string[]>();
 
-/** Open a context and load the client pipeline's own module graph, without pretending to be the camera app. */
-const openSeatPage = async (label: string): Promise<Page> => {
+/**
+ * Open a context and load the client pipeline's own module graph, without pretending to be the camera app.
+ *
+ * `bare: true` navigates to a same-origin, script-free document (the pipeline's own transpiled module
+ * source rendered as text) instead of the camera app. The prediction slice opens four seats across two
+ * tests; each camera-app tab allocates a SwiftShader WebGL context in this headless container, and the
+ * fifth tab crashed the renderer. A seat that only runs network modules does not need a scene, and the
+ * pipeline still serves its modules to that document exactly as it does to the app.
+ */
+const openSeatPage = async (label: string, options: { bare?: boolean } = {}): Promise<Page> => {
   const context = await browser?.newContext();
   expect(context, 'a browser context must open').toBeDefined();
   const page = await context?.newPage();
@@ -271,10 +289,12 @@ const openSeatPage = async (label: string): Promise<Page> => {
     // The camera client's development socket is expected to fail: no room listens on 2567 here, and
     // UDG-004's contract requires that refusal to be a rendered state rather than a crash. Same rule as
     // the camera suite's own expected-console list.
-    if (/ws:\/\/127\.0\.0\.1:2567|WebSocket is closed|Failed to construct 'WebSocket'/.test(text)) return;
+    // The camera client's development socket, and the recovery phase's deliberate network loss, are
+    // expected: no room listens on 2567 here, and an offline context must fail its sockets visibly.
+    if (/ws:\/\/127\.0\.0\.1:2567|WebSocket is closed|Failed to construct 'WebSocket'|net::ERR_INTERNET_DISCONNECTED|WebSocket connection to 'ws:\/\/127/.test(text)) return;
     pageErrors.push(`console: ${text}`);
   });
-  await page?.goto(`${CLIENT_ORIGIN}/`, { waitUntil: 'load' });
+  await page?.goto(options.bare === true ? `${CLIENT_ORIGIN}${REMOTE_URL}` : `${CLIENT_ORIGIN}/`, { waitUntil: 'load' });
   await primeClientModules(page as Page, label);
   return page as Page;
 };
@@ -659,8 +679,587 @@ test('two browser seats over the client pipeline each observe the other seat\'s 
   expect.soft(checks.filter((record) => !record.ok), `failed checks: ${JSON.stringify(checks.filter((record) => !record.ok))}`).toEqual([]);
 });
 
+// --------------------------------------------------------------------------- prediction slice (slice 4)
+
+/**
+ * The prediction/correction slice, in one test.
+ *
+ * The mover page composes the SAME production classes the seat uses — `createSdkSeatTransport`
+ * and `DirectMotionPredictor` — and the observer page runs the ordinary `joinPredictionSeat`
+ * composition. Three things this structure is chosen for, each a requirement rather than a
+ * convenience: (1) the fixture can stage a frame the AUTHORITY refuses (generation 0 beside a
+ * live watermark) through the public SDK handle, so a correction is genuinely server-forced —
+ * the seat predicted a step the authority declined to take; (2) the correction pacing is real:
+ * Node watches the room's own authority ticks (`RegionRoom.liveRooms()` in this process) and
+ * stages at tick 38/118 so consumption lands at 40/120 within the asserted window; (3) nothing
+ * reaches into anything private: the handle, its `data`, and `send()` are the published surface.
+ *
+ * The interpolation half is the mirror image of the smoke's rule: the observer's render poses
+ * must lie BETWEEN published samples (never past the newest — extrapolation would be authored
+ * motion), and the observer never sends, so it structurally cannot feed the authority.
+ */
+
+interface PredTransportSurface {
+  issuedEpoch(): number;
+  handle(): {
+    data: { sessionEpoch: number; generation: number; directIntent: boolean; moveX: number; moveZ: number; seq: number };
+    send(): number;
+    readonly sentCount: number;
+    readonly lastProcessed: number;
+  };
+  close(): Promise<void>;
+}
+
+interface PredCorrectionRow {
+  readonly revision: number; readonly authorityTick: number; readonly epoch: number;
+  readonly ack: number; readonly resolvedThrough: number; readonly atMs: number;
+  readonly predictedBeforeZ: number; readonly predictedAfterZ: number; readonly authoritativeZ: number;
+  readonly rawCorrectionZ: number; readonly pendingCount: number; readonly zero: boolean;
+}
+
+interface PredPredictorSurface {
+  attach(): void;
+  tick(now: number): void;
+  send(request: { generation: number; moveX: number; moveZ: number }, directIntent: boolean): { seq: number; generation: number };
+  stateName(): string;
+  snapshotReadyForInput(): boolean;
+  canonical(): null;
+  replicated(): { revision: number; epoch: number; authorityTick: number; x: number; z: number; ack: number; resolvedThrough: number } | null;
+  rawPredicted(): { x: number; z: number } | null;
+  presentation(): { x: number; z: number } | null;
+  heldSnapshot(): { x: number; z: number } | null;
+  pendingJournal(): readonly { seq: number; epoch: number }[];
+  deliveryLedger(): readonly { accepted: boolean; reason: string; delivery: { revision: number; epoch: number; authorityTick: number } }[];
+  tickLedger(): readonly { action: string; reason: string; reconcileSeq: number }[];
+  correctionLedger(): readonly PredCorrectionRow[];
+  recoveryLedger(): readonly { event: string; detail: string; atMs: number }[];
+  sentAudit(): readonly { seq: number; epoch: number; atMs: number }[];
+  pruneAuthorityLedger(): { byResolvedThrough: number; byAckWatermark: number };
+  rejoinTimestamps(): readonly number[];
+  close(): Promise<void>;
+}
+
+interface PredModuleSurface {
+  createSdkSeatTransport(options: unknown): Promise<{ transport: PredTransportSurface; roomId: string; sessionId: string }>;
+  DirectMotionPredictor: new (transport: unknown, options: unknown) => PredPredictorSurface;
+}
+
+interface PredSeatWindow {
+  __udgPredSeat?: {
+    readonly transport: PredTransportSurface;
+    readonly predictor: PredPredictorSurface;
+    readonly roomId: string;
+    readonly sessionId: string;
+    generation: number;
+    moverStop: boolean;
+    readonly joinEpoch: number;
+    readonly joinZ: number;
+  };
+  __udgObsSeat?: {
+    readonly seat: PageSeatHandle;
+    readonly presentation: PageRemotePresentation;
+    readonly peerId: string;
+    renders: { t: number; x: number; z: number; alpha: number; holding: boolean; fromTick: number; toTick: number }[];
+    foldTimer: ReturnType<typeof setInterval> | null;
+  };
+}
+
+/** Wait until the live room with this id has advanced its authority clock to at least `target`. */
+const waitAuthorityTick = async (roomId: string, target: number, limitMs: number): Promise<number> => {
+  const deadline = Date.now() + limitMs;
+  for (;;) {
+    const room = (roomClass?.liveRooms() ?? []).find((candidate) => candidate.roomId === roomId);
+    const ticks = Number((room?.evidence()?.['ticks'] ?? -1) as number);
+    if (ticks >= target) return ticks;
+    if (Date.now() > deadline) return ticks;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+};
+
+test('prediction slice: pinned prediction, two server-forced corrections at authority ticks 40/120, exactly-once replay, deadline recovery, read-only interpolation', async () => {
+  expect(fixture, 'the room fixture booted').toBeDefined();
+  expect(roomClass, 'the live room class is reachable in-process').toBeDefined();
+  const movementSpeed = fixture?.movementSpeed ?? 0;
+  const tickRate = fixture?.tickRate ?? 0;
+  const stepMetres = movementSpeed / tickRate;
+  const ledgerLimit = 20_000;
+
+  // ---- the mover: production classes composed by the fixture page, so the handle is reachable.
+  const pageM = await openSeatPage('pred-M', { bare: true });
+  const joinM = await pageM.evaluate(async (args) => {
+    const adapter = (await import(/* @vite-ignore */ args.adapterUrl)) as PredModuleSurface;
+    const joined = await adapter.createSdkSeatTransport({
+      endpoint: args.endpoint,
+      join: args.join,
+      presentation: args.presentation,
+      epochTimeoutMs: 15_000,
+    });
+    const predictor = new adapter.DirectMotionPredictor(joined.transport, {
+      speed: args.speed,
+      ledgerLimit: args.ledgerLimit,
+      snapshotDeadlineMs: 500,
+      rejoin: async () => {
+        const again = await adapter.createSdkSeatTransport({
+          endpoint: args.endpoint,
+          join: { mode: 'byId', roomId: joined.roomId },
+          presentation: args.presentation,
+          epochTimeoutMs: 15_000,
+        });
+        return again.transport;
+      },
+    });
+    predictor.attach();
+    // BEFORE any frame tick of ours runs: what do the readers say? The SDK decoded deliveries
+    // already — if anything auto-reconciled, `rawPredicted()` would not be null and a reconcile
+    // would already be in the ledger. This is the "no auto-reconcile before a verified delivery
+    // has been ticked by the seat" proof, read at the only moment it can be read.
+    const beforeFirstFrame = {
+      deliveries: predictor.deliveryLedger().length,
+      reconciled: predictor.tickLedger().filter((row) => row.action === 'reconciled').length,
+      rawPredicted: predictor.rawPredicted(),
+      presentation: predictor.presentation(),
+      canonical: predictor.canonical(),
+      snapshotReady: predictor.snapshotReadyForInput(),
+    };
+    let frames = 0;
+    const raf = (): void => {
+      frames += 1;
+      predictor.tick(performance.now());
+      requestAnimationFrame(raf);
+    };
+    requestAnimationFrame(raf);
+    const row0 = predictor.replicated();
+    (globalThis as unknown as PredSeatWindow).__udgPredSeat = {
+      transport: joined.transport,
+      predictor,
+      roomId: joined.roomId,
+      sessionId: joined.sessionId,
+      generation: 1,
+      moverStop: true,
+      joinEpoch: joined.transport.issuedEpoch(),
+      joinZ: row0?.z ?? 0,
+    };
+    return { ok: true as const, roomId: joined.roomId, sessionId: joined.sessionId, epoch: joined.transport.issuedEpoch(), beforeFirstFrame, framesStart: frames };
+  }, { endpoint: fixture?.endpoint ?? '', join: { mode: 'create', roomName: ROOM_NAME }, presentation: fixture?.presentation ?? {}, adapterUrl: ADAPTER_URL, speed: movementSpeed, ledgerLimit });
+  expect(joinM.ok, `fixture seat joined: ${JSON.stringify(joinM)}`).toBe(true);
+  const roomId = joinM.roomId as string;
+
+  check('pred: canonical state is never held by the seat (the server owns it; the reader is structurally null)', joinM.beforeFirstFrame.canonical === null, joinM.beforeFirstFrame);
+  check(
+    'pred: the SDK decoded deliveries but reconciled NOTHING before the seat ticked a verified delivery (no raw/predicted state exists yet)',
+    joinM.beforeFirstFrame.deliveries >= 1 && joinM.beforeFirstFrame.reconciled === 0 && joinM.beforeFirstFrame.rawPredicted === null && joinM.beforeFirstFrame.presentation === null,
+    joinM.beforeFirstFrame,
+  );
+  check('pred: input is gated on a verified snapshot before any send is allowed', joinM.beforeFirstFrame.snapshotReady === true, joinM.beforeFirstFrame);
+
+  // ---- the observer: the ordinary production seat, sending nothing, rendering with delay.
+  const pageO = await openSeatPage('pred-O', { bare: true });
+  const joinO = await pageO.evaluate(async (args) => {
+    const adapter = (await import(/* @vite-ignore */ args.adapterUrl)) as {
+      joinPredictionSeat(options: unknown): Promise<PageSeatHandle>;
+    };
+    const remote = (await import(/* @vite-ignore */ args.remoteUrl)) as {
+      createRemotePresentation(): PageRemotePresentation;
+    };
+    const seat = await adapter.joinPredictionSeat({
+      endpoint: args.endpoint,
+      join: args.join,
+      presentation: args.presentation,
+      epochTimeoutMs: 15_000,
+      speed: args.speed,
+      predictor: { ledgerLimit: args.ledgerLimit },
+    });
+    const presentation = remote.createRemotePresentation();
+    presentation.observe(seat.snapshot());
+    const peerId = (args.peerId ?? seat.snapshot().peers[0]?.key) as string;
+    const renders: { t: number; x: number; z: number; alpha: number; holding: boolean; fromTick: number; toTick: number }[] = [];
+    const record = (): void => {
+      presentation.observe(seat.snapshot());
+      const pose = presentation.renderPose(peerId, performance.now(), 60);
+      if (pose !== undefined && renders.length < 4000) {
+        renders.push({ t: performance.now(), x: pose.x, z: pose.z, alpha: pose.alpha, holding: pose.holding, fromTick: pose.fromTick, toTick: pose.toTick });
+      }
+      requestAnimationFrame(record);
+    };
+    requestAnimationFrame(record);
+    (globalThis as unknown as PredSeatWindow).__udgObsSeat = { seat, presentation, peerId, renders, foldTimer: null };
+    return { ok: true as const, sessionId: seat.sessionId, peerId, self: seat.snapshot().self };
+  }, {
+    endpoint: fixture?.endpoint ?? '', join: { mode: 'byId', roomId }, presentation: fixture?.presentation ?? {},
+    adapterUrl: ADAPTER_URL, remoteUrl: REMOTE_URL, speed: movementSpeed, ledgerLimit, peerId: joinM.sessionId,
+  });
+  expect(joinO.ok, 'observer seat joined').toBe(true);
+  const observerStartZ = joinO.self?.z ?? 0;
+
+  // The advertised fixed rate: the negative-control detector for a missing rate must be armed
+  // and silent — the predictor only ever steps with the advertised dt.
+  const advertisedM = await pageM.evaluate(() => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+    if (h === undefined) throw new Error('no fixture seat');
+    return { missingRateTicks: h.predictor.tickLedger().filter((row) => row.reason === 'missing-advertised-rate').length };
+  });
+  check('pred: the room advertised its fixed rate and the missing-rate refusal never fired', advertisedM.missingRateTicks === 0 && tickRate === 20, { ...advertisedM, tickRate });
+
+  // ---- responsiveness: prediction begins no later than one step plus one rendered frame.
+  const response = await pageM.evaluate(async (args) => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+    if (h === undefined) throw new Error('no fixture seat');
+    const preRaw = h.predictor.rawPredicted();
+    const prePres = h.predictor.presentation();
+    if (preRaw === null || prePres === null) throw new Error('the predictor has no raw/presentation state to measure');
+    const t0 = performance.now();
+    h.predictor.send({ generation: h.generation, moveX: 0, moveZ: 1 }, true);
+    h.generation += 1;
+    const syncRaw = h.predictor.rawPredicted();
+    const syncDelta = syncRaw === null ? Number.NaN : syncRaw.z - preRaw.z;
+    const responseMs = await new Promise<number>((resolve) => {
+      const started = performance.now();
+      const poll = (): void => {
+        const p = h.predictor.presentation();
+        if (p !== null && p.z - prePres.z > args.stepMetres * 0.5) resolve(performance.now() - t0);
+        else if (performance.now() - started > 2000) resolve(Number.NaN);
+        else requestAnimationFrame(poll);
+      };
+      requestAnimationFrame(poll);
+    });
+    return { syncDelta, responseMs, allowanceMs: args.stepMs + 40 };
+  }, { stepMetres, stepMs: 1000 / tickRate });
+  check(
+    `pred: raw prediction responds within one fixed step (${String((1000 / tickRate).toFixed(0))} ms) plus one rendered frame (measured ${String(response.responseMs.toFixed(1))} ms against a ${String(response.allowanceMs)} ms allowance)`,
+    Math.abs(response.syncDelta - stepMetres) < 0.000001 && response.responseMs <= response.allowanceMs,
+    response,
+  );
+
+  // ---- the movement loop, then the two server-forced corrections.
+  await pageM.evaluate(() => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+    if (h === undefined) throw new Error('no fixture seat');
+    h.moverStop = false;
+    const step = (): void => {
+      if (h.moverStop) return;
+      try {
+        h.predictor.send({ generation: h.generation, moveX: 0, moveZ: 1 }, true);
+        h.generation += 1;
+      } catch {
+        // stop-sending windows during recovery are the ADR path, not a failure; the generation
+        // counter simply does not advance for a frame that was never staged.
+      }
+      setTimeout(step, 50);
+    };
+    step();
+  });
+
+  /** Stage one frame the AUTHORITY refuses (generation 0 beside a live watermark), through the
+   * public SDK handle — the seat predicts the step, the authority declines it, adoption is forced. */
+  const stageRefusedFrame = async (moveX: number): Promise<{ stagedSeq: number; watermark: number; epoch: number }> =>
+    pageM.evaluate((args) => {
+      const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+      if (h === undefined) throw new Error('no fixture seat');
+      const handle = h.transport.handle();
+      const epoch = h.transport.issuedEpoch();
+      handle.data.sessionEpoch = epoch;
+      handle.data.generation = 0;
+      handle.data.directIntent = true;
+      handle.data.moveX = args.moveX;
+      handle.data.moveZ = 1;
+      handle.data.seq = handle.sentCount + 1;
+      const stagedSeq = handle.send();
+      return { stagedSeq, watermark: handle.lastProcessed, epoch };
+    }, { moveX });
+
+  const tickAtStage1 = await waitAuthorityTick(roomId, 38, 20_000);
+  const stage1 = await stageRefusedFrame(0);
+  const tickSeen1 = await waitAuthorityTick(roomId, 46, 5_000);
+  const tickAtStage2 = await waitAuthorityTick(roomId, 118, 20_000);
+  const stage2 = await stageRefusedFrame(0.004); // a distinct payload: the refusal cache must not swallow the second frame
+  const tickSeen2 = await waitAuthorityTick(roomId, 126, 5_000);
+
+  await pageM.waitForTimeout(500);
+  const corrections1 = await pageM.evaluate(() => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+    if (h === undefined) throw new Error('no fixture seat');
+    return { corrections: h.predictor.correctionLedger(), state: h.predictor.stateName() };
+  });
+  await pageM.evaluate(() => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+    if (h === undefined) throw new Error('no fixture seat');
+    h.moverStop = true;
+  });
+  await pageM.waitForTimeout(400);
+
+  check('pred: pacing reached the intended authority windows (stage near 40 and 120)', tickAtStage1 >= 37 && tickSeen1 >= 46 && tickAtStage2 >= 117 && tickSeen2 >= 126, { tickAtStage1, tickSeen1, tickAtStage2, tickSeen2 });
+  // A reconcile's raw correction is fully explained by the inputs the seat still owes — the
+  // pending window replayed. What is NOT explainable that way is the refused step the authority
+  // never took. `excess = raw − pending x step` is therefore 0 everywhere except at a genuine
+  // server refusal, where it is exactly one predicted step. That is the "zero eligible
+  // corrections in the raw trace" criterion, evaluated per reconcile.
+  const excess = (row: PredCorrectionRow): number => row.rawCorrectionZ - row.pendingCount * stepMetres;
+  const nonzero = corrections1.corrections.filter((row) => Math.abs(excess(row)) > 0.000001);
+  const forced = nonzero.filter((row) => Math.abs(excess(row) - stepMetres) < 0.000001 && row.authorityTick >= 38 && row.authorityTick <= 48);
+  const forced2 = nonzero.filter((row) => Math.abs(excess(row) - stepMetres) < 0.000001 && row.authorityTick >= 116 && row.authorityTick <= 128);
+  check('pred: exactly two UNEXPLAINED corrections in the whole raw trace — each exactly one predicted step, adopted at authority ticks 40 and 120 (genuine server refusals, induced through the public handle)',
+    nonzero.length === 2 && forced.length === 1 && forced2.length === 1,
+    { nonzero: nonzero.map((row) => ({ tick: row.authorityTick, raw: row.rawCorrectionZ, pending: row.pendingCount, excess: excess(row) })), stage1, stage2 });
+  const everyForcedCorrectionIsAnAdoption = forced.length === 1 && forced2.length === 1
+    && Math.abs(forced[0]!.predictedAfterZ - (forced[0]!.authoritativeZ + forced[0]!.pendingCount * stepMetres)) < 0.000001
+    && Math.abs(forced2[0]!.predictedAfterZ - (forced2[0]!.authoritativeZ + forced2[0]!.pendingCount * stepMetres)) < 0.000001;
+  check('pred: after each forced adoption the raw predicted pose equals authority + pending x step to <1e-6 m (the flat-replay convergence, with the pending window replayed exactly once)',
+    everyForcedCorrectionIsAnAdoption,
+    { f1: forced[0], f2: forced2[0], stepMetres });
+
+  // ---- the steady state around the corrections: zero-correcting reconciles and the replay
+  //      invariant on EVERY reconcile — the double-step / double-replay negative control.
+  const steady = await pageM.evaluate((args) => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+    if (h === undefined) throw new Error('no fixture seat');
+    const rows = h.predictor.correctionLedger();
+    let violations = 0;
+    let unexplained = 0;
+    let idleZero = 0;
+    let idleTotal = 0;
+    for (const row of rows) {
+      if (Math.abs(row.predictedAfterZ - (row.authoritativeZ + row.pendingCount * args.stepMetres)) > 0.000001) violations += 1;
+      const rowExcess = row.rawCorrectionZ - row.pendingCount * args.stepMetres;
+      if (Math.abs(rowExcess) > 0.000001) unexplained += 1;
+      if (row.pendingCount === 0) {
+        idleTotal += 1;
+        if (row.zero) idleZero += 1;
+      }
+    }
+    let maxSeqDelta = 0;
+    let last = -1;
+    for (const tick of h.predictor.tickLedger()) {
+      if (tick.action !== 'reconciled') continue;
+      if (last >= 0 && tick.reconcileSeq - last > maxSeqDelta) maxSeqDelta = tick.reconcileSeq - last;
+      last = tick.reconcileSeq;
+    }
+    const ticks = h.predictor.tickLedger();
+    return {
+      corrections: rows.length,
+      violations,
+      unexplained,
+      idleZero,
+      idleTotal,
+      maxSeqDelta,
+      reconciledTicks: ticks.filter((row) => row.action === 'reconciled').length,
+      skippedTicks: ticks.filter((row) => row.action === 'skipped').length,
+      deliveries: h.predictor.deliveryLedger().length,
+      accepted: h.predictor.deliveryLedger().filter((row) => row.accepted).length,
+      prune: h.predictor.pruneAuthorityLedger(),
+      pendingNow: h.predictor.pendingJournal().length,
+      sent: h.predictor.sentAudit().length,
+      byEpoch: [...new Set(h.predictor.sentAudit().map((row) => row.epoch))],
+    };
+  }, { stepMetres });
+  check('pred: the pending window replays EXACTLY once per reconcile — zero double-step/double-replay violations across the whole run', steady.violations === 0 && steady.corrections > 20, steady);
+  check('pred: at most one reconcile per frame tick (reconcileSeq never advances by more than one)', steady.maxSeqDelta <= 1, steady);
+  check('pred: every reconcile except the two server refusals corrects by exactly the pending window it owes; reconciles with an empty pending window correct to exactly zero',
+    // idleTotal >= 1 is structural: the settle drain after the loop stops always reconciles with
+    // an empty pending window. Whenever the window is empty, the correction must be exactly zero.
+    steady.unexplained === 2 && steady.idleTotal >= 1 && steady.idleZero === steady.idleTotal, steady);
+  check('pred: pruning authority is inputResolvedThrough ONLY — the SDK ack watermark pruned nothing all run, and every sent frame is accounted for (pruned-by-resolution or still pending, never forgotten)', steady.prune.byAckWatermark === 0 && steady.prune.byResolvedThrough + steady.pendingNow === steady.sent && steady.sent > 30, steady);
+  check('pred: every accepted delivery paired ack with resolution on one epoch (the guard saw the pair the SDK owed)', steady.accepted >= steady.corrections, steady);
+
+  // ---- several verified patches between two frames still reconcile exactly once.
+  // Restart the movement loop for the stall window: the room publishes against consumption, so
+  // patches only queue up while the seat is actually sending. The stall then misses real patches.
+  await pageM.evaluate(() => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+    if (h === undefined) throw new Error('no fixture seat');
+    h.moverStop = false;
+    const step = (): void => {
+      if (h.moverStop) return;
+      try {
+        h.predictor.send({ generation: h.generation, moveX: 0, moveZ: 1 }, true);
+        h.generation += 1;
+      } catch { /* in-flight refusals are recorded, not fatal here */ }
+      setTimeout(step, 50);
+    };
+    step();
+  });
+  const gap = await pageM.evaluate(async () => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+    if (h === undefined) throw new Error('no fixture seat');
+    const started = performance.now();
+    while (performance.now() - started < 260) { /* stall the frame loop; deliveries queue up */ }
+    // From the stall's end, watch for the FIRST actual reconcile (a reconcileSeq advance in the
+    // correction ledger): every queued patch must have been decoded and verified before that one
+    // reconcile, and exactly one reconcile covers the whole burst.
+    const baseCorrections = h.predictor.correctionLedger().length;
+    const baseDeliveries = h.predictor.deliveryLedger().length;
+    const deadline = performance.now() + 3000;
+    while (performance.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 4));
+      if (h.predictor.correctionLedger().length > baseCorrections) break;
+    }
+    return {
+      deliveryDelta: h.predictor.deliveryLedger().length - baseDeliveries,
+      correctionDelta: h.predictor.correctionLedger().length - baseCorrections,
+    };
+  });
+  await pageM.evaluate(() => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+    if (h === undefined) throw new Error('no fixture seat');
+    h.moverStop = true;
+  });
+  await pageM.waitForTimeout(350);
+  check(
+    'pred: several verified patches queued by a stalled frame loop are covered by exactly ONE reconcile when the seat next advances it (never one per patch)',
+    gap.deliveryDelta >= 2 && gap.correctionDelta === 1,
+    gap,
+  );
+
+  // ---- the observer half: interpolation follows published samples and never authors motion.
+  const observer = await pageO.evaluate((args) => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgObsSeat;
+    if (h === undefined) throw new Error('no observer seat');
+    if (h.foldTimer !== null) clearInterval(h.foldTimer);
+    const track = h.presentation.trackOf(h.peerId);
+    const between = h.renders.filter((pose) => !pose.holding && pose.alpha > 0.02 && pose.alpha < 0.98 && pose.fromTick !== pose.toTick);
+    const maxPublishedZ = track?.lastSample.z ?? Number.NaN;
+    const maxRenderZ = h.renders.reduce((acc, pose) => Math.max(acc, pose.z), Number.NEGATIVE_INFINITY);
+    const minRenderZ = h.renders.reduce((acc, pose) => Math.min(acc, pose.z), Number.POSITIVE_INFINITY);
+    const firstBetween = between[0];
+    let backward = 0;
+    for (let index = 1; index < h.renders.length; index += 1) {
+      const previous = h.renders[index - 1] as (typeof h.renders)[number];
+      const current = h.renders[index] as (typeof h.renders)[number];
+      if (current.z < previous.z - 0.000001) backward += 1;
+    }
+    return {
+      renders: h.renders.length,
+      between: between.length,
+      maxPublishedZ, maxRenderZ, minRenderZ,
+      firstBetween,
+      backward, holds: h.presentation.renderStats(h.peerId)?.holds ?? -1,
+      renderStats: h.presentation.renderStats(h.peerId),
+      sentCount: h.seat.sentCount(),
+      selfZ: h.seat.snapshot().self?.z ?? Number.NaN,
+      selfTick: h.seat.snapshot().self?.lastAuthorityTick ?? 0,
+      presentationIssues: h.presentation.issues(),
+      observerStartZ: args.observerStartZ,
+    };
+  }, { observerStartZ });
+  check('pred: the observer rendered interpolated poses strictly inside published sample pairs (alpha between, distinct fromTick/toTick)',
+    observer.renders > 100 && observer.between > 20 && observer.firstBetween !== undefined && observer.firstBetween.z >= Math.min(observer.minRenderZ, observer.maxPublishedZ),
+    { renders: observer.renders, between: observer.between, firstBetween: observer.firstBetween });
+  check('pred: interpolation never extrapolated — no render pose passed the newest published sample, and none moved backwards during the +z run',
+    observer.maxRenderZ <= observer.maxPublishedZ + 0.000001 && observer.backward === 0,
+    { maxRenderZ: observer.maxRenderZ, maxPublishedZ: observer.maxPublishedZ, backward: observer.backward });
+  check('pred: the observer authored NOTHING — zero sends, its own row never moved, and the presentation recorded no anomaly',
+    observer.sentCount === 0 && Math.abs(observer.selfZ - observer.observerStartZ) < 0.000001 && observer.presentationIssues.length === 0 && observer.holds >= 1,
+    observer);
+
+  // ---- ADR-0003 §3.2 recovery in the browser, under REAL impairment: the mover context goes
+  // offline with an input outstanding. No delivery can arrive, the client-local snapshot deadline
+  // expires, and the seat must stop sending, discard the journal, hold the last verified pose,
+  // make its ONE bounded rejoin attempt (which cannot succeed while offline), and suspend inside
+  // the rolling allowance — holding, never drifting, never sending. The ladder-then-resume path
+  // (backoff walk to a SUCCESSFUL rejoin and fresh-snapshot recovery) is pinned deterministically
+  // by the unit suite; the browser proves the same ledger runs against a real stalled stream.
+  const heldBefore = await pageM.evaluate(() => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+    if (h === undefined) throw new Error('no fixture seat');
+    return { held: h.predictor.heldSnapshot(), epoch: h.transport.issuedEpoch(), state: h.predictor.stateName() };
+  });
+  expect(heldBefore.state).toBe('tracking');
+  await pageM.evaluate(() => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+    if (h === undefined) throw new Error('no fixture seat');
+    h.generation += 1;
+    h.predictor.send({ generation: h.generation, moveX: 0, moveZ: 1 }, true);
+  });
+  await pageM.context().setOffline(true);
+  const recovery = await pageM.evaluate(async () => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+    if (h === undefined) throw new Error('no fixture seat');
+    const deadline = performance.now() + 8000;
+    let sendRefusedDuringRecovery = 'no refusal observed';
+    let sendAttempted = false;
+    let heldDuringRecovery = null as { x: number; z: number } | null;
+    let journalDuringRecovery = -1;
+    while (performance.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const state = h.predictor.stateName();
+      if (state === 'recovering' || state === 'suspended') {
+        if (!sendAttempted) {
+          sendAttempted = true;
+          try {
+            h.generation += 1;
+            h.predictor.send({ generation: h.generation, moveX: 0, moveZ: 1 }, true);
+          } catch (error) {
+            sendRefusedDuringRecovery = error instanceof Error ? error.message : String(error);
+          }
+        }
+        heldDuringRecovery = h.predictor.heldSnapshot();
+        journalDuringRecovery = h.predictor.pendingJournal().length;
+      }
+      if (state === 'suspended') break;
+    }
+    return {
+      stateNow: h.predictor.stateName(),
+      sendRefusedDuringRecovery,
+      heldDuringRecovery,
+      journalDuringRecovery,
+      events: h.predictor.recoveryLedger().map((row) => row.event),
+      triggerDetail: h.predictor.recoveryLedger().find((row) => row.event === 'trigger')?.detail ?? '',
+      rejoins: h.predictor.rejoinTimestamps().length,
+      epochNow: h.predictor.replicated()?.epoch ?? -1,
+    };
+  });
+  await pageM.context().setOffline(false);
+  await pageM.waitForTimeout(800);
+  const wantedOrder = ['trigger', 'stop-sending', 'discard-pending', 'rejoin-scheduled', 'rejoin-attempt', 'suspended'];
+  // The refused-send attempts are part of the story (recorded, reported) but not the ladder; the
+  // ladder itself must appear in exactly this order among the ledger's own milestones.
+  const ladder = recovery.events.filter((event: string) => event !== 'send-refused');
+  const orderOk = wantedOrder.every((event, index) => ladder[index] === event);
+  check('pred: a delivery stream stalled by real network loss with input outstanding runs the ADR-0003 §3.2 ledger in the browser, in order: deadline trigger, stop sending, discard, one bounded rejoin, suspension',
+    orderOk && /snapshot-deadline-expired/.test(recovery.triggerDetail) && recovery.stateNow === 'suspended', recovery);
+  check('pred: while suspended the seat sends nothing when asked, keeps the journal discarded, and holds the LAST verified pose — suspension is holding, not drifting',
+    /recovery/.test(recovery.sendRefusedDuringRecovery) && recovery.journalDuringRecovery === 0
+    && recovery.heldDuringRecovery !== null && heldBefore.held !== null
+    && Math.abs(recovery.heldDuringRecovery.z - heldBefore.held.z) < 0.000001
+    && recovery.rejoins === 1 && recovery.epochNow === heldBefore.epoch, recovery);
+
+  // ---- the room's own view, read in-process: ticks advanced, refusal stats exist, nothing crashed.
+  const evidence = (roomClass?.liveRooms() ?? []).find((room) => room.roomId === roomId)?.evidence();
+  check('pred: the authority clock passed 120 and the room stayed healthy through two refusals and an epoch change',
+    Number((evidence?.['ticks'] ?? 0) as number) >= 126 && evidence?.['refused'] !== true,
+    { ticks: evidence?.['ticks'], stats: evidence?.['stats'] });
+  observations['predEvidence'] = evidence ?? {};
+  observations['predRecovery'] = recovery;
+  observations['predSteady'] = steady;
+
+  // ---- close, page health.
+  await pageM.evaluate(async () => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
+    if (h === undefined) return;
+    h.moverStop = true;
+    try {
+      await h.predictor.close();
+    } catch {
+      // The socket went through a real impairment; a failed graceful leave is recorded, not fatal.
+    }
+  });
+  await pageO.evaluate(async () => {
+    const h = (globalThis as unknown as PredSeatWindow).__udgObsSeat;
+    if (h === undefined) return;
+    await h.seat.close();
+  });
+  const pageErrors = [...(pageErrorSinks.get('pred-M') ?? []), ...(pageErrorSinks.get('pred-O') ?? [])];
+  check('pred: neither prediction-slice context raised a page or console error beyond the expected development-socket refusal', pageErrors.length === 0, pageErrors.slice(0, 4));
+  // Free the tabs before the run record is written: the renderer cannot carry another WebGL-heavy tab.
+  await pageM.context().close();
+  await pageO.context().close();
+
+  const predFailures = checks.filter((record) => record.name.startsWith('pred:') && !record.ok);
+  check('pred: every prediction-slice check passed', predFailures.length === 0, predFailures.map((record) => record.name));
+  expect.soft(predFailures, `failed prediction checks: ${JSON.stringify(predFailures.map((record) => record.name))}`).toEqual([]);
+});
+
 limitations.push('Two-browser-context loopback smoke: it certifies nothing about the four-profile Gate A matrix, the seeds, impairment, forced corrections, or the 20-client ten-minute workload.');
 limitations.push('Gate A remains Not Run; the client compiler diagnostics are a separate claim in docs/integration/colyseus-0.18-api-map.md §12 and docs/adr/0004-client-declaration-checking-exception.md.');
-limitations.push('Local prediction and forced correction are later slices of this spike: the seat publishes what the authority replicated, and this smoke asserts nothing about correction magnitude.');
+limitations.push('Local prediction and forced correction (slice 4, second test): the two forced corrections are induced by staging a frame the AUTHORITY refuses (generation 0 beside the live watermark) through the public SDK handle — a genuine server refusal at the paced authority ticks, not a fixture-side lie about position. The disposition-trigger variants of ADR-0003 recovery (retirement, named gap, episode and window bounds) are pinned by the unit suite; the browser run proves the deadline-triggered stop/discard/hold/bounded-attempt/suspension ledger end to end under real network loss, holding the last verified pose throughout.');
 limitations.push('Gate A per-tick and safety-on-transition rows are not evaluated here: a browser sees patched deliveries, not the authority journal, and the 100 ms patch interval over a 50 ms step means one delivery carries two consumed ticks. The transient `movementMode` of a consumed direct intent is therefore recorded and not asserted. Those rows wait for the Gate A run against the journal.');
 

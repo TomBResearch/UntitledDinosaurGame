@@ -69,9 +69,48 @@ export interface RemotePresentation {
   observations(): number;
   /** Samples retained per peer. Same validation rule as the `createRemotePresentation` argument. */
   sampleLimit(limit: number): void;
+  /**
+   * The read-only interpolated render pose of one peer at `nowMs`, rendered `delayMs` behind the
+   * published timeline. Between the last two ARRIVED samples the pose is the linear blend of them;
+   * BEFORE the first it is the first; AFTER the latest it HOLDS the latest — this module never
+   * extrapolates, so a stalled peer freezes rather than drifts. The pose is a fresh object: no
+   * received schema and no track is mutated, and nothing here can reach the authority — the same
+   * structural guarantee as the rest of this file (no SDK, no handle, no write path).
+   */
+  renderPose(sessionId: string, nowMs: number, delayMs: number): PeerRenderPose | undefined;
+  /** Per-peer render telemetry: renders served, the largest pose jump between consecutive renders
+   * (the discontinuity metric, reported separately from delay), and the longest hold. */
+  renderStats(sessionId: string): PeerRenderStats | undefined;
 }
 
 const DEFAULT_SAMPLE_LIMIT = 256;
+
+/** One interpolated render read. Fresh object; nothing received is aliased or mutated. */
+export interface PeerRenderPose {
+  readonly sessionId: string;
+  readonly x: number;
+  readonly z: number;
+  /** The two published samples the pose was taken from (the same tick pair when holding). */
+  readonly fromTick: number;
+  readonly toTick: number;
+  /** Blend weight toward `toTick`, always in [0, 1] — never > 1, because that would be extrapolation. */
+  readonly alpha: number;
+  /** True when the render target is at or past the newest sample: the pose holds, it does not predict. */
+  readonly holding: boolean;
+  /** Age of the newest published sample at render time — the visible lag of the followed timeline. */
+  readonly howOldMs: number;
+}
+
+/** Render telemetry per peer, reported separately from the pose itself. */
+export interface PeerRenderStats {
+  readonly renders: number;
+  /** Largest distance between two consecutive render poses (the discontinuity metric). */
+  readonly maxRenderJump: number;
+  /** Longest stretch spent holding the newest sample instead of blending between two. */
+  readonly maxHoldMs: number;
+  /** How many renders held (a stalled publisher is visible as a rising count, never as drift). */
+  readonly holds: number;
+}
 
 /**
  * The one limit rule, shared by the constructor argument and the setter: a positive integer.
@@ -90,6 +129,8 @@ interface MutableTrack {
   readonly sessionId: string;
   readonly epochs: number[];
   readonly samples: PeerSample[];
+  /** Arrival instant (from the presentation's clock) paired with each retained sample, in lockstep. */
+  readonly arrivals: number[];
   /** The latest epoch observed for this peer; it follows the authority's rows, never a client guess. */
   epoch: number;
   tickRegressions: number;
@@ -97,6 +138,11 @@ interface MutableTrack {
   epochChanges: number;
   absences: number;
   identityMismatches: number;
+  renders: number;
+  maxRenderJump: number;
+  maxHoldMs: number;
+  holds: number;
+  lastRender: { readonly x: number; readonly z: number } | null;
 }
 
 const toTrack = (track: MutableTrack): PeerTrack => {
@@ -131,8 +177,11 @@ const toTrack = (track: MutableTrack): PeerTrack => {
  *
  * `limit` is validated with the same rule the `sampleLimit` setter enforces: a positive integer, or the
  * constructor throws before any track exists.
+ *
+ * `clock` stamps sample arrivals for the render-delay path; it defaults to `performance.now` and is
+ * injectable so the interpolation is unit-testable without wall-clock races.
  */
-export const createRemotePresentation = (limit: number = DEFAULT_SAMPLE_LIMIT): RemotePresentation => {
+export const createRemotePresentation = (limit: number = DEFAULT_SAMPLE_LIMIT, clock: () => number = () => performance.now()): RemotePresentation => {
   const tracks = new Map<string, MutableTrack>();
   const anomalies: string[] = [];
   let observations = 0;
@@ -164,7 +213,11 @@ export const createRemotePresentation = (limit: number = DEFAULT_SAMPLE_LIMIT): 
       }
     }
     track.samples.push({ tick: peer.lastAuthorityTick, x: peer.x, z: peer.z, movementMode: peer.movementMode });
-    while (track.samples.length > sampleLimit) track.samples.shift();
+    track.arrivals.push(clock());
+    while (track.samples.length > sampleLimit) {
+      track.samples.shift();
+      track.arrivals.shift();
+    }
   };
 
   return {
@@ -179,12 +232,18 @@ export const createRemotePresentation = (limit: number = DEFAULT_SAMPLE_LIMIT): 
             sessionId: peer.key,
             epochs: [peer.sessionEpoch],
             samples: [],
+            arrivals: [],
             epoch: peer.sessionEpoch,
             tickRegressions: 0,
             duplicateSamples: 0,
             epochChanges: 0,
             absences: 0,
             identityMismatches: 0,
+            renders: 0,
+            maxRenderJump: 0,
+            maxHoldMs: 0,
+            holds: 0,
+            lastRender: null,
           };
           tracks.set(peer.key, created);
           fold(created, peer);
@@ -210,6 +269,70 @@ export const createRemotePresentation = (limit: number = DEFAULT_SAMPLE_LIMIT): 
     observations: () => observations,
     sampleLimit: (next) => {
       sampleLimit = checkedSampleLimit(next);
+    },
+    renderPose: (sessionId, nowMs, delayMs) => {
+      const track = tracks.get(sessionId);
+      if (track === undefined) return undefined;
+      const count = track.samples.length;
+      if (count === 0) return undefined;
+      const newest = track.samples[count - 1];
+      if (newest === undefined) return undefined;
+      // The pair is the last two DISTINCT-TICK samples, measured from the moment each pose FIRST
+      // arrived: fold echoes of the same tick are re-observations, not new published poses, and
+      // blending between an echo and its original would invent motion between identical points.
+      let indexB = count - 1;
+      while (indexB > 0 && (track.samples[indexB - 1]?.tick ?? -1) === newest.tick) indexB -= 1;
+      const newestAt = track.arrivals[indexB];
+      let indexA = indexB - 1;
+      while (indexA > 0 && (track.samples[indexA - 1]?.tick ?? -1) === (track.samples[indexA]?.tick ?? -2)) indexA -= 1;
+      if (newestAt === undefined) return undefined;
+      const target = nowMs - delayMs;
+      let pose = { x: newest.x, z: newest.z };
+      let fromTick = newest.tick;
+      let toTick = newest.tick;
+      let alpha = 1;
+      let holding = true;
+      const previous = indexA >= 0 ? track.samples[indexA] : undefined;
+      const previousAt = indexA >= 0 ? track.arrivals[indexA] : undefined;
+      if (previous !== undefined && previousAt !== undefined && target < newestAt) {
+        const span = newestAt - previousAt;
+        alpha = span <= 0 ? 1 : Math.min(1, Math.max(0, (target - previousAt) / span));
+        pose = {
+          x: previous.x + (newest.x - previous.x) * alpha,
+          z: previous.z + (newest.z - previous.z) * alpha,
+        };
+        fromTick = previous.tick;
+        toTick = newest.tick;
+        holding = false;
+      }
+      const result: PeerRenderPose = {
+        sessionId,
+        x: pose.x,
+        z: pose.z,
+        fromTick,
+        toTick,
+        alpha: holding ? 1 : alpha,
+        holding,
+        howOldMs: Math.max(0, nowMs - newestAt),
+      };
+      // Telemetry only; the pose object itself is never stored by reference anywhere.
+      track.renders += 1;
+      if (track.lastRender !== null) {
+        const jump = Math.hypot(pose.x - track.lastRender.x, pose.z - track.lastRender.z);
+        if (jump > track.maxRenderJump) track.maxRenderJump = jump;
+      }
+      if (holding) {
+        track.holds += 1;
+        const held = Math.max(0, nowMs - newestAt);
+        if (held > track.maxHoldMs) track.maxHoldMs = held;
+      }
+      track.lastRender = pose;
+      return result;
+    },
+    renderStats: (sessionId) => {
+      const track = tracks.get(sessionId);
+      if (track === undefined) return undefined;
+      return { renders: track.renders, maxRenderJump: track.maxRenderJump, maxHoldMs: track.maxHoldMs, holds: track.holds };
     },
   };
 };
