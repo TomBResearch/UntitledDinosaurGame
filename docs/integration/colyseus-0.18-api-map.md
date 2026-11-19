@@ -673,69 +673,79 @@ The named-gap trigger remains unobservable on loopback (the server names no rang
 unit-pinned only.
 
 
-### 13.2 Amendment proposal (recorded, NOT applied): making the server consume the ONE shared step function
+### 13.2 Amendment (OWNER-APPROVED 2026-11-19, APPLIED): the server side of the spike consumes the ONE shared step function
 
 Slice 5 review item 1 asked for a single pure exported step relation used by BOTH sides of the spike
-and by the 200-tick AC-1 trace, with no production-default edits. What is true after the applied
-refactor, without touching any ungranted server path:
+and by the 200-tick AC-1 trace, with no production-default edits. The reviewer then granted the
+amendment below (scope: the two server files named in point 1–2, one optional process-local
+parameter each; recorded in the assignment record §3.5). What is true after the applied amendment:
 
 * the prediction side has ONE function object — `apps/client/src/network/flatStep.ts` exports
   `flatDirectStep`; the reconciler's step closure, the matched-ack checkpoint instrumenter, the
   replay-identity ledger, the browser pages (`/network/flatStep.js`) and the adapter's public
   re-export (signature unchanged) all resolve to it; the unit suite pins the export identity;
 * the AC-1 trace (`tests/reference/flat-direct-step.ts`, a test reference file the review granted
-  for refactoring) composes the SAME compiled module (`apps/client/dist/network/flatStep.js`)
-  tick-by-tick over its reference window and reports `sharedKernelCompositionMetres` /
+  for refactoring) now produces its rows THROUGH the kernel wrapper and composes the SAME compiled
+  module (`apps/client/dist/network/flatStep.js`) tick-by-tick over its reference window, reporting
+  `rowsSteppedBySharedKernel` (module identity), `kernelStepperCalls`, `productionDefaultMatchesKernel`
+  (parity against the untouched default stepper) and `sharedKernelCompositionMetres` /
   `sharedKernelAgreesWithRows` beside the published `speed × step × ticks` product — so the trace's
-  cross-check is no longer a separately written formula, and the equality is behavioural: production
-  stepper rows vs the shared kernel, within AC-1's own 1e-6 m tolerance;
+  cross-check is no longer a separately written formula, and the stepper identity is a wired fact
+  inside the verdict;
 * the spike's in-browser expectations (refusal deltas at ticks 40/120, mixed-input zero windows) are
   computed from the shared function inside the page, and they agree with the LIVE room's consumed
   dispositions — behavioural agreement measured at runtime, not a parity check as sole evidence.
 
-What is NOT reachable without an amendment: the live room still steps
-`new FlatReferenceStepper(options.config.movement.speed)` because `buildMovementAuthority` hardcodes
-it (`apps/server/src/movement/MovementAuthorityAdapter.ts`, the `AuthorityCore.build` call) and
-`RegionRoom.onCreate` calls the factory with no stepper slot. The deployment seam
-(`defineOperatorRegionRoom({ config })` → `defineServer({ rooms })` → `defineRoom`) carries hashed
-config DATA only; no public composition point accepts a stepper. A subclass cannot reach it either:
-the authority core is a private field of `RegionRoom`.
+What the amendment added (exactly two server files, one optional parameter each):
 
-Proposed amendment, narrowly scoped — the exact injection points are exactly two, and only the first
-file would change:
-
-1. `apps/server/src/movement/MovementAuthorityAdapter.ts` — add ONE optional parameter to
+1. `apps/server/src/movement/MovementAuthorityAdapter.ts` — ONE optional parameter on
    `buildMovementAuthority`:
    `readonly stepperFactory?: (speed: number) => EntityStepper`
-   used as `stepper: (options.stepperFactory ?? ((speed) => new FlatReferenceStepper(speed)))(speed)`.
-   This is the same shape as the factory's existing process-local injection precedents
+   used as `stepper: (options.stepperFactory ?? ((speed) => new FlatReferenceStepper(speed)))(speed)`
+   — the same shape as the factory's existing process-local injection precedents
    (`time?: TimeSource`, `scheduler?: Scheduler`, `routeCompletions?: () => ...`).
-2. `apps/server/src/rooms/RegionRoom.ts` — OPTIONAL, only if a room-level seam is wanted later:
-   thread an optional `stepperFactory` through `defineOperatorRegionRoom`'s options to the factory
-   call at `onCreate` (line ~204). NOT required for the spike: the spike's server-side composition
-   (the netcode harness) builds the room; if only point 1 lands, a test composition that calls
-   `buildMovementAuthority` directly can pass the kernel, and the room default is untouched.
+2. `apps/server/src/rooms/RegionRoom.ts` — an optional `stepperFactory` on `RegionRoomOptions`,
+   passed through at `onCreate` when present. Trusted-only by construction: `RegionRoomOptions`
+   is reachable solely through a deployment envelope carrying the per-process `OPERATOR_NONCE`
+   (`trustedDeployment`), which discards a client's create/join options WHOLESALE without the
+   nonce — and a function object is not wire-serialisable in any case.
 
 Default-preservation design: the parameter is OPTIONAL; when absent the expression constructs
 `new FlatReferenceStepper(config.movement.speed)` — the identical object the current code builds.
-No production call site changes; `pnpm test:contract` re-pins config/movement hashes; AC-1's trace
-keeps running the production stepper and its kernel cross-check must stay green, so a silent default
-change cannot pass the suite.
+No production call site changes; `pnpm test:contract` re-pins config/movement hashes; the AC-1 trace
+reports `productionDefaultMatchesKernel` (one identical request through the unchanged production
+stepper and through the kernel wrapper must agree to 1e-12 m), so a silent default change cannot
+pass the suite.
 
-Proof that callers cannot configure a step via the network:
+Proof that callers cannot configure a step via the network (all three layers pinned by
+`tests/unit/udg-spike-001/trusted-stepper-seam.test.ts`):
 
-* the wire surface is fixed: `DIRECT_INPUT_FIELDS = ['sessionEpoch', 'generation', 'directIntent',
-  'moveX', 'moveZ', 'seq']` (`packages/protocol/src/schema/DirectInputSchema.ts`) — no field names a
-  function, and the input validator rejects unknown fields;
-* the amendment adds NO config key: `configHash`/`movementHash` inputs are unchanged
-  (`packages/config/src/input.ts` field list untouched), so the §6.3 hash gate cannot even be
-  addressed with a stepper concept;
+* the wire surface is fixed: `DIRECT_WIRE_FRAME_FIELDS = ['sessionEpoch', 'generation',
+  'directIntent', 'moveX', 'moveZ', 'seq']` (`packages/protocol/src/validation/direct.ts`) — an
+  exact-key gate, no field names a function, an extra key is refused;
+* the amendment adds NO config key: the config compiler silently DROPS unknown keys
+  (`withConfigOverrides(DEFAULT, { …, stepperFactory: 'x' })` yields a compiled config carrying no
+  such key), so a config-carried factory cannot reach the authority or the hashes;
+* the deployment envelope is nonce-gated: a guessed or missing `deploymentNonce` discards the
+  options wholesale (the hostile room is refused for the very bounds it tried to supply, and a
+  sentinel factory is never constructed, let alone stepped); the nonce is a module-private
+  `randomUUID()` per process;
 * the parameter is a FUNCTION living in the server process at composition time — the same class of
   seam as the existing `sink`/`time`/`scheduler` options, reachable only by code that imports the
   factory, not by any message, join option (presentation only) or deployment payload;
-* `defineRoom` options remain data; nothing in the proposal alters them.
+* `defineRoom` options remain data; the amendment alters no wire or config surface.
 
-Status: recorded here for owner decision per the review; no server path edited. Awaiting approval.
+Consumers of the seam (test compositions only): the netcode harness room runs through
+`tests/support/step-kernel/kernel-stepper.mjs` — a wrapper whose every step goes through THE
+`flatDirectStep` imported from `apps/client/dist/network/flatStep.js` — and records a sentinel
+count; the AC-1 trace produces its rows through the same wrapper and asserts module identity
+(`rowsSteppedBySharedKernel`) plus a parity diagnostic against the unchanged production default
+(`productionDefaultMatchesKernel`). Nothing in `apps/server` production code imports the client or
+test trees; the dependency direction stays trusted-caller → adapter.
+
+Status: APPROVED and APPLIED 2026-11-19. Production default unchanged: any room that does not pass
+the option constructs exactly the `FlatReferenceStepper(config.movement.speed)` it constructed
+before; the camera suite and every other composition exercise precisely that unchanged path.
 
 ### 13.3 Adoption corroboration of the matched-ack metric (slice 5 review item 3, applied)
 
@@ -782,22 +792,51 @@ the direct adoption boundary; conservation residual < 1e-9; coverage complete; n
 double-counted. A unit control mirrors it in the fake (`stalled batch` test).
 
 
-### 13.4 Post-retirement replacement semantics (slice 5 review item 2, observed, reported, NOT fixed here)
+### 13.4 Post-retirement replacement semantics (slice 5 review item 2 — RESOLVED: root cause was the client-side generation sequence, NOT a server defect)
 
-Measured twice, deterministically, in the netcode suite (`retirement overflow…` test, runs A and B):
-after a §3.1 retirement triggers the §3.3 bounded closure of the offender seat, the client's ADR
-path completes cleanly — quarantine, discard, bounded rejoin through `joinById`, fresh snapshot on a
-new epoch, zero old-domain deliveries — but the REPLACEMENT seat, a distinct new session (a rejoin
-builds a fresh `Client`), then **consumes every direct frame without the authoritative row ever
-moving**: the room's own seat ledger advances `resolvedThrough` with every frame, replica deliveries
-keep flowing, and a four-second, 40-sample position trace holds a span of exactly 0.000 m. The same
-client resumes motion through the identical rejoin mechanism whenever the server keeps the seat
-(offline-deadline recovery test), so the frozen replacement is server-side post-retirement
-semantics, not client state. The suite pins the defect by name (EVENT 2b) with full room/seat/epoch
-attribution and is designed to FLIP if a server change ever restores replacement movement. Owner
-question for the server: what post-retirement state admits a replacement seat's inputs yet withholds
-motion, and should `joinById` after a §3.3 closure mint a new session at all (ADR-0003 §3.3 speaks
-of the SAME seat re-representing)? No server path was edited; this is the report.
+**History, kept honest.** The slice-4/5 rounds reported the replacement seat after a §3.3 retirement
+closure as a REPORTED REAL SERVER FAILURE: it consumed every direct frame (room seat
+`resolvedThrough` advancing, deliveries flowing) while the authoritative row never moved (4 s trace,
+span exactly 0.000 m), deterministically at both rejoin cadences. That section concluded "server-side
+post-retirement semantics, not client state". **That conclusion was wrong**, and the owner question
+(whether `joinById` after a §3.3 closure should mint a new session at all) is withdrawn as
+unnecessary for this symptom — the replacement seat was always healthy.
+
+**Root cause (protocol-side, client obligation).** The client-side step relation is unchanged; the
+defect was in this spike's own test mover. Protocol §4.2 (implemented in
+`apps/server/src/authority/entity.ts::resetForNewEpoch` → generation watermark resets to 0, and
+screened in `apps/server/src/authority/screen.ts`): a frame whose generation exceeds
+`MAX_GENERATION_FORWARD_GAP = 64` beyond the watermark is refused as `RESYNC_REQUIRED`, and a refusal
+of any kind is still a journalled disposition answered with a NEUTRAL step (`RegionRoom.tick`) —
+consumed, acked, watermark-advanced, unmoving. The retirement fixture's mover continued the
+OFFENDER's generation counter (120–300 by then) into the replacement's fresh-epoch domain, so every
+replacement frame sat outside the forward-gap window of the zero watermark and was screened to a
+neutral step. The offline-recovery test never hit this because its reconnection lands with a small
+generation gap (≤ 64) — which is why the asymmetry looked server-side.
+
+**Positive control (before naming anything).** The netcode suite now runs the frozen variant as a
+RED scenario with a same-seat control: after the 0-span settle is established, ONLY the frame
+generation is restarted at 1 (`controlDeltaZ` ≈ 7.4 m within 2 s, tail matched corrections back to
+zero) — same room, same replacement seat, same session, same epoch. The room ledger attributes the
+refusals precisely: the replacement entity's frames are CONSUMED in volume with ZERO wire-level
+refusals (`tickRecords.refused` is the transport gate; the §4.2 screen refusals are core
+journalled dispositions). Two GREEN scenarios — replacement movers that restart the generation
+sequence when the epoch changes (§4.2-compliant), at the default ladder and at a 1500 ms deferred
+ladder landing after the §3.3 closure — then satisfy the strict BOTH-events claim end to end
+(EVENT 1 offender closed with code 4100 by exact identity; EVENT 2 new session/epoch, snapshot
+before any fresh input, ≥ 0.4 m of motion with zero nominal corrections).
+
+**Fix applied (fixture-only).** The retirement, recovery-resume and prediction-slice browser movers
+now observe §4.2: each mover tracks the replicated epoch and restarts its generation counter at 1
+when the epoch changes. No server path was edited for this; no server behaviour changed.
+
+**Standing client guidance (worth a production contract later).** `DirectMotionPredictor.send` takes
+a CALLER-stamped generation; any client that enters a new epoch — whether by reconnection or by a
+new session after a §3.3 closure — MUST restart its generation sequence at 1, or the forward-gap
+screen silently (but correctly) neutral-steps every frame. An open, non-blocking owner question:
+whether the predictor should own per-epoch generation management (reset-on-epoch-change or
+enforce-the-caller-restarting) rather than trusting the caller. Recorded, not implemented — the
+SDK-facing client surface is outside this round's grants.
 
 
 [docs]: https://docs.colyseus.io/ 'Colyseus documentation (versionless URL; the pinned package is the authority)'

@@ -180,6 +180,7 @@ let fixture: Fixture | undefined;
 let browser: Browser | undefined;
 /** The live room class, reached in-process, so correction pacing can watch authority ticks. */
 let roomClass: { liveRooms(): readonly { roomId?: string; evidence(): Record<string, unknown> }[] } | undefined;
+let kernelStepper: { kernelStepperSentinel: { calls: number }; kernelStep: unknown } | undefined;
 
 test.beforeAll(async () => {
   // The room module is the accepted pinned one; the harness boots it exactly as the UDG-003 suites do.
@@ -205,13 +206,34 @@ test.beforeAll(async () => {
   const roomModulePath = join(ROOT, 'apps', 'server', 'dist', 'rooms', 'RegionRoom.js');
   expect(existsSync(roomModulePath), `the pinned room module ${roomModulePath}`).toBe(true);
   const roomModule = (await import(pathToFileURL(roomModulePath).href)) as {
-    defineOperatorRegionRoom: (options: { config?: unknown }) => unknown;
+    defineOperatorRegionRoom: (options: { config?: unknown; stepperFactory?: unknown }) => unknown;
     RegionRoom: unknown;
   };
   roomClass = roomModule['RegionRoom'] as { liveRooms(): readonly { roomId?: string; evidence(): Record<string, unknown> }[] };
 
   // The harness loads the pinned packages the way `apps/server` sees them, and binds nothing by hand.
-  const rooms = { [ROOM_NAME]: roomModule.defineOperatorRegionRoom({ config: overrides }) };
+  // Review-amendment wiring (owner-approved): the live room steps the authority through the shared
+  // kernel wrapper — a trusted `stepperFactory` on the deployment envelope, wrapping THE one exported
+  // relation `apps/client/dist/network/flatStep.js` that the client side, the browser pages and the
+  // AC-1 trace all consume. The wrapper module re-exports the function it steps with, and Node's
+  // module registry gives every importer in this process the same function object.
+  const kernelModule = (await import(
+    pathToFileURL(join(ROOT, 'tests', 'support', 'step-kernel', 'kernel-stepper.mjs')).href,
+  )) as {
+    kernelStepperFactory: (speed: number) => unknown;
+    kernelStepperSentinel: { calls: number };
+    kernelStep: unknown;
+  };
+  kernelStepper = kernelModule;
+  observations['kernelModule'] = {
+    note: 'tests/support/step-kernel/kernel-stepper.mjs wraps apps/client/dist/network/flatStep.js; the AC-1 trace imports that same dist file',
+  };
+  const rooms = {
+    [ROOM_NAME]: roomModule.defineOperatorRegionRoom({
+      config: overrides,
+      stepperFactory: kernelModule.kernelStepperFactory,
+    }),
+  };
   const server = await startHarnessServer(ROOT, rooms as never);
 
   fixture = {
@@ -821,6 +843,8 @@ interface PredSeatWindow {
     sendOne?: (moveX: number, moveZ: number, direct: boolean) => { seq?: number; error?: string };
     readonly joinEpoch: number;
     readonly joinZ: number;
+    /** Protocol §4.2: a new epoch starts a new generation sequence — the mover tracks the epoch. */
+    lastSeenEpoch?: number;
   };
   __udgRecSeat?: {
     readonly transport: PredTransportSurface;
@@ -831,6 +855,7 @@ interface PredSeatWindow {
     moverStop: boolean;
     readonly joinEpoch: number;
     readonly joinZ: number;
+    lastSeenEpoch?: number;
   };
   __udgRetSeat?: {
     readonly transport: PredTransportSurface;
@@ -843,6 +868,9 @@ interface PredSeatWindow {
     readonly joinEpoch: number;
     readonly joinZ: number;
     replacementSessionId: string;
+    lastSeenEpoch?: number;
+    /** RED scenario keeps true: the mover DELIBERATELY violates protocol §4.2 for the red run. */
+    continueGeneration?: boolean;
   };
   __udgObsSeat?: {
     readonly seat: PageSeatHandle;
@@ -871,6 +899,7 @@ interface GatedRoom {
   readonly tickRecords: readonly {
     tick: number;
     consumed: readonly { entityId: string; seq: number }[];
+    refused?: readonly { entityId: string; count: number }[];
     closures?: readonly { entityId: string; code: number }[];
   }[];
   evidence(): Record<string, unknown>;
@@ -982,6 +1011,7 @@ test('prediction slice: pinned prediction, two server-forced corrections consume
       moverPause: false,
       joinEpoch: joined.transport.issuedEpoch(),
       joinZ: row0?.z ?? 0,
+      lastSeenEpoch: joined.transport.issuedEpoch(),
     };
     const seatWindow = (globalThis as unknown as PredSeatWindow).__udgPredSeat;
     if (seatWindow !== undefined) {
@@ -1145,6 +1175,12 @@ test('prediction slice: pinned prediction, two server-forced corrections consume
   check('pred: the room\'s own consumption ledger shows the refused frames consumed at EXACTLY authority ticks 40 and 120 (the test-only tick-gate seam made that construction, not timing luck)',
     disposition1 === 40 && disposition2 === 120,
     { stage1Seq, stage2Seq, disposition1, disposition2, frozenAt });
+
+  // Review-amendment sentinel: this room — including the two exact 40/120 dispositions above —
+  // stepped its authority through the wrapper around THE shared kernel function for EVERY tick.
+  // The vectors the browser comparisons expect are computed from the same function object.
+  check('pred: the live room stepped the authority through the shared-kernel wrapper (trusted stepperFactory) — the sentinel counts every authority step, and the exact 40/120 refusals above were produced by THE same flatDirectStep the client and the trace import',
+    (kernelStepper?.kernelStepperSentinel.calls ?? 0) > 120, { kernelStepCalls: kernelStepper?.kernelStepperSentinel.calls ?? -1 });
 
   // No second authority step: the server\'s own per-tick consumption ledger never shows the same
   // sequence number consumed twice, on any tick, for this entity.
@@ -1454,6 +1490,11 @@ test('prediction slice: pinned prediction, two server-forced corrections consume
     h.moverStop = false;
     const step = (): void => {
       if (h.moverStop) return;
+      // Protocol §4.2: a new epoch starts a NEW generation sequence (the core resets the watermark
+      // to zero on epoch change), so a mover that crosses an epoch boundary must restart its
+      // counter — otherwise the forward-gap screen refuses every frame.
+      const rowEpoch = h.predictor.replicated()?.epoch;
+      if (rowEpoch !== undefined && rowEpoch !== h.lastSeenEpoch) { h.lastSeenEpoch = rowEpoch; h.generation = 1; }
       try {
         h.predictor.send({ generation: h.generation, moveX: 0, moveZ: 1 }, true);
         h.generation += 1;
@@ -1695,10 +1736,15 @@ test('recovery resumes through a real rejoin and a fresh snapshot once the netwo
       moverStop: false,
       joinEpoch: joined.transport.issuedEpoch(),
       joinZ: predictor.replicated()?.z ?? 0,
+      lastSeenEpoch: joined.transport.issuedEpoch(),
     };
     const step = (): void => {
       const h = (globalThis as unknown as PredSeatWindow).__udgRecSeat;
       if (h === undefined || h.moverStop) return;
+      // Protocol §4.2: restart the generation sequence when the epoch changes (the core resets
+      // the watermark on epoch change; continuing the counter lands outside the forward gap).
+      const rowEpoch = h.predictor.replicated()?.epoch;
+      if (rowEpoch !== undefined && rowEpoch !== h.lastSeenEpoch) { h.lastSeenEpoch = rowEpoch; h.generation = 1; }
       try {
         h.predictor.send({ generation: h.generation, moveX: 0, moveZ: 1 }, true);
         h.generation += 1;
@@ -1829,34 +1875,37 @@ test('recovery resumes through a real rejoin and a fresh snapshot once the netwo
 });
 
 /**
- * RETIREMENT, REPLACEMENT AND THE §3.3 CLOSURE — BY EXACT IDENTITY, WITH THE REPLACEMENT FAILURE
- * REPORTED, NOT HIDDEN (slice 5 review item 2). ADR-0003 §3.1/§3.3 makes a confirmed retirement
- * TWO distinct events, and the earlier EITHER-check (`closeObservations.length >= 1` OR motion)
- * could be satisfied by ANY closure — including the offender's own — even when replacement was
- * broken. The two events, each attributed by exact session/epoch:
+ * RETIREMENT, REPLACEMENT AND THE §3.3 CLOSURE — BY EXACT IDENTITY, BOTH EVENTS, WITH THE
+ * GENERATION-SEQUENCE BREACH REPRODUCED AS THE RED RUN (slice 5 review item 2, resolved at the
+ * amendment round). ADR-0003 §3.1/§3.3 makes a confirmed retirement TWO distinct events, and the
+ * earlier EITHER-check (`closeObservations.length >= 1` OR motion) could be satisfied by ANY
+ * closure — including the offender's own — even when replacement was broken. The two events, each
+ * attributed by exact session/epoch:
  *
  *   EVENT 1 (the offender): the seat that over-ran the authority is closed through the ADR branch:
  *   the room's per-tick CLOSURE ledger attributes a code-4100 closure to the offender's exact
  *   entityId (= its sessionId), and its own §3.1 close observation carries the retirement
- *   (retiredUnrepresented >= 1) and the consumed count frozen at closure. This event HOLDS.
+ *   (retiredUnrepresented >= 1) and the consumed count frozen at closure.
  *
- *   EVENT 2 (the replacement): a new domain applies a fresh snapshot BEFORE any fresh input and
- *   CAN MOVE. The client half holds in the browser (new epoch, snapshot before input, journal
- *   discarded, no old-epoch re-issue, no old-domain deliveries). The SERVER half does NOT: the
- *   replacement seat joins (as a NEW session — a rejoin through `joinById` is a new Client on
- *   this stack), seats cleanly, and then CONSUMES EVERY FRAME WITHOUT MOVING — verified in the
- *   room's own seat ledger (resolvedThrough = every frame sent) and in 40 client-side position
- *   samples over a four-second settle window (trace span exactly 0.000 m), at BOTH rejoin
- *   cadences (default ~250 ms ladder and deferred 1500 ms past the §3.3 window). The offline
- *   rejoin test proves the same client DOES resume motion whenever the server keeps the seat, so
- *   the frozen replacement is server-side post-retirement semantics, deterministic, and reported
- *   as a named failure below rather than absorbed into an EITHER.
+ *   EVENT 2 (the replacement): a new domain (NEW session — a rejoin through `joinById` is a new
+ *   Client on this stack — new epoch) applies a fresh snapshot BEFORE any fresh input AND MOVES:
+ *   ≥0.4 m of authoritative travel across the settle window with zero nominal corrections and
+ *   zero identity residual, at BOTH rejoin cadences (default ~250 ms ladder and deferred 1500 ms
+ *   past the §3.3 window).
  *
- * CONTROL (the review's red requirement, inverted-by-reality): with the old loose claim this
- * suite would have PASSED runs where the replacement never moved; the strict BOTH-events claim
- * cannot pass here — and the checks below pin exactly that: loose-claim-satisfied AND
- * strict-claim-failing, so a future build where replacement movement is fixed will flip the
- * finding check and force this report to change. The offline-deadline scenario remains separate.
+ * WHY THERE IS NO SERVER DEFECT HERE: the earlier "consumed-but-frozen replacement" finding was
+ * this fixture's own mover CONTINUING the offender's generation sequence into the replacement's
+ * new-epoch domain. Protocol §4.2 (`entity.ts::resetForNewEpoch` zeroes the generation watermark;
+ * `screen.ts` refuses frames further than MAX_GENERATION_FORWARD_GAP = 64 ahead of it) turns such
+ * frames into journalled RESYNC_REQUIRED refusals — a disposition and a NEUTRAL step: consumed,
+ * acked, watermark-advanced, unmoving. The RED scenario below keeps that breach under test: it
+ * reproduces the frozen signature (room ledger: frames consumed, ZERO wire-level refusals — the
+ * refusals are core-screen dispositions) and then runs a SAME-SEAT POSITIVE CONTROL — restart the
+ * generation sequence at 1, change nothing else, motion resumes within 2 s — attributing the
+ * failure to client frame content, not room state, before any layer is named. CONTROL against the
+ * legacy claim: the loose EITHER-check is satisfied by the FROZEN red run while the strict
+ * BOTH-events claim fails it; only the protocol-correct green runs satisfy the strict claim.
+ * The offline-deadline scenario remains a separate test.
  */
 const retirementServerFacts = (roomId: string, sessionId: string): {
   closures: readonly { tick: number; entityId: string; code: number }[];
@@ -1931,12 +1980,20 @@ interface RetirementRun {
   worstCorrection: number;
   worstIdentityResidualAfter: number;
   motionWindow: { sentDelta: number; deliveriesDelta: number; ackAdvanced: number; resolvedAdvanced: number; zAtResume: number; zNow: number; zTraceMin: number; zTraceMax: number; zTraceSpan: number };
+  /** RED scenario only: did the mover deliberately continue the old generation sequence (§4.2 breach). */
+  continueGeneration: boolean;
+  /** RED scenario's positive control: restart the sequence and re-measure motion. */
+  controlDeltaZ: number;
+  controlSentDelta: number;
+  controlWorstCorrection: number;
+  controlTailWorstCorrection: number;
 }
 
 /** Join a seat, over-run the authority until the SERVER retires inputs, then watch the whole ladder. */
 const runRetirementScenario = async (
   seatKey: string,
   rejoinBackoffMs: readonly number[] | null,
+  continueGeneration: boolean,
 ): Promise<{ page: Page; run: RetirementRun; factsAtTrigger: ReturnType<typeof retirementServerFacts> }> => {
   const page = await openSeatPage(seatKey, { bare: true });
   const movementSpeed = fixture?.movementSpeed ?? 0;
@@ -1984,12 +2041,22 @@ const runRetirementScenario = async (
       joinEpoch: joined.transport.issuedEpoch(),
       joinZ: predictor.replicated()?.z ?? 0,
       replacementSessionId: joined.sessionId,
+      lastSeenEpoch: joined.transport.issuedEpoch(),
+      continueGeneration: args.continueGeneration,
     };
     // The over-rate loop: 30 ms while bursting (~33/s against 20/s consumption, under the 40/s
     // arrival ceiling), 50 ms afterwards.
     const step = (): void => {
       const h = (globalThis as unknown as PredSeatWindow).__udgRetSeat;
       if (h === undefined || h.moverStop) return;
+      // Protocol §4.2: a new epoch starts a NEW generation sequence (the core resets the watermark
+      // to zero). The GREEN scenario obeys this; the RED scenario DELIBERATELY ignores it, which
+      // is what puts every replacement frame outside MAX_GENERATION_FORWARD_GAP of the fresh
+      // watermark and into the journalled RESYNC_REQUIRED refusal (consumed, neutral step).
+      if (h.continueGeneration !== true) {
+        const rowEpoch = h.predictor.replicated()?.epoch;
+        if (rowEpoch !== undefined && rowEpoch !== h.lastSeenEpoch) { h.lastSeenEpoch = rowEpoch; h.generation = 1; }
+      }
       try {
         h.predictor.send({ generation: h.generation, moveX: 0, moveZ: 1 }, true);
         h.generation += 1;
@@ -2007,6 +2074,7 @@ const runRetirementScenario = async (
     adapterUrl: ADAPTER_URL,
     speed: movementSpeed,
     rejoinBackoffMs,
+    continueGeneration,
   });
   expect(joined.ok, `the ${seatKey} retirement seat joined`).toBe(true);
 
@@ -2021,6 +2089,7 @@ const runRetirementScenario = async (
   const run = await page.evaluate(async () => {
     const h = (globalThis as unknown as PredSeatWindow).__udgRetSeat;
     if (h === undefined) throw new Error('no retirement seat');
+    const scenarioContinueGeneration = h.continueGeneration === true;
     const sleepPage = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
     let triggered = false;
     let triggerAt = 0;
@@ -2046,6 +2115,8 @@ const runRetirementScenario = async (
         snapshotTickAtRecovery: -1, replacementSessionId: '',
         movedAfterResume: 0, measuredAfterCount: 0,
         worstCorrection: 0, worstIdentityResidualAfter: 0,
+        continueGeneration: h.continueGeneration === true,
+        controlDeltaZ: 0, controlSentDelta: 0, controlWorstCorrection: 0, controlTailWorstCorrection: 0,
         motionWindow: { sentDelta: -1, deliveriesDelta: -1, ackAdvanced: -1, resolvedAdvanced: -1, zAtResume: 0, zNow: 0, zTraceMin: 0, zTraceMax: 0, zTraceSpan: 0 },
       } satisfies RetirementRun;
     }
@@ -2122,6 +2193,43 @@ const runRetirementScenario = async (
     const reissuedOldEpoch = h.predictor.sentAudit().filter(
       (entry) => entry.atMs >= triggerAt && entry.epoch !== epochAtRecovery,
     ).length;
+    // POSITIVE CONTROL (red scenario only): the frozen seat exists; now restart the generation
+    // sequence exactly as protocol §4.2 requires for the new epoch and re-settle for two seconds.
+    // Motion resuming in THIS window — same room, same seat, same session, same epoch, only the
+    // frame generation changed — attributes the failing layer to the client's frame content, not
+    // to room state, the seat, the epoch, the bounds or the published row.
+    let controlDeltaZ = 0;
+    let controlSentDelta = 0;
+    let controlWorstCorrection = 0;
+    let controlTailWorstCorrection = 0;
+    if (h.continueGeneration === true) {
+      const matchedAtControl = h.predictor.matchedCorrections().length;
+      const sentAtControl = h.predictor.sentAudit().length;
+      const zBeforeControl = h.predictor.replicated()?.z ?? Number.NaN;
+      h.continueGeneration = false;
+      const epochNowControl = h.predictor.replicated()?.epoch;
+      if (epochNowControl !== undefined) h.lastSeenEpoch = epochNowControl;
+      h.generation = 1;
+      const controlUntil = performance.now() + 2000;
+      while (performance.now() < controlUntil) {
+        await sleepPage(100);
+      }
+      controlDeltaZ = (h.predictor.replicated()?.z ?? Number.NaN) - zBeforeControl;
+      controlSentDelta = h.predictor.sentAudit().length - sentAtControl;
+      for (const row2 of h.predictor.matchedCorrections().slice(matchedAtControl)) {
+        if (row2.status === 'measured' && row2.magnitude > controlWorstCorrection) controlWorstCorrection = row2.magnitude;
+      }
+      // The TAIL of the control window is the steady-state claim: once the restarted sequence is
+      // in step, the most recent matched corrections are zero again. (The single lead-collapsing
+      // correction at the restart instant is the honest, expected correction of the breach — the
+      // client DID predict motion the authority refused — so it is reported, not thresholded.)
+      const controlMeasured = h.predictor.matchedCorrections()
+        .slice(matchedAtControl)
+        .filter((row2) => row2.status === 'measured');
+      for (const row2 of controlMeasured.slice(-8)) {
+        if (row2.magnitude > controlTailWorstCorrection) controlTailWorstCorrection = row2.magnitude;
+      }
+    }
     h.moverStop = true;
     return {
       ok: true, roomId: h.roomId, sessionId: h.sessionId, joinEpoch: h.joinEpoch,
@@ -2135,6 +2243,8 @@ const runRetirementScenario = async (
       movedAfterResume: zNow - zAtResume,
       measuredAfterCount: matchedAfter.length,
       worstCorrection, worstIdentityResidualAfter,
+      continueGeneration: scenarioContinueGeneration,
+      controlDeltaZ, controlSentDelta, controlWorstCorrection, controlTailWorstCorrection,
       motionWindow,
       events: h.predictor.recoveryLedger().map((row2) => row2.event),
     } satisfies RetirementRun;
@@ -2160,44 +2270,97 @@ const replacementFrozenDespiteConsumption = (run: RetirementRun): boolean =>
   && run.motionWindow.deliveriesDelta > 5
   && run.motionWindow.zTraceSpan < 0.000001;
 
-test('retirement overflow in the browser: EVENT 1 (offender closed through the ADR branch) holds by exact identity; EVENT 2\'s "replacement can move" is REPORTED as a real server failure (consumed-but-frozen), never absorbed into an EITHER', async () => {
-  expect(fixture, 'the room fixture booted').toBeDefined();
+/** Wire-level consumption/refusal for one entity after a given tick, from the room's own ledger. */
+const replacementTickFacts = (roomId: string, entityId: string, fromTick: number): {
+  consumed: number; wireRefused: number; ticks: number;
+} => {
+  const room = gatedRoom(roomId);
+  let consumed = 0;
+  let wireRefused = 0;
+  let ticks = 0;
+  for (const record of room.tickRecords) {
+    if (record.tick <= fromTick) continue;
+    ticks += 1;
+    for (const entry of record.consumed ?? []) if (entry.entityId === entityId) consumed += 1;
+    for (const entry of record.refused ?? []) if (entry.entityId === entityId) wireRefused += Number(entry.count);
+  }
+  return { consumed, wireRefused, ticks };
+};
 
-  // ---- run A: the default rejoin ladder (first attempt ~250 ms, INSIDE the §3.3 closure window).
-  const runA = await runRetirementScenario('ret-A', null);
-  const factsA = retirementServerFacts(runA.run.roomId, runA.run.sessionId);
-  observations['predRetirementA'] = { facts: factsA, run: runA.run, strictBothEvents: replacementRestored(runA.run) };
-
-  // THE CONTROL the review asked for, pinned against reality: the OLD loose claim (any
-  // closeObservation, or motion) is satisfied by these runs, while the strict BOTH-events claim
-  // FAILS because the replacement never moves. "Broken replacement movement cannot pass" — and
-  // the old check would have passed it. If a future build fixes replacement, this control flips
-  // and forces the report to change.
-  const naiveLooseClaimSatisfied = factsA.closeObservations.length >= 1;
-  check('retirement CONTROL: the legacy EITHER-claim (any close observation) is satisfied while the strict BOTH-events claim FAILS — replacement movement is broken at the default rejoin cadence and cannot pass (if replacement ever moves, this check flips on purpose: re-report, do not re-tune)',
-    naiveLooseClaimSatisfied === true
-    && replacementRestored(runA.run) === false
-    && replacementFrozenDespiteConsumption(runA.run)
-    && factsA.offenderClosures.filter((c) => c.entityId === runA.run.sessionId && c.code === 4100).length === 1,
-    { loose: naiveLooseClaimSatisfied, strict: replacementRestored(runA.run), motion: runA.run.motionWindow, offenderClosures: factsA.offenderClosures });
-  await runA.page.evaluate(async () => {
+/** Stop the mover, attempt the graceful leave, collect the page-error sink, close the context. */
+const closeRetirementRun = async (page: Page, key: string): Promise<readonly string[]> => {
+  await page.evaluate(async () => {
     const h = (globalThis as unknown as PredSeatWindow).__udgRetSeat;
     if (h === undefined) return;
     h.moverStop = true;
     try {
       await h.predictor.close();
     } catch {
-      // the server closed this seat through §3.3; a failed graceful leave is recorded, not fatal
+      // the server may have closed this seat through §3.3; a failed graceful leave is recorded, not fatal
     }
   });
-  const errorsA = pageErrorSinks.get('ret-A') ?? [];
-  check('retirement: no unexpected page or console errors in run A', errorsA.length === 0, errorsA.slice(0, 4));
-  await runA.page.context().close();
+  const errors = pageErrorSinks.get(key) ?? [];
+  await page.context().close();
+  return errors;
+};
 
-  // ---- run B: the rejoin ladder deferred to 1500 ms, landing AFTER the §3.3 bounded closure has
-  // removed the offender seat. The client-side recovery ladder and quarantine must be perfect;
-  // EVENT 1 must hold with full attribution; EVENT 2's movement is then measured and REPORTED.
-  const runB = await runRetirementScenario('ret-B', [1500]);
+test('retirement overflow in the browser: EVENT 1 (offender closed through the ADR branch) holds by exact identity; EVENT 2 (replacement MOVES cleanly) PASSES with the protocol-correct generation sequence; the generation-continuation breach is reproduced as the consumed-but-frozen red run and attributed by a same-seat positive control', async () => {
+  expect(fixture, 'the room fixture booted').toBeDefined();
+
+  // ---- RED run (the known red run, retained): the replacement mover DELIBERATELY continues the
+  // offender's generation sequence across the new domain — the exact client-side §4.2 breach
+  // ("a new epoch starts a new generation sequence") behind the slice-4/slice-5 "replacement
+  // never moves" finding: the core resets the generation watermark to zero for the new epoch,
+  // every continued frame sits outside MAX_GENERATION_FORWARD_GAP of it, and the screen's
+  // RESYNC_REQUIRED refusal is a journalled disposition with a NEUTRAL step — consumed, acked,
+  // watermark-advanced, unmoving. The same-seat control then restarts the sequence and nothing
+  // else: motion resuming there attributes the failing layer to client frame content, not to the
+  // room, the seat, the epoch, the bounds, or the published row.
+  const runRed = await runRetirementScenario('ret-RED', null, true);
+  const factsRed = retirementServerFacts(runRed.run.roomId, runRed.run.sessionId);
+  const redTickFacts = replacementTickFacts(runRed.run.roomId, runRed.run.replacementSessionId, runRed.run.snapshotTickAtRecovery);
+  observations['predRetirementRed'] = {
+    facts: factsRed, run: runRed.run, tickFacts: redTickFacts, strictBothEvents: replacementRestored(runRed.run),
+  };
+
+  check('retirement RED reproduction: a replacement that CONTINUES the old generation sequence is consumed-but-frozen — the room consumes every frame (seat resolvedThrough advances, ZERO wire-level refusals in the room ledger) while the row never moves (4 s trace, span 0): the refusals are core-screen dispositions (RESYNC_REQUIRED, neutral step), exactly the signature the previous slices reported',
+    runRed.run.continueGeneration === true
+    && replacementFrozenDespiteConsumption(runRed.run)
+    && replacementRestored(runRed.run) === false
+    && redTickFacts.consumed > 20 && redTickFacts.wireRefused === 0,
+    { motion: runRed.run.motionWindow, tickFacts: redTickFacts });
+
+  check('retirement RED positive control: on the SAME seat, in the SAME room, under the SAME session and epoch, restarting the generation sequence at 1 (§4.2) restores authoritative motion within 2 s (≥0.6 m, frames still flowing) and the TAIL matched corrections return to zero — the server replaced the seat correctly; the frozen variant fails on client frame content alone (the single lead-collapsing correction at the restart instant is the breach\'s own honest correction — the client predicted motion the authority refused — and is reported, not thresholded), so no server defect is named',
+    runRed.run.controlDeltaZ >= 0.6 && runRed.run.controlSentDelta >= 20 && runRed.run.controlTailWorstCorrection < 0.000001,
+    { controlDeltaZ: runRed.run.controlDeltaZ, controlSentDelta: runRed.run.controlSentDelta, controlWorstCorrection: runRed.run.controlWorstCorrection, controlTailWorstCorrection: runRed.run.controlTailWorstCorrection, frozenSpan: runRed.run.motionWindow.zTraceSpan });
+
+  // THE CONTROL the review asked for, pinned against reality in BOTH directions: the OLD loose
+  // EITHER-claim is satisfied by the FROZEN red run while the strict BOTH-events claim fails it;
+  // the green runs below must PASS the same strict claim. A broken replacement cannot pass the
+  // strict claim, and the loose claim demonstrably could.
+  check('retirement CONTROL: the legacy EITHER-claim (any close observation) is satisfied by the FROZEN red run while the strict BOTH-events claim fails it — broken replacement movement cannot pass the strict claim the green runs must satisfy',
+    factsRed.closeObservations.length >= 1
+    && replacementRestored(runRed.run) === false
+    && replacementFrozenDespiteConsumption(runRed.run),
+    { loose: factsRed.closeObservations.length >= 1, strict: replacementRestored(runRed.run) });
+  const errorsRed = await closeRetirementRun(runRed.page, 'ret-RED');
+  check('retirement: no unexpected page or console errors in run RED', errorsRed.length === 0, errorsRed.slice(0, 4));
+
+  // ---- GREEN run A: protocol-correct replacement (the mover restarts its generation sequence
+  // when the epoch changes), default rejoin ladder (first attempt ~250 ms, INSIDE the window).
+  const runA = await runRetirementScenario('ret-A', null, false);
+  const factsA = retirementServerFacts(runA.run.roomId, runA.run.sessionId);
+  observations['predRetirementA'] = { facts: factsA, run: runA.run, strictBothEvents: replacementRestored(runA.run) };
+  check('retirement GREEN (default rejoin cadence): the strict BOTH-events claim HOLDS — the offender is closed through the ADR branch (exactly one code-4100 closure on its own entityId) AND the replacement MOVES cleanly on the new domain (fresh snapshot before any fresh input, ≥0.4 m across the settle window, zero nominal corrections, zero identity residual)',
+    replacementRestored(runA.run)
+    && factsA.offenderClosures.filter((c) => c.entityId === runA.run.sessionId && c.code === 4100).length === 1,
+    { strict: replacementRestored(runA.run), motion: runA.run.motionWindow, offenderClosures: factsA.offenderClosures });
+  const errorsA = await closeRetirementRun(runA.page, 'ret-A');
+  check('retirement: no unexpected page or console errors in run A', errorsA.length === 0, errorsA.slice(0, 4));
+
+  // ---- GREEN run B: the rejoin ladder deferred to 1500 ms, landing AFTER the §3.3 bounded
+  // closure has removed the offender seat. Full attribution set on this run.
+  const runB = await runRetirementScenario('ret-B', [1500], false);
   const factsB = retirementServerFacts(runB.run.roomId, runB.run.sessionId);
   observations['predRetirementB'] = { facts: factsB, run: runB.run, strictBothEvents: replacementRestored(runB.run) };
 
@@ -2236,18 +2399,17 @@ test('retirement overflow in the browser: EVENT 1 (offender closed through the A
     && runB.run.reissuedOldEpoch === 0,
     runB.run);
 
-  // THE REPORTED REAL FAILURE (review item 2's "report real failure rather than weaken"):
-  // deterministic consumed-but-frozen replacement, attributed by room, replacement session,
-  // seat epoch and the room's own consumption counter. This check ASSERTS THE DEFECT SO IT
-  // CANNOT SILENTLY PASS AS RECOVERY; a server fix flips it and demands re-reporting.
+  // EVENT 2's server half, asserted as PASSING behaviour (the previous round's REPORTED server
+  // failure is rescinded: the frozen replacement was the §4.2 generation-continuation breach in
+  // this fixture's mover, reproduced by the red run and attributed by the same-seat control).
   const replacementSeat = factsB.seats.find((s) => s.epoch === runB.run.epochAtRecovery);
-  check('retirement EVENT 2b — REPORTED REAL FAILURE (server): the replacement seat in THIS room, under the replacement session identity and epoch, CONSUMES EVERY FRAME (room seat resolvedThrough and client ack/resolved watermarks advance; deliveries flow) yet its authoritative row NEVER MOVES across a 4 s settle window (40 position samples, span exactly 0.000 m) at either rejoin cadence — EVENT 2\'s "can move" clause does NOT hold on this build; referred to the server owners (same family as the closure-claims-the-seat finding; the offline-rejoin test proves the client resumes motion whenever the server keeps the seat)',
-    replacementRestored(runB.run) === false
-    && replacementFrozenDespiteConsumption(runB.run)
+  check('retirement EVENT 2b (the replacement, server half, exact identity): the seat this room minted for the replacement session and epoch CONSUMES AND APPLIES — resolvedThrough advances, deliveries flow, the authoritative row travels ≥0.4 m across the 4 s settle window with a nonzero trace span, its effect ledger is empty and it is not closing — so BOTH §3.3 replacement clauses (new domain AND can move) hold against the protocol-correct client at the deferred cadence',
+    replacementRestored(runB.run)
     && replacementSeat !== undefined
     && replacementSeat.resolvedThrough > 20
     && replacementSeat.effects === 0
-    && replacementSeat.closing === false,
+    && replacementSeat.closing === false
+    && runB.run.motionWindow.zTraceSpan > 0.4,
     { roomId: runB.run.roomId, offenderSession: runB.run.sessionId, replacementSession: runB.run.replacementSessionId, epoch: runB.run.epochAtRecovery, seat: replacementSeat, motion: runB.run.motionWindow, worstCorrectionMetres: runB.run.worstCorrection });
 
   check('retirement: no double effect and no ghost seat — after the run exactly ONE seat is seated (the replacement epoch under the replacement session), its effect ledger is empty, and the offender\'s consumed count stopped at its closure',
@@ -2258,19 +2420,8 @@ test('retirement overflow in the browser: EVENT 1 (offender closed through the A
     && factsB.offenderCloseObservations.every((o) => o.consumedCountAtClose >= 1),
     { seats: factsB.seats, epochAtRecovery: runB.run.epochAtRecovery, replacementSession: runB.run.replacementSessionId });
 
-  await runB.page.evaluate(async () => {
-    const h = (globalThis as unknown as PredSeatWindow).__udgRetSeat;
-    if (h === undefined) return;
-    h.moverStop = true;
-    try {
-      await h.predictor.close();
-    } catch {
-      // a failed graceful leave is recorded, not fatal
-    }
-  });
-  const errorsB = pageErrorSinks.get('ret-B') ?? [];
+  const errorsB = await closeRetirementRun(runB.page, 'ret-B');
   check('retirement: no unexpected page or console errors in run B', errorsB.length === 0, errorsB.slice(0, 4));
-  await runB.page.context().close();
   const retirementFailures = checks.filter((record) => record.name.startsWith('retirement') && !record.ok);
   expect.soft(retirementFailures, `failed retirement checks: ${JSON.stringify(retirementFailures.map((record) => record.name))}`).toEqual([]);
 });
@@ -2279,5 +2430,5 @@ limitations.push('Two-browser-context loopback smoke: it certifies nothing about
 limitations.push('Gate A remains Not Run; the client compiler diagnostics are a separate claim in docs/integration/colyseus-0.18-api-map.md §12 and docs/adr/0004-client-declaration-checking-exception.md.');
 limitations.push('Local prediction and forced correction (slice 4, revised after review): the two forced corrections are induced by staging a frame the AUTHORITY refuses (generation 0 beside the live watermark) through the public SDK handle, while a TEST-ONLY tick gate freezes the pinned room between ticks so the refusal is consumed at EXACTLY authority ticks 40 and 120 — the disposition tick is read from the room\'s public per-tick consumption ledger, and the delivery tick is recorded separately. The gate wraps the room instance only inside this test process; no server file is edited and no shipped behaviour changes. Corrections are measured by the per-matched-ack checkpoint instrumenter (shared reference step function, every eligible ack exactly once, unavailable checkpoints invalidated rather than zeroed); the old end-pose difference is retained under a renamed, honestly-labelled diagnostic. Recovery evidence now covers three distinct browser paths: deadline/suspension under sustained network loss, bounded-retry resume through a real rejoin and fresh snapshot, and a genuine overflow/retirement trigger observed in the server ledger. The named-gap trigger remains unreachably quiet in this server build (it never names a range on loopback) and is pinned by the unit suite only.');
 limitations.push('Gate A per-tick and safety-on-transition rows are not evaluated here: a browser sees patched deliveries, not the authority journal, and the 100 ms patch interval over a 50 ms step means one delivery carries two consumed ticks. The transient `movementMode` of a consumed direct intent is therefore recorded and not asserted. Those rows wait for the Gate A run against the journal.');
-limitations.push('Slice 5 review items: (1) the step relation is ONE exported function on the prediction side (apps/client flatStep module; adapter re-export, browser pages, instrumenter and the AC-1 trace\'s new kernel cross-check all resolve to it) — the live room keeps FlatReferenceStepper untouched and the single-injection-point amendment is RECORDED UNAPPLIED in docs/integration/colyseus-0.18-api-map.md §13.2, awaiting owner approval; (3) matched-ack checkpoints are corroborated per adoption (adoptionLedger: real rawBefore→adopted delta conserved against attributed corrections + unresolved tail; direct vs reconstructed boundaries flagged; coverage holes fail the metric), with the refused-then-advancing single-batch browser control. (2) retirement is asserted as TWO events by exact identity: EVENT 1 (offender closed through the §3.1/§3.3 branch, attributed to the session\'s entityId in the room\'s own closure ledger, closure tick before the replacement\'s snapshot tick) HOLDS; EVENT 2\'s client half (new-session/new-epoch domain, snapshot before any fresh input, no old-epoch reissue, journal discarded) HOLDS, but its "replacement can move" clause is a REPORTED REAL SERVER FAILURE — the replacement seat consumes every frame (room seat resolvedThrough advances; deliveries flow) while its authoritative row never moves (4 s position trace, span 0.000 m) at either rejoin cadence; the suite pins that defect by name and flips if a server fix ever restores motion, rather than absorbing it into an EITHER-check. The named-gap/stalled-ack/termination matrix coverage remains outstanding.');
+limitations.push('Slice 5 review items, closed at the amendment round: (1) the step relation is ONE exported function used by BOTH sides of the spike — apps/client flatStep is imported by the adapter/browser pages/instrumenter, and (owner-approved amendment A-1, assignments §3.5) the netcode harness room and the AC-1 trace step the authority through tests/support/step-kernel/kernel-stepper.mjs wrapping that same dist export via the trusted stepperFactory seam; production default FlatReferenceStepper unchanged (parity + sentinel + module-identity checks pin this). (3) matched-ack checkpoints are corroborated per adoption (adoptionLedger conservation on real behaviour, direct-vs-reconstructed boundaries, coverage holes fail the metric) with the refused-then-advancing single-batch browser control. (2) retirement is asserted as TWO events by exact identity and BOTH now hold end to end: EVENT 1 (offender closed through the §3.1/§3.3 branch, code 4100, closure tick before the replacement\'s snapshot tick) and EVENT 2 (new session/epoch domain, fresh snapshot before any fresh input, replacement MOVES ≥0.4 m with zero nominal corrections) at the default and deferred rejoin cadences. The earlier "replacement never moves" finding is RESCINDED: it was this fixture\'s mover continuing the old generation sequence across the new epoch (protocol §4.2; MAX_GENERATION_FORWARD_GAP screen refuses such frames with a neutral step); the suite retains that breach as a RED scenario reproduced with a same-seat positive control, and the legacy EITHER-check is pinned as the control that a broken replacement could pass but the strict claim cannot. The named-gap/stalled-ack/termination matrix coverage remains outstanding.');
 

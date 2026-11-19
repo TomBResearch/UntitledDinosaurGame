@@ -271,6 +271,37 @@ Local instruction files that apply to the granted paths and must be read before 
 
 ---
 
+### 3.5 Amendments (dated, reviewer-approved)
+
+**A-1 (2026-11-19) — the trusted stepper seam.** Reviewer scoped-approval: ONE optional process-local
+`stepperFactory?: (speed: number) => EntityStepper` parameter on each of (1)
+`buildMovementAuthority`'s options in `apps/server/src/movement/MovementAuthorityAdapter.ts`, with the
+default expression constructing exactly the `FlatReferenceStepper(config.movement.speed)` the prior line
+constructed, and (2) `RegionRoomOptions` in `apps/server/src/rooms/RegionRoom.ts` with a conditional
+passthrough at the existing `buildMovementAuthority` call. This entry narrows the grant: those two server
+files are granted for exactly those edits. Trust boundary: factory selection is unreachable from the wire
+(fixed six-field exact-key frame gate), from configuration (the config compiler drops unknown keys) and
+from untrusted create/join options (the per-process-nonce gate discards them wholesale) — pinned by
+`tests/unit/udg-spike-001/trusted-stepper-seam.test.ts`. Consumers are test compositions only: the netcode
+harness room and the AC-1 reference trace, both through `tests/support/step-kernel/kernel-stepper.mjs`
+wrapping THE `flatDirectStep` exported by `apps/client/dist/network/flatStep.js`. No new architecture
+dependency: nothing in `apps/server` imports the client or test trees; the direction stays trusted-caller →
+adapter. Production default unchanged and every other composition (camera suite, shipped server) exercises
+precisely the default path. Evidence: the netcode suite's kernel-stepper sentinel check beside the exact
+40/120 dispositions, the AC-1 trace fields `rowsSteppedBySharedKernel` / `kernelStepperCalls` /
+`productionDefaultMatchesKernel`, and `docs/integration/colyseus-0.18-api-map.md` §13.2.
+
+**A-2 (2026-11-19) — post-retirement replacement diagnosis, resolved without any server change.** The
+previously reported "replacement consumes frames but never moves" finding was diagnosed from the
+authority sources (protocol §4.2: `resetForNewEpoch` zeroes the generation watermark; the screening
+window `MAX_GENERATION_FORWARD_GAP = 64`; a screen refusal is a journalled disposition with a neutral
+step) and confirmed with a same-seat positive control (only the frame generation restarted → motion
+resumes). Root cause: this spike's own test mover continued the offender's generation sequence into
+the replacement's new-epoch domain. The fix is fixture-only and inside already-granted test paths (the
+browser movers now restart the generation counter when the epoch changes); no production logic needed
+to change, and none did. The server-defect claim is rescinded in
+`docs/integration/colyseus-0.18-api-map.md` §13.4, with standing client guidance recorded there.
+
 ## 4. Full-profile matrix: candidate-bound layout, not routine CI
 
 The full matrix is **4 profiles × 3 seeds = 12 runs**, each with 20 s warm-up + 120 s measurement plus room

@@ -98,7 +98,7 @@ interface RunResult {
 }
 
 async function run(label: string): Promise<RunResult> {
-  const [stepMod, clockMod, movementMod, configMod] = await Promise.all([
+  const [stepMod, clockMod, , configMod] = await Promise.all([
     import(pathToFileURL(resolve(ROOT, 'apps/server/dist/authority/step.js')).href) as Promise<Record<string, unknown>>,
     import(pathToFileURL(resolve(ROOT, 'apps/server/dist/authority/clock.js')).href) as Promise<Record<string, unknown>>,
     import(pathToFileURL(resolve(ROOT, 'apps/server/dist/movement/MovementAuthorityAdapter.js')).href) as Promise<Record<string, unknown>>,
@@ -112,7 +112,6 @@ async function run(label: string): Promise<RunResult> {
   );
   const AuthorityCore = stepMod['AuthorityCore'] as { build(options: Record<string, unknown>): Record<string, unknown> };
   const FixedStepClock = clockMod['FixedStepClock'] as { create(options: Record<string, unknown>): Record<string, unknown> };
-  const FlatReferenceStepper = movementMod['FlatReferenceStepper'] as new (speed: number) => unknown;
 
   const clock = FixedStepClock.create({
     network: (config as { network: unknown }).network,
@@ -123,9 +122,24 @@ async function run(label: string): Promise<RunResult> {
   if (!('dtSeconds' in clock)) throw new Error(`the reference clock refused to build: ${JSON.stringify(clock)}`);
 
   const collector = new Collector();
+  // Review amendment (owner-approved): the trace's rows are now produced by THE shared kernel —
+  // the same wrapper the netcode harness room runs — around the very dist file this trace imports
+  // for its own composition, so "the rows were stepped by the same function" is a module-identity
+  // observation, not a parity claim. `productionDefaultMatchesKernel` (below) keeps the parity
+  // diagnostic against the UNCHANGED production default stepper honest.
+  const kernelWrapper = (await import(
+    pathToFileURL(resolve(ROOT, 'tests', 'support', 'step-kernel', 'kernel-stepper.mjs')).href,
+  )) as {
+    kernelStepperFactory: (speed: number) => {
+      step(request: unknown): { state: { kinematic: { position: { x: number; y: number; z: number } } } };
+    };
+    kernelStep: unknown;
+    kernelStepperSentinel: { calls: number };
+  };
+  const traceStepper = kernelWrapper.kernelStepperFactory((config as { movement: { speed: number } }).movement.speed);
   const core = AuthorityCore.build({
     config,
-    stepper: new FlatReferenceStepper((config as { movement: { speed: number } }).movement.speed),
+    stepper: traceStepper,
     time: stubTime,
     clock,
     runId: `udg-003-ac1-${label}`,
@@ -245,10 +259,32 @@ async function main(): Promise<void> {
   // from a separately written formula any more.
   let sharedKernelCompositionMetres = Number.NaN;
   let sharedKernelImportFailure = '';
+  let rowsSteppedBySharedKernel = false;
+  let productionDefaultMatchesKernel = false;
+  // The same wrapper module `run()` stepped both traces with (Node's module registry gives this
+  // importer the identical instance, which is exactly what the identity check below asserts).
+  const kernelWrapperMain = (await import(
+    pathToFileURL(resolve(ROOT, 'tests', 'support', 'step-kernel', 'kernel-stepper.mjs')).href,
+  )) as {
+    kernelStepperFactory: (speed: number) => {
+      step(request: unknown): { state: { kinematic: { position: { x: number; y: number; z: number } } } };
+    };
+    kernelStep: unknown;
+    kernelStepperSentinel: { calls: number };
+  };
+  const movementModMain = (await import(
+    pathToFileURL(resolve(ROOT, 'apps', 'server', 'dist', 'movement', 'MovementAuthorityAdapter.js')).href,
+  )) as Record<string, unknown>;
+  const FlatReferenceStepper = movementModMain['FlatReferenceStepper'] as new (speed: number) => {
+    step(request: unknown): { state: { kinematic: { position: { x: number; y: number; z: number } } } };
+  };
   try {
     const kernelMod = (await import(
       pathToFileURL(resolve(ROOT, 'apps/client/dist/network/flatStep.js')).href,
     )) as Record<string, unknown>;
+    // Module-registry identity: the wrapper that stepped THIS trace's rows re-exports the very
+    // function object this import resolved. The rows were stepped by the shared kernel itself.
+    rowsSteppedBySharedKernel = kernelWrapperMain.kernelStep === kernelMod['flatDirectStep'];
     const sharedStep = kernelMod['flatDirectStep'] as (
       pose: { x: number; z: number },
       drive: { moveX: number; moveZ: number },
@@ -260,6 +296,17 @@ async function main(): Promise<void> {
       kernelPose = sharedStep(kernelPose, { moveX: 0, moveZ: 1 }, stepSeconds, speed);
     }
     sharedKernelCompositionMetres = Math.hypot(kernelPose.x, kernelPose.z);
+    // Parity diagnostic against the UNCHANGED production default: one identical request through
+    // `FlatReferenceStepper` and through the kernel wrapper must agree to 1e-12 m.
+    const parityRequest = {
+      state: { kinematic: { position: { x: 0.5, y: 0, z: 0.25 } } },
+      input: { moveX: 0.6, moveZ: 0.8 },
+      dtSeconds: stepSeconds,
+    };
+    const productionPose = new FlatReferenceStepper(speed).step(parityRequest).state.kinematic.position;
+    const kernelPoseOne = kernelWrapperMain.kernelStepperFactory(speed).step(parityRequest).state.kinematic.position;
+    productionDefaultMatchesKernel =
+      Math.abs(productionPose.x - kernelPoseOne.x) <= 1e-12 && Math.abs(productionPose.z - kernelPoseOne.z) <= 1e-12;
   } catch (error) {
     sharedKernelImportFailure = String(error);
     process.stderr.write(`shared kernel import failed: ${String(error)}\n`);
@@ -410,6 +457,11 @@ async function main(): Promise<void> {
       Number.isFinite(sharedKernelCompositionMetres)
       && Math.abs(sharedKernelCompositionMetres - referenceMetresFromRows) <= TOLERANCE_METRES,
     sharedKernelImportFailure,
+    // Review amendment: the rows are now PRODUCED through the wrapper around the same dist file
+    // this composition imports — a module-identity fact, wired straight into the verdict.
+    rowsSteppedBySharedKernel,
+    kernelStepperCalls: kernelWrapperMain.kernelStepperSentinel.calls,
+    productionDefaultMatchesKernel,
     labelledResetMetres: withResetsMetres,
     resetSegmentTickCount: resetRows.length,
   };
@@ -446,7 +498,7 @@ async function main(): Promise<void> {
           'AC-1: 200 valid direct ticks produce the specified 40 m flat trace within 1e-6 m in pure simulation, labelled reset segments excluded.',
         simulation: {
           kind: 'pure authority core, virtual clock, stub scheduler: no socket, no room, no wall clock',
-          stepper: 'FlatReferenceStepper (the flat reference relation: drive x speed x dt)',
+          stepper: 'kernel wrapper (tests/support/step-kernel/kernel-stepper.mjs) over THE shared flatDirectStep (apps/client/dist/network/flatStep.js); production default FlatReferenceStepper unchanged',
           configHash: (configMod['computeConfigHash'] as (c: unknown) => string)(config),
           movementHash: (configMod['movementHash'] as (c: unknown) => string)(config),
           regionHash: (configMod['regionHash'] as (c: unknown) => string)(config),

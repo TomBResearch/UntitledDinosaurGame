@@ -50,6 +50,7 @@ import type { ServerConfig } from '@udg/config';
 import { SessionInputState, type CloseObservation, type InputSignal } from '../network/ColyseusInputAdapter.js';
 import { EpochIssuer, screenJoin, spawnFor } from '../network/join-validation.js';
 import { buildMovementAuthority, authorityEntityId, type MovementAuthority } from '../movement/MovementAuthorityAdapter.js';
+import type { EntityStepper } from '../authority/types.js';
 import { publishPlayer, publishRegion, unpublishPlayer } from '../state/map-player.js';
 import { DevelopmentSessions } from '../lifecycle/DevelopmentSessions.js';
 import { TickMetrics } from '../telemetry/tick-metrics.js';
@@ -81,6 +82,16 @@ export interface RegionRoomOptions {
   readonly regionProvenance?: string;
   /** Cap on journalled rows kept in the room for evidence export; 0 keeps none. */
   readonly journalRetention?: number;
+  /**
+   * Optional stepper factory (UDG-SPIKE-001 review amendment, owner-approved 2026-11-19).
+   *
+   * Trusted-only by construction: `RegionRoomOptions` is reachable solely through a deployment
+   * envelope that carries the per-process `OPERATOR_NONCE` (`trustedDeployment`); a client's
+   * create/join options without the nonce are discarded wholesale, and a function object is not
+   * wire-serialisable in any case. The production default (`FlatReferenceStepper`) is unchanged
+   * when this is undefined; no configuration key and no wire field selects a factory.
+   */
+  readonly stepperFactory?: (speed: number) => EntityStepper;
 }
 
 /** One seat: the association this room owns, plus the transport state for its current domain. */
@@ -206,6 +217,7 @@ export class RegionRoom extends Room<{ state: RegionSchema; input: DirectWireFra
       sink: this.#sink,
       runId: options.runId ?? 'udg-003-phase-2-room',
       ...(options.regionProvenance === undefined ? {} : { regionProvenance: options.regionProvenance }),
+      ...(options.stepperFactory === undefined ? {} : { stepperFactory: options.stepperFactory }),
     });
     if (built.ok === false) throw new Error(`RegionRoom authority refused: ${built.failure}`);
     this.#authority = built.authority;
