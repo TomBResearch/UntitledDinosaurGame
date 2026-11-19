@@ -1020,3 +1020,88 @@ fraction of a 120 s sample base — and (c) keep the per-cell diagnostics this s
 (timer lag, stream wait, throttle deltas, browser-application observation) as first-class
 evidence. None of this selects, adjusts or exempts any profile: the §2.2 rule fired honestly on
 every run above, VALID and INVALID alike.
+
+## 14.2. The ACCEPTED achieved round trip: the SDK's own protocol ping on the playing socket (slice 6c, 2026-11-20)
+
+Review of `74e84179` approved the TCP/FIFO stall primitive **as diagnostics** and cleared nothing as
+an achieved ROUND TRIP: the proxy leg-sum pairs the newest delivered forward chunk with any later
+reverse chunk, but a periodic patch is not CAUSED by that chunk, coalescing and repeated forward
+pairings bias percentiles, and the sum omits the time between legs — the same socket is not a
+causal pair. Every earlier leg-sum VALID label counts as queue-health diagnostics only. Prior
+on-disk runs are preserved untouched; in the onward schema (`schemaVersion: 2`) the aggregate is
+named `diagnosticProxyLegSum`, and the accepted metric is below.
+
+**The public seam exists — found in installed types, confirmed in shipped source, measured in the
+browser.** `@colyseus/sdk@0.18.9` exposes `Room.ping(callback)`: it sends a one-byte
+`Protocol.PING` frame on THE joined WebSocket (`src/Room.ts:307-317`), and `@colyseus/core@0.18.27`
+answers it SYNCHRONOUSLY at the protocol layer with `client.raw(...)` (`build/Room.mjs:1436-1437`)
+— no room code, no tick, no patch involvement. The echo fires the callback EXACTLY ONCE and clears
+the single slot (`Room.ts:788-791`), so a stale echo can never double-resolve. `room.connection`
+is public (`build/Room.d.ts:19`) with `get isOpen()`, letting the harness refuse to pose a dead
+socket as a slow reply (`Room.ping` silently NO-OPS when closed — `Room.ts:308-310` — which would
+otherwise read as endless slow replies). Rejected alternatives, with reasons: `client.getLatency`
+(separate probe connection + `Date.now` wall clock — a parallel path), `room.clock` RTT (a smoothed
+server-time ESTIMATE, not a raw round trip), proxy leg-sum (demoted), rAF/poll inter-arrival (not
+RTT). Because the public seam works, the test-room nonce-echo fallback is NOT built and NOT
+proposed — nothing is split off.
+
+**Harness composition.** The contract-owned adapter (`§3.1`) gained one OPTIONAL member,
+`pingLatency?(callback)`, a documented pass-through that refuses when the socket is closed. The
+browser-side probe: one ping in flight (serialized; after a retirement it WAITS a grace so a late
+echo fires the OLD callback and is counted as a discard before any new send — the single SDK slot
+can never be crossed); the probe's own `performance.now()` brackets send→matching receive (the
+SDK's rounded ms rides along as a drift receipt, never subtracted); a reply deadline RETIRES the
+sample as invalid — never estimated, never reused; late echoes are discarded, never sampled.
+Overhead: 1 byte up, 1 byte down per sample (both endpoints' source lines cited above).
+
+**Negative controls (both in-suite, both observed passing — runs 24/25):** (1) MISSING REPLY: a
+30 ms-deadline ping on the ~100 ms elevated path RETIRED, its late echo was DISCARDED, and the
+next ping answered cleanly — a missing reply is an invalid-sample opportunity, never a silent pass;
+(2) PATCH/MOVEMENT INDEPENDENCE: under the test-only tick gate (movement frozen, observer advances
+< 1 m) every ping still answered exactly once at cadence with a comparable median — the sample
+brackets the ping's own causal reply, not the patch pipeline or its application. Drift receipts:
+SDK-vs-wrapper agreement max 0.5 ms; page-clock/wall-clock ratio within 0.03% over each window;
+every sample strictly positive.
+
+**Two harness defects surfaced by the probe's own forensics and fixed (each visible in evidence,
+none hidden):** (a) the close-grace timer had been mis-armed at connection OPEN in slice 6b,
+force-finishing EVERY connection exactly 5 s after it opened — the new per-connection `connLog`
+(every death at lifetimeMs == closeGraceMs, `firstFin 'none'`) caught the regression red-handed;
+elevated "socket deaths" in runs 15–18 were this harness bug, not the machine, and the records
+saying so are preserved. (b) A close-ORDERING deadlock: `server.close()` only calls back once all
+sockets are gone, but `beginClose` waited behind that callback — the 5 s bug had been masking it by
+killing connections early. Close now begins draining live connections FIRST, with an 8 s hard cap
+that force-finishes stragglers into ERRORED (visible) closures. A half-open-connection regression
+test proves close() returns in 0 ms.
+
+**Raw results, every run recorded (no cherry-picking; throttle = host cpu.stat worst per-second
+CFS events at probe end):**
+
+| run | machine | LAN p50/jit | elevated p50/jit | quiet p50/jit | throttle | verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| 20 | quiet | (pre-quiet-window build; loaded p50 110.3, jit 17.8) | | | 0 | median +10.3 |
+| 24 | quiet | 5.1 / 2.0 ✓ | 106.9 / 38.3 | 103.0 / 45.8 | 0 | jitter INVALID |
+| 25 | quiet | 5.7 / 1.6 ✓ | 106.8 / 33.0 | 104.0 / 43.2 | 0 | jitter INVALID |
+| 26 | throttled | 4.9 / 57.3 | 107.8 / 37.1 | 102.6 / 34.1 | 10 | INVALID |
+| 27 | throttled | 5.1 / 1.4 | 110.5 / 41.6 | 114.1 / 32.3 | 10 | INVALID |
+
+The shape is consistent: **the median rule passes on every quiet-runner probe (103–108 vs 100,
+inside ±10), the LAN cell passes outright (p50 ≈ 5 vs 4, jitter ≈ 2), and the elevated SHORT window
+fails the jitter rule on 2–4 browser-side tail samples per run** (raw quiet distribution
+`102 102 103 103 104 104 106 106 107 | 129 138 147`: a +25…+45 ms tail of browser main-thread
+delivery latency — counted, never subtracted, per the review's no-subtraction rule). The quiet
+window (tick gate held — the room's own patch stream is background traffic for the probe) isolates
+the path's core to ±3 ms of the profile, showing the impairment instrument itself is calibrated;
+the tail belongs to the browser thread, not to the proxy (its stream-wait and lag diagnostics read
+zero during those windows).
+
+**Measured blocker, precisely stated.** On this runner the connected short-window elevated ping
+cell is INVALID today and CANNOT be honestly turned VALID: (i) n = 24 tolerates only TWO samples
+above p95 — any single ~30 ms browser hiccup flips the verdict; (ii) the runner has degraded
+mid-session: runs 26–27 carry 10 CFS throttle events per second (5+ s freezes) even at what was
+earlier an idle baseline, and under freezes LAN cells flip too (run 26: 43.7 ms outlier). What a
+Gate A cell needs, in order of evidence: a quiet runner (the throttle receipt must read zero), the
+FULL 20 s/120 s windows (a 5% hiccup rate must not flip p95 at n = 700+ the way it does at n = 24),
+and idle-phase probe windows recorded alongside the loaded cell — which is exactly what this slice
+now emits per run: raw samples, summaries, controls, drift, throttle, overhead, connLog, teardown
+receipts. No threshold moved; the rule fired on every run above, on VALID and INVALID alike.

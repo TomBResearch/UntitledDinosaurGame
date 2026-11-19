@@ -132,7 +132,7 @@ describe('UDG-SPIKE-001 ws-delay-proxy on a synthetic clock', () => {
     clock.advance(revStalls[0]!);
     await until(() => Buffer.concat(clientGot).length === 4, 'client to receive PONG');
     expect(Buffer.concat(clientGot).toString()).toBe('PONG');
-    const rtt = proxy.stats().achievedRttSamples;
+    const rtt = proxy.stats().proxyLegSumSamples;
     expect(rtt.length).toBe(1);
     expect(rtt[0]).toBeCloseTo(stalls[2]! + revStalls[0]!, 9);
 
@@ -335,7 +335,7 @@ describe('UDG-SPIKE-001 ws-delay-proxy on a synthetic clock', () => {
     expect(s.s2c.bytesDelivered).toBe(message.length);
     expect(s.c2s.chunksDropped + s.s2c.chunksDropped).toBe(0);
     expect(s.c2s.orderViolations + s.s2c.orderViolations).toBe(0);
-    expect(s.achievedRttSamples.length).toBeGreaterThanOrEqual(1);
+    expect(s.proxyLegSumSamples.length).toBeGreaterThanOrEqual(1);
 
     client.destroy();
     const closing5 = proxy.close();

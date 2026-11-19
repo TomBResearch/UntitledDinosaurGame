@@ -168,13 +168,33 @@ export interface DirectionStats {
   readonly maxStreamWaitMs: number;
 }
 
+/** Which endpoint ended a proxied connection, and how. The proxy is the LAST place both sides
+ * are observable at once — a death attribution belongs here: firstFin 'client' means the browser
+ * sent FIN/RST first, 'upstream' means the target server did, 'proxy' means close() was requested
+ * on the proxy itself, 'none' means neither FIN arrived (an RST/abort cut the loop). */
+export interface ConnectionClosureRecord {
+  readonly firstFin: 'client' | 'upstream' | 'proxy' | 'none';
+  readonly lifetimeMs: number;
+  readonly error: boolean;
+}
+
 export interface ProxyStats {
+  readonly connLog: readonly ConnectionClosureRecord[];
   readonly listening: boolean;
   readonly connections: { readonly opened: number; readonly closed: number; readonly active: number; readonly errors: number };
   readonly c2s: DirectionStats;
   readonly s2c: DirectionStats;
   /** Paired achieved round-trip stall samples per the documented pairing rule. */
-  readonly achievedRttSamples: readonly number[];
+  /**
+   * DIAGNOSTIC PROXY-LEG SUM — demoted at review of 74e84179, and the demotion is part of the
+   * name. Each entry is (achieved stall of the newest forward chunk already delivered upstream)
+   * + (this reverse chunk's achieved stall), on the SAME connection. It is NOT an accepted round
+   * trip: the periodic reverse patch need not be CAUSED by that forward chunk, coalescing and
+   * repeated forward pairings bias percentiles, and the sum omits the time between the legs.
+   * The accepted achieved-RTT metric is the SDK protocol ping probe (api map §14.2); this record
+   * stays what it always honestly measured — what the proxy's two queues did to bytes.
+   */
+  readonly proxyLegSumSamples: readonly number[];
   readonly requestedOneWayBaseMs: number;
   readonly requestedJitterBudgetMs: number;
 }
@@ -236,7 +256,7 @@ interface DirectionState {
   earlyFireReschedules: number;
   pumping: boolean;
   sourceClosed: boolean;
-  /** For c2s: achieved stall of the newest chunk already delivered upstream (RTT pairing rule). */
+  /** For c2s: achieved stall of the newest chunk already delivered upstream (leg-sum pairing). */
   lastForwardAchievedMs: number | null;
   maxTimerLagMs: number;
   chunksBackpressured: number;
@@ -275,7 +295,7 @@ interface ConnectionEnv {
   readonly timer: TimerDriver;
   readonly maxBufferedBytesPerDirection: number;
   readonly onClosed: (conn: ProxyConnection, error: boolean) => void;
-  readonly onRttSample: (sampleMs: number) => void;
+  readonly onLegSumSample: (sampleMs: number) => void;
 }
 
 class ProxyConnection {
@@ -289,8 +309,13 @@ class ProxyConnection {
 
   private readonly closeGraceMs: number;
 
+  private readonly openedAtMs: number;
+  private firstFin: 'client' | 'upstream' | 'proxy' | 'none' = 'none';
+  private closeInitiated = false;
+
   constructor(private readonly client: Socket, private readonly env: ConnectionEnv, closeGraceMs: number) {
     this.closeGraceMs = closeGraceMs;
+    this.openedAtMs = env.timer.nowMs();
     this.c2s = newDirection('c2s', env.profile.seed);
     this.s2c = newDirection('s2c', env.profile.seed);
     client.setTimeout(0);
@@ -298,6 +323,7 @@ class ProxyConnection {
       this.enqueue(this.c2s, chunk);
     });
     client.on('close', () => {
+      if (this.firstFin === 'none') this.firstFin = 'client';
       this.c2s.sourceClosed = true;
       this.pump(this.c2s);
     });
@@ -313,6 +339,7 @@ class ProxyConnection {
         this.enqueue(this.s2c, chunk);
       });
       this.upstream.on('close', () => {
+        if (this.firstFin === 'none') this.firstFin = 'upstream';
         this.s2c.sourceClosed = true;
         this.pump(this.s2c);
       });
@@ -322,18 +349,18 @@ class ProxyConnection {
       this.abort();
     });
     this.upstream.on('close', () => {
+      if (this.firstFin === 'none') this.firstFin = 'upstream';
       this.maybeFinish();
     });
     client.on('close', () => {
       this.maybeFinish();
     });
 
-    // Hard-close grace: the drains normally finish long before this; it exists so close() cannot
-    // hang on a half-open socket the kernel has not finished with.
-    const grace = env.timer.schedule(closeGraceMs, () => {
-      this.finish();
-    });
-    this.pendingCancels.add(grace);
+    // (No timer is armed at OPEN — a connection lives until an endpoint or close() ends it.
+    // A previous revision armed the hard-close grace HERE, which force-finished EVERY connection
+    // exactly closeGraceMs after it opened: the connLog lifecycle records (every death at
+    // lifetimeMs == closeGraceMs, firstFin 'none') caught the regression. The grace belongs to
+    // beginClose, where a close has actually been initiated.)
   }
 
   private enqueue(dir: DirectionState, data: Buffer): void {
@@ -412,8 +439,8 @@ class ProxyConnection {
       dir.delayPairs.push({ requestedMs: chunk.requestedStallMs, achievedMs: achieved });
       if (dir.label === 'c2s') dir.lastForwardAchievedMs = achieved;
       if (dir.label === 's2c' && this.c2s.lastForwardAchievedMs !== null) {
-        // RTT pairing rule: newest forward chunk already delivered upstream + this one's stall.
-        this.env.onRttSample(this.c2s.lastForwardAchievedMs + achieved);
+        // Leg-sum pairing (DIAGNOSTIC, not an accepted RTT — see ProxyStats.proxyLegSumSamples).
+        this.env.onLegSumSample(this.c2s.lastForwardAchievedMs + achieved);
       }
       const dest = this.destination(dir);
       if (dest === null || dest.destroyed) {
@@ -453,8 +480,27 @@ class ProxyConnection {
   }
 
   /** Explicit close (proxy.close()): FIN the client side; pending stalls still drain in order. */
+  hardFinish(): void {
+    this.finish();
+  }
+
+  lifecycle(): ConnectionClosureRecord {
+    return { firstFin: this.firstFin, lifetimeMs: this.env.timer.nowMs() - this.openedAtMs, error: this.errored };
+  }
+
   beginClose(): void {
+    if (this.firstFin === 'none') this.firstFin = 'proxy';
     if (this.finished) return;
+    if (!this.closeInitiated) {
+      this.closeInitiated = true;
+      // Hard-close grace: the drains normally finish long before this; it exists so close()
+      // cannot hang on a half-open socket the kernel has not finished with. ARMED AT CLOSE
+      // INITIATION — never at connection open.
+      const grace = this.env.timer.schedule(this.closeGraceMs, () => {
+        this.finish();
+      });
+      this.pendingCancels.add(grace);
+    }
     if (this.client.writable) this.client.end();
   }
 
@@ -545,7 +591,8 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
   let opened = 0;
   let closedCount = 0;
   let errors = 0;
-  const rttSamples: number[] = [];
+  const legSumSamples: number[] = [];
+  const connLogDone: ConnectionClosureRecord[] = [];
   let listening = true;
   let closeWaiter: (() => void) | null = null;
 
@@ -560,6 +607,7 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
         const snap = done.snapshot();
         c2sDone = mergeStats(c2sDone, snap.c2s);
         s2cDone = mergeStats(s2cDone, snap.s2c);
+        connLogDone.push(done.lifecycle());
         live.delete(done);
         closedCount += 1;
         if (error) errors += 1;
@@ -569,8 +617,8 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
           wake();
         }
       },
-      onRttSample: (sample) => {
-        rttSamples.push(sample);
+      onLegSumSample: (sample) => {
+        legSumSamples.push(sample);
       },
     }, closeGraceMs);
     opened += 1;
@@ -600,17 +648,23 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
       }
       return {
         listening,
+        connLog: [...connLogDone, ...[...live].map((conn) => conn.lifecycle())],
         connections: { opened, closed: closedCount, active: live.size, errors },
         c2s,
         s2c,
-        achievedRttSamples: [...rttSamples],
+        proxyLegSumSamples: [...legSumSamples],
         requestedOneWayBaseMs: options.profile.oneWayMs,
         requestedJitterBudgetMs: options.profile.jitterBudgetMs,
       };
     },
     async close(): Promise<void> {
       listening = false;
-      await new Promise<void>((resolveClose) => {
+      // ORDER MATTERS (a real deadlock lived here): `server.close()` only calls back once every
+      // open socket is gone — if BEGIN-close waited behind that callback, live connections could
+      // never drain, because draining is exactly what closes those sockets. So: stop accepting,
+      // begin-close every live connection FIRST, then await the drain with a hard cap, then the
+      // listener's own close (which follows the sockets on its own).
+      const listeningClosed = new Promise<void>((resolveClose) => {
         server.close(() => {
           resolveClose();
         });
@@ -622,7 +676,22 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
           return;
         }
         closeWaiter = resolveDrain;
+        const cap = setTimeout(() => {
+          // Hard cap: an unfinishable connection (half-open peer, lost FIN) is force-finished —
+          // queued bytes then make it an ERRORED closure in the connLog, visible, never a hang.
+          for (const conn of [...live]) conn.hardFinish();
+          const wake = closeWaiter;
+          closeWaiter = null;
+          if (wake !== null) wake();
+        }, 8_000);
+        cap.unref();
       });
+      await Promise.race([listeningClosed, new Promise<void>((resolveCap) => {
+        const t = setTimeout(() => {
+          resolveCap();
+        }, 2_000);
+        t.unref();
+      })]);
     },
   };
 };

@@ -264,7 +264,8 @@ export interface SelfCheckResult {
     readonly activeConnectionsAfterClose: number;
   };
   readonly requestedAchieved: ReturnType<typeof summarizeDelays>;
-  readonly networkValidity: ReturnType<typeof networkValidity>;
+  /** DIAGNOSTIC PROXY-LEG SUM verdict — demoted at review of 74e84179; NOT accepted RTT. */
+  readonly proxyLegSumValidity: ReturnType<typeof networkValidity>;
   readonly tracePath: string;
   readonly traceRecords: number;
   readonly activeResourcesAfterClose: readonly string[];
@@ -378,7 +379,7 @@ export const runSelfCheck = async (options: {
   const validity = networkValidity({
     requestedRttMs: plan.profile.rttMs,
     declaredJitterBudgetMs: plan.profile.jitterBudgetMs,
-    achievedRttSamples: statsBeforeClose.achievedRttSamples,
+    achievedRttSamples: statsBeforeClose.proxyLegSumSamples, // the echo loop feeds the leg-sum record; the SDK ping probe owns the accepted RTT (api map §14.2)
   });
 
   // Handle audit: give the kernel/uv a beat to retire close requests (an FSReqCallback from the
@@ -408,7 +409,7 @@ export const runSelfCheck = async (options: {
       activeConnectionsAfterClose: stats.connections.active,
     },
     requestedAchieved: summarizeDelays(pairs),
-    networkValidity: validity,
+    proxyLegSumValidity: validity,
     tracePath: `${options.outDir}/dpa2-self-check-stalls.jsonl`,
     traceRecords: traceSummary.records,
   };

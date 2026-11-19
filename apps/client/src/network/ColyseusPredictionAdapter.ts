@@ -370,6 +370,16 @@ export interface PredictionTransport {
   readState(): RegionReplicaState | null;
   /** The live input handle (public SDK surface). */
   handle(): InputHandle<StagedDirectInput>;
+  /**
+   * UDG-SPIKE-001 slice 6c — a pass-through to the pinned SDK's public `room.ping(callback)`
+   * (protocol-level `Protocol.PING` frame on THE joined socket; `@colyseus/core@0.18.27` echoes
+   * it synchronously via `client.raw(...)`, independent of ticks, patches and room code). The
+   * callback fires EXACTLY ONCE when the echo arrives, carrying the SDK's own monotonic-clock
+   * latency. Presence contract: OPTIONAL — fake transports may omit it, and nothing in the
+   * prediction path calls it; it exists so an RTT probe observes the SAME socket the seat plays
+   * on, instead of a parallel echo connection. Diagnostic use only.
+   */
+  pingLatency?(callback: (ms: number) => void): void;
   /** Subscribe to state deliveries; the callback runs per patch, synchronously with its decode. */
   subscribe(onPatch: () => void): () => void;
   advertised(): AdvertisedStep & { readonly stepSeconds: number | undefined };
@@ -1536,6 +1546,14 @@ export const createSdkSeatTransport = async (options: {
     },
     readState: () => room.state ?? null,
     handle: () => handle,
+    pingLatency: (callback) => {
+      // `Room.ping` SILENTLY NO-OPS when the connection is closed (SDK Room.ts:308-310) — a dead
+      // socket would otherwise pose as endless slow replies. Refuse loudly instead.
+      if (closed || room.connection?.isOpen !== true) {
+        throw new Error('rtt-probe-socket-closed: the seat socket is not open — refusing to pose a dead socket as a slow reply');
+      }
+      room.ping(callback);
+    },
     subscribe: (onPatch) => {
       patchEvents.add(onPatch);
       return () => { patchEvents.delete(onPatch); };
