@@ -67,11 +67,24 @@ export interface RemotePresentation {
   issues(): readonly string[];
   /** Snapshots folded in. */
   observations(): number;
-  /** Samples retained per peer. */
+  /** Samples retained per peer. Same validation rule as the `createRemotePresentation` argument. */
   sampleLimit(limit: number): void;
 }
 
 const DEFAULT_SAMPLE_LIMIT = 256;
+
+/**
+ * The one limit rule, shared by the constructor argument and the setter: a positive integer.
+ *
+ * The trim loop in `fold` (`while samples.length > limit, shift`) only terminates for `limit ≥ 1`, and a
+ * track with no retained samples has no `firstSample`/`lastSample` to read — so a zero or negative limit is
+ * refused here, at the boundary, exactly like the setter already refused it. Without this, a bad value at
+ * construction was a hang (negative) or a throwing `trackOf` (zero), not a named error.
+ */
+const checkedSampleLimit = (candidate: number): number => {
+  if (!Number.isInteger(candidate) || candidate < 1) throw new Error('sampleLimit must be a positive integer');
+  return candidate;
+};
 
 interface MutableTrack {
   readonly sessionId: string;
@@ -115,12 +128,15 @@ const toTrack = (track: MutableTrack): PeerTrack => {
  *
  * The instance keeps no state that could be mistaken for authority: every value on a `PeerTrack` is a value
  * the server published, in the order the deliveries arrived.
+ *
+ * `limit` is validated with the same rule the `sampleLimit` setter enforces: a positive integer, or the
+ * constructor throws before any track exists.
  */
 export const createRemotePresentation = (limit: number = DEFAULT_SAMPLE_LIMIT): RemotePresentation => {
   const tracks = new Map<string, MutableTrack>();
   const anomalies: string[] = [];
   let observations = 0;
-  let sampleLimit = limit;
+  let sampleLimit = checkedSampleLimit(limit);
 
   const note = (detail: string): void => {
     anomalies.push(detail);
@@ -193,8 +209,7 @@ export const createRemotePresentation = (limit: number = DEFAULT_SAMPLE_LIMIT): 
     issues: () => [...anomalies],
     observations: () => observations,
     sampleLimit: (next) => {
-      if (!Number.isInteger(next) || next < 1) throw new Error('sampleLimit must be a positive integer');
-      sampleLimit = next;
+      sampleLimit = checkedSampleLimit(next);
     },
   };
 };

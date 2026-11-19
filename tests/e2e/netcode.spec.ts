@@ -8,8 +8,9 @@
  * `apps/client/src/network/**` — compiled by the client's own pipeline (the Vite dev server serves the
  * same TypeScript the accepted client build typechecks), importing the published `@colyseus/sdk` 0.18.9
  * exactly as documented — and **each seat observes the *other* seat's authoritative movement**, with the
- * server-issued epoch, monotonic authority ticks, the adopted per-step speed ceiling, and no credential
- * retained anywhere in either context.
+ * server-issued epoch, monotonic authority ticks, the adopted speed ceiling held in the two forms a browser
+ * can actually observe (an ack-budget bound and a tick-span **average** — not a per-tick maximum, which the
+ * Gate A authoritative trace owns), and no credential retained anywhere in either context.
  *
  * ## What it does not prove
  *
@@ -575,9 +576,12 @@ test('two browser seats over the client pipeline each observe the other seat\'s 
   // (1) **No seat outruns its acknowledged frames.** An observer's total distance cannot exceed what the
   //     authority acknowledged for that seat: `distance ≤ acks × 0.2 m`. This is the abuse half of the
   //     adopted P10 row, read from outside the room.
-  // (2) **No step is oversized once spread over the authority ticks it covers.** The room publishes every
-  //     100 ms over a 50 ms step, so one delivery legitimately carries two consumed ticks and a sample pair
-  //     can differ by 0.4 m; dividing by the tick span the samples cover is the honest per-tick bound here.
+  // (2) **The observed distance stays inside the ceiling *on average* over the authority ticks it spans.**
+  //     The room publishes every 100 ms over a 50 ms step, so one delivery legitimately carries two consumed
+  //     ticks and a sample pair can differ by 0.4 m; dividing the observed distance by the tick span the
+  //     samples cover is the honest bound a browser can show. It is an average over a patch-covered span,
+  //     **not** a proof of any individual authority tick's maximum speed — that per-tick maximum is proven
+  //     against the authority journal by the formal Gate A trace.
   // Gate A's per-tick and transition safety rows are measured against the authority journal in the Gate A
   // run, not from a browser; this smoke says so rather than claiming them.
   const outrunsAcks = (distance: number, acks: number): boolean => distance > acks * perStepMetres + FLOAT_TOLERANCE_METRES;
@@ -595,7 +599,7 @@ test('two browser seats over the client pipeline each observe the other seat\'s 
   };
   const phase1PerTick = perTickBound(trackOfAOnB, phase1Distance);
   const phase2PerTick = perTickBound(trackOfBOnA, phase2Distance);
-  check('every observed displacement stays inside the adopted 0.2 m ceiling over the authority ticks it covers', phase1PerTick.ok && phase2PerTick.ok, {
+  check('the observed distance stays inside the adopted 0.2 m ceiling as an average over the authority ticks it covers (a per-tick maximum would need the Gate A journal)', phase1PerTick.ok && phase2PerTick.ok, {
     phase1: phase1PerTick,
     phase2: phase2PerTick,
     ceilingPerTick: SPEED_LIMIT_PER_STEP_METRES,

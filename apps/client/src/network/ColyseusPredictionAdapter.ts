@@ -39,7 +39,7 @@
  *   for evidence sanitisation to hunt for (docs/validation/evidence-requirements.md §19.1).
  */
 
-import { Client } from '@colyseus/sdk';
+import { Client, type InputHandle } from '@colyseus/sdk';
 import { validateDirectFrame, type DirectFrame, type MovementMode, type SessionEpoch } from '@udg/protocol';
 
 /** The join presentation the room's hash gate demands (protocol-v1 §6.3; `screenJoin` on the server). */
@@ -236,6 +236,11 @@ interface StagedDirectInput {
  * The promise resolves once the room has issued an epoch **and** that epoch has arrived in this seat's own
  * replica row — the UDG-003 harness's issued-epoch wait, because a frame stamped with an epoch the client
  * invented is refused by design, and the epoch a seat may stamp with is the one the server issued.
+ *
+ * **If that wait rejects, or the input handle cannot be obtained after the room already accepted the join,
+ * the half-built seat is unwound before the original error propagates:** the state callback is detached and
+ * the room is left with consent, so a failed join never leaves a held-open room, a live callback or a
+ * waiting waiter behind. The cleanup's own failure never replaces the caller's original error.
  */
 export const joinPredictionSeat = async (options: PredictionAdapterOptions): Promise<PredictionSeat> => {
   const epochTimeoutMs = options.epochTimeoutMs ?? 10_000;
@@ -317,9 +322,31 @@ export const joinPredictionSeat = async (options: PredictionAdapterOptions): Pro
     });
   };
 
-  await waitForEpoch();
+  // Unwind a join that the room accepted but this function cannot finish. Detaching the state callback and
+  // leaving with consent keeps a failed join from orphaning a listener, a waiter or a room; the leave's own
+  // failure is swallowed because the caller must see the *original* error, and because no seat object is
+  // ever handed out on this path, the idempotence rule for ordinary `close()` calls is untouched. By the
+  // time this runs, no epoch timer can be pending: the wait either rejected from its own already-fired
+  // timeout or resolved and cleared it.
+  const abandonJoinedRoom = async (): Promise<void> => {
+    closed = true;
+    epochWaiters.length = 0;
+    room.onStateChange.clear();
+    try {
+      await room.leave();
+    } catch {
+      // Cleanup must not mask the original failure; `throw error` below stays the seat's only rejection.
+    }
+  };
 
-  const input = room.input<StagedDirectInput>();
+  let input: InputHandle<StagedDirectInput>;
+  try {
+    await waitForEpoch();
+    input = room.input<StagedDirectInput>();
+  } catch (error) {
+    await abandonJoinedRoom();
+    throw error;
+  }
 
   const stage = (request: DirectMovementRequest, directIntent: boolean): SentFrame => {
     if (closed) throw new Error('the seat is closed and sends nothing');
