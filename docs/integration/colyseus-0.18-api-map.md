@@ -673,5 +673,132 @@ The named-gap trigger remains unobservable on loopback (the server names no rang
 unit-pinned only.
 
 
+### 13.2 Amendment proposal (recorded, NOT applied): making the server consume the ONE shared step function
+
+Slice 5 review item 1 asked for a single pure exported step relation used by BOTH sides of the spike
+and by the 200-tick AC-1 trace, with no production-default edits. What is true after the applied
+refactor, without touching any ungranted server path:
+
+* the prediction side has ONE function object — `apps/client/src/network/flatStep.ts` exports
+  `flatDirectStep`; the reconciler's step closure, the matched-ack checkpoint instrumenter, the
+  replay-identity ledger, the browser pages (`/network/flatStep.js`) and the adapter's public
+  re-export (signature unchanged) all resolve to it; the unit suite pins the export identity;
+* the AC-1 trace (`tests/reference/flat-direct-step.ts`, a test reference file the review granted
+  for refactoring) composes the SAME compiled module (`apps/client/dist/network/flatStep.js`)
+  tick-by-tick over its reference window and reports `sharedKernelCompositionMetres` /
+  `sharedKernelAgreesWithRows` beside the published `speed × step × ticks` product — so the trace's
+  cross-check is no longer a separately written formula, and the equality is behavioural: production
+  stepper rows vs the shared kernel, within AC-1's own 1e-6 m tolerance;
+* the spike's in-browser expectations (refusal deltas at ticks 40/120, mixed-input zero windows) are
+  computed from the shared function inside the page, and they agree with the LIVE room's consumed
+  dispositions — behavioural agreement measured at runtime, not a parity check as sole evidence.
+
+What is NOT reachable without an amendment: the live room still steps
+`new FlatReferenceStepper(options.config.movement.speed)` because `buildMovementAuthority` hardcodes
+it (`apps/server/src/movement/MovementAuthorityAdapter.ts`, the `AuthorityCore.build` call) and
+`RegionRoom.onCreate` calls the factory with no stepper slot. The deployment seam
+(`defineOperatorRegionRoom({ config })` → `defineServer({ rooms })` → `defineRoom`) carries hashed
+config DATA only; no public composition point accepts a stepper. A subclass cannot reach it either:
+the authority core is a private field of `RegionRoom`.
+
+Proposed amendment, narrowly scoped — the exact injection points are exactly two, and only the first
+file would change:
+
+1. `apps/server/src/movement/MovementAuthorityAdapter.ts` — add ONE optional parameter to
+   `buildMovementAuthority`:
+   `readonly stepperFactory?: (speed: number) => EntityStepper`
+   used as `stepper: (options.stepperFactory ?? ((speed) => new FlatReferenceStepper(speed)))(speed)`.
+   This is the same shape as the factory's existing process-local injection precedents
+   (`time?: TimeSource`, `scheduler?: Scheduler`, `routeCompletions?: () => ...`).
+2. `apps/server/src/rooms/RegionRoom.ts` — OPTIONAL, only if a room-level seam is wanted later:
+   thread an optional `stepperFactory` through `defineOperatorRegionRoom`'s options to the factory
+   call at `onCreate` (line ~204). NOT required for the spike: the spike's server-side composition
+   (the netcode harness) builds the room; if only point 1 lands, a test composition that calls
+   `buildMovementAuthority` directly can pass the kernel, and the room default is untouched.
+
+Default-preservation design: the parameter is OPTIONAL; when absent the expression constructs
+`new FlatReferenceStepper(config.movement.speed)` — the identical object the current code builds.
+No production call site changes; `pnpm test:contract` re-pins config/movement hashes; AC-1's trace
+keeps running the production stepper and its kernel cross-check must stay green, so a silent default
+change cannot pass the suite.
+
+Proof that callers cannot configure a step via the network:
+
+* the wire surface is fixed: `DIRECT_INPUT_FIELDS = ['sessionEpoch', 'generation', 'directIntent',
+  'moveX', 'moveZ', 'seq']` (`packages/protocol/src/schema/DirectInputSchema.ts`) — no field names a
+  function, and the input validator rejects unknown fields;
+* the amendment adds NO config key: `configHash`/`movementHash` inputs are unchanged
+  (`packages/config/src/input.ts` field list untouched), so the §6.3 hash gate cannot even be
+  addressed with a stepper concept;
+* the parameter is a FUNCTION living in the server process at composition time — the same class of
+  seam as the existing `sink`/`time`/`scheduler` options, reachable only by code that imports the
+  factory, not by any message, join option (presentation only) or deployment payload;
+* `defineRoom` options remain data; nothing in the proposal alters them.
+
+Status: recorded here for owner decision per the review; no server path edited. Awaiting approval.
+
+### 13.3 Adoption corroboration of the matched-ack metric (slice 5 review item 3, applied)
+
+The review's point: `captureAckCheckpoint` advanced its anchor on every guard-verified MATCHED
+delivery, before establishing whether the SDK had actually ADOPTED that state — under render
+batching several matched deliveries can be accepted between two `predictor.tick()` calls, and only
+the LAST one's state is what `reconcile()` adopts. The instrumenter must therefore distinguish a
+boundary the SDK directly adopted from one reconstructed inside a larger adoption, and must fail
+loudly when a required boundary is unobservable. No private hooks, no custom predictor:
+
+| Public observation | Where the adapter reads it | What it proves |
+| --- | --- | --- |
+| the guard-verified `(state, ack)` pair at reconcile time | the same `evaluateDeliveryGuard` verdict the SDK's `stateAt` returns (`verified.ack` at each `tick`) | the exact ack the SDK adopted on this reconcile (`adoptedAck`) — adoption, not delivery |
+| raw pose BEFORE the reconcile | the step closure's first call reads `state` untouched (already instrumented: `rawBeforeX/Z`) | the actual pre-adoption prediction, i.e. the controller's real starting point |
+| raw pose AFTER the reconcile + pending seqs | existing `replayIdentityLedger` capture point | the actual post-adoption state and what the SDK replays |
+| the matched-checkpoint ledger rows' ack spans | `captureAckCheckpoint` (read-only) | which boundaries the run observed and their statuses |
+
+On every reconcile the adapter appends an `AdoptionRecord` (`adoptionLedger()`): `{ atMs, adoptedAck,
+directBoundaryAck, coveredCheckpoints: [{ ackFrom, ackTo, status, correctionX/Z }],
+coverageComplete, attributedSumX/Z, actualAdoptionDeltaX/Z (rawBefore − adopted),
+unresolvedSteppedX/Z (Σ step over journal seqs > adoptedAck), residualX/Z }`. The conservation
+equation is REAL behaviour, not a hypothetical rebase:
+
+`actualAdoptionDelta − unresolvedStepped − attributedSum == 0` (per axis, within 1e-9)
+
+i.e. the actual distance the controller moved between adoption boundaries, minus what frames past
+the adopted ack legitimately stepped, equals the SUM of the corrections the checkpoint ledger
+attributes to the boundaries inside that adoption. A checkpoint whose `ackTo` equals the reconcile's
+`adoptedAck` was DIRECTLY adopted (`directBoundaryAck`); earlier boundaries inside the same adoption
+are explicitly `reconstructed-within-adoption` — still algebraically exact for this flat relation,
+but flagged as not being an SDK adoption point. `coverageComplete` fails the metric when a reconcile
+adopts an ack span its checkpoint rows do not fully chain (a gap between `prevAdoptedAck` and
+`adoptedAck`, or an `invalidated-missing-frames` row inside the span): the metric then reports the
+hole instead of averaging over it. Instrumentation remains read-only: checkpoints and adoption rows
+read the journal, the delivery ledger and the state objects the SDK hands the step closure; nothing
+in the instrumentation path writes predictor or SDK state.
+
+The browser negative control (netcode suite, section 3) constructs exactly the review's scenario: a
+staged refused frame whose matched delivery lands, then a second advancing matched delivery, both
+inside ONE render batch with `predictor.tick` held off — then a single tick. Checks: exactly one
+reconcile adopted; the refusal's correction attributed to exactly ONE boundary (the one whose span
+covers the refused seq) with magnitude equal to the shared function's step; the later boundary is
+the direct adoption boundary; conservation residual < 1e-9; coverage complete; no checkpoint
+double-counted. A unit control mirrors it in the fake (`stalled batch` test).
+
+
+### 13.4 Post-retirement replacement semantics (slice 5 review item 2, observed, reported, NOT fixed here)
+
+Measured twice, deterministically, in the netcode suite (`retirement overflow…` test, runs A and B):
+after a §3.1 retirement triggers the §3.3 bounded closure of the offender seat, the client's ADR
+path completes cleanly — quarantine, discard, bounded rejoin through `joinById`, fresh snapshot on a
+new epoch, zero old-domain deliveries — but the REPLACEMENT seat, a distinct new session (a rejoin
+builds a fresh `Client`), then **consumes every direct frame without the authoritative row ever
+moving**: the room's own seat ledger advances `resolvedThrough` with every frame, replica deliveries
+keep flowing, and a four-second, 40-sample position trace holds a span of exactly 0.000 m. The same
+client resumes motion through the identical rejoin mechanism whenever the server keeps the seat
+(offline-deadline recovery test), so the frozen replacement is server-side post-retirement
+semantics, not client state. The suite pins the defect by name (EVENT 2b) with full room/seat/epoch
+attribution and is designed to FLIP if a server change ever restores replacement movement. Owner
+question for the server: what post-retirement state admits a replacement seat's inputs yet withholds
+motion, and should `joinById` after a §3.3 closure mint a new session at all (ADR-0003 §3.3 speaks
+of the SAME seat re-representing)? No server path was edited; this is the report.
+
+
 [docs]: https://docs.colyseus.io/ 'Colyseus documentation (versionless URL; the pinned package is the authority)'
 [pinned]: https://www.npmjs.com/package/@colyseus/core/v/0.18.27 'pinned package page'

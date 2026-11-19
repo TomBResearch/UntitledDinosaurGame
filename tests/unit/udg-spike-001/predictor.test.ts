@@ -29,14 +29,44 @@ vi.mock('../../../apps/client/node_modules/@colyseus/sdk/build/index.mjs', () =>
   class FakeReconciler {
     readonly state: { x: number; z: number };
     reconcileSeq = 0;
+    private readonly instanceRef: { x: number; z: number };
+    private readonly stepFn:
+      ((ctx: { dt: number }, state: { x: number; z: number }, command: { moveX: number; moveZ: number }) => void) | null;
     private readonly input_: { lastProcessed: number; _staged?: Map<number, { moveX: number; moveZ: number }>; _dt?: number };
     private lastAck = 0;
 
-    constructor(instance: { x: number; z: number }, opts: { input: { lastProcessed: number; stepSeconds?: number } }) {
+    constructor(
+      instance: { x: number; z: number },
+      opts: {
+        input: { lastProcessed: number; stepSeconds?: number };
+        step?: (ctx: { dt: number }, state: { x: number; z: number }, command: { moveX: number; moveZ: number }) => void;
+      },
+    ) {
       recorder.reconcilerBuilt += 1;
-      this.state = instance;
+      this.instanceRef = instance;
+      // The raw prediction is a SEPARATE object, as in the pinned SDK: `local` starts as a copy of
+      // the instance and the instance stays the authoritative-truth carrier the reconciler adopts
+      // FROM at reconcile (`adoptTruth`), never at delivery time.
+      this.state = { x: instance.x, z: instance.z };
       this.input_ = opts.input as { lastProcessed: number; _staged?: Map<number, { moveX: number; moveZ: number }>; _dt?: number };
+      this.stepFn = opts.step ?? null;
       if (opts.input.stepSeconds === undefined) throw new Error('fake reconciler requires an advertised dt');
+      // Eager predict-on-send, exactly as the pinned SDK observes the handle: every new send
+      // steps the raw state ONCE through the adapter's own step closure — no second formula.
+      const handle = opts.input as unknown as {
+        onSend?: (listener: (seq: number) => void) => () => void;
+        at?: (seq: number) => { moveX: number; moveZ: number } | undefined;
+      };
+      handle.onSend?.((seq) => {
+        const command = handle.at?.(seq);
+        if (command !== undefined && this.stepFn !== null) {
+          this.stepFn({ dt: this.dt() }, this.state, command);
+        }
+      });
+    }
+
+    private dt(): number {
+      return this.input_._dt ?? 0.05;
     }
 
     tick(): void {
@@ -44,17 +74,18 @@ vi.mock('../../../apps/client/node_modules/@colyseus/sdk/build/index.mjs', () =>
       if (this.input_.lastProcessed !== this.lastAck) {
         this.lastAck = this.input_.lastProcessed;
         this.reconcileSeq += 1;
-        // Adopt (the row values were already copied into the shared instance by the patch), then
-        // replay the PENDING frames — once, or twice when the fault is induced.
+        // adoptTruth: copy the instance's mirrored fields — the delivery truth — at ADOPTION time
+        // (the pinned SDK posture; deliveries never move the raw state directly), then replay the
+        // PENDING frames — once, or twice when the fault is induced — through the same closure.
+        this.state.x = this.instanceRef.x;
+        this.state.z = this.instanceRef.z;
         const staged = this.input_._staged;
-        const dt = this.input_._dt ?? 0.05;
         if (staged !== undefined && recorder.replay !== 'none') {
           const times = recorder.replay === 'double' ? 2 : 1;
           for (const [seq, frame] of [...staged.entries()].sort((a, b) => a[0] - b[0])) {
             if (seq <= this.lastAck) continue;
             for (let step = 0; step < times; step += 1) {
-              this.state.x += frame.moveX * 4 * dt;
-              this.state.z += frame.moveZ * 4 * dt;
+              if (this.stepFn !== null) this.stepFn({ dt: this.dt() }, this.state, frame);
             }
           }
         }
@@ -70,6 +101,9 @@ vi.mock('../../../apps/client/node_modules/@colyseus/sdk/build/index.mjs', () =>
 
 const { evaluateDeliveryGuard, flatDirectStep, DirectMotionPredictor } = await import(
   '../../../apps/client/src/network/ColyseusPredictionAdapter.js'
+);
+const { flatDirectStep: flatStepFromKernelModule } = await import(
+  '../../../apps/client/src/network/flatStep.js'
 );
 
 // The predictor parameter types are satisfied STRUCTURALLY by the fakes below; the casts live
@@ -804,6 +838,61 @@ describe('UDG-SPIKE-001 — the checkpoint instrumenter measures every matched a
     }
     expect([...seen].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7]);
   });
+
+  it('a stalled render batch: the adoption ledger corroborates the ACTUAL SDK adoption (refused frame then an advancing matched delivery, one tick)', () => {
+    const { fake, predictor } = buildMeasured();
+    // Raw prediction steps eagerly at each send (the pinned SDK's posture, now modelled by the
+    // fake): z = 3 · step after three sends. Deliveries must NOT adopt — the adoption ledger
+    // stays empty however many matched deliveries land. The reconciler is armed at the snapshot
+    // tick first — as the browser arms it — so sends step the raw state eagerly from then on.
+    predictor.tick(1000);
+    expect(predictor.adoptionLedger().length, 'the snapshot state itself needs no adoption row').toBe(0);
+    predictor.send({ generation: 1, moveX: 0, moveZ: 1 }, true);
+    predictor.send({ generation: 2, moveX: 0, moveZ: 1 }, true);
+    // D1: the refused frame resolves — ack advances to 2 while authority moved only once.
+    fake.patch({ lastAuthorityTick: 2, z: stepMetres, inputResolvedThrough: 2, ackTo: 2 });
+    // Another advancing matched delivery in the SAME batch, still no predictor tick.
+    predictor.send({ generation: 3, moveX: 0, moveZ: 1 }, true);
+    fake.patch({ lastAuthorityTick: 3, z: 2 * stepMetres, inputResolvedThrough: 3, ackTo: 3 });
+    expect(predictor.adoptionLedger().length, 'deliveries never adopt; the tick adopts').toBe(0);
+    expect(predictor.matchedCorrections().filter((row) => row.status === 'measured').length, 'both boundaries exposed once at delivery').toBe(2);
+
+    predictor.tick(1100); // the render loop returns: ONE reconcile adopts the latest state
+    const adoptions = predictor.adoptionLedger();
+    expect(adoptions.length).toBe(1);
+    const row = adoptions[0] as (typeof adoptions)[number];
+    expect(row.adoptedAck).toBe(3);
+    expect(row.prevAdoptedAck).toBe(0);
+    expect(row.boundaries.length, 'both batched boundaries sit inside this one adoption').toBe(2);
+    const first = row.boundaries[0] as (typeof row.boundaries)[number];
+    const last = row.boundaries[1] as (typeof row.boundaries)[number];
+    expect(first.ackTo).toBe(2);
+    expect(first.directlyAdopted, 'the intermediate boundary was reconstructed inside this adoption').toBe(false);
+    expect(last.directlyAdopted, 'the boundary equal to the adopted ack is the direct SDK checkpoint').toBe(true);
+    expect(first.correctionZ, 'the refused frame is attributed to exactly ONE boundary as its exact step').toBeCloseTo(stepMetres, 12);
+    expect(row.boundaries.filter((b) => Math.hypot(b.correctionX, b.correctionZ) > 1e-9).length, 'single attribution').toBe(1);
+    expect(row.coverageComplete, 'the ack span 0..3 is fully chained by measured boundaries').toBe(true);
+    // The conservation equation on REAL behaviour: raw before adoption sat one refused step
+    // ahead of the adopted truth; nothing unresolved; attribution explains it to float noise.
+    expect(row.actualAdoptionDeltaZ).toBeCloseTo(stepMetres, 12);
+    expect(row.maxAbsResidualMetres, 'no checkpoint rebased on an unapplied delivery could satisfy this').toBeLessThan(1e-9);
+  });
+
+  it('an unobservable required boundary inside an adoption fails the metric explicitly', () => {
+    const { fake, predictor } = buildMeasured();
+    predictor.tick(1000);
+    predictor.send({ generation: 1, moveX: 0, moveZ: 1 }, true);
+    predictor.send({ generation: 2, moveX: 0, moveZ: 1 }, true);
+    // Ack jumps to 5 but the journal only ever held 1..2: the range is unmeasurable — the
+    // checkpoint is invalidated (never zero) and the adoption that covers it must report the
+    // hole rather than chain over it.
+    fake.patch({ lastAuthorityTick: 2, z: 5 * stepMetres, inputResolvedThrough: 5, ackTo: 5 });
+    predictor.tick(1100);
+    const row = predictor.adoptionLedger().at(-1) as ReturnType<InstanceType<typeof DirectMotionPredictor>['adoptionLedger']>[number];
+    expect(row.coverageComplete, 'an invalidated boundary inside the span fails coverage explicitly').toBe(false);
+    expect(predictor.matchedInstrumentStats().adoptionCoverageIncomplete).toBe(1);
+    expect(predictor.matchedInstrumentStats().invalidated).toBe(1);
+  });
 });
 
 // ────────────────────────────────────────── replay-identity ledger
@@ -847,10 +936,21 @@ describe('UDG-SPIKE-001 — the replay-identity ledger catches double steps and 
   });
 });
 
-// ───────────────────────────────────────────────────────────── shared flat step parity
+// ───────────────────────────────────────────────────────────── shared flat step kernel
 
-describe('UDG-SPIKE-001 — the client step relation IS the authority reference stepper', () => {
+describe('UDG-SPIKE-001 — one shared step function on the prediction side (slice 5 review item 1)', () => {
+  it('the adapter re-exports the kernel module\'s ONE function — identity, not two copies', () => {
+    // The reconciler's step closure, the checkpoint instrumenter, the identity ledger and the
+    // browser pages all reach the relation through these exports; one function object means the
+    // spike's expectations are the SAME relation the reconciler steps with, by construction.
+    expect(flatStepFromKernelModule).toBe(flatDirectStep);
+  });
+
   it('reproduces FlatReferenceStepper over 200 mixed-drive ticks to 1e-12 m', async () => {
+    // Diagnostic about the PRODUCTION stepper only (the amendment proposal in api-map §13.2 would
+    // make the server consume this same function). It is not how the spike establishes identity:
+    // that is the shared export above plus the browser's behavioural agreement — live consumed
+    // dispositions at ticks 40/120 matching vectors computed from this function.
     const { pathToFileURL } = await import('node:url');
     const { resolve } = await import('node:path');
     const modPath = resolve(__dirname, '../../../apps/server/dist/movement/MovementAuthorityAdapter.js');

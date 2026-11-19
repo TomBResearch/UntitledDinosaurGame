@@ -60,6 +60,7 @@
 
 import { Client, Reconciler, type InputHandle } from '@colyseus/sdk';
 import { validateDirectFrame, type DirectFrame, type MovementMode, type SessionEpoch } from '@udg/protocol';
+import { flatDirectStep } from './flatStep.js';
 
 /** The join presentation the room's hash gate demands (protocol-v1 §6.3; `screenJoin` on the server). */
 export interface RegionJoinPresentation {
@@ -225,27 +226,15 @@ export interface FlatPose {
 }
 
 /**
- * The spike's shared flat step: `pose + drive · speed · dt` — the same relation the authority's
- * `FlatReferenceStepper` produces and `tests/reference/flat-direct-step.ts` evidences as the AC-1
- * trace (the assignment names that file the sole movement function on both sides; the reference
- * producer itself runs the authority core and executes on import, so the first-party typed step
- * lives here and its equivalence to the authority stepper is pinned by
- * `tests/unit/udg-spike-001/flat-step-parity.test.ts`, and the reference trace's own equality
- * (200 ticks → 40 m within 1e-6 m) is re-checked from `tests/reference/flat-direct-step.ts`
- * output by the spike's Node-side checks, never re-derived here).
- *
- * Pure and total: finite inputs are required by the caller's domain rules; nothing in this
- * function reads the clock, the network or any schema.
+ * The step relation every consumer on this side shares. The implementation moved to
+ * `./flatStep.js` so the client bundle, the browser test pages, the reconciler's step closure, the
+ * checkpoint instrumenter, the identity ledger and the AC-1 reference trace all resolve to ONE
+ * function (slice 5 review item 1); it is re-exported here under the established name, so the
+ * adapter's public surface is unchanged. The live room's `FlatReferenceStepper` remains the
+ * production default, untouched; the recorded amendment proposing a single function server-side
+ * is `docs/integration/colyseus-0.18-api-map.md` §13.2.
  */
-export const flatDirectStep = (
-  pose: Readonly<FlatPose>,
-  drive: Readonly<{ moveX: number; moveZ: number }>,
-  dtSeconds: number,
-  speed: number,
-): FlatPose => ({
-  x: pose.x + drive.moveX * speed * dtSeconds,
-  z: pose.z + drive.moveZ * speed * dtSeconds,
-});
+export { flatDirectStep };
 
 // ─────────────────────────────────────────────────────────────── the delivery guard
 
@@ -512,6 +501,54 @@ export interface ReplayIdentityRecord {
   readonly maxAbsResidualMetres: number;
 }
 
+/**
+ * Adoption corroboration record (slice 5 review item 3). One per reconcile that adopted a
+ * delivery. The checkpoint ledger alone could not distinguish “the SDK actually adopted this
+ * boundary” from “this boundary was reconstructed inside a larger adoption” — under render
+ * batching several matched deliveries land between two ticks, and only the LAST adopted state is
+ * what `reconcile()` applies. This row is based on real controller behaviour only, read at the
+ * public surfaces: the raw pose before the reconcile, the guard-verified pair the SDK adopts, the
+ * journal's unresolved tail, and the checkpoint rows inside the adoption span. The conservation
+ * equation
+ *   (rawBefore − adopted) − Σ step(unresolved seqs > adoptedAck) − Σ attributed corrections == 0
+ * says the ACTUAL distance the controller moved at this adoption equals the corrections the
+ * checkpoint ledger attributes to the boundaries it covered — a hypothesis rebased on an
+ * unapplied delivery could not satisfy it. Instrumentation reads state; it never writes it.
+ */
+export interface AdoptionRecord {
+  readonly reconcileSeq: number;
+  readonly atMs: number;
+  readonly epoch: SessionEpoch;
+  readonly authorityTick: number;
+  readonly adoptedAck: number;
+  readonly prevAdoptedAck: number;
+  /** Boundary rows the adoption span covers, in ack order, each flagged direct vs reconstructed. */
+  readonly boundaries: readonly AdoptionBoundaryRecord[];
+  /** Every ack from prevAdoptedAck to adoptedAck is chained by MEASURED boundaries — false fails the metric. */
+  readonly coverageComplete: boolean;
+  readonly attributedX: number;
+  readonly attributedZ: number;
+  readonly unresolvedSteppedX: number;
+  readonly unresolvedSteppedZ: number;
+  /** rawBefore − adopted: the actual pose change this adoption applied. */
+  readonly actualAdoptionDeltaX: number;
+  readonly actualAdoptionDeltaZ: number;
+  readonly residualX: number;
+  readonly residualZ: number;
+  readonly maxAbsResidualMetres: number;
+}
+
+/** One checkpoint boundary inside an adoption: directly adopted iff its ackTo is the adopted ack. */
+export interface AdoptionBoundaryRecord {
+  readonly ackFrom: number;
+  readonly ackTo: number;
+  readonly status: MatchedAckCorrectionRecord['status'];
+  readonly correctionX: number;
+  readonly correctionZ: number;
+  /** True when THIS boundary is the state the SDK adopted this reconcile; false = reconstructed. */
+  readonly directlyAdopted: boolean;
+}
+
 /** The recovery ledger: every trigger, stop, discard, rejoin attempt and suspension, in order. */
 export interface RecoveryRecord {
   readonly atMs: number;
@@ -592,7 +629,10 @@ export class DirectMotionPredictor {
   private quarantined = false;
   /** Checkpoint instrumenter anchor: last adopted truth at a measured ack boundary. */
   private anchor: { readonly epoch: SessionEpoch; readonly ack: number; readonly x: number; readonly z: number } | null = null;
-  private matchedInstrumentCounters = { measured: 0, zero: 0, anchored: 0, invalidated: 0, nonAdvancingDeliveries: 0 };
+  private matchedInstrumentCounters = { measured: 0, zero: 0, anchored: 0, invalidated: 0, nonAdvancingDeliveries: 0, adoptions: 0, adoptionCoverageIncomplete: 0 };
+  private readonly adoptionRecords: AdoptionRecord[] = [];
+  private lastAdoptedAck = 0;
+  private lastAdoptedEpoch: SessionEpoch | null = null;
   private reconcileSeqCounter = 0;
   /** Advertised fixed step in seconds, captured when the reconciler was armed (instrumenter dt). */
   private advertisedStepSeconds: number | null = null;
@@ -743,6 +783,76 @@ export class DirectMotionPredictor {
           maxAbsResidualMetres: Math.max(Math.abs(afterX - expected.x), Math.abs(afterZ - expected.z)),
         });
       }
+      // Adoption corroboration (slice 5 review item 3): tie THIS adoption — the actual state
+      // change the SDK just applied — to the checkpoint boundaries it covered, from real
+      // controller behaviour read at public surfaces only. The conservation residual is zero
+      // exactly when the corrections attributed to covered boundaries explain the ACTUAL
+      // movement; a checkpoint rebased on a delivery the SDK never applied could not satisfy it.
+      if (this.lastAdoptedEpoch !== verified.epoch) {
+        this.lastAdoptedEpoch = verified.epoch;
+        this.lastAdoptedAck = 0;
+      }
+      const coveredRows = this.matchedRecords.filter(
+        (row) => row.epoch === verified.epoch && row.ackTo > this.lastAdoptedAck && row.ackTo <= verified.ack,
+      );
+      const boundaries = coveredRows.map((row) => ({
+        ackFrom: row.ackFrom,
+        ackTo: row.ackTo,
+        status: row.status,
+        correctionX: row.status === 'invalidated-missing-frames' ? 0 : row.correctionX,
+        correctionZ: row.status === 'invalidated-missing-frames' ? 0 : row.correctionZ,
+        directlyAdopted: row.ackTo === verified.ack,
+      }));
+      let chainCursor = this.lastAdoptedAck;
+      let chainComplete = true;
+      for (const boundary of boundaries) {
+        if (boundary.ackFrom !== chainCursor || boundary.status === 'invalidated-missing-frames') {
+          chainComplete = false;
+        }
+        chainCursor = boundary.ackTo;
+      }
+      if (chainCursor !== verified.ack) chainComplete = false;
+      let attributedX = 0;
+      let attributedZ = 0;
+      for (const row of coveredRows) {
+        if (row.status === 'invalidated-missing-frames') continue; // failed boundary: coverage says so
+        attributedX += row.correctionX;
+        attributedZ += row.correctionZ;
+      }
+      let unresolved = { x: 0, z: 0 };
+      if (dt !== null) {
+        // Seqs past the adopted ack that the raw prediction has already stepped, composed with the
+        // SAME shared function the reconciler steps with — no second formula here either.
+        for (const frame of this.journalFrames(verified.ack, Number.MAX_SAFE_INTEGER)) {
+          unresolved = flatDirectStep(unresolved, { moveX: frame.frame.moveX, moveZ: frame.frame.moveZ }, dt, this.options.speed);
+        }
+      }
+      const actualAdoptionX = beforeX - verified.x;
+      const actualAdoptionZ = beforeZ - verified.z;
+      const adoptionResidualX = actualAdoptionX - unresolved.x - attributedX;
+      const adoptionResidualZ = actualAdoptionZ - unresolved.z - attributedZ;
+      this.matchedInstrumentCounters.adoptions += 1;
+      if (!chainComplete) this.matchedInstrumentCounters.adoptionCoverageIncomplete += 1;
+      this.push(this.adoptionRecords, {
+        reconcileSeq: this.reconcileSeqCounter,
+        atMs: now,
+        epoch: verified.epoch,
+        authorityTick: verified.authorityTick,
+        adoptedAck: verified.ack,
+        prevAdoptedAck: this.lastAdoptedAck,
+        boundaries,
+        coverageComplete: chainComplete,
+        attributedX,
+        attributedZ,
+        unresolvedSteppedX: unresolved.x,
+        unresolvedSteppedZ: unresolved.z,
+        actualAdoptionDeltaX: actualAdoptionX,
+        actualAdoptionDeltaZ: actualAdoptionZ,
+        residualX: adoptionResidualX,
+        residualZ: adoptionResidualZ,
+        maxAbsResidualMetres: Math.max(Math.abs(adoptionResidualX), Math.abs(adoptionResidualZ)),
+      });
+      this.lastAdoptedAck = verified.ack;
     }
     this.push(this.ticks, {
       atMs: now,
@@ -934,6 +1044,8 @@ export class DirectMotionPredictor {
   /** Replay-identity ledger: adopted ⊕ Σ step(pending) − raw, per reconcile. */
   replayIdentityLedger(): readonly ReplayIdentityRecord[] { return [...this.replayIdentity]; }
   matchedInstrumentStats(): typeof this.matchedInstrumentCounters { return { ...this.matchedInstrumentCounters }; }
+  /** Adoption corroboration ledger (slice 5 review item 3), defensive copy. */
+  adoptionLedger(): readonly AdoptionRecord[] { return [...this.adoptionRecords]; }
   recoveryLedger(): readonly RecoveryRecord[] { return [...this.recovery]; }
   sentAudit(): readonly { readonly seq: number; readonly epoch: SessionEpoch; readonly atMs: number }[] { return [...this.sentFrames]; }
   pruneAuthorityLedger(): typeof this.pruneAuthority { return { ...this.pruneAuthority }; }

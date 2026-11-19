@@ -237,6 +237,33 @@ async function main(): Promise<void> {
   const withResetsMetres = sum(primary.rows);
   const perTickMax = reference.reduce((max, row) => Math.max(max, row.resolvedDisplacement), 0);
   const settingsProduct = speed * stepSeconds * REFERENCE_TICKS;
+  // Slice 5 review item 1: the cross-check beside the rows is now the SHARED kernel function
+  // composed tick by tick — `apps/client/dist/network/flatStep.js`, the one relation every
+  // prediction-side consumer (reconciler step closure, matched-ack checkpoints, identity ledger,
+  // browser pages) imports. `settingsProduct` remains the published product field for continuity;
+  // it is no longer the trace's only arithmetic cross-check, and no spike expectation is computed
+  // from a separately written formula any more.
+  let sharedKernelCompositionMetres = Number.NaN;
+  let sharedKernelImportFailure = '';
+  try {
+    const kernelMod = (await import(
+      pathToFileURL(resolve(ROOT, 'apps/client/dist/network/flatStep.js')).href,
+    )) as Record<string, unknown>;
+    const sharedStep = kernelMod['flatDirectStep'] as (
+      pose: { x: number; z: number },
+      drive: { moveX: number; moveZ: number },
+      dtSeconds: number,
+      speed: number,
+    ) => { x: number; z: number };
+    let kernelPose = { x: 0, z: 0 };
+    for (let tick = 0; tick < REFERENCE_TICKS; tick += 1) {
+      kernelPose = sharedStep(kernelPose, { moveX: 0, moveZ: 1 }, stepSeconds, speed);
+    }
+    sharedKernelCompositionMetres = Math.hypot(kernelPose.x, kernelPose.z);
+  } catch (error) {
+    sharedKernelImportFailure = String(error);
+    process.stderr.write(`shared kernel import failed: ${String(error)}\n`);
+  }
   const finalPosition = reference.length > 0 ? (reference[reference.length - 1] as TraceRow).position : { x: 0, y: 0, z: 0 };
   const stateRowTravel = Math.hypot(finalPosition.x, finalPosition.z);
 
@@ -375,6 +402,14 @@ async function main(): Promise<void> {
     stateDeltaSumAcrossReferenceRows: stateDeltaSum,
     stateDeltasAgreeWithTickRows,
     deterministicAcrossRuns: deterministic,
+    // The shared kernel (same function object the client prediction side steps with), composed
+    // tick by tick over the reference window, must reproduce the rows — behavioural agreement
+    // between the production stepper (which produced the rows) and the shared relation.
+    sharedKernelCompositionMetres,
+    sharedKernelAgreesWithRows:
+      Number.isFinite(sharedKernelCompositionMetres)
+      && Math.abs(sharedKernelCompositionMetres - referenceMetresFromRows) <= TOLERANCE_METRES,
+    sharedKernelImportFailure,
     labelledResetMetres: withResetsMetres,
     resetSegmentTickCount: resetRows.length,
   };
