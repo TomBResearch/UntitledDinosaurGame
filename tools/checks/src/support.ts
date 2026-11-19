@@ -88,7 +88,11 @@ export const E2E_SUITES: Readonly<Record<string, E2eSuite>> = {
     suite: 'netcode',
     specPath: 'tests/e2e/netcode.spec.ts',
     owningTask: 'UDG-SPIKE-001',
-    implemented: false,
+    // Grant T-1(a): flipped to true because `tests/e2e/netcode.spec.ts` now exists and runs (UDG-SPIKE-001 §5
+    // paired-seat smoke). The correspondence is not trusted: `tests/contracts/UDG-SPIKE-001.test.ts` asserts
+    // `implemented` is true for exactly the rows whose spec file exists, for all five rows, so a row that
+    // claims a suite nobody wrote — or a written suite the guard still refuses — fails the build.
+    implemented: true,
     requiredArtefact: 'tests/e2e/netcode.spec.ts, owned by UDG-SPIKE-001 (Gate A netcode spike)',
   },
   physics: {

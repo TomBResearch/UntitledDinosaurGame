@@ -557,5 +557,66 @@ protocol change, and no compatibility claim — `stackCompatibility` remains `no
 `PR-14` has since landed as the Phase 2 W-8 substrate (above); Phase 0's assertion of its absence was correct for
 every run taken before that work item, and the historical records are not rewritten (rule R-1).
 
+## 12. The browser seat (UDG-SPIKE-001 §5): the public client API, and the compiler claim kept apart
+
+UDG-SPIKE-001's first slice put a real browser client behind the pinned `@colyseus/sdk`. The names below are the
+**whole** client-side surface the seat uses — `apps/client/src/network/ColyseusPredictionAdapter.ts` and
+`apps/client/src/network/RemotePresentation.ts`, driven by `tests/e2e/netcode.spec.ts` in two Chromium contexts and
+recorded again by `tests/probes/colyseus-client.probe.ts`. Declaration text is quoted from the installed
+`@colyseus/sdk@0.18.9` / `@colyseus/core@0.18.27` trees, not from documentation prose.
+
+### 12.1 Compiler status for `apps/client`, stated separately (the §0 rule, applied to a second project)
+
+| question | answer today | where it is proven |
+| --- | --- | --- |
+| Does first-party client code typecheck against the pinned declarations? | **yes** — `pnpm --filter @udg/client typecheck` exits 0, under the [ADR-0004](../adr/0004-client-declaration-checking-exception.md) exception, with zero diagnostics in repository code | `tests/contracts/UDG-SPIKE-001.test.ts` ("keeps the client gate clean") |
+| Are the vendor declaration defects fixed? | **no** — 3 remain under the client's browser library shape (`TS1192` in `@colyseus/core`'s router, `TS2344` ×2 inside `@colyseus/sdk`'s own HTTP types), listed and pinned | `pnpm --filter @udg/client typecheck:declarations`, [colyseus-client-declaration-inventory.json](colyseus-client-declaration-inventory.json) |
+| Did those diagnostics cost anything at runtime? | **no runtime consequence was measured** — the same import that the compiler cannot fully check joins a room, sends input and receives authoritative state in two browsers | `tests/e2e/netcode.spec.ts` → `netcode-smoke-results.json` |
+| Is the pinned stack compatible at runtime? | **not established** — Gate A is Not Run, and no §12 row changes that | `compatibility-verdict.json` still reads `not-established` |
+
+Two measurements that decide the shape of the exception, both taken on this branch:
+
+- **The client-shape inventory is 3, not the server's 27.** Under the browser library set the 18+1 `HeadersInit`
+  `TS2304` class does not fire, because `lib.dom` declares the name. The server inventory above is unchanged and
+  was not re-scored.
+- **There is no cleaner public import.** `@colyseus/sdk` publishes one documented entry (`exports "."`); the
+  `browser` condition swaps the *runtime* file only, and types stay `build/index.d.ts`. The package also exposes a
+  `"./*"` subpath map, and `@colyseus/sdk/Client` does resolve — it is **worse**: 6 additional `TS2591`
+  `Cannot find name 'Buffer'` defects in `Connection.d.ts`, `transport/ITransport.d.ts` and `msgpackr/index.d.ts`,
+  whose only relief is `@types/node` in a browser project, which the ambient-type policy refuses. The root import
+  is therefore the cleanest public route, and the 3-diagnostic floor is the vendor's, not ours.
+
+### 12.2 Client API rows: what the seat uses
+
+| name | package | declaration | exact declared signature | used by | status |
+| --- | --- | --- | --- | --- | --- |
+| `new Client(settings, options?)` | `@colyseus/sdk@0.18.9` | `build/Client.d.ts` | `constructor(settings?: string \| EndpointSettings, options?: ClientOptions)` — a matchmake URL string is the documented form | `joinPredictionSeat` | passes: both seats construct and connect over loopback |
+| `client.create<State>(roomName, options?, rootSchema?)` | `@colyseus/sdk@0.18.9` | `build/Client.d.ts` | `create<State = any>(roomName: string, options?: JoinOptions, rootSchema?: SchemaConstructor<State>): Promise<Room<any, State>>` — seat A creates the room | `joinPredictionSeat` | passes. `State` is the seat's own structural replica view (`RegionReplicaState`) and every field read through it is validated before use; no `rootSchema` is passed, so the state serializer comes from the server's handshake reflection |
+| `client.joinById<State>(roomId, options?, rootSchema?)` | `@colyseus/sdk@0.18.9` | `build/Client.d.ts` | as above with `roomId` — seat B joins the seat-A room | `joinPredictionSeat` | passes; **measured in slice 1 and re-measured here:** `create()` makes a *new* room every call, so a pair must share one id (`joinById`), which is why the smoke creates once and joins by id |
+| `room.sessionId`, `room.roomId` | `@colyseus/sdk@0.18.9` | `build/Room.d.ts` | `sessionId: string`; `roomId: string` | seat identity, peer partition | passes: distinct per seat, same room |
+| `room.state` | `@colyseus/sdk@0.18.9` | `build/Room.d.ts` | `get state(): State` | `snapshot()` | passes, **read only**. Nothing in `apps/client` writes to the received schema; the input handle's own staging object is the only thing the seat mutates |
+| `room.onStateChange(cb)`, `.clear()` | `@colyseus/sdk@0.18.9` | `build/Room.d.ts` | callable signal: `(cb: (state: State) => void) => EventEmitter`, with `once`/`remove`/`invoke`/`clear` | delivery counting, issued-epoch wait, teardown | passes. The epoch wait is the UDG-003 harness rule restated client-side: a seat sends only after its own row carries the room's issued epoch |
+| `room.input<I>(options?)` | `@colyseus/sdk@0.18.9` | `build/Room.d.ts` | `input<I = …>(options?: InputOptions<I>): InputHandle<I>` — `I` is intentionally unconstrained by the declaration | the fixed-step channel | passes with **no local input schema**: `RegionRoom.defineInput(DirectInputSchema)` advertises the fields through the `INPUT_REFLECTION` handshake section and the SDK rebuilds them client-side (`"the synthesized class mirrors the server's fields, but `instanceof YourInput` won't pass on it"`, quoted from `InputOptions` docs) |
+| `InputHandle.data` | `@colyseus/sdk@0.18.9` | `build/input/InputHandle.d.ts` | `readonly data: I` — the mutable staging instance | frame staging | passes; the seat writes only the six reflected `DirectInputSchema` fields, after `validateDirectFrame` |
+| `InputHandle.send()`, `.sentCount`, `.lastProcessed` | `@colyseus/sdk@0.18.9` | `build/input/InputHandle.d.ts` | `send(): number` (returns the assigned seq; 0 when nothing was sent), `readonly sentCount: number`, `readonly lastProcessed: number` | one input per `send()`, seq `sentCount + 1`, ack read-back | passes: the smoke asserts the authority acknowledged every frame it sent |
+| `InputHandle.tickRate`, `.stepMs`, `.patchRate` | `@colyseus/sdk@0.18.9` | `build/input/InputHandle.d.ts` | `readonly tickRate?: number`, `readonly stepMs?: number`, `readonly patchRate?: number` — advertised by `defineInput` through the join handshake | the seat's fixed-step facts | passes: `tickRate 20`, `stepMs 50`, `patchRate 100` observed by both seats. (A *missing* advertised rate is a required Gate A case and stays with the spike harness.) |
+| `room.leave(consented?)` | `@colyseus/sdk@0.18.9` | `build/Room.d.ts` | `leave(consented?: boolean): Promise<number>` — called with no argument, i.e. consented | `close()` | passes: consented leave also cancels automatic reconnection, which is what keeps a finished run from holding a room |
+
+### 12.3 Client names deliberately not used, and why
+
+| name | why not |
+| --- | --- |
+| `room.reconnectionToken`, `client.reconnect(token)`, `joinByToken` | A credential. Root rule and evidence sanitisation (§19.1) keep tokens out of client state and out of evidence; `tests/contracts/UDG-SPIKE-001.test.ts` greps both seat modules for the identifier, and the smoke asserts neither browser context retains storage. Reconnection is ADR-0003 §3.2 client work (UDG-008), not this slice's |
+| `client.joinOrCreate`, `client.join`, `client.filterCreate`, `Client.selectByLatency` | The smoke needs one shared room with a known join order (create once, join by id), which is what `create` + `joinById` measure. `joinOrCreate` was measured in slice 1 to hide the room identity behind a second creation path; the spike names the room instead |
+| `room.input({ mode: "unreliable", historySize, allowRewind, renderDelay })`, `room.clock`/`RoomClock`, `InputHandle.at/reckonTimeAt/onSend/reset/epoch/pendingCount/replayBufferSize` | Lag compensation, clocks and replay rings belong to prediction and reconciliation. The declaration itself says `mode: "unreliable"` is only unreliable on the experimental `@colyseus/h3-transport`, and this repository pins the WebSocket transport — using it would add a redundancy ring the ordered channel does not need. Later slices add them with their own evidence |
+| `@colyseus/sdk/predict` (`predict.sim`, `predict.reconciler`, `Predict`) | The spike's local-prediction and forced-correction limbs are later slices, and ADR-0003 §4 makes the ack/disposition pairing the thing that must be re-measured first. Importing a predictor now would decide Gate A's answer by borrowing a primitive the contract has not yet proven on this room |
+| `room.send`/message handlers, `getStateCallbacks`, `room.lock`/`unlock`, `room.onDrop`/`onReconnect`/`onError` | No discrete effect exists in the Gate A flat scope (`M`/`P` are UDG-003 and UDG-007), room locking is server policy, and error/drop handling is the ADR-0003 §3.2 client recovery surface owned by UDG-008 |
+| a local `rootSchema` / local schema classes | The server's reflection already rebuilds both the state serializer and the input schema in the browser (slice-1 measurement, re-confirmed by this smoke). Shipping a second copy of the schema in the client would create two sources of truth for one wire format |
+
+The **distinction this section exists to keep**: the vendor *declarations* are defective (3 pinned diagnostics, no
+first-party error, an exception confined to one project and audited by a suite), and the *runtime* path over the same
+public API works in two browsers. Neither statement may be read as the other, and `stackCompatibility` stays
+`not-established` until Gate A runs on an exact candidate.
+
 [docs]: https://docs.colyseus.io/ 'Colyseus documentation (versionless URL; the pinned package is the authority)'
 [pinned]: https://www.npmjs.com/package/@colyseus/core/v/0.18.27 'pinned package page'

@@ -166,14 +166,21 @@ describe('UDG-004 owned surface exists and is configured as the contract states'
     }
     // Each exclusion was measured and decided in the assignment record, not assumed: Babylon 9.36.0 produced
     // 154 third-party declaration diagnostics under `skipLibCheck: false`; `@webgpu/types` is not Babylon's
-    // declared dependency; `@babylonjs/loaders` has no consumer in a procedural greybox; `@colyseus/*` belongs
-    // to UDG-003; `@vitejs/plugin-react` was measured unnecessary and stays a separate owner decision.
+    // declared dependency; `@babylonjs/loaders` has no consumer in a procedural greybox; `@vitejs/plugin-react`
+    // was measured unnecessary and stays a separate owner decision.
     for (const forbidden of ['@babylonjs/loaders', '@webgpu/types', '@vitejs/plugin-react']) {
       expect(all[forbidden], `${forbidden} must not be a client dependency`).toBeUndefined();
     }
-    for (const name of Object.keys(all)) {
-      expect(name.startsWith('@colyseus/'), `${name} must not appear in the client`).toBe(false);
+    // UDG-004 shipped a client with no networking SDK, and said so. That still holds for everything except the
+    // one specifier UDG-SPIKE-001 §5 / ADR-0004 registered afterwards: `@colyseus/sdk` at exactly the pin the
+    // workspace already installed, and nothing else from that scope. The authority must be named where the
+    // client relaxes declaration checking, so a pin cannot arrive without the decision that carries it.
+    const permittedColyseus: Readonly<Record<string, string>> = { '@colyseus/sdk': '0.18.9' };
+    for (const name of Object.keys(all).filter((specifier) => specifier.startsWith('@colyseus/'))) {
+      expect(permittedColyseus[name], `${name} is not a permitted client dependency`).toBe(all[name]);
     }
+    expect(read('apps/client/tsconfig.json')).toContain('ADR-0004');
+    expect(read('apps/client/tsconfig.tools.json'), 'the dev-seam project imports no Colyseus module and stays strict').not.toContain('"skipLibCheck": true');
     record('client.pinsExact', Object.keys(all).length);
     record('client.approvedPinsVerified', true);
   });
@@ -424,8 +431,11 @@ describe('UDG-004 public interface is what the contract states', () => {
 describe('the browser dispatcher refuses per suite (grants G-2 and G-3)', () => {
   it('dispatches the camera suite and refuses every other answer a caller can construct', () => {
     expect(guardUnavailable('test:e2e', ['--suite=camera']).exitCode, 'camera must dispatch').toBe(0);
+    // `netcode` stopped being an owed suite when UDG-SPIKE-001 landed `tests/e2e/netcode.spec.ts` (grant
+    // T-1(a)). It dispatches now; the spec-file correspondence behind that flag is asserted by
+    // `tests/contracts/UDG-SPIKE-001.test.ts`, which checks all five rows against the filesystem.
+    expect(guardUnavailable('test:e2e', ['--suite=netcode']).exitCode, 'netcode must dispatch now that its spec exists').toBe(0);
     const owed: readonly (readonly [string, string])[] = [
-      ['netcode', 'UDG-SPIKE-001'],
       ['physics', 'UDG-006'],
       ['input', 'UDG-008'],
       ['hybrid', 'UDG-SPIKE-003'],
@@ -443,7 +453,9 @@ describe('the browser dispatcher refuses per suite (grants G-2 and G-3)', () => 
     // not much of a refusal.
     expect(guardUnavailable('test:e2e', ['--suite=nonsense']).exitCode).toBe(2);
     expect(guardUnavailable('test:e2e', []).exitCode).toBe(1);
-    expect(guardUnavailable('test:e2e', []).message).toContain('netcode (UDG-SPIKE-001)');
+    // The usage text still names every suite's owner, and now marks `netcode` as implemented: that is grant
+    // T-1(a)'s visible effect, asserted here so the flag cannot flip without a test noticing.
+    expect(guardUnavailable('test:e2e', []).message).toContain('netcode (UDG-SPIKE-001, implemented)');
     // Commands other than `test:e2e` keep the behaviour UDG-001 pinned: an unknown command is exit 2, and the
     // guarded list still contains `test:e2e`, because four of its suites are still owed.
     expect(guardUnavailable('test:whatever', []).exitCode).toBe(2);

@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "generated": {
-    "at": "2026-11-15T20:31:02.056Z",
+    "at": "2026-11-19T09:50:28.497Z",
     "taskId": "UDG-001",
     "command": "pnpm dependencies:record",
-    "commit": "9b034307c3d11a9358c3947509f3f6e49edbf1ea"
+    "commit": "a203bde5339209aff23a067c1829e05d332a7472"
   },
   "runtime": {
     "node": {
@@ -26,7 +26,7 @@
   },
   "lockfile": {
     "path": "pnpm-lock.yaml",
-    "sha256": "944ae1e435e5cf5cf5d13d42b6b0cb80f04e364ebc39b377625687bd2a7742af"
+    "sha256": "74a572588c8e83971e98226d1a5ebd55bf15eb149cf7fa1c078c5bb596365267"
   },
   "workspaces": [
     {
@@ -100,6 +100,7 @@
       "dir": "apps/client",
       "dependencies": {
         "@babylonjs/core": "8.56.2",
+        "@colyseus/sdk": "0.18.9",
         "@udg/config": "workspace:*",
         "@udg/protocol": "workspace:*",
         "react": "19.3.1",
@@ -157,6 +158,7 @@
       "licence": "MIT",
       "licenceSource": "node_modules/@colyseus/sdk/package.json",
       "importedBy": [
+        "apps/client",
         "apps/server"
       ]
     },
