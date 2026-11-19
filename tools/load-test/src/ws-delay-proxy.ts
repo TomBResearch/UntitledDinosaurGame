@@ -147,10 +147,25 @@ export interface DirectionStats {
   readonly orderViolations: number;
   /** Times the destination signalled backpressure and the pump paused before the next write. */
   readonly backpressurePauses: number;
+  readonly earlyFireReschedules: number;
   /** Raw requested/achieved stall pairs, in delivery order. */
   readonly delayPairs: readonly DelayPair[];
   /** Bytes currently buffered inside the proxy (queue depth, this direction). */
   readonly bufferedBytes: number;
+  /**
+   * CONTAMINATION DIAGNOSTICS — instrumented ALONGSIDE the accepted metric, never subtracted
+   * from it (§2.2 says measure what the bytes experienced; these say WHAT caused it):
+   * `maxTimerLagMs` is the scheduler overshoot (clock/loop contention — the proxy's own fault);
+   * `total/maxStreamWaitMs` is time a write spent waiting for the destination to accept bytes
+   * (kernel/socket backpressure — the receiver's flow control); `chunksBackpressured` counts
+   * the chunks that met a full write buffer. A clean elevated run keeps the lag small AND keeps
+   * the achieved jitter inside the budget; a run whose diagnostics show big lag or stream wait
+   * explains its own INVALID verdict without changing the verdict.
+   */
+  readonly maxTimerLagMs: number;
+  readonly chunksBackpressured: number;
+  readonly totalStreamWaitMs: number;
+  readonly maxStreamWaitMs: number;
 }
 
 export interface ProxyStats {
@@ -191,6 +206,16 @@ interface Chunk {
   readonly data: Buffer;
   readonly arrivedAtMs: number;
   readonly requestedStallMs: number;
+  /**
+   * PINNED departure time, computed once at admission — the delay-tube constraint a real
+   * order-preserving link must obey: `dep(i) = max(arrival(i) + d(i), dep(i−1) − b/2)`.
+   * Consequence (induction): every achieved delay lands inside [d(i), d + b/2] ⊆ the profile
+   * band, AND one chunk's scheduler hiccup no longer re-anchors the chunks behind it. The
+   * earlier scheme recomputed each due AFTER the previous fire, so a burst of chunks stacked a
+   * FULL stall behind its neighbour and any timer overshoot compounded down the queue — the
+   * instrument's own distortion, inflating achieved jitter past the band it claims to apply.
+   */
+  readonly departureAtMs: number;
 }
 
 interface DirectionState {
@@ -200,16 +225,23 @@ interface DirectionState {
   readonly delayPairs: DelayPair[];
   nextSeq: number;
   lastDeliveredSeq: number;
+  /** Departure time pinned for the most recently admitted chunk (delay-tube floor input). */
+  lastScheduledDepartureMs: number;
   bytesReceived: number;
   bytesDelivered: number;
   chunksReceived: number;
   chunksDelivered: number;
   orderViolations: number;
   backpressurePauses: number;
+  earlyFireReschedules: number;
   pumping: boolean;
   sourceClosed: boolean;
   /** For c2s: achieved stall of the newest chunk already delivered upstream (RTT pairing rule). */
   lastForwardAchievedMs: number | null;
+  maxTimerLagMs: number;
+  chunksBackpressured: number;
+  totalStreamWaitMs: number;
+  maxStreamWaitMs: number;
 }
 
 const newDirection = (label: 'c2s' | 's2c', seed: number): DirectionState => ({
@@ -219,15 +251,21 @@ const newDirection = (label: 'c2s' | 's2c', seed: number): DirectionState => ({
   delayPairs: [],
   nextSeq: 1,
   lastDeliveredSeq: 0,
+  lastScheduledDepartureMs: 0,
   bytesReceived: 0,
   bytesDelivered: 0,
   chunksReceived: 0,
   chunksDelivered: 0,
   orderViolations: 0,
   backpressurePauses: 0,
+  earlyFireReschedules: 0,
   pumping: false,
   sourceClosed: false,
   lastForwardAchievedMs: null,
+  maxTimerLagMs: 0,
+  chunksBackpressured: 0,
+  totalStreamWaitMs: 0,
+  maxStreamWaitMs: 0,
 });
 
 interface ConnectionEnv {
@@ -303,7 +341,9 @@ class ProxyConnection {
     const now = this.env.timer.nowMs();
     const centredBaseMs = this.env.profile.oneWayMs - this.env.profile.jitterBudgetMs / 2;
     const requested = boundedUniformStall(centredBaseMs, this.env.profile.jitterBudgetMs, dir.rng());
-    dir.queue.push({ seq: dir.nextSeq, data, arrivedAtMs: now, requestedStallMs: requested });
+    const departureAtMs = Math.max(now + requested, dir.lastScheduledDepartureMs - this.env.profile.jitterBudgetMs / 2);
+    dir.lastScheduledDepartureMs = departureAtMs;
+    dir.queue.push({ seq: dir.nextSeq, data, arrivedAtMs: now, requestedStallMs: requested, departureAtMs });
     dir.nextSeq += 1;
     dir.bytesReceived += data.length;
     dir.chunksReceived += 1;
@@ -343,16 +383,28 @@ class ProxyConnection {
       this.pump(dir); // covers data that raced the FIN decision
       return;
     }
-    const remaining = Math.max(0, head.arrivedAtMs + head.requestedStallMs - this.env.timer.nowMs());
+    const dueAtMs = Math.max(this.env.timer.nowMs(), head.departureAtMs);
+    const remaining = dueAtMs - this.env.timer.nowMs();
     const cancel = this.env.timer.schedule(remaining, () => {
       this.pendingCancels.delete(cancel);
       if (this.finished) return;
+      // An early fire (timer coalescing/sub-ms rounding) must NOT deliver below the pinned
+      // departure: that would breach the band from the low side. Reschedule the remainder.
+      const earlyByMs = head.departureAtMs - this.env.timer.nowMs();
+      if (earlyByMs > 0.5) {
+        dir.earlyFireReschedules += 1;
+        this.pumpStep(dir); // recomputes due against the pinned departure — never delivers early
+        return;
+      }
       const chunk = dir.queue.shift();
       if (chunk === undefined) {
         dir.pumping = false;
         return;
       }
-      const achieved = this.env.timer.nowMs() - chunk.arrivedAtMs;
+      const firedAtMs = this.env.timer.nowMs();
+      const timerLag = firedAtMs - dueAtMs;
+      if (timerLag > dir.maxTimerLagMs) dir.maxTimerLagMs = timerLag;
+      const achieved = firedAtMs - chunk.arrivedAtMs;
       if (chunk.seq !== dir.lastDeliveredSeq + 1) dir.orderViolations += 1;
       dir.lastDeliveredSeq = chunk.seq;
       dir.bytesDelivered += chunk.data.length;
@@ -370,7 +422,12 @@ class ProxyConnection {
       }
       if (dest.write(chunk.data) === false) {
         dir.backpressurePauses += 1;
+        dir.chunksBackpressured += 1;
+        const streamWaitStartMs = this.env.timer.nowMs();
         dest.once('drain', () => {
+          const waited = this.env.timer.nowMs() - streamWaitStartMs;
+          dir.totalStreamWaitMs += waited;
+          if (waited > dir.maxStreamWaitMs) dir.maxStreamWaitMs = waited;
           this.pumpStep(dir);
         });
         // A FIN-receiving peer can close the read side and END the socket while a write is still
@@ -439,8 +496,13 @@ const directionStats = (d: DirectionState): DirectionStats => ({
   chunksDropped: 0,
   orderViolations: d.orderViolations,
   backpressurePauses: d.backpressurePauses,
+  earlyFireReschedules: d.earlyFireReschedules,
   delayPairs: [...d.delayPairs],
   bufferedBytes: d.queue.reduce((sum, c) => sum + c.data.length, 0),
+  maxTimerLagMs: d.maxTimerLagMs,
+  chunksBackpressured: d.chunksBackpressured,
+  totalStreamWaitMs: d.totalStreamWaitMs,
+  maxStreamWaitMs: d.maxStreamWaitMs,
 });
 
 const blankDirection = (): DirectionStats => directionStats(newDirection('c2s', 0));
@@ -453,8 +515,13 @@ const mergeStats = (a: DirectionStats, b: DirectionStats): DirectionStats => ({
   chunksDropped: 0,
   orderViolations: a.orderViolations + b.orderViolations,
   backpressurePauses: a.backpressurePauses + b.backpressurePauses,
+  earlyFireReschedules: a.earlyFireReschedules + b.earlyFireReschedules,
   delayPairs: [...a.delayPairs, ...b.delayPairs],
   bufferedBytes: a.bufferedBytes + b.bufferedBytes,
+  maxTimerLagMs: Math.max(a.maxTimerLagMs, b.maxTimerLagMs),
+  chunksBackpressured: a.chunksBackpressured + b.chunksBackpressured,
+  totalStreamWaitMs: a.totalStreamWaitMs + b.totalStreamWaitMs,
+  maxStreamWaitMs: Math.max(a.maxStreamWaitMs, b.maxStreamWaitMs),
 });
 
 // --------------------------------------------------------------------------- public API

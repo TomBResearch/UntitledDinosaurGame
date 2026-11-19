@@ -39,7 +39,7 @@
  * cannot pass.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -49,7 +49,7 @@ import { chromium, expect, test, type Browser, type Page } from '@playwright/tes
 import { networkValidity, summarizeCorrections, summarizeDelays } from '../../tools/load-test/src/statistics.ts';
 import { captureEnvironmentRecord, impairmentSourceRecord, planSpikeRun } from '../../tools/load-test/src/run-spike.ts';
 import { createTraceWriter, readTrace } from '../../tools/load-test/src/trace-writer.ts';
-import { createWsDelayProxy } from '../../tools/load-test/src/ws-delay-proxy.ts';
+import type { ProxyStats } from '../../tools/load-test/src/ws-delay-proxy.ts';
 
 import { startHarnessServer } from '../support/client-harness/transport.mjs';
 
@@ -191,6 +191,13 @@ test.beforeAll(async () => {
   // The room module is the accepted pinned one; the harness boots it exactly as the UDG-003 suites do.
   const build = spawnSync('pnpm', ['--filter', '@udg/server', 'build'], { cwd: ROOT, encoding: 'utf8' });
   expect(build.status, `apps/server build failed: ${build.stderr}`).toBe(0);
+
+  // The impairment smoke drives tools/load-test's proxy HOST as its own Node process (measurement
+  // contamination control — the impairment clock must not share an event loop with the room, the
+  // tick gate and the browser CDP traffic). Its binary is built here, explicitly, because
+  // tools/load-test is not yet a workspace member (that pin-free wiring is the DPA-2 decision).
+  const harnessBuild = spawnSync(process.execPath, [join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(ROOT, 'tools', 'load-test', 'tsconfig.json')], { cwd: ROOT, encoding: 'utf8' });
+  expect(harnessBuild.status, `tools/load-test build failed: ${harnessBuild.stdout}${harnessBuild.stderr}`).toBe(0);
 
   const config = (await import('../../packages/config/dist/index.js')) as {
     DEFAULT_SERVER_CONFIG: object;
@@ -2569,13 +2576,132 @@ const readImpLedger = async (page: Page): Promise<ImpLedger> =>
     return { stats: holder.predictor.matchedInstrumentStats(), rows: holder.predictor.matchedCorrections() };
   });
 
-/** Let every in-proxy stall drain (driver: real timers) before snapshotting proxy stats —
- * byte-fidelity claims are only meaningful over a settled queue. */
-const settleProxy = async (proxy: { stats(): { c2s: { bufferedBytes: number }; s2c: { bufferedBytes: number } } }, maxMs = 5_000): Promise<void> => {
+/* ------------------------------------------------------------------ proxy host client (slice 6b)
+ *
+ * The impairment proxies run inside a dedicated Node child process (`proxy-host.ts`), NOT inside
+ * this Playwright worker. Why: the worker's event loop also runs the room (authority ticks, patch
+ * batching, the tick gate) and the CDP traffic of every browser context; a stall timer scheduled
+ * on that loop fires LATE under load, and the achieved sample — honestly — counts the overshoot.
+ * That is instrument contamination, and the fix is to give the impairment its own loop, not to
+ * adjust the metric. Every reply is bounded by a pre-declared timeout (checked, as values, by
+ * the first check of the smoke BEFORE any phase starts), and shutdown returns a finite-teardown
+ * RECEIPT: the host reports what it closed and what, if anything, is still live.
+ */
+const HOST_START_TIMEOUT_MS = 10_000;
+const HOST_REQUEST_TIMEOUT_MS = 15_000;
+const HOST_SHUTDOWN_TIMEOUT_MS = 10_000;
+const PROXY_SETTLE_MAX_MS = 8_000;
+
+interface HostReceipt {
+  readonly ch: 'receipt';
+  readonly trigger: string;
+  readonly exitCode: number;
+  readonly proxiesClosed: number;
+  readonly proxiesOpened: number;
+  readonly activeResourcesAfterClose: readonly string[];
+  readonly shutdownMs: number;
+}
+
+interface ProxyHostClient {
+  readonly pid: number;
+  request(command: Record<string, unknown>): Promise<Record<string, unknown>>;
+  stderrTail(): string;
+  shutdown(): Promise<{ receipt: HostReceipt | null; exitCode: number | null; signal: string | null; stderrTail: string }>;
+}
+
+const startProxyHost = (): Promise<ProxyHostClient> =>
+  new Promise((resolve, reject) => {
+    const child = spawn('node', [join(ROOT, 'tools', 'load-test', 'dist', 'proxy-host.js')], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const stderrParts: string[] = [];
+    child.stderr.on('data', (d: Buffer) => stderrParts.push(String(d)));
+    let buffer = '';
+    let nextId = 1;
+    const pending = new Map<number, { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+    let receipt: HostReceipt | null = null;
+    let helloReceived = false;
+    const startTimer = setTimeout(() => {
+      if (!helloReceived) {
+        child.kill();
+        reject(new Error(`proxy host did not say hello within ${String(HOST_START_TIMEOUT_MS)} ms`));
+      }
+    }, HOST_START_TIMEOUT_MS);
+    child.stdout.on('data', (d: Buffer) => {
+      buffer += String(d);
+      for (;;) {
+        const nl = buffer.indexOf('\n');
+        if (nl < 0) break;
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        if (line.trim().length === 0) continue;
+        const msg = JSON.parse(line) as Record<string, unknown>;
+        if (msg['ch'] === 'hello') {
+          helloReceived = true;
+          clearTimeout(startTimer);
+          resolve(client);
+          continue;
+        }
+        if (msg['ch'] === 'receipt') {
+          receipt = msg as unknown as HostReceipt;
+          continue;
+        }
+        const id = msg['id'] as number | undefined;
+        if (typeof id === 'number' && pending.has(id)) {
+          const waiter = pending.get(id);
+          pending.delete(id);
+          if (waiter !== undefined) {
+            clearTimeout(waiter.timer);
+            waiter.resolve(msg);
+          }
+        }
+      }
+    });
+    const client: ProxyHostClient = {
+      pid: child.pid ?? -1,
+      request(command): Promise<Record<string, unknown>> {
+        const id = nextId;
+        nextId += 1;
+        return new Promise((resolveReq, rejectReq) => {
+          const timer = setTimeout(() => {
+            pending.delete(id);
+            rejectReq(new Error(`proxy host reply to op ${String(command['op'])} exceeded the ${String(HOST_REQUEST_TIMEOUT_MS)} ms pre-cap`));
+          }, HOST_REQUEST_TIMEOUT_MS);
+          pending.set(id, { resolve: resolveReq, reject: rejectReq, timer });
+          child.stdin.write(`${JSON.stringify({ ch: 'cmd', id, ...command })}\n`);
+        });
+      },
+      stderrTail(): string {
+        return stderrParts.join('').slice(-400);
+      },
+      async shutdown() {
+        const exitPromise = new Promise<{ code: number | null; signal: string | null }>((resolveExit) => {
+          child.once('exit', (code: number | null, signal: string | null) => {
+            resolveExit({ code, signal });
+          });
+        });
+        child.stdin.write(`${JSON.stringify({ ch: 'cmd', id: nextId, op: 'shutdown' })}\n`);
+        const timeoutExit = new Promise<{ code: number | null; signal: string | null }>((resolveExit) => {
+          const t = setTimeout(() => {
+            child.kill('SIGKILL');
+            resolveExit({ code: null, signal: 'PRECAPPED-KILL' });
+          }, HOST_SHUTDOWN_TIMEOUT_MS);
+          t.unref();
+        });
+        const gone = await Promise.race([exitPromise, timeoutExit]);
+        return { receipt, exitCode: gone.code, signal: gone.signal, stderrTail: client.stderrTail() };
+      },
+    };
+  });
+
+/** Let every in-proxy stall drain before snapshotting proxy stats — byte-fidelity claims are only
+ * meaningful over a settled queue. Stats come from the host over the bounded control channel. */
+const settleProxy = async (host: ProxyHostClient, handle: number, maxMs = PROXY_SETTLE_MAX_MS): Promise<{ stats: ProxyStats; throttle: { worstThrottleDeltaUsec: number; worstThrottleDeltaEvents: number } | null }> => {
   const started = Date.now();
-  while (Date.now() - started < maxMs) {
-    const snap = proxy.stats();
-    if (snap.c2s.bufferedBytes === 0 && snap.s2c.bufferedBytes === 0) return;
+  for (;;) {
+    const reply = await host.request({ op: 'stats', handle });
+    const stats = reply['stats'] as ProxyStats;
+    const throttle = (reply['throttle'] as { worstThrottleDeltaUsec: number; worstThrottleDeltaEvents: number } | undefined) ?? null;
+    if (stats.c2s.bufferedBytes === 0 && stats.s2c.bufferedBytes === 0) return { stats, throttle };
+    if (Date.now() - started > maxMs) return { stats, throttle };
     await sleep(50);
   }
 };
@@ -2592,7 +2718,12 @@ const closeImpSeat = async (page: Page): Promise<void> => {
 const consecutiveFromOne = (values: readonly number[]): boolean =>
   values.every((value, index) => value === index + 1);
 
-test('impairment proxy smoke: paired browser seats through the WS delay proxy — LAN-labelled baseline and a labelled elevated calibration (both diagnostic; no p95 gate)', async () => {
+// The Playwright `testInfo` second-argument form needs the empty destructure; ESLint's
+// no-empty-pattern rule and Playwright's fixture validator disagree — a targeted, line-local
+// suppression of the LINT (not a config change) keeps the accepted-case timeout visible.
+// eslint-disable-next-line no-empty-pattern
+test('impairment proxy smoke: paired browser seats through the WS delay proxy — LAN-labelled baseline and a labelled elevated calibration (both diagnostic; no p95 gate)', async ({}, testInfo) => {
+  test.setTimeout(120_000);
   expect(fixture, 'the room fixture booted').toBeDefined();
   const roomPort = Number(new URL(fixture?.endpoint ?? 'http://127.0.0.1:0').port);
   check('impairment: the proxy target port parses from the fixture endpoint', Number.isInteger(roomPort) && roomPort > 0, roomPort);
@@ -2604,9 +2735,30 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
     planLan.official === false && planElev.official === false && /diagnostic:/.test(planLan.label) && /diagnostic:/.test(planElev.label),
     { lan: planLan.label, elevated: planElev.label });
 
+  // Pre-cap timeouts are validated BEFORE any phase runs: every await this smoke will perform
+  // against the proxy host already has a declared finite bound, and the Playwright case timeout
+  // is stated — a smoke with an open-ended await is a hang waiting to happen, not a diagnostic.
+  const caps = {
+    hostStartMs: HOST_START_TIMEOUT_MS,
+    hostRequestMs: HOST_REQUEST_TIMEOUT_MS,
+    hostShutdownMs: HOST_SHUTDOWN_TIMEOUT_MS,
+    proxySettleMs: PROXY_SETTLE_MAX_MS,
+    caseTimeoutMs: testInfo.timeout,
+  };
+  check('impairment: PRE-CAP timeouts are declared and finite before the first phase (host start/request/settle/shutdown + case timeout)',
+    Object.values(caps).every((value) => Number.isFinite(value) && value > 0), caps);
+
+  const host = await startProxyHost();
+  check('impairment: the impairment proxies run in their OWN Node process (the impairment clock shares no event loop with the room, the tick gate or CDP traffic)',
+    host.pid > 0 && host.pid !== process.pid, { hostPid: host.pid, workerPid: process.pid });
+
   // ============================ phase 1: LAN-labelled baseline through the proxy ============
-  const proxyLan = await createWsDelayProxy({ listenPort: 0, targetHost: '127.0.0.1', targetPort: roomPort, profile: planLan.impairment });
-  const proxyUrlLan = `http://127.0.0.1:${String(proxyLan.port)}`;
+  const startLan = await host.request({ op: 'start', profile: planLan.impairment, targetHost: '127.0.0.1', targetPort: roomPort });
+  const handleLan = startLan['handle'] as number;
+  const proxyUrlLan = `http://127.0.0.1:${String(startLan['port'] as number)}`;
+  check('impairment[lan]: the seats reach the room ONLY through the proxy port (the endpoint named is the proxy, not the room)',
+    typeof handleLan === 'number' && Number(new URL(proxyUrlLan).port) === startLan['port'] && Number(new URL(proxyUrlLan).port) !== roomPort,
+    { proxyPort: startLan['port'], roomPort });
 
   const pageM = await openSeatPage('imp-M', { bare: true });
   const joinM = await joinImpSeat(pageM, proxyUrlLan, { mode: 'create', roomName: ROOM_NAME });
@@ -2616,11 +2768,18 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
   const joinO = await joinSeat(pageO, { mode: 'byId', roomId: roomIdImp }, proxyUrlLan);
   check('impairment: the observer seat joined the SAME room through the SAME proxy', joinO.ok === true && joinO.roomId === roomIdImp, joinO);
 
+  const lanBrowserApplication = await pageM.evaluate(() => {
+    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+    if (holder === undefined) throw new Error('the impairment mover is not joined');
+    const at = holder.predictor.deliveryLedger().filter((d) => d.accepted).map((d) => d.delivery.atMs);
+    const gaps = at.slice(1).map((value, index) => value - (at[index] ?? 0)).filter((g) => Number.isFinite(g) && g >= 0).sort((a, b) => a - b);
+    return { deliveries: at.length, gapMinMs: gaps[0] ?? null, gapMedianMs: gaps[Math.floor(gaps.length / 2)] ?? null, gapMaxMs: gaps[gaps.length - 1] ?? null };
+  });
   const lanMove = await runImpMover(pageM, 8, 'x');
-  await settleProxy(proxyLan);
+  const lanSettled = await settleProxy(host, handleLan);
+  const lanProxy = lanSettled.stats;
   const lanLedger = await readImpLedger(pageM);
   const lanObserver = await reportSeat(pageO);
-  const lanProxy = proxyLan.stats();
   const trackOfMover = lanObserver.tracks.find((track) => track.sessionId === joinM.sessionId);
 
   check('impairment[lan]: the observer saw the mover travel on +x through the proxy with no tick regression',
@@ -2672,8 +2831,12 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
 
   await closeImpSeat(pageM);
   await closeSeat(pageO);
-  await proxyLan.close();
-  const lanProxyClosed = proxyLan.stats();
+  // Release the LAN seats' whole contexts BEFORE the elevated phase: a co-resident Chromium
+  // renderer per leaked context is suite CPU that lands on the instrument as throttle events.
+  await pageM.context().close();
+  await pageO.context().close();
+  const lanClose = await host.request({ op: 'close', handle: handleLan });
+  const lanProxyClosed = lanClose['stats'] as ProxyStats;
   // Byte fidelity is asserted over the CLOSED stats: the room keeps patching while seats sit open,
   // so a mid-run snapshot legitimately catches a stall in flight. After an explicit drained close
   // every accepted byte has crossed, and a zero error count certifies no hard-close ever cut a
@@ -2690,19 +2853,33 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
   await pageO.context().close();
 
   // ==================== phase 2: labelled elevated calibration through a second proxy ========
-  const proxyElev = await createWsDelayProxy({ listenPort: 0, targetHost: '127.0.0.1', targetPort: roomPort, profile: planElev.impairment });
-  const proxyUrlElev = `http://127.0.0.1:${String(proxyElev.port)}`;
+  const startElev = await host.request({ op: 'start', profile: planElev.impairment, targetHost: '127.0.0.1', targetPort: roomPort });
+  const handleElev = startElev['handle'] as number;
+  const proxyUrlElev = `http://127.0.0.1:${String(startElev['port'] as number)}`;
   const pageM2 = await openSeatPage('imp-M2', { bare: true });
   const joinM2 = await joinImpSeat(pageM2, proxyUrlElev, { mode: 'create', roomName: ROOM_NAME });
   const pageO2 = await openSeatPage('imp-O2', { bare: true });
   const joinO2 = await joinSeat(pageO2, { mode: 'byId', roomId: joinM2.roomId ?? '' }, proxyUrlElev);
   check('impairment[elevated]: the calibration seats joined through the elevated-profile proxy', joinM2.ok === true && joinO2.ok === true, { m: joinM2, o: joinO2 });
 
-  const elevMove = await runImpMover(pageM2, 14, 'z');
-  await settleProxy(proxyElev, 8_000);
+  // 30 steps ≈ a ~2× wider sample base at the same 60 ms cadence: an episodic multi-second
+  // throttle freeze then inflates a SMALLER fraction of the ranked samples — the honest p95 of
+  // a bigger window, not a moved threshold.
+  const elevMove = await runImpMover(pageM2, 30, 'z');
+  const elevSettled = await settleProxy(host, handleElev);
+  const elevProxy = elevSettled.stats;
   const elevLedger = await readImpLedger(pageM2);
   const elevObserver = await reportSeat(pageO2);
-  const elevProxy = proxyElev.stats();
+  // Browser-application-path observation, recorded SEPARATELY and never fed to networkValidity:
+  // accepted-delivery inter-arrival gaps inside the page (patch interval + authority tick +
+  // renderer scheduling live HERE, not in the proxy's byte samples).
+  const browserApplication = await pageM2.evaluate(() => {
+    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+    if (holder === undefined) throw new Error('the impairment mover is not joined');
+    const at = holder.predictor.deliveryLedger().filter((d) => d.accepted).map((d) => d.delivery.atMs);
+    const gaps = at.slice(1).map((value, index) => value - (at[index] ?? 0)).filter((g) => Number.isFinite(g) && g >= 0).sort((a, b) => a - b);
+    return { deliveries: at.length, gapMinMs: gaps[0] ?? null, gapMedianMs: gaps[Math.floor(gaps.length / 2)] ?? null, gapMaxMs: gaps[gaps.length - 1] ?? null };
+  });
   const trackElev = elevObserver.tracks.find((track) => track.sessionId === joinM2.sessionId);
 
   check('impairment[elevated]: movement completes through the impaired path (observer sees +z, no regressions)',
@@ -2716,13 +2893,13 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
     declaredJitterBudgetMs: planElev.profile.jitterBudgetMs,
     achievedRttSamples: elevProxy.achievedRttSamples,
   });
-  // Honest §2.2 handling on a short diagnostic calibration: the achieved record is stated RAW
-  // (requested, achieved p50/p95, the jitter statistic, the sample count) and the INVALID rule
-  // is EVALUATED and recorded — an INVALID calibration reports INVALID, it never re-runs into a
-  // claim. (Backpressure from a busy runner inflates achieved queue time over the pure stall;
-  // the official matrix will re-run per the rule, and this smoke proves the rule fires.)
-  check('impairment[elevated]: the calibration states its achieved record (requested p50/p95, achieved p50/p95, jitter statistic, sample count) and the §2.2 verdict is recorded as the ACTUAL verdict — pass or INVALID, never silent',
-    elevValidity.achieved !== null && elevValidity.achieved.n > 0 && typeof elevValidity.valid === 'boolean' && Array.isArray(elevValidity.reasons),
+  // The §2.2 rule on the CONNECTED browser path, asserted strictly. The achieved sample is the
+  // byte's true in-proxy queue time — timer overshoot and stream wait included, NOTHING
+  // subtracted — but the instrument now runs on an uncontended loop (dedicated host process),
+  // and the diagnostics beside the metric name the causes. If this check fails it is a measured
+  // blocker with its own evidence (lag/stream-wait breakdown), not something to average away.
+  check('impairment[elevated]: the connected calibration is VALID under the declared budget on the uncontended instrument (achieved p50 within 10 ms of 100; achieved jitter p95−p50 within budget+10), with the contamination breakdown stated beside the metric',
+    elevValidity.valid,
     {
       verdict: elevValidity.valid ? 'valid' : 'INVALID',
       requested: planElev.profile.rttMs,
@@ -2731,6 +2908,13 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
       jitterP95P50: elevValidity.achievedJitterMs,
       samples: elevValidity.achieved?.n ?? 0,
       reasons: elevValidity.reasons,
+      diagnostics: {
+        c2s: { maxTimerLagMs: elevProxy.c2s.maxTimerLagMs, chunksBackpressured: elevProxy.c2s.chunksBackpressured, totalStreamWaitMs: elevProxy.c2s.totalStreamWaitMs, maxStreamWaitMs: elevProxy.c2s.maxStreamWaitMs },
+        s2c: { maxTimerLagMs: elevProxy.s2c.maxTimerLagMs, chunksBackpressured: elevProxy.s2c.chunksBackpressured, totalStreamWaitMs: elevProxy.s2c.totalStreamWaitMs, maxStreamWaitMs: elevProxy.s2c.maxStreamWaitMs },
+        hostCgroupThrottle: elevSettled.throttle,
+        browserApplicationPath: browserApplication,
+      lanBrowserApplicationPath: lanBrowserApplication,
+      },
     });
   check('impairment[elevated]: under impairment the order audit held and the stall path dropped nothing',
     elevProxy.c2s.orderViolations === 0 && elevProxy.s2c.orderViolations === 0 && elevProxy.c2s.chunksDropped === 0,
@@ -2749,8 +2933,8 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
 
   await closeImpSeat(pageM2);
   await closeSeat(pageO2);
-  await proxyElev.close();
-  const elevProxyClosed = proxyElev.stats();
+  const elevClose = await host.request({ op: 'close', handle: handleElev });
+  const elevProxyClosed = elevClose['stats'] as ProxyStats;
   check('impairment[elevated]: the elevated proxy stalled, never dropped — the CLOSED stats show every accepted byte crossed, zero active connections, zero hard-close cuts',
     elevProxyClosed.connections.active === 0 && elevProxyClosed.connections.errors === 0
     && elevProxyClosed.c2s.bytesDelivered === elevProxyClosed.c2s.bytesReceived && elevProxyClosed.s2c.bytesDelivered === elevProxyClosed.s2c.bytesReceived,
@@ -2767,6 +2951,17 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
   const impErrors = ['imp-M', 'imp-O', 'imp-M2', 'imp-O2'].flatMap((label) => pageErrorSinks.get(label) ?? []);
   check('impairment: no unexpected page or console errors on any impaired seat', impErrors.length === 0, impErrors.slice(0, 4));
 
+  // The exact receipt of a NORMAL FINITE Node teardown of the impairment instrument: shutdown was
+  // requested (not killed), the process exited on its own within the pre-cap, every proxy drained,
+  // and the host states what (if anything) stayed live.
+  const hostTeardown = await host.shutdown();
+  check('impairment: finite-teardown RECEIPT of the proxy host — clean exit code 0, both proxies closed, zero active resources after close, within the pre-cap',
+    hostTeardown.exitCode === 0 && hostTeardown.receipt !== null
+    && hostTeardown.receipt.exitCode === 0 && hostTeardown.receipt.proxiesClosed === 2 && hostTeardown.receipt.proxiesOpened === 2
+    && hostTeardown.receipt.activeResourcesAfterClose.length === 0
+    && hostTeardown.receipt.shutdownMs < HOST_SHUTDOWN_TIMEOUT_MS,
+    { ...hostTeardown, stderr: hostTeardown.stderrTail.slice(0, 200) });
+
   // The efficient local evidence for this slice: raw samples kept, not just the verdicts.
   mkdirSync(dirname(RESULTS_FILE), { recursive: true });
   writeFileSync(join(OUT_DIR, 'impairment-proxy-stats.json'), `${JSON.stringify({
@@ -2776,6 +2971,18 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
     gate: 'Not Run — diagnostic infrastructure smoke; no p95 gate, no matrix verdict',
     environment: { ...captureEnvironmentRecord(), browser: browser?.version() ?? 'unknown', headed: 'headless' },
     impairmentSource: impairmentSourceRecord(true),
+    timestampProvenance: {
+      proxySamples: 'process.hrtime.bigint (monotonic) inside the dedicated proxy-host Node process; arrivedAt on socket data events, deliveredAt at stall-timer fire; achieved = deliveredAt - arrivedAt (timer overshoot and stream wait INCLUDED — nothing subtracted)',
+      browserPaths: 'page performance.now() enters ONLY the browserApplicationPath observation (delivery inter-arrival); it is recorded separately and NEVER fed to networkValidity',
+      rttPairing: 'same-connection Colyseus traffic only: input frames forward, state patches back; no echo, no parallel path; patch APPLICATION is not part of any sample',
+    },
+    instrumentProcess: { hostPid: host.pid, caps, teardown: hostTeardown.receipt, teardownExitCode: hostTeardown.exitCode },
+    browserApplicationPath: browserApplication,
+    contaminationDiagnostics: {
+      hostCgroupThrottle: { lan: lanSettled.throttle, elevated: elevSettled.throttle },
+      lan: { c2s: { maxTimerLagMs: lanProxy.c2s.maxTimerLagMs, chunksBackpressured: lanProxy.c2s.chunksBackpressured, totalStreamWaitMs: lanProxy.c2s.totalStreamWaitMs }, s2c: { maxTimerLagMs: lanProxy.s2c.maxTimerLagMs, chunksBackpressured: lanProxy.s2c.chunksBackpressured, totalStreamWaitMs: lanProxy.s2c.totalStreamWaitMs } },
+      elevated: { c2s: { maxTimerLagMs: elevProxy.c2s.maxTimerLagMs, chunksBackpressured: elevProxy.c2s.chunksBackpressured, totalStreamWaitMs: elevProxy.c2s.totalStreamWaitMs }, s2c: { maxTimerLagMs: elevProxy.s2c.maxTimerLagMs, chunksBackpressured: elevProxy.s2c.chunksBackpressured, totalStreamWaitMs: elevProxy.s2c.totalStreamWaitMs } },
+    },
     runs: {
       lan: {
         label: planLan.label, official: planLan.official, requested: { rttMs: planLan.profile.rttMs, jitterBudgetMs: planLan.profile.jitterBudgetMs, seed: planLan.seed },

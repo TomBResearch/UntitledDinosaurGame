@@ -948,3 +948,75 @@ passes, adopts or freezes anything.
 
 [docs]: https://docs.colyseus.io/ 'Colyseus documentation (versionless URL; the pinned package is the authority)'
 [pinned]: https://www.npmjs.com/package/@colyseus/core/v/0.18.27 'pinned package page'
+
+## 14.1. DPA-2 follow-up: what "achieved latency" actually measures on the paired-browser path (slice 6b, 2026-11-19)
+
+Published candidate `c4792c79…` was reviewed at report level; this bounded follow-up ran ONE short
+diagnostic batch on the two-real-browser Colyseus path to clarify and validate the ACHIEVED latency
+record. No matrix, no thresholds moved, no official verdicts; the c479 elevated INVALID record is
+preserved verbatim (`artifacts/.local/spike-001/preserved-c479/`, sha256-indexed) alongside every
+raw requested/achieved sample.
+
+**Where the timestamps come from.** Every accepted network sample is measured with
+`process.hrtime.bigint()` (monotonic) INSIDE the dedicated proxy-host Node process: `arrivedAt` is
+stamped on the socket `data` event, `deliveredAt` at stall-timer fire, achieved = delivered −
+arrived. The browser's `performance.now()` enters ONLY the separately recorded
+`browserApplicationPath` observation (accepted-delivery inter-arrival gaps inside the page —
+patch interval, authority tick and renderer scheduling live there). It is never subtracted from,
+added to, or mixed into the accepted metric.
+
+**The RTT is a real production-shaped round trip through the same WebSocket transport.** Both
+browser seats join through the proxy endpoint (a check asserts the named port is the proxy's, not
+the room's); forward chunks are real input frames, reverse chunks are the same connection's real
+state patches, paired by the documented rule (reverse chunk pairs with the newest forward chunk
+already delivered upstream). No echo path feeds any browser verdict — the pure-Node echo
+self-check is labelled transport-feasibility only. Patch APPLICATION (browser JS applying state)
+is nowhere in any sample.
+
+**Contamination: found, removed, receipts.** The c479 elevated INVALID (jitter p95−p50 ≈ 39.8 vs a
+20 ms budget) decomposed into three instrument faults, each fixed with its own receipt:
+
+1. *Wrong process.* The proxy ran inside the Playwright worker, sharing one event loop with the
+   room, the tick gate and CDP traffic. It now runs in its own Node process (`proxy-host.ts`,
+   NDJSON control over stdio). Receipt: `shutdown` → `{exitCode: 0, activeResourcesAfterClose: [],
+   shutdownMs ≈ 100}` asserted in-suite; every control reply carries a pre-declared timeout, and
+   the caps (start 10 s / request 15 s / settle 8 s / shutdown 10 s / case 120 s) are CHECKED as
+   values BEFORE any phase starts.
+2. *Scheduler re-anchoring + early fire.* Due times were recomputed AFTER the previous chunk
+   fired, letting sub-millisecond early fires shave the band (observed: achieved p50 93.2 vs
+   requested 100 — the MEDIAN sat below the band floor's expectation). Departures are now pinned
+   at admission — `dep(k) = max(arr(k)+d(k), dep(k−1) − b/2)`, the delay-tube constraint any
+   order-preserving link must obey — and an early timer fire RESCHEDULES instead of delivering
+   below its pinned departure. Deterministically unit-tested (burst at staggered arrivals: every
+   achieved delay inside `[d(k), d+b/2]`, FIFO order intact, nothing delivered early; 90/90 spike
+   unit tests green).
+3. *CPU-quota throttling — the measured residual.* The container carries a 6-core CFS quota
+   (`cpu.max 600000 100000`). The host now samples `/sys/fs/cgroup/cpu.stat` every second and
+   reports its worst per-second throttle delta beside every stats reply. The record is unambiguous:
+   INVALID runs carry 5.5–5.7 s of throttled time within one second (whole-process freezes) with
+   stall-timer lags of 27–44 ms; VALID runs carry zero throttle events with lags of 1.7–3.0 ms. An
+   idle baseline measures 0.00 s throttled. Releasing the LAN phase's browser contexts before the
+   elevated phase and widening the elevated sample base (~2× steps at the same cadence — the
+   honest p95 of a bigger window, not a moved threshold) reduced exposure to episodic host
+   contention.
+
+**Reproducibility, same runner, same code, ordered:** run9 INVALID (throttle 10 events, lag 44 ms)
+· run10 INVALID (10 events) · run11 INVALID (10 events, lag 43.9) · run12 **VALID** (0 events, lag
+2.7, jitter 10.5) · run13 **VALID** (0, 2.0, 12.6) · run14 **VALID** (0, 3.0, 14.9) — the final
+harness is reproducibly valid across three consecutive full-suite runs (achieved p50 95.9–96.6 vs
+requested 100, jitter inside budget+10, order audits zero, byte-fidelity over closed stats,
+finite-teardown receipts `proxiesClosed: 2/2, activeResourcesAfterClose: []`).
+
+**Measured blocker (reported, not hidden).** On THIS runner the short-window connected elevated
+diagnostic remains PROBABILISTIC until runner load settles: CFS throttle arrives in episodic
+multi-second whole-process freezes (co-tenant and suite-peak driven), and a freeze inside the
+window inflates every queued sample behind it — which is exactly what a real FIFO queue does to
+real bytes, so the metric keeps it and the verdict goes INVALID honestly. The pre-existing marginal
+case `recovery resumes…` exhibits the identical pattern under the same freezes (2 of the last 6
+in-run failures; 3.0 s in isolation), confirming it is runner-wide, not slice-specific. The
+official matrix must therefore (a) run on a quiet runner with the throttle receipt attached to
+every cell, (b) use the full 20 s/120 s windows — a multi-second freeze inflates a far smaller
+fraction of a 120 s sample base — and (c) keep the per-cell diagnostics this slice now records
+(timer lag, stream wait, throttle deltas, browser-application observation) as first-class
+evidence. None of this selects, adjusts or exempts any profile: the §2.2 rule fired honestly on
+every run above, VALID and INVALID alike.

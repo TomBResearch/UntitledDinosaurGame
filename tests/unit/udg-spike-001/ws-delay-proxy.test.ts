@@ -177,6 +177,63 @@ describe('UDG-SPIKE-001 ws-delay-proxy on a synthetic clock', () => {
     await new Promise<void>((resolve) => echo.close(() => resolve()));
   });
 
+  it('a co-arriving burst stays inside the profile band: departures are PINNED at admission (delay tube with the b/2 look-back), FIFO order holds, and no chunk is ever delivered before its pinned departure', async () => {
+    const clock = new FakeClock();
+    const got: Buffer[] = [];
+    const echo = createServer((socket) => {
+      socket.on('data', (d) => got.push(Buffer.from(d)));
+    });
+    const echoPort = await listen(echo);
+    const baseMs = 100;
+    const budgetMs = 20;
+    const seed = 1001;
+    const proxy = await createWsDelayProxy({
+      listenPort: 0, targetHost: '127.0.0.1', targetPort: echoPort,
+      profile: { name: 'unit-burst', oneWayMs: baseMs, jitterBudgetMs: budgetMs, seed }, timer: clock,
+    });
+    const client = connect({ host: '127.0.0.1', port: proxy.port });
+    client.on('error', () => { /* expected RST at teardown */ });
+    await new Promise<void>((resolve) => client.once('connect', resolve));
+    await realSleep(20); // upstream established: every chunk below is stalled for its full profile time
+
+    client.write(Buffer.from('A'));
+    await until(() => proxy.stats().c2s.chunksReceived === 1, 'chunk A admitted');
+    clock.advance(3);
+    client.write(Buffer.from('B'));
+    await until(() => proxy.stats().c2s.chunksReceived === 2, 'chunk B admitted');
+    clock.advance(3);
+    client.write(Buffer.from('C'));
+    await until(() => proxy.stats().c2s.chunksReceived === 3, 'chunk C admitted');
+
+    // Seeded stalls + the admission-time pinning rules, recomputed independently:
+    // dep(k) = max(arr(k) + d(k), dep(k−1) − b/2); FIFO serialisation delivers at max_{j≤k} dep(j).
+    const stalls = expectedStalls(seed, 1, baseMs, budgetMs, 3);
+    const depA = (stalls[0] ?? 0) as number;
+    const depB = Math.max(3 + (stalls[1] ?? 0), depA - budgetMs / 2);
+    const depC = Math.max(6 + (stalls[2] ?? 0), depB - budgetMs / 2);
+
+    clock.advance(89.9); // every pinned departure is ≥ 90 (band floor): at 89.9 NOTHING may have left
+    await realSleep(10);
+    expect(Buffer.concat(got).length, 'no chunk leaves before its pinned departure').toBe(0);
+    clock.advance(Math.max(depA, depB, depC) - 89.9 + 1);
+    await until(() => Buffer.concat(got).length === 3, 'all three delivered, in order');
+    expect(Buffer.concat(got).toString(), 'FIFO order survives the look-back').toBe('ABC');
+
+    const pairs = proxy.stats().c2s.delayPairs;
+    const runMax = [Math.max(depA), Math.max(depA, depB), Math.max(depA, depB, depC)];
+    const arrivals = [0, 3, 6];
+    for (const [k, pair] of pairs.entries()) {
+      expect(pair.achievedMs, `chunk ${String(k)} delivers at exactly its pinned (serialised) departure`).toBeCloseTo((runMax[k] ?? 0) - (arrivals[k] ?? 0), 6);
+      expect(pair.achievedMs, `chunk ${String(k)} never falls below its own profile delay`).toBeGreaterThanOrEqual((stalls[k] ?? 0) - 1e-9);
+      expect(pair.achievedMs, `chunk ${String(k)} never exceeds the profile band even queued behind a longer stall`).toBeLessThanOrEqual(baseMs + budgetMs / 2 + 1e-9);
+    }
+    client.destroy();
+    const closing6 = proxy.close();
+    clock.advance(6_000);
+    await closing6;
+    await new Promise<void>((resolve) => echo.close(() => resolve()));
+  });
+
   it('backpressure pauses the pump and an explicit close drains pending stalls IN ORDER before FIN', async () => {
     const clock = new FakeClock();
     const bhSockets: Socket[] = [];
