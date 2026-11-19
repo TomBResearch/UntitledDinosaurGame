@@ -1,8 +1,8 @@
 # Contracts adoption record
 
-Status: **Partially adopted — P01, P02, P03 and P06 approved (P03 on 2026-11-09); P04, P05 and P07 to P10 pending**
+Status: **Partially adopted — P01, P02, P03 and P06 approved (P03 on 2026-11-09); P10 approved on 2026-11-19 for the Gate A / UDG-SPIKE-001 scope only; P04, P05, P07, P08 and P09 pending**
 
-Implementation assignment: **UDG-001** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)) and **UDG-002** (authorised 2026-11-08, see [P02 and P06 adoption](#p02-and-p06-adoption-recorded-2026-11-08); **accepted and Verified 2026-11-09**, see [UDG-002 acceptance](#udg-002-acceptance-recorded-2026-11-09)), and **UDG-003 Phases 0, 1 and 2** (Phase 0 authorised 2026-11-09, see [P03 adoption](#p03-adoption-and-udg-003-phase-0-authorisation-recorded-2026-11-09); Phases 1 and 2 authorised and accepted at phase level, see [Phase 1 acceptance](#udg-003-phase-1-acceptance-recorded-2026-11-14-by-commit-dated-record), [Phase 2 authorisation](#udg-003-phase-2-authorisation-recorded-2026-11-14-by-commit-dated-record) and [Phase 2 acceptance](#udg-003-phase-2-acceptance-recorded-dated-by-commit); **UDG-003 Phase 3 was accepted on 2026-11-18 and the task as a whole is recorded Verified** (see [UDG-003 Phase 3 accepted](#udg-003-phase-3-accepted-and-udg-003-recorded-task-level-verified-2026-11-18-dated-by-commit); the earlier submission is retained at [UDG-003 Phase 3 submitted](#udg-003-phase-3-submitted-for-review-dated-by-commit)), and **UDG-004** (assigned and **Ready** — see [UDG-004 assignment recorded](#udg-004-assignment-recorded-dated-by-commit); **implemented and submitted for review** and then **accepted and Verified on 2026-11-16** at `d318444fe8668f4485d85398ecc6eb88ff5e3b36` with CI run `43893238010` attempt 2 as the passing submission evidence — see [UDG-004 implementation submitted](#udg-004-implementation-submitted-for-review-dated-by-commit) and [UDG-004 acceptance](#udg-004-acceptance-recorded-2026-11-16)). Nothing beyond UDG-003 Phase 3 and UDG-004 is assigned: every task from UDG-005 to UDG-SPIKE-003 stays unassigned.
+Implementation assignment: **UDG-001** (authorised 2026-11-08 by the integration owner; **accepted and Verified 2026-11-08**, see [UDG-001 acceptance](#udg-001-acceptance-recorded-2026-11-08)) and **UDG-002** (authorised 2026-11-08, see [P02 and P06 adoption](#p02-and-p06-adoption-recorded-2026-11-08); **accepted and Verified 2026-11-09**, see [UDG-002 acceptance](#udg-002-acceptance-recorded-2026-11-09)), and **UDG-003 Phases 0, 1 and 2** (Phase 0 authorised 2026-11-09, see [P03 adoption](#p03-adoption-and-udg-003-phase-0-authorisation-recorded-2026-11-09); Phases 1 and 2 authorised and accepted at phase level, see [Phase 1 acceptance](#udg-003-phase-1-acceptance-recorded-2026-11-14-by-commit-dated-record), [Phase 2 authorisation](#udg-003-phase-2-authorisation-recorded-2026-11-14-by-commit-dated-record) and [Phase 2 acceptance](#udg-003-phase-2-acceptance-recorded-dated-by-commit); **UDG-003 Phase 3 was accepted on 2026-11-18 and the task as a whole is recorded Verified** (see [UDG-003 Phase 3 accepted](#udg-003-phase-3-accepted-and-udg-003-recorded-task-level-verified-2026-11-18-dated-by-commit); the earlier submission is retained at [UDG-003 Phase 3 submitted](#udg-003-phase-3-submitted-for-review-dated-by-commit)), and **UDG-004** (assigned and **Ready** — see [UDG-004 assignment recorded](#udg-004-assignment-recorded-dated-by-commit); **implemented and submitted for review** and then **accepted and Verified on 2026-11-16** at `d318444fe8668f4485d85398ecc6eb88ff5e3b36` with CI run `43893238010` attempt 2 as the passing submission evidence — see [UDG-004 implementation submitted](#udg-004-implementation-submitted-for-review-dated-by-commit) and [UDG-004 acceptance](#udg-004-acceptance-recorded-2026-11-16)), and **UDG-SPIKE-001** (assigned and **Ready** on 2026-11-19 with P10 adopted for the Gate A scope — see [P10 adoption and UDG-SPIKE-001 assignment](#p10-adoption-for-gate-a-and-udg-spike-001-assignment-recorded-2026-11-19-dated-by-commit); implementation not started, Gate A **Not Run**). Nothing beyond UDG-003 Phase 3, UDG-004 and UDG-SPIKE-001 is assigned: UDG-005, UDG-006, UDG-SPIKE-002, UDG-007, UDG-008 and UDG-SPIKE-003 stay unassigned.
 
 Integration owner: **Project owner, GitHub account `TomBResearch`** — recorded 2026-11-08 at the owner's instruction as both integration owner and project reviewer. Replace with the owner's preferred display name on request; the identity, not the decision, is what may be restated.
 
@@ -23,7 +23,7 @@ The proposal definitions and deadlines have one owner: [scope and authority](sco
 | P07 | Pending | Unassigned | None |
 | P08 | Pending | Unassigned | None |
 | P09 | Pending | Unassigned | None |
-| P10 | Pending | Unassigned | None |
+| P10 | **Approved — Gate A / UDG-SPIKE-001 scope only** | Codex — delegated reviewer and integration approver, acting for the project owner (`TomBResearch`) under the owner's explicit 2026-11-19 in-chat delegation; signing as delegated, not as `TomBResearch` and not as Pi / 2026-11-19 | [P10 adoption for Gate A and UDG-SPIKE-001 assignment](#p10-adoption-for-gate-a-and-udg-spike-001-assignment-recorded-2026-11-19-dated-by-commit). No ADR: the ruling adopts the proposed numeric, workload and evidence limbs **as written** for Gate A and moves no baseline clause, protocol shape, timestep or collision owner. Gate B/C thresholds and the Gate C input-parity row await their own adoptions at their own spikes. |
 
 ## P01 adoption clarifications recorded 2026-11-08
 
@@ -1202,3 +1202,85 @@ here accepts a task, phase, gate or milestone; a routine green is still not evid
 re-opened, re-judged or re-run (a recorded FAIL stays FAIL, A-P3-7); no evidence requirement, threshold or
 definition-of-done item moves. Gates A, B and C remain **Not Run**, `stackCompatibility` remains
 **not-established**, and every task after UDG-004 stays Not Started.
+
+
+## P10 adoption for Gate A, and UDG-SPIKE-001 assignment recorded (2026-11-19, dated by commit)
+
+**Delegation, stated before the decision.** On 2026-11-19 the project owner (`TomBResearch`) explicitly delegated
+the reviewer, assigner and integration-approval roles for **UDG-SPIKE-001** (including the Gate A decision) to
+**Codex** in chat. Codex records and signs this entry **as delegated reviewer/integration approver acting for the
+owner** — not as Pi, and not as, or impersonating, `TomBResearch`, who remains the integration owner of record.
+The delegation covers UDG-SPIKE-001 assignment, review and Gate A; it reopens nothing else and weakens no rule.
+Pi implements. Main was independently checked at the reviewed commit below, with routine CI success, before this
+record was written.
+
+```text
+Reviewed repository commit            fc63b65edca55a439862b6e674dc2eb63ef80708 ("docs(contracts): the owner
+                                      accepts CI routing at 6d91c61, …") — main tip at review
+Passing routine CI at review          https://github.com/TomBResearch/UntitledDinosaurGame/actions/runs/44415266083
+                                      (workflow "ci (routine)", push, conclusion success)
+Contract edition                      UDG-CONTRACTS-M0-001 v1.0, repository edition 1 (unchanged)
+Manifest at review                    docs/contracts/checksums.json, 66 entries
+                                      file SHA-256 1f1511db4e6d45058351793bfc1d5a2b2ae9442dc4486b38d0f622e7fe73f611
+                                      This adoption commit regenerates the manifest, so the manifest of the
+                                      adoption edition is identified by this commit rather than by a
+                                      self-referential digest (the rule used since the P02 record; M-4).
+Documents adopted by reference        docs/contracts/scope.md 572b6ca2f327…, acceptance-gates.md 8f8fa0250348…,
+                                      measurement.md b92d739ec9a9…, evidence-requirements.md c8248da02a1d…,
+                                      UDG-SPIKE-001.md 8af4e270935d… (task contract at review),
+                                      ADR-0003 4ab67402d63a… — all as reviewed, none edited by this record
+Baseline                              UDG-SPEC-M0-002 v0.2, SHA-256 b51e7afdd6810c377d2d2702d7673119521a59cd0d6b91686700bf9149b73fcf
+Prerequisites (Verified, ancestors)   UDG-003 4f567ae4596b1a5b99e35a3b48d7d9b728c2863d (impl 74aa8da…, CI 44299429735)
+                                      UDG-004 76db480892fa4aa21bd79c1bf7e939b5ddb6315e (impl d318444…, CI 43893238010 attempt 2)
+Approval channel                      Owner instruction of 2026-11-19 under the delegation above, carried as the
+                                      numbered items of assignments/UDG-SPIKE-001.md "Owner instruction this
+                                      record implements"
+Assignment record                     assignments/UDG-SPIKE-001.md (Ready, not started)
+```
+
+**What is adopted — P10, Gate A scope only.** The numeric, workload and evidence limbs of
+[scope.md §1.3](scope.md#13-proposed-refinements-requiring-adoption) as specified by UDG-SPIKE-001: the
+Gate A-applicable rows of [acceptance-gates.md §7.3](../validation/acceptance-gates.md) — flat travel 40 m in 200
+ticks within 0.000001 m; per-tick desired distance ≤ 0.2 m + 0.000001 m with burst adding no steps; **elevated
+unobstructed p95 raw correction below 0.15 m (v0.2's threshold, kept)**; old-epoch accepted frames and duplicate
+movement commits each zero (the stale-route-activation half travels with CF-2/GA-10a/GA-10b and their owners) —
+plus **all of [measurement.md §7.4](../validation/measurement.md)** (seeds 1001/1002/1003; two real browser
+contexts; 20 s warm-up + 120 s measurement; all four profiles with elevated carrying the correction gate; ≥100
+eligible acknowledgements per run or the run fails as insufficient; nearest-rank percentiles; achieved-RTT/jitter
+validity with INVALID-and-rerun, no pass claimed) and **[evidence-requirements.md](../validation/evidence-requirements.md)**
+with the contract's Gate A artefacts, **plus [ADR-0003](../adr/0003-input-acknowledgement-overflow-and-resynchronisation-policy.md)
+GA-1…GA-13** as accepted. Exact convergence 0.000001 m at the forced corrections (ticks 40 and 120) in the pure
+flat replay, and the one-input-step-plus-one-rendered-frame response window, apply as the contract states.
+**Input parity remains a Gate C row; Gate B and Gate C thresholds await their own adoptions.** A missing,
+unverifiable or non-replayable Gate A artefact is FAIL, not "Not Run".
+
+**What is explicitly not moved.** The ADR-0003 envelope parameters (`B = 8`, 250/1000 ms closure, 500 ms snapshot
+deadline, 4000 ms episode deadline, two rejoins per rolling 60 s) stay **provisional test settings — GA-11
+measures and justifies production settings**, and a harness-modelled loss population keeps its
+`tcpLossModelled: false` limitation. **GA-12/PE-1…PE-5 stand as written: no suspected-dedupe close without
+positive evidence, and the run reports its actual verdict; Codex reviews the GA-12 record against ADR-0003 before
+any Gate A decision.** GA-10a/GA-10b stay **outstanding** with UDG-007 named as owner.
+**CF-1, CF-3 and CF-4 must be resolved by actual Gate A evidence or block the gate**; CF-2 stays with UDG-003
+(`M` half) and UDG-007 (`P`′ half). **P06 receives its freeze only at a Gate A pass** (ADR-0001 deferred-freeze
+unchanged). **D4 stays open** — the existing `/workspace/udg-evidence` store is the only destination.
+**ADR-0002 is server-only: no extension, no new compiler policy, no new pin and no package install is adopted by
+this record**; the client compiler diagnostics (DPA-1) and the WS-proxy dependency question (DPA-2) are
+decision points resolved from measurement at build time, and neither blocks a disposable scratch feasibility
+probe. Protocol/precision changes, package installation, new dependencies and private-API use are outside this
+docs stage.
+
+**Assignment.** [assignments/UDG-SPIKE-001.md](assignments/UDG-SPIKE-001.md) records the grant: implementer
+**Pi**; reviewer and integration approver **Codex (delegated)**; implementation baseline
+`fc63b65edca55a439862b6e674dc2eb63ef80708` with routine CI `44415266083` (success); the contract's owned files
+plus controlled grants T-1…T-9 that enable **netcode/spike only**, add a **candidate-bound** Gate A full-matrix
+capture (four parallel profile jobs × seeds 1001→1002→1003, per-job timeout 30 min, `candidate_sha` binding with
+the accepted refusal guards, wall target ≤ 30 min against the ≥28-minute serial floor) **without loading it into
+routine CI**, preserve the five accepted capture plans byte-identically, and keep routine routing fast. The
+first implementation slice is the pinned public SDK browser import/API and paired-client smoke check (§5 of the
+record). This record starts no implementation, names no new pins, and passes nothing.
+
+State after this entry: **UDG-001, UDG-002, UDG-003, UDG-004 Verified**; **UDG-SPIKE-001 Ready, not started**;
+UDG-005, UDG-006, UDG-SPIKE-002, UDG-007, UDG-008, UDG-SPIKE-003 unassigned and Not Started. **Gates A, B and C
+remain Not Run**; `stackCompatibility` remains **not-established**; P04, P05, P07, P08, P09 pending; P06
+unfrozen; CF-1…CF-4 carried; GA-10a/GA-10b outstanding; **D4 open**; Part B unadopted; nothing re-opened,
+re-judged or re-run. Nothing here accepts or verifies any work.
