@@ -16,9 +16,12 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-const recorder = vi.hoisted((): { reconcilerBuilt: number; reconcilerTicks: number } => ({
+const recorder = vi.hoisted((): { reconcilerBuilt: number; reconcilerTicks: number; replay: 'none' | 'single' | 'double' } => ({
   reconcilerBuilt: 0,
   reconcilerTicks: 0,
+  // 'single' replays each pending frame once (the compliant SDK posture); 'double' replays each
+  // twice — an induced fault the replay-identity ledger must catch. 'none' only adopts.
+  replay: 'none' as 'none' | 'single' | 'double',
 }));
 
 // Same interception point as `seat-join-cleanup.test.ts`: the client package's pinned SDK entry.
@@ -26,13 +29,13 @@ vi.mock('../../../apps/client/node_modules/@colyseus/sdk/build/index.mjs', () =>
   class FakeReconciler {
     readonly state: { x: number; z: number };
     reconcileSeq = 0;
-    private readonly input_: { lastProcessed: number };
+    private readonly input_: { lastProcessed: number; _staged?: Map<number, { moveX: number; moveZ: number }>; _dt?: number };
     private lastAck = 0;
 
     constructor(instance: { x: number; z: number }, opts: { input: { lastProcessed: number; stepSeconds?: number } }) {
       recorder.reconcilerBuilt += 1;
       this.state = instance;
-      this.input_ = opts.input as { lastProcessed: number };
+      this.input_ = opts.input as { lastProcessed: number; _staged?: Map<number, { moveX: number; moveZ: number }>; _dt?: number };
       if (opts.input.stepSeconds === undefined) throw new Error('fake reconciler requires an advertised dt');
     }
 
@@ -41,6 +44,20 @@ vi.mock('../../../apps/client/node_modules/@colyseus/sdk/build/index.mjs', () =>
       if (this.input_.lastProcessed !== this.lastAck) {
         this.lastAck = this.input_.lastProcessed;
         this.reconcileSeq += 1;
+        // Adopt (the row values were already copied into the shared instance by the patch), then
+        // replay the PENDING frames — once, or twice when the fault is induced.
+        const staged = this.input_._staged;
+        const dt = this.input_._dt ?? 0.05;
+        if (staged !== undefined && recorder.replay !== 'none') {
+          const times = recorder.replay === 'double' ? 2 : 1;
+          for (const [seq, frame] of [...staged.entries()].sort((a, b) => a[0] - b[0])) {
+            if (seq <= this.lastAck) continue;
+            for (let step = 0; step < times; step += 1) {
+              this.state.x += frame.moveX * 4 * dt;
+              this.state.z += frame.moveZ * 4 * dt;
+            }
+          }
+        }
       }
     }
 
@@ -150,6 +167,10 @@ function createFakeTransport(epoch: number) {
       return sentCount;
     },
     lastProcessed: 0,
+    // Pending-frame view for the recorder-mode FakeReconciler: exactly what a real SDK handle
+    // keeps staged for replay, exposed so the fake can replay it faithfully.
+    _staged: buffer,
+    _dt: 0.05,
     tickRate: 20 as number | undefined,
     stepMs: 50 as number | undefined,
     patchRate: 100 as number | undefined,
@@ -400,7 +421,10 @@ describe('UDG-SPIKE-001 — ADR-0003 §3.2 recovery: stop, discard, hold, bounde
     expect(predictor.heldSnapshot()).toEqual({ x: 0, z: 1.5 });
 
     const events = predictor.recoveryLedger().map((entry) => entry.event);
-    expect(events.slice(0, 4)).toEqual(['trigger', 'stop-sending', 'discard-pending', 'rejoin-scheduled']);
+    const wanted = ['trigger', 'stop-sending', 'discard-pending', 'rejoin-scheduled'] as const;
+    const firstOf = wanted.map((event) => events.indexOf(event));
+    expect(firstOf.every((index) => index >= 0), 'every §3.2 step is recorded').toBe(true);
+    expect(firstOf, 'and in order').toEqual([...firstOf].sort((a, b) => a - b));
 
     // The ladder: the first attempt waits 250 ms of the injected clock, and actual rejoins are
     // what the rolling allowance counts.
@@ -477,6 +501,349 @@ describe('UDG-SPIKE-001 — ADR-0003 §3.2 recovery: stop, discard, hold, bounde
     expect(predictor.stateName()).toBe('recovering');
     const trigger = predictor.recoveryLedger().find((entry) => entry.event === 'trigger');
     expect(trigger?.detail).toMatch(/gap-named/);
+  });
+});
+
+// ────────────────────────────── domain quarantine: late old-room deliveries cannot end recovery
+
+describe('UDG-SPIKE-001 — recovery quarantines the old domain (review P1)', () => {
+  const buildRecoverable = () => {
+    const clock = createFakeClock();
+    const fake = createFakeTransport(7);
+    const next = createFakeTransport(8);
+    const rejoin = vi.fn(async () => toTransport(next));
+    const predictor = new DirectMotionPredictor(toTransport(fake), {
+      speed: 4,
+      clock: toClock(clock),
+      rejoin,
+      snapshotDeadlineMs: 500,
+      recoveryDeadlineMs: 4000,
+      rejoinWindowMs: 60_000,
+      maxRejoinsPerWindow: 2,
+      rejoinBackoffMs: [250, 500, 1000],
+    });
+    predictor.attach();
+    fake.patch({ lastAuthorityTick: 1, z: 1.5 });
+    return { clock, fake, next, predictor, rejoin };
+  };
+
+  it('a late VALID delivery from the quarantined domain holds instead of completing recovery', async () => {
+    const { clock, fake, next, predictor } = buildRecoverable();
+    predictor.send({ generation: 1, moveX: 0, moveZ: 1 }, true);
+    fake.patch({ lastAuthorityTick: 2, inputRetiredUnrepresented: 1 });
+    expect(predictor.stateName()).toBe('recovering');
+    const deliveriesBefore = predictor.deliveryLedger().length;
+
+    // A late, entirely VALID old-domain delivery arrives anyway (clean disposition, matched ack).
+    fake.patch({ lastAuthorityTick: 3, z: 1.7, inputResolvedThrough: 1, ackTo: 1, inputRetiredUnrepresented: 0 });
+
+    // THE defect this test pins (red-before): the old code let this delivery complete recovery.
+    expect(predictor.stateName(), 'recovery completes only through the replacement domain').toBe('recovering');
+    // The old transport is unsubscribed AND closed at the trigger — its handle is isolated.
+    expect(fake.closed(), 'the quarantined transport is closed at the trigger').toBe(true);
+    expect(() => predictor.send({ generation: 2, moveX: 0, moveZ: 1 }, true)).toThrow(/recovery/);
+    expect(predictor.heldSnapshot(), 'the held pose is the pre-trigger truth, not the late row').toEqual({ x: 0, z: 1.5 });
+    expect(predictor.deliveryLedger().length, 'the quarantined delivery is never even evaluated').toBe(deliveriesBefore);
+    expect(predictor.recoveryLedger().filter((entry) => entry.event === 'snapshot-recovered').length).toBe(0);
+
+    // The ladder was never cancelled: the first bounded attempt still runs, and the NEW epoch
+    // — and only it — completes the recovery.
+    clock.advance(250);
+    await flush();
+    expect(predictor.rejoinTimestamps().length).toBe(1);
+    next.patch({ lastAuthorityTick: 1, z: 1.5 });
+    expect(predictor.stateName()).toBe('tracking');
+    expect(predictor.recoveryLedger().at(-1)?.event).toBe('snapshot-recovered');
+  });
+
+  it('a rejoin that resolves after the seat closed is refused and its transport discarded', async () => {
+    const clock = createFakeClock();
+    const fake = createFakeTransport(7);
+    const next = createFakeTransport(8);
+    let release: (value: TransportArg) => void = () => undefined;
+    const predictor = new DirectMotionPredictor(toTransport(fake), {
+      speed: 4,
+      clock: toClock(clock),
+      rejoin: () => new Promise<TransportArg>((resolve) => {
+        release = resolve;
+      }),
+    });
+    predictor.attach();
+    fake.patch({ lastAuthorityTick: 1, z: 1.5 });
+    fake.patch({ lastAuthorityTick: 2, inputRetiredUnrepresented: 1 });
+    clock.advance(250);
+    await flush();
+    expect(predictor.rejoinTimestamps().length, 'the attempt is in flight').toBe(1);
+
+    await predictor.close(); // the seat closes while the join promise is still settling
+    release(toTransport(next));
+    await flush();
+    await flush();
+
+    expect(next.closed(), 'the abandoned rejoin installed nothing; its transport was closed').toBe(true);
+    expect(predictor.stateName()).toBe('closed');
+    const events = predictor.recoveryLedger();
+    expect(events.some((entry) => entry.event === 'rejoin-complete'), 'no install happened').toBe(false);
+    expect(events.some((entry) => entry.detail.includes('abandoned rejoin result'))).toBe(true);
+  });
+
+  it('an episode deadline crossing while an attempt is in flight suspends and refuses a late success', async () => {
+    const clock = createFakeClock();
+    const fake = createFakeTransport(7);
+    const next = createFakeTransport(8);
+    let release: (value: TransportArg) => void = () => undefined;
+    const predictor = new DirectMotionPredictor(toTransport(fake), {
+      speed: 4,
+      clock: toClock(clock),
+      recoveryDeadlineMs: 1000,
+      rejoin: () => new Promise<TransportArg>((resolve) => {
+        release = resolve;
+      }),
+    });
+    predictor.attach();
+    fake.patch({ lastAuthorityTick: 1, z: 1.5 });
+    fake.patch({ lastAuthorityTick: 2, inputRetiredUnrepresented: 1 });
+    clock.advance(250);
+    await flush();
+    clock.advance(1000); // the episode elapsed while the attempt was in flight
+    release(toTransport(next));
+    await flush();
+    await flush();
+
+    expect(next.closed(), 'a success after the episode is abandoned, transport closed').toBe(true);
+    expect(predictor.stateName()).toBe('suspended');
+    const events = predictor.recoveryLedger();
+    expect(events.some((entry) => entry.event === 'episode-expired')).toBe(true);
+    expect(events.some((entry) => entry.event === 'rejoin-complete'), 'the late success was not installed').toBe(false);
+  });
+
+  it('an ordinary rejoin error takes the next ladder step; only budget or episode exhaustion suspends', async () => {
+    const clock = createFakeClock();
+    const fake = createFakeTransport(7);
+    const second = createFakeTransport(9);
+    let calls = 0;
+    const predictor = new DirectMotionPredictor(toTransport(fake), {
+      speed: 4,
+      clock: toClock(clock),
+      rejoin: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('join refused: seat is closing');
+        return toTransport(second);
+      },
+    });
+    predictor.attach();
+    fake.patch({ lastAuthorityTick: 1, z: 1.5 });
+    fake.patch({ lastAuthorityTick: 2, inputRetiredUnrepresented: 1 });
+    clock.advance(250);
+    await flush();
+    const afterFailure = predictor.recoveryLedger().map((entry) => entry.event);
+    expect(afterFailure, 'one failed route does NOT suspend: ADR retry semantics').not.toContain('suspended');
+    expect(predictor.recoveryLedger().some((entry) => entry.detail.includes('rejoin route failed'))).toBe(true);
+    expect(predictor.stateName()).toBe('recovering');
+
+    clock.advance(500); // the ladder's next bounded step
+    await flush();
+    expect(predictor.rejoinTimestamps().length).toBe(2);
+    second.patch({ lastAuthorityTick: 1, z: 1.5 });
+    expect(predictor.stateName()).toBe('tracking');
+  });
+
+  it('the same failure with no rolling-window allowance left suspends instead', async () => {
+    const clock = createFakeClock();
+    const fake = createFakeTransport(7);
+    const predictor = new DirectMotionPredictor(toTransport(fake), {
+      speed: 4,
+      clock: toClock(clock),
+      maxRejoinsPerWindow: 1,
+      rejoin: async () => {
+        throw new Error('join refused: seat is closing');
+      },
+    });
+    predictor.attach();
+    fake.patch({ lastAuthorityTick: 1, z: 1.5 });
+    fake.patch({ lastAuthorityTick: 2, inputRetiredUnrepresented: 1 });
+    clock.advance(250);
+    await flush();
+    expect(predictor.stateName(), 'the counted failure exhausted the allowance').toBe('suspended');
+    expect(predictor.recoveryLedger().some((entry) => entry.event === 'suspended' && entry.detail.includes('rolling-window'))).toBe(true);
+    expect(predictor.heldSnapshot()).toEqual({ x: 0, z: 1.5 });
+  });
+});
+
+// ─────────────────────────────── checkpoint instrumenter: matched-ack corrections
+
+describe('UDG-SPIKE-001 — the checkpoint instrumenter measures every matched ack exactly once', () => {
+  const speed = 4;
+  const dt = 0.05;
+  const stepMetres = speed * dt;
+
+  const buildMeasured = () => {
+    const clock = createFakeClock();
+    const fake = createFakeTransport(7);
+    const predictor = new DirectMotionPredictor(toTransport(fake), { speed, clock: toClock(clock) });
+    predictor.attach();
+    fake.patch({ lastAuthorityTick: 1 }); // first snapshot: truth (0,0), ack 0 — no range yet
+    return { clock, fake, predictor };
+  };
+
+  type PredictorInstance = InstanceType<typeof DirectMotionPredictor>;
+  const measured = (predictor: PredictorInstance) => predictor.matchedCorrections().filter((row) => row.status === 'measured');
+
+  it('a straight consumed run measures ZERO correction while the legacy pending×step approximation is nonzero', () => {
+    const { fake, predictor } = buildMeasured();
+    predictor.send({ generation: 1, moveX: 0, moveZ: 1 }, true);
+    fake.patch({ lastAuthorityTick: 2, z: stepMetres, inputResolvedThrough: 1, ackTo: 1 });
+    const rows = measured(predictor);
+    expect(rows.length).toBe(1);
+    const row = rows[0] as (typeof rows)[number];
+    expect(Math.abs(row.correctionX)).toBeLessThan(1e-12);
+    expect(Math.abs(row.correctionZ)).toBeLessThan(1e-12);
+    expect(row.seqs).toEqual([1]);
+    expect(row.ackFrom).toBe(0);
+    expect(row.ackTo).toBe(1);
+    // The rejected approximation, shown disagreeing with the real metric on a fully consumed run.
+    expect(row.legacyPendingApproximationMetres).toBeCloseTo(stepMetres, 12);
+  });
+
+  it('a refusal is detected as EXACTLY the refused frame step vector', () => {
+    const { fake, predictor } = buildMeasured();
+    for (let generation = 1; generation <= 3; generation += 1) {
+      predictor.send({ generation, moveX: 0, moveZ: 1 }, true);
+    }
+    // Authority resolved all three but MOVED only twice — seq 3 was refused (consumed, no motion).
+    fake.patch({ lastAuthorityTick: 2, z: 2 * stepMetres, inputResolvedThrough: 3, ackTo: 3 });
+    const rows = measured(predictor);
+    expect(rows.length).toBe(1);
+    const row = rows[0] as (typeof rows)[number];
+    expect(row.correctionZ, 'correction equals the refused step, not an approximation of it').toBeCloseTo(stepMetres, 12);
+    expect(row.correctionX).toBeCloseTo(0, 12);
+    expect(predictor.matchedInstrumentStats().zero, 'a real correction is never counted as zero').toBe(0);
+  });
+
+  it('turns, diagonals and neutral inputs stay EXACTLY zero — where pending×step would flag them', () => {
+    const { fake, predictor } = buildMeasured();
+    const drives = [
+      { moveX: 1, moveZ: 0 },
+      { moveX: 1, moveZ: 0 },
+      { moveX: Math.SQRT1_2, moveZ: Math.SQRT1_2 },
+      { moveX: 0, moveZ: 0 },
+    ];
+    let x = 0;
+    let z = 0;
+    drives.forEach((drive, index) => {
+      predictor.send({ generation: index + 1, moveX: drive.moveX, moveZ: drive.moveZ }, drive.moveX !== 0 || drive.moveZ !== 0);
+      const next = flatDirectStep({ x, z }, drive, dt, speed);
+      x = next.x;
+      z = next.z;
+    });
+    fake.patch({ lastAuthorityTick: 2, x, z, inputResolvedThrough: 4, ackTo: 4 });
+    const rows = measured(predictor);
+    expect(rows.length).toBe(1);
+    const row = rows[0] as (typeof rows)[number];
+    expect(Math.abs(row.correctionX), 'mixed non-collinear pending inputs measure exactly zero').toBeLessThan(1e-12);
+    expect(Math.abs(row.correctionZ)).toBeLessThan(1e-12);
+    expect(row.legacyPendingApproximationMetres, 'the old metric would have reported 4 steps of correction here').toBeCloseTo(4 * stepMetres, 12);
+    expect(predictor.matchedInstrumentStats().zero).toBe(1);
+  });
+
+  it('non-advancing matched deliveries (the SDK early-out) are counted as nothing, never as zero corrections', () => {
+    const { fake, predictor } = buildMeasured();
+    predictor.send({ generation: 1, moveX: 0, moveZ: 1 }, true);
+    fake.patch({ lastAuthorityTick: 2, z: stepMetres, inputResolvedThrough: 1, ackTo: 1 });
+    const before = measured(predictor).length;
+    // Further verified deliveries that advance neither ack nor resolution.
+    fake.patch({ lastAuthorityTick: 3 });
+    fake.patch({ lastAuthorityTick: 4 });
+    expect(measured(predictor).length, 'no ack boundary, no checkpoint').toBe(before);
+    expect(predictor.matchedInstrumentStats().nonAdvancingDeliveries).toBe(2);
+  });
+
+  it('a checkpoint whose frames are not all observable is invalidated — and the anchor is held, never zeroed', () => {
+    const { fake, predictor } = buildMeasured();
+    predictor.send({ generation: 1, moveX: 0, moveZ: 1 }, true);
+    predictor.send({ generation: 2, moveX: 0, moveZ: 1 }, true);
+    predictor.send({ generation: 3, moveX: 0, moveZ: 1 }, true);
+    // Ack/resolution jump to 5, but the journal only ever held 1..3: the range is unmeasurable.
+    fake.patch({ lastAuthorityTick: 2, z: 5 * stepMetres, inputResolvedThrough: 5, ackTo: 5 });
+    const rows = predictor.matchedCorrections();
+    expect(rows.at(-1)?.status).toBe('invalidated-missing-frames');
+    expect(measured(predictor).length, 'an unavailable checkpoint is never recorded as zero').toBe(0);
+    expect(predictor.matchedInstrumentStats().invalidated).toBe(1);
+    // The anchor is HELD (still at 0) and measurement stays disabled until a domain resync
+    // re-anchors it: pruning by the resolved watermark has removed the evidence, and an
+    // incomplete range is NEVER reported as a zero correction.
+    predictor.send({ generation: 4, moveX: 0, moveZ: 1 }, true);
+    predictor.send({ generation: 5, moveX: 0, moveZ: 1 }, true);
+    fake.patch({ lastAuthorityTick: 3, z: 5 * stepMetres, inputResolvedThrough: 5, ackTo: 5 });
+    expect(measured(predictor).length, 'a range with unobservable frames is never measured as zero').toBe(0);
+    expect(predictor.matchedInstrumentStats().invalidated, 'every attempt against the incomplete range is recorded').toBeGreaterThanOrEqual(2);
+  });
+
+  it('batched deliveries measure each ack range exactly once: monotone cursor, disjoint seq coverage', () => {
+    const { fake, predictor } = buildMeasured();
+    for (let generation = 1; generation <= 5; generation += 1) {
+      predictor.send({ generation, moveX: 0, moveZ: 1 }, true);
+    }
+    fake.patch({ lastAuthorityTick: 2, z: 2 * stepMetres, inputResolvedThrough: 2, ackTo: 2 });
+    for (let generation = 6; generation <= 7; generation += 1) {
+      predictor.send({ generation, moveX: 0, moveZ: 1 }, true);
+    }
+    fake.patch({ lastAuthorityTick: 3, z: 4 * stepMetres, inputResolvedThrough: 4, ackTo: 4 });
+    fake.patch({ lastAuthorityTick: 4, z: 7 * stepMetres, inputResolvedThrough: 7, ackTo: 7 });
+    const rows = measured(predictor);
+    expect(rows.length, 'three ack boundaries').toBe(3);
+    const seen = new Set<number>();
+    let cursor = 0;
+    for (const row of rows) {
+      expect(row.ackFrom, 'the cursor advances with each measured boundary').toBe(cursor);
+      cursor = row.ackTo;
+      for (const seq of row.seqs) {
+        expect(seen.has(seq), `seq ${String(seq)} measured once`).toBe(false);
+        seen.add(seq);
+      }
+    }
+    expect([...seen].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+});
+
+// ────────────────────────────────────────── replay-identity ledger
+
+describe('UDG-SPIKE-001 — the replay-identity ledger catches double steps and confirms exact-once replay', () => {
+  const buildIdentity = () => {
+    const clock = createFakeClock();
+    const fake = createFakeTransport(7);
+    const predictor = new DirectMotionPredictor(toTransport(fake), { speed: 4, clock: toClock(clock) });
+    predictor.attach();
+    fake.patch({ lastAuthorityTick: 1 });
+    return { clock, fake, predictor };
+  };
+
+  it('compliant replay leaves NO residual in non-empty windows; an induced double replay leaves exactly the extra steps', () => {
+    recorder.replay = 'single';
+    try {
+      const { fake, predictor } = buildIdentity();
+      for (let generation = 1; generation <= 4; generation += 1) {
+        predictor.send({ generation, moveX: 0, moveZ: 1 }, true);
+      }
+      fake.patch({ lastAuthorityTick: 2, z: 2 * 0.2, inputResolvedThrough: 2, ackTo: 2 });
+      predictor.tick(1100);
+      const clean = predictor.replayIdentityLedger();
+      expect(clean.length).toBe(1);
+      const row = clean[0] as (typeof clean)[number];
+      expect(row.pendingSeqs, 'the window is non-empty — the ledger row is over real pending work').toEqual([3, 4]);
+      expect(row.maxAbsResidualMetres, 'adopted ⊕ Σ step(pending) equals the raw pose exactly once each').toBeLessThan(1e-12);
+
+      recorder.replay = 'double';
+      predictor.send({ generation: 5, moveX: 0, moveZ: 1 }, true);
+      predictor.send({ generation: 6, moveX: 0, moveZ: 1 }, true);
+      fake.patch({ lastAuthorityTick: 3, z: 4 * 0.2, inputResolvedThrough: 4, ackTo: 4 });
+      predictor.tick(1200);
+      const faulted = predictor.replayIdentityLedger().at(-1) as (typeof clean)[number];
+      expect(faulted.pendingSeqs).toEqual([5, 6]);
+      expect(faulted.maxAbsResidualMetres, 'a double replay leaves exactly two steps of residual').toBeCloseTo(2 * 0.2, 12);
+    } finally {
+      recorder.replay = 'none';
+    }
   });
 });
 

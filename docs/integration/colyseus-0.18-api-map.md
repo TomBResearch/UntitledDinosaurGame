@@ -647,5 +647,31 @@ presentation reader ran ahead of sends in the first tick loops; it is a smoothin
 `value()` reads, not an error, and the seat now reads presentation after its tick in all measured paths.
 
 
+### 13.1 Review-round additions (2026-11-19): what the prediction layer names now
+
+Names used by the revised slice, each with its public-SDK basis; names deliberately NOT used are listed after.
+
+| Prediction-layer name | What it is | Public basis or reason |
+| --- | --- | --- |
+| `DirectMotionPredictor.matchedCorrections()` | the per-matched-ack correction ledger (checkpoint instrumenter): for every guard-verified delivery whose ack advanced, predicted-at-ack minus authoritative, per axis, measured exactly once via a monotone cursor | reconstruction replays journal frames through `flatDirectStep` — the SAME module export the reconciler's `step` closure uses (one function on both sides; the parity test against `FlatReferenceStepper` is retained as a separate diagnostic, not the metric) |
+| `DirectMotionPredictor.replayIdentityLedger()` | per reconcile: adopted ⊕ Σ step(pending) − raw | zero residual is the ledger for "each valid remaining seq stepped exactly once"; an induced double replay leaves exactly the extra steps (unit-proven negative control) |
+| `DirectMotionPredictor.endPoseDiagnostics()` | the renamed former `correctionLedger` | kept, honestly labelled: the end-of-tick pre-smoothing difference INCLUDES the pending window and is not a per-ack correction; the browser run reports where it disagrees with the real metric |
+| unavailable checkpoints | recorded `invalidated-missing-frames`; the anchor is held | an unmeasurable boundary is never counted as a zero correction; measurement resumes only after a domain resync re-anchors |
+| domain quarantine at recovery entry | unsubscribe + `transport.close()` at the trigger, quarantined epoch remembered; accepting branch refuses the quarantined epoch; rejoin results install only under live `recovering` state and an unelapsed episode, else the joined transport is closed and discarded | the SDK `Reconciler` exposes NO supported disposer for its internal `onSend` subscription (verified against the pinned sources); isolation is therefore consented leave plus dropping every subscription the predictor itself holds (`subscribe`, `onSend`) — both public unsubscribers |
+| rejoin-error semantics | an ordinary route failure spends the rolling allowance through the ladder; suspension only on budget or episode exhaustion | ADR-0003 §3.2 retry posture; a late success after close/episode/suspend is refused and its transport discarded (unit-pinned) |
+| the tick gate (test-only seam) | `tests/e2e/netcode.spec.ts` wraps the LIVE room instance's public `tick()` in the harness process and pumps authority steps one at a time, staging one input per step | the disposition tick is then read from the room's own public `tickRecords` consumption ledger: the refused frames are consumed at EXACTLY the labelled ticks 40 and 120 by construction; no server file is edited; the wrapper is removed at the end of the section |
+| label convention | `evidence().ticks` counts COMPLETED steps; `tickRecords[].tick` and replica `lastAuthorityTick` label a step by the counter BEFORE it | the seam asserts the room's own record labels; both counters are recorded in evidence |
+
+Browser facts newly measured (same suite): recovery that resumes through a REAL bounded-retry rejoin and
+fresh snapshot (the old domain never completes recovery — the late-valid-old-patch defect is unit-pinned
+red-before/fixed-after); a genuine overflow/retirement trigger — an over-rate in-envelope stream makes the
+SERVER ledger retire unrepresented inputs, and that row-named disposition, not a deadline, runs the §3.2
+ladder to a fresh-snapshot resume; on this server build the rejoin lands on the seat the §3.3 bounded
+closure has already claimed, so post-resume motion may be ended by the server's own closure — recorded
+honestly as a server-design observation for the owners, with the client ledger correct in every branch.
+The named-gap trigger remains unobservable on loopback (the server names no range there) and stays
+unit-pinned only.
+
+
 [docs]: https://docs.colyseus.io/ 'Colyseus documentation (versionless URL; the pinned package is the authority)'
 [pinned]: https://www.npmjs.com/package/@colyseus/core/v/0.18.27 'pinned package page'

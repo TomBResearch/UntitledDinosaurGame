@@ -428,24 +428,88 @@ export interface PredictorTickRecord {
   readonly predictedBeforeZ: number;
   readonly predictedAfterZ: number;
   readonly verifiedRowZ: number;
-  readonly correctionZ: number | null;
+  /** End-pose delta at the last reconcile (diagnostic; see EndPoseDeltaRecord). */
+  readonly endPoseDeltaZ: number | null;
   readonly pendingSeqs: readonly number[];
 }
 
 /** One accepted delivery paired with the reconcile that adopted it (zero corrections included). */
-export interface RawCorrectionRecord {
+/**
+ * END-POSE DIAGNOSTIC (renamed on review; the name `rawCorrection` overstated it): the difference
+ * between the end-of-tick pre-smoothing pose and the adopted row at the last reconcile boundary.
+ * It includes the un-acked pending window by construction and is an end-pose-drift diagnostic, NOT
+ * a per-ack correction. The per-matched-ack correction is `MatchedAckCorrectionRecord`.
+ */
+export interface EndPoseDeltaRecord {
   readonly revision: number;
   readonly authorityTick: number;
   readonly epoch: SessionEpoch;
   readonly ack: number;
   readonly resolvedThrough: number;
   readonly atMs: number;
+  readonly predictedBeforeX: number;
   readonly predictedBeforeZ: number;
+  readonly predictedAfterX: number;
   readonly predictedAfterZ: number;
+  readonly authoritativeX: number;
   readonly authoritativeZ: number;
-  readonly rawCorrectionZ: number;
+  /** End-pose delta (predicted-before − adopted); includes the pending window. Diagnostic. */
+  readonly endPoseDeltaX: number;
+  readonly endPoseDeltaZ: number;
   readonly pendingCount: number;
   readonly zero: boolean;
+}
+
+/**
+ * One matched-ack boundary from the checkpoint instrumenter.
+ *
+ * For every guard-verified matched delivery whose ack advanced beyond the previous checkpoint, the
+ * instrumenter reconstructs the predicted-at-ack pose by replaying the journal frames inside
+ * (previousAck, ack] through the SHARED reference step function — the very same `flatDirectStep`
+ * module export the SDK reconciler is constructed with, not a duplicate formula — starting from the
+ * previously adopted authoritative anchor, then measures `predictedAtAck − authoritative` per axis.
+ * This is the real correction for that matched ack: zero exactly when authority consumed every
+ * frame the client stepped, and one refused frame's step vector when it did not — exact for turns,
+ * diagonals and neutral inputs, which the rejected `pendingCount × step` approximation cannot
+ * express. Each matched ack is measured exactly once (the anchor cursor is monotonic); unavailable
+ * checkpoints are held/invalidated and never counted as zero.
+ */
+export interface MatchedAckCorrectionRecord {
+  readonly atMs: number;
+  readonly authorityTick: number;
+  readonly epoch: SessionEpoch;
+  readonly ackFrom: number;
+  readonly ackTo: number;
+  /** Journal sequence numbers inside the covered range (sorted). */
+  readonly seqs: readonly number[];
+  readonly status: 'anchored' | 'measured' | 'invalidated-missing-frames';
+  readonly predictedAtAckX: number;
+  readonly predictedAtAckZ: number;
+  readonly authoritativeX: number;
+  readonly authoritativeZ: number;
+  /** Correction (predicted − authoritative); meaningful only when `status === 'measured'`. */
+  readonly correctionX: number;
+  readonly correctionZ: number;
+  readonly magnitude: number;
+  /** The rejected approximation, kept ONLY so the negative control can show it disagreeing. */
+  readonly legacyPendingApproximationMetres: number;
+}
+
+/**
+ * Replay-identity ledger. After every reconcile with an adopted delivery: does the raw pose equal
+ * `adopted ⊕ Σ step(pending journal frames)` under the shared reference step? A pending frame
+ * replayed twice leaves one step of residual; one skipped leaves the negative of a step — so a
+ * residual inside 1e-6 m is the identity ledger for “each valid remaining seq replayed exactly
+ * once in this window”.
+ */
+export interface ReplayIdentityRecord {
+  readonly reconcileSeq: number;
+  readonly atMs: number;
+  readonly ack: number;
+  readonly pendingSeqs: readonly number[];
+  readonly residualX: number;
+  readonly residualZ: number;
+  readonly maxAbsResidualMetres: number;
 }
 
 /** The recovery ledger: every trigger, stop, discard, rejoin attempt and suspension, in order. */
@@ -507,13 +571,31 @@ export class DirectMotionPredictor {
   private readonly pending = new Map<number, PendingInput>();
   private readonly deliveriesLog: { readonly delivery: VerifiedDelivery; readonly accepted: boolean; readonly reason: GuardReason }[] = [];
   private readonly ticks: PredictorTickRecord[] = [];
-  private readonly corrections: RawCorrectionRecord[] = [];
+  private readonly corrections: EndPoseDeltaRecord[] = [];
+  private readonly matchedRecords: MatchedAckCorrectionRecord[] = [];
+  private readonly replayIdentity: ReplayIdentityRecord[] = [];
   private readonly recovery: RecoveryRecord[] = [];
   private readonly sentFrames: { readonly seq: number; readonly epoch: SessionEpoch; readonly atMs: number }[] = [];
 
   private state: PredictorState = 'dormant';
   private sendingStopped = false;
   private snapshotReady = false;
+  /**
+   * Domain quarantine (review P1): the epoch of the transport currently attached, the epoch whose
+   * room was quarantined at recovery entry, and the quarantine flag itself. While recovering, the
+   * old transport is UNSUBSCRIBED and CLOSED at the trigger, and the accepting branch additionally
+   * refuses to complete recovery from any delivery carrying the quarantined epoch: recovery ends
+   * only through an explicit successful transport replacement whose fresh snapshot arrives.
+   */
+  private domainEpoch: SessionEpoch | null = null;
+  private recoveryEpoch: SessionEpoch | null = null;
+  private quarantined = false;
+  /** Checkpoint instrumenter anchor: last adopted truth at a measured ack boundary. */
+  private anchor: { readonly epoch: SessionEpoch; readonly ack: number; readonly x: number; readonly z: number } | null = null;
+  private matchedInstrumentCounters = { measured: 0, zero: 0, anchored: 0, invalidated: 0, nonAdvancingDeliveries: 0 };
+  private reconcileSeqCounter = 0;
+  /** Advertised fixed step in seconds, captured when the reconciler was armed (instrumenter dt). */
+  private advertisedStepSeconds: number | null = null;
   private deadlineHandle: TimerToken | null = null;
   private recoveryStartedAt: number | null = null;
   private episodeExpired = false;
@@ -548,6 +630,7 @@ export class DirectMotionPredictor {
   /** Start observing the transport. Idempotent. */
   attach(): void {
     if (this.unsubscribe !== null) return;
+    this.domainEpoch = this.transport.issuedEpoch();
     const handlePatch = (): void => this.evaluatePatch();
     this.unsubscribe = this.transport.subscribe(handlePatch);
     this.onSendUnsub = this.transport.handle().onSend((seq) => this.observeSend(seq));
@@ -582,7 +665,7 @@ export class DirectMotionPredictor {
         predictedBeforeZ: this.reconciler?.state.z ?? Number.NaN,
         predictedAfterZ: this.reconciler?.state.z ?? Number.NaN,
         verifiedRowZ: this.lastAccepted?.z ?? Number.NaN,
-        correctionZ: null,
+        endPoseDeltaZ: null,
         pendingSeqs: [...this.pending.keys()],
       });
       return;
@@ -600,7 +683,7 @@ export class DirectMotionPredictor {
           predictedBeforeZ: Number.NaN,
           predictedAfterZ: Number.NaN,
           verifiedRowZ: outcome.delivery?.z ?? Number.NaN,
-          correctionZ: null,
+          endPoseDeltaZ: null,
           pendingSeqs: [...this.pending.keys()],
         });
         return;
@@ -610,13 +693,17 @@ export class DirectMotionPredictor {
     if (reconciler === null) return;
     const verified = outcome.delivery;
     if (verified === null) return;
+    const beforeX = reconciler.state.x;
     const beforeZ = reconciler.state.z;
     const seqBefore = reconciler.reconcileSeq;
     reconciler.tick(now);
     const delta = reconciler.reconcileSeq - seqBefore;
     if (delta > 0) {
+      this.reconcileSeqCounter += 1;
+      const afterX = reconciler.state.x;
       const afterZ = reconciler.state.z;
-      const rawCorrection = beforeZ - verified.z;
+      const deltaX = beforeX - verified.x;
+      const deltaZ = beforeZ - verified.z;
       this.push(this.corrections, {
         revision: verified.revision,
         authorityTick: verified.authorityTick,
@@ -624,15 +711,38 @@ export class DirectMotionPredictor {
         ack: verified.ack,
         resolvedThrough: verified.resolvedThrough,
         atMs: now,
+        predictedBeforeX: beforeX,
         predictedBeforeZ: beforeZ,
+        predictedAfterX: afterX,
         predictedAfterZ: afterZ,
+        authoritativeX: verified.x,
         authoritativeZ: verified.z,
-        rawCorrectionZ: rawCorrection,
+        endPoseDeltaX: deltaX,
+        endPoseDeltaZ: deltaZ,
         pendingCount: this.pendingCountAt(verified),
         // A 200-step float64 accumulate carries ~1e-14 of drift, so "zero" means "inside float
         // drift", not "bitwise" — an order of magnitude below the 1e-6 m criterion it feeds.
-        zero: Math.abs(rawCorrection) < 1e-9,
+        zero: Math.abs(deltaX) < 1e-9 && Math.abs(deltaZ) < 1e-9,
       });
+      // Replay-identity ledger: raw-after must equal adopted ⊕ Σ step(pending) under the SHARED
+      // reference step function. A double replay or a skipped replay leaves a step of residual.
+      const dt = this.instrumentDt();
+      if (dt !== null) {
+        const pendingFrames = this.journalFrames(0, Number.MAX_SAFE_INTEGER);
+        let expected = { x: verified.x, z: verified.z };
+        for (const frame of pendingFrames) {
+          expected = flatDirectStep(expected, { moveX: frame.frame.moveX, moveZ: frame.frame.moveZ }, dt, this.options.speed);
+        }
+        this.push(this.replayIdentity, {
+          reconcileSeq: this.reconcileSeqCounter,
+          atMs: now,
+          ack: verified.ack,
+          pendingSeqs: pendingFrames.map((frame) => frame.seq),
+          residualX: afterX - expected.x,
+          residualZ: afterZ - expected.z,
+          maxAbsResidualMetres: Math.max(Math.abs(afterX - expected.x), Math.abs(afterZ - expected.z)),
+        });
+      }
     }
     this.push(this.ticks, {
       atMs: now,
@@ -643,9 +753,119 @@ export class DirectMotionPredictor {
       predictedBeforeZ: beforeZ,
       predictedAfterZ: reconciler.state.z,
       verifiedRowZ: verified.z,
-      correctionZ: this.corrections.length > 0 ? (this.corrections[this.corrections.length - 1]?.rawCorrectionZ ?? null) : null,
+      endPoseDeltaZ: this.corrections.length > 0 ? (this.corrections[this.corrections.length - 1]?.endPoseDeltaZ ?? null) : null,
       pendingSeqs: [...this.pending.keys()],
     });
+  }
+
+  /** The advertised fixed step, read eagerly so measurement does not wait on the reconciler. */
+  private instrumentDt(): number | null {
+    if (this.advertisedStepSeconds !== null) return this.advertisedStepSeconds;
+    const advertised = this.transport.advertised();
+    const seconds = advertised.stepSeconds ?? (advertised.tickRate === undefined ? undefined : 1 / advertised.tickRate);
+    if (seconds === undefined) return null;
+    this.advertisedStepSeconds = seconds;
+    return seconds;
+  }
+
+  /** Journal frames with `fromExclusive < seq <= toInclusive`, oldest first. */
+  private journalFrames(fromExclusive: number, toInclusive: number): PendingInput[] {
+    const frames: PendingInput[] = [];
+    for (const [seq, entry] of this.pending.entries()) {
+      if (seq > fromExclusive && seq <= toInclusive) frames.push(entry);
+    }
+    return frames.sort((a, b) => a.seq - b.seq);
+  }
+
+  /**
+   * The checkpoint instrumenter (review item 2). Measurement only — it never feeds predictor state.
+   * The predicted-at-ack pose is reconstructed with the SHARED reference step function (the same
+   * `flatDirectStep` export the SDK reconciler steps with), from the previously adopted
+   * authoritative anchor. Unavailable checkpoints are recorded as invalidated and the anchor is
+   * HELD — never advanced, never counted as zero.
+   */
+  private captureAckCheckpoint(delivery: VerifiedDelivery): void {
+    const dt = this.instrumentDt();
+    if (dt === null) return; // instrumenter unavailable until the room advertises its fixed step
+    if (this.anchor !== null && this.anchor.epoch !== delivery.epoch) this.anchor = null;
+    const base = {
+      atMs: delivery.atMs,
+      authorityTick: delivery.authorityTick,
+      epoch: delivery.epoch,
+      authoritativeX: delivery.x,
+      authoritativeZ: delivery.z,
+    };
+    if (this.anchor === null) {
+      this.anchor = { epoch: delivery.epoch, ack: delivery.ack, x: delivery.x, z: delivery.z };
+      this.matchedInstrumentCounters.anchored += 1;
+      this.push(this.matchedRecords, {
+        ...base,
+        ackFrom: 0,
+        ackTo: delivery.ack,
+        seqs: [],
+        status: 'anchored',
+        predictedAtAckX: delivery.x,
+        predictedAtAckZ: delivery.z,
+        correctionX: 0,
+        correctionZ: 0,
+        magnitude: 0,
+        legacyPendingApproximationMetres: this.pendingCountAt(delivery) * this.options.speed * dt,
+      });
+      return;
+    }
+    if (delivery.ack <= this.anchor.ack) {
+      // A matched delivery that advances nothing is the SDK's early-out regime: no eligible ack
+      // boundary, so no checkpoint — recorded as a counter, never as a zero correction.
+      this.matchedInstrumentCounters.nonAdvancingDeliveries += 1;
+      return;
+    }
+    const frames = this.journalFrames(this.anchor.ack, delivery.ack);
+    const covered = delivery.ack - this.anchor.ack;
+    if (frames.length !== covered) {
+      // A journal frame inside the covered range is not observable (evicted, or the range spans a
+      // domain the journal never held): the checkpoint is INVALID, never zero, and the anchor is
+      // held so no later boundary is measured against a false base.
+      this.matchedInstrumentCounters.invalidated += 1;
+      this.push(this.matchedRecords, {
+        ...base,
+        ackFrom: this.anchor.ack,
+        ackTo: delivery.ack,
+        seqs: frames.map((frame) => frame.seq),
+        status: 'invalidated-missing-frames',
+        predictedAtAckX: Number.NaN,
+        predictedAtAckZ: Number.NaN,
+        correctionX: Number.NaN,
+        correctionZ: Number.NaN,
+        magnitude: Number.NaN,
+        legacyPendingApproximationMetres: this.pendingCountAt(delivery) * this.options.speed * dt,
+      });
+      return;
+    }
+    let predictedX = this.anchor.x;
+    let predictedZ = this.anchor.z;
+    for (const frame of frames) {
+      const stepped = flatDirectStep({ x: predictedX, z: predictedZ }, { moveX: frame.frame.moveX, moveZ: frame.frame.moveZ }, dt, this.options.speed);
+      predictedX = stepped.x;
+      predictedZ = stepped.z;
+    }
+    const correctionX = predictedX - delivery.x;
+    const correctionZ = predictedZ - delivery.z;
+    this.matchedInstrumentCounters.measured += 1;
+    if (Math.abs(correctionX) < 1e-9 && Math.abs(correctionZ) < 1e-9) this.matchedInstrumentCounters.zero += 1;
+    this.push(this.matchedRecords, {
+      ...base,
+      ackFrom: this.anchor.ack,
+      ackTo: delivery.ack,
+      seqs: frames.map((frame) => frame.seq),
+      status: 'measured',
+      predictedAtAckX: predictedX,
+      predictedAtAckZ: predictedZ,
+      correctionX,
+      correctionZ,
+      magnitude: Math.hypot(correctionX, correctionZ),
+      legacyPendingApproximationMetres: frames.length * this.options.speed * dt,
+    });
+    this.anchor = { epoch: delivery.epoch, ack: delivery.ack, x: delivery.x, z: delivery.z };
   }
 
   /** The one staging/send path: refuses locally, and refuses whenever the ADR says stop sending. */
@@ -707,7 +927,13 @@ export class DirectMotionPredictor {
   pendingJournal(): readonly PendingInput[] { return [...this.pending.values()]; }
   deliveryLedger(): typeof this.deliveriesLog { return [...this.deliveriesLog]; }
   tickLedger(): readonly PredictorTickRecord[] { return [...this.ticks]; }
-  correctionLedger(): readonly RawCorrectionRecord[] { return [...this.corrections]; }
+  /** End-pose diagnostic (renamed from `correctionLedger` on review — it is NOT a per-ack metric). */
+  endPoseDiagnostics(): readonly EndPoseDeltaRecord[] { return [...this.corrections]; }
+  /** The per-matched-ack correction ledger from the checkpoint instrumenter. */
+  matchedCorrections(): readonly MatchedAckCorrectionRecord[] { return [...this.matchedRecords]; }
+  /** Replay-identity ledger: adopted ⊕ Σ step(pending) − raw, per reconcile. */
+  replayIdentityLedger(): readonly ReplayIdentityRecord[] { return [...this.replayIdentity]; }
+  matchedInstrumentStats(): typeof this.matchedInstrumentCounters { return { ...this.matchedInstrumentCounters }; }
   recoveryLedger(): readonly RecoveryRecord[] { return [...this.recovery]; }
   sentAudit(): readonly { readonly seq: number; readonly epoch: SessionEpoch; readonly atMs: number }[] { return [...this.sentFrames]; }
   pruneAuthorityLedger(): typeof this.pruneAuthority { return { ...this.pruneAuthority }; }
@@ -744,20 +970,34 @@ export class DirectMotionPredictor {
     }
 
     if (outcome.ok && delivery !== null) {
+      if (this.state === 'recovering' && this.recoveryEpoch !== null && delivery.epoch === this.recoveryEpoch) {
+        // Defence in depth behind the quarantine: even if an old-domain patch were observed while
+        // recovering, it may NOT complete recovery. The held pose stays held; the anchor, journal,
+        // deadline and rejoin ladder are untouched. Only the replacement domain ends recovery.
+        this.recordRecovery('trigger', `held stale-domain delivery revision ${String(delivery.revision)} epoch ${String(delivery.epoch)}`);
+        return;
+      }
       const firstForDomain = !this.snapshotReady;
       this.lastAccepted = delivery;
+      // The checkpoint instrumenter runs on every accepted delivery, in every live state: it is
+      // measurement only and never feeds predictor state back.
+      this.captureAckCheckpoint(delivery);
       this.pruneByResolution(delivery);
       this.restartDeadline();
       this.snapshotReady = true;
       if (this.state === 'recovering') {
-        // Snapshot recovery: the first accepted delivery of the new domain re-arms input. No
-        // pending identity survives it: the journal was discarded at trigger time and is not
-        // reissued here — this delivery is a fresh snapshot, and only NOW may input resume.
+        // Snapshot recovery of the NEW domain: the first accepted delivery on the replacement
+        // transport's freshly issued epoch re-arms input. No pending identity survives it: the
+        // journal was discarded at trigger time and is not reissued — this delivery is a fresh
+        // snapshot, and only NOW may input resume.
         this.recordRecovery('snapshot-recovered', `revision ${String(delivery.revision)} epoch ${String(delivery.epoch)}`);
         this.rejoinInFlight = false;
         this.recoveryStartedAt = null;
+        this.recoveryEpoch = null;
         this.sendingStopped = false;
         this.state = 'tracking';
+        this.anchor = null;
+        this.captureAckCheckpoint(delivery);
       }
       if (firstForDomain && this.state === 'dormant') this.state = 'tracking';
       if (this.state === 'waiting-boundary') this.state = 'tracking';
@@ -841,6 +1081,15 @@ export class DirectMotionPredictor {
     this.deadlineHandle = this.options.clock.setTimer(() => {
       this.deadlineHandle = null;
       if (this.state === 'recovering') {
+        // The episode deadline outranks an in-flight attempt: if the whole episode has elapsed,
+        // the recovery suspends even while a join promise is still settling — the settling
+        // result is then refused at install time and its transport discarded.
+        if (this.recoveryStartedAt !== null && this.options.clock.nowMs() - this.recoveryStartedAt >= this.options.recoveryDeadlineMs) {
+          this.episodeExpired = true;
+          this.recordRecovery('episode-expired', 'deadline crossed while a rejoin attempt was in flight; its result will be refused');
+          this.state = 'suspended';
+          return;
+        }
         // Waiting for a snapshot that has not arrived inside the deadline: the next bounded
         // rejoin attempt (or the suspension) is scheduled, never an early reconcile.
         this.scheduleRejoin();
@@ -865,6 +1114,8 @@ export class DirectMotionPredictor {
     this.recoveryStartedAt = this.options.clock.nowMs();
     this.reconciler = null; // discard the predicted continuation; truth stays in lastAccepted (held)
     this.snapshotReady = false;
+    this.anchor = null; // the checkpoint anchor does not survive a domain change
+    this.recoveryEpoch = this.domainEpoch;
     this.recordRecovery('trigger', `${trigger} at ${String(detail)}`);
     if (!this.sendingStopped) {
       this.sendingStopped = true;
@@ -873,7 +1124,35 @@ export class DirectMotionPredictor {
     const discarded = this.pending.size;
     this.pending.clear(); // pending identities are discarded, never reissued across the change
     this.recordRecovery('discard-pending', `${String(discarded)} journal entries dropped; held pose retained`);
+    // DOMAIN QUARANTINE (review P1): stop observing the old room AT THE TRIGGER, before any async
+    // rejoin settles, and close/isolate its handle. No late delivery from the quarantined domain
+    // can clear the stop latch or cancel the ladder; the SDK reconciler has no supported disposer
+    // (recorded in the API map), so isolation is the leave plus dropping every subscription we
+    // hold. The quarantined epoch is remembered so the accepting branch can also refuse it.
+    this.quarantined = true;
+    this.detach();
+    this.recordRecovery('trigger', `domain ${String(this.recoveryEpoch ?? 'unknown')} quarantined: subscriptions dropped, handle closing`);
+    void this.closeQuarantined();
     this.scheduleRejoin();
+  }
+
+  /** Close the quarantined transport; a failure to leave is recorded, never retried blindly. */
+  private async closeQuarantined(): Promise<void> {
+    try {
+      await this.transport.close();
+    } catch (error) {
+      this.recordRecovery('trigger', `quarantined transport close failed (isolated anyway): ${String(error instanceof Error ? error.message : error)}`);
+    }
+  }
+
+  /** A rejoin result that arrived after recovery ended: the transport it joined is NOT installed. */
+  private async discardAbandoned(next: PredictionTransport, why: string): Promise<void> {
+    this.recordRecovery('trigger', `abandoned rejoin result (${why}); its transport is closed`);
+    try {
+      await next.close();
+    } catch (error) {
+      this.recordRecovery('trigger', `abandoned transport close failed: ${String(error instanceof Error ? error.message : error)}`);
+    }
   }
 
   private scheduleRejoin(): void {
@@ -919,24 +1198,65 @@ export class DirectMotionPredictor {
     this.recordRecovery('rejoin-attempt', `counted rejoin ${String(this.rejoinAts.length)} in the window`);
     try {
       const next = await this.options.rejoin();
+      // Install the result only if recovery is STILL the live policy at this instant. The seat may
+      // have been disposed, the episode deadline may have crossed, or a prior suspension may have
+      // landed while this join was settling — an accepted attempt never overrides any of those.
+      const episodeCrossed = this.recoveryStartedAt !== null
+        && this.options.clock.nowMs() - this.recoveryStartedAt >= this.options.recoveryDeadlineMs;
+      // Re-read the state at install time: the compiler's earlier narrowing does not survive an
+      // await, and neither should this code's assumptions.
+      const stateAtInstall: PredictorState = this.readState();
+      if (stateAtInstall === 'closed') {
+        await this.discardAbandoned(next, 'seat closed while the rejoin was settling');
+        return;
+      }
+      if (stateAtInstall !== 'recovering') {
+        await this.discardAbandoned(next, `state is ${stateAtInstall}, not recovering`);
+        this.rejoinInFlight = false;
+        return;
+      }
+      if (episodeCrossed) {
+        await this.discardAbandoned(next, 'episode deadline crossed while the rejoin was settling');
+        this.episodeExpired = true;
+        this.rejoinInFlight = false;
+        this.recordRecovery('episode-expired', 'rejoin succeeded but the episode had elapsed: result refused, transport discarded');
+        this.state = 'suspended';
+        return;
+      }
       const previous = this.transport;
       this.transport = next;
-      previous.rearm?.(next);
-      void previous.close();
+      if (!this.quarantined) {
+        previous.rearm?.(next);
+        void previous.close();
+      }
+      // else: the quarantined domain was already unsubscribed and closed at the trigger.
+      this.quarantined = false;
+      this.recoveryEpoch = null;
       this.lastOutcome = null;
       this.rejoinInFlight = false;
       // Input stays stopped and no reconciler exists until the first accepted delivery of the
       // NEW domain arrives through evaluatePatch() — snapshot recovery precedes any further input.
+      // Recorded BEFORE attaching: attaching may synchronously deliver the new domain's first
+      // patch, and the ledger must read rejoin-complete, then snapshot-recovered.
+      this.recordRecovery('rejoin-complete', `new domain epoch ${String(next.issuedEpoch())}; awaiting the fresh snapshot`);
       this.detach();
       this.attach();
-      this.recordRecovery('rejoin-complete', `new domain epoch ${String(next.issuedEpoch())}; awaiting the fresh snapshot`);
       // The snapshot wait is itself deadline-bound: no verified delivery inside it schedules the
       // next bounded attempt (or the suspension), it never leaves the seat silently frozen.
       this.armDeadlineIfNeeded();
     } catch (error) {
       this.rejoinInFlight = false;
-      this.recordRecovery('suspended', `rejoin route failed: ${String(error instanceof Error ? error.message : error)}`);
-      this.state = 'suspended';
+      const reason = String(error instanceof Error ? error.message : error);
+      const stateAfterFailure: PredictorState = this.readState();
+      if (stateAfterFailure !== 'recovering') {
+        this.recordRecovery('trigger', `rejoin route failed after recovery ended (${reason})`);
+        return;
+      }
+      // ADR §3.2 retry/suspension semantics for an ordinary rejoin error: the attempt was counted,
+      // so the ladder decides — next bounded attempt while the window and episode allow it,
+      // suspension when either is exhausted. One failure alone never suspends.
+      this.recordRecovery('trigger', `rejoin route failed: ${reason}`);
+      this.scheduleRejoin();
     }
   }
 
@@ -959,6 +1279,7 @@ export class DirectMotionPredictor {
     const instance = this.transport.rowInstance();
     if (instance === null) return null;
     const speed = this.options.speed;
+    this.advertisedStepSeconds = stepSeconds;
     const reconciler = new Reconciler<PredictedMirror, StagedDirectInput>(instance, {
       input: this.transport.handle(),
       fields: ['x', 'z'],
@@ -973,6 +1294,11 @@ export class DirectMotionPredictor {
     });
     this.reconciler = reconciler satisfies ReconcilerLike;
     return this.reconciler;
+  }
+
+  /** Read the state without the compiler's stale control-flow narrowing. */
+  private readState(): PredictorState {
+    return this.state;
   }
 
   private recordRecovery(event: RecoveryRecord['event'], detail: string): void {
