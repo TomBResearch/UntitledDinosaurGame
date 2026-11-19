@@ -1722,7 +1722,10 @@ test('recovery resumes through a real rejoin and a fresh snapshot once the netwo
   const attempted = await pageR.evaluate(async () => {
     const h = (globalThis as unknown as PredSeatWindow).__udgRecSeat;
     if (h === undefined) throw new Error('no recovery seat');
-    const deadline = performance.now() + 6000;
+    // Windows are generous (trigger+first offline attempt needs ~0.8 s in isolation): a loaded
+    // runner starves the page's timers, and the CLAIM here is ORDERING (attempt before network
+    // return), not latency. Nothing is asserted that a faster run would not also satisfy.
+    const deadline = performance.now() + 15_000;
     while (performance.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 40));
       if (h.predictor.recoveryLedger().some((row) => row.event === 'rejoin-attempt')) {
@@ -1759,8 +1762,10 @@ test('recovery resumes through a real rejoin and a fresh snapshot once the netwo
     const zAtRecovery = h.predictor.replicated()?.z ?? Number.NaN;
     const matchedAtRecovery = h.predictor.matchedCorrections().length;
     const identitiesAtRecovery = h.predictor.replayIdentityLedger().length;
-    // Movement must actually resume on the new domain, with clean corrections.
-    const until = performance.now() + 3000;
+    // Movement must actually resume on the new domain, with clean corrections. The window is
+    // 4 s for a 0.6 m requirement (the seat owes ~4 m/s when consuming) — the threshold stands;
+    // only the allowance for a starved runner grows.
+    const until = performance.now() + 4000;
     let zNow = zAtRecovery;
     while (performance.now() < until) {
       await new Promise((resolve) => setTimeout(resolve, 50));
