@@ -116,6 +116,33 @@ describe('gate-a workflow — the candidate is bound before anything executes', 
   }
 });
 
+describe('gate-a workflow — YAML plain-scalar conformance (the class of error a stdlib parser rejects)', () => {
+  it('no unquoted plain scalar on a name/description/run-name line contains colon-space or space-hash', () => {
+    // macOS Ruby Psych rejected gate-a.yml at 151:121 for exactly this class: a plain scalar
+    // carrying ': ' inside a step name. No YAML parser exists in this offline container (ruby,
+    // PyYAML, js-yaml, yaml, perl YAML all probed absent — retained in dpa8a), so the scanner
+    // below is the dependency-free fixture for the rule, and the reviewer's Psych run over the
+    // pushed bytes stays the standards authority. Block scalars (| and >) and quoted scalars are
+    // legal with colons; PLAIN scalars are not.
+    const offenders: string[] = [];
+    text.split('\n').forEach((line, index) => {
+      const m = /^\s*(-\s+)?(name|description|run-name):\s+(\S.*)$/u.exec(line);
+      if (m === null) return;
+      const value = m[3] as string;
+      if (/^['">&*!|>]/u.test(value)) return; // quoted or block/anchor/directive style
+      if (value.includes(': ') || value.endsWith(':') || value.includes(' #')) offenders.push(`line ${String(index + 1)}: ${line.trim()}`);
+    });
+    expect(offenders, `plain scalars a standards parser will reject:\n${offenders.join('\n')}`).toEqual([]);
+
+    // the scanner must actually fire on the class it claims to catch (the Psych-rejected line)
+    const psychRejected = "      - name: Upload x (only behind a passed gate: nothing uploads)";
+    const m = /^\s*(-\s+)?(name|description|run-name):\s+(\S.*)$/u.exec(psychRejected);
+    expect(m).not.toBeNull();
+    const value = m?.[3] as string;
+    expect(value.includes(': ')).toBe(true);
+  });
+});
+
 describe('gate-a workflow — the matrix shape the grant fixed', () => {
   it('four profile jobs over independent legs, fail-fast off, ordered official seeds, and NEVER the whole capture plan', () => {
     const block = jobBlock('profile');
@@ -140,10 +167,32 @@ describe('gate-a workflow — the matrix shape the grant fixed', () => {
   it('the scenario lane is separate, states its statuses and every declared gap', () => {
     const block = jobBlock('scenarios');
     expect(block).toContain('gate-a-scenario-status.json');
-    for (const gap of ['GA-11 production', 'PE-1', 'UDG-007', 'GA-5b']) {
+    for (const gap of ['GA-11 production', 'PE-1', 'GA-5b', 'DEFERRED']) {
       expect(block, `the lane must state the ${gap} gap explicitly`).toContain(gap);
     }
     expect(block).toContain('if: always()'); // red lanes still state their status
+  });
+});
+
+describe('gate-a workflow — a manual rerun is never a first attempt (runner run_attempt guard)', () => {
+  it('every job refuses run_attempt != 1 before checkout/install, and no upload or bind can precede that gate', () => {
+    for (const job of ['profile', 'scenarios', 'evidence']) {
+      const block = jobBlock(job);
+      expect(block, `${job} must read the runner attempt from env`).toContain('RUN_ATTEMPT: ${{ github.run_attempt }}');
+      const guardAt = block.indexOf('"$RUN_ATTEMPT" != "1"');
+      expect(guardAt, `${job} must guard the attempt`).toBeGreaterThan(-1);
+      expect(guardAt, `${job} guards it BEFORE install`).toBeLessThan(block.indexOf('pnpm install --frozen-lockfile'));
+      expect(guardAt, `${job} guards it BEFORE any checkout`).toBeLessThan(block.indexOf('uses: actions/checkout@'));
+      // uploads/publish stay behind the gate step (non-first attempts upload nothing)
+      for (const line of block.split('\n').filter((entry) => entry.includes('uses: actions/upload-artifact@'))) {
+        void line; // presence checked next via the gating-condition test below
+      }
+    }
+    // the evidence binder re-checks the attempt before aggregating (identifiers mean attempt one)
+    expect(jobBlock('evidence')).toContain('refusing to aggregate a non-first attempt');
+    // mock refusal of the policy itself: the gate condition is exact, not a range
+    expect(text).toContain('if [ "$RUN_ATTEMPT" != "1" ]');
+    expect(text).not.toMatch(/RUN_ATTEMPT.*-le/u);
   });
 });
 

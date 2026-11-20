@@ -81,12 +81,18 @@ jobs:
       UDG_GATE_A_FORMAL: '1'
       UDG_SPIKE_OUT: artifacts/.local/spike-001/gate-a
     steps:
-      - name: Validate every dispatch input BEFORE checkout/install (40-hex candidate; printable bounded label)
+      - name: Validate every dispatch input BEFORE checkout/install (40-hex candidate; printable bounded label; first attempt only)
         id: inputgate
         env:
           INPUT_RUN_ID: ${{ inputs.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          # First-attempt guard (formal): a runner REUSE keeps the same run_id with run_attempt > 1.
+          # Only attempt 1 may produce formally-identised artefacts — a rerun could otherwise pass
+          # as a first attempt or collide with its own evidence identifiers. Env-only, no expression
+          # in the shell body; refused here, before checkout, installs and (via the gates) uploads.
+          if [ "$RUN_ATTEMPT" != "1" ]; then echo "::error::formal dispatch accepts run_attempt 1 only (this is attempt $RUN_ATTEMPT) — dispatch a fresh run, a rerun never counts as a first attempt"; exit 1; fi
           case "$CANDIDATE" in
             *[!0-9a-f]*) echo "::error::candidate_sha contains characters outside [0-9a-f]"; exit 1 ;;
           esac
@@ -148,7 +154,7 @@ jobs:
             exit 1
           fi
 
-      - name: Upload this profile's artefacts (a red ROW's bytes are evidence — but ONLY behind a passed input/HEAD gate: a malformed, short or wrong SHA uploads nothing, ever)
+      - name: Upload this profile's artefacts — a red ROW's bytes are evidence, but ONLY behind passed input/HEAD gates (a malformed, short or wrong SHA uploads nothing, ever)
         if: always() && steps.inputgate.outcome == 'success' && steps.headbind.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -166,12 +172,18 @@ jobs:
       UDG_GATE_A_FORMAL: '1'
       UDG_SPIKE_OUT: artifacts/.local/spike-001/gate-a-scenarios
     steps:
-      - name: Validate every dispatch input BEFORE checkout/install (40-hex candidate; printable bounded label)
+      - name: Validate every dispatch input BEFORE checkout/install (40-hex candidate; printable bounded label; first attempt only)
         id: inputgate
         env:
           INPUT_RUN_ID: ${{ inputs.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          # First-attempt guard (formal): a runner REUSE keeps the same run_id with run_attempt > 1.
+          # Only attempt 1 may produce formally-identised artefacts — a rerun could otherwise pass
+          # as a first attempt or collide with its own evidence identifiers. Env-only, no expression
+          # in the shell body; refused here, before checkout, installs and (via the gates) uploads.
+          if [ "$RUN_ATTEMPT" != "1" ]; then echo "::error::formal dispatch accepts run_attempt 1 only (this is attempt $RUN_ATTEMPT) — dispatch a fresh run, a rerun never counts as a first attempt"; exit 1; fi
           case "$CANDIDATE" in
             *[!0-9a-f]*) echo "::error::candidate_sha contains characters outside [0-9a-f]"; exit 1 ;;
           esac
@@ -249,7 +261,7 @@ jobs:
               { ...statusOf("spike-cell-ga9-ga13.json"),
                 gaps: ["GA-5b client-recovery sub-leg narrowed, blocked on PE-1", "GA-13 formal replay legs land here once this lane runs hosted"] },
               { ...statusOf("spike-cell-ga-scenarios.json"),
-                gaps: ["GA-12 positive proof blocked on PE-1", "GA-10a/GA-10b blocked on UDG-007"] },
+                gaps: ["GA-12 positive proof blocked on PE-1", "GA-10a/GA-10b DEFERRED by owner decision (not a Gate A blocker)"] },
               { ...statusOf("spike-cell-ga11-calibration.json"),
                 gaps: ["GA-11 production-directed populations are Not-Run: this calibration batch does NOT substitute"] },
             ];
@@ -286,13 +298,20 @@ jobs:
       # Mandatory lane results reach the binder here (env, never interpolated shell). The binder
       # refuses a red/skipped/cancelled lane even when every artefact file happens to be present.
       LANES: profile=${{ needs.profile.result }},scenarios=${{ needs.scenarios.result }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
     steps:
-      - name: Validate every dispatch input BEFORE checkout/install (40-hex candidate; printable bounded label)
+      - name: Validate every dispatch input BEFORE checkout/install (40-hex candidate; printable bounded label; first attempt only)
         id: inputgate
         env:
           INPUT_RUN_ID: ${{ inputs.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          # First-attempt guard (formal): a runner REUSE keeps the same run_id with run_attempt > 1.
+          # Only attempt 1 may produce formally-identised artefacts — a rerun could otherwise pass
+          # as a first attempt or collide with its own evidence identifiers. Env-only, no expression
+          # in the shell body; refused here, before checkout, installs and (via the gates) uploads.
+          if [ "$RUN_ATTEMPT" != "1" ]; then echo "::error::formal dispatch accepts run_attempt 1 only (this is attempt $RUN_ATTEMPT) — dispatch a fresh run, a rerun never counts as a first attempt"; exit 1; fi
           case "$CANDIDATE" in
             *[!0-9a-f]*) echo "::error::candidate_sha contains characters outside [0-9a-f]"; exit 1 ;;
           esac
@@ -346,6 +365,9 @@ jobs:
         id: bind
         run: |
           set -euo pipefail
+          # belt and braces: the publishable path must be a first attempt even if someone rewires
+          # the gates above — the binder's identifiers mean "attempt one".
+          if [ "${RUN_ATTEMPT:-}" != "1" ]; then echo "::error::refusing to aggregate a non-first attempt"; exit 1; fi
           set +e
           node tools/checks/dist/evidence.js gate-a-aggregate \
             --dir /tmp/gate-a/rows --scenarios /tmp/gate-a/scenarios \

@@ -351,3 +351,21 @@ semantics of every grant rule), the binder module tests, and the new CLI exit-co
 GitHub still discovers dispatchable workflows only from `main`; nothing here merges or dispatches,
 and the formal matrix stays blocked for a PASS by GA-11 production populations and unresolved
 GA-5b/GA-12 policy — with open gaps this lane publishes labelled diagnostics only, never a bundle.
+
+## 14. Slice-15 update (2026-11-20): standards-YAML correction, first-attempt guard, corrected recommendations
+
+- **Psych rejection (line 151 col 121) retained and fixed**: an unquoted plain-scalar step name
+  carried `: `; reworded. No YAML parser exists in this container (ruby/PyYAML/perl/js-yaml/yaml all
+  probed absent; manifest untouched), so the pushed head is the reviewer's parse candidate and a
+  dependency-free plain-scalar conformance scanner (with a positive control firing on the exact
+  rejected class) is the local fixture. Red receipt: `dpa8a/`.
+- **First-attempt guard**: `github.run_attempt` (env-only) must equal `1` in every job before
+  checkout/install; uploads and the bind sit behind that gate. A manual rerun keeps the run_id —
+  attempt > 1 can no longer reuse first-attempt identities or be mistaken for a first attempt.
+- **Corrected recommendations** (replacing the slice-14 wording): GA-10a/GA-10b are **explicitly
+  deferred by owner decision and are NOT Gate A blockers**; what still waits is **verification
+  (the hosted formal dispatch + evidence:verify path), GA-11 production populations, GA-5b and
+  GA-12**. And the conductor-only framing is corrected: PR #7 spans the entire spike program
+  (harness, kernel seam, evidence tooling, CI lanes), so **merging the whole PR is NOT a
+  conductor-only release**; a conductor-only step would need its own scoped cherry-pick/release
+  decision, which nothing in this batch performs. Nothing merged, nothing dispatched.
