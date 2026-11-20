@@ -204,6 +204,14 @@ export interface ConnectionClosureRecord {
   readonly error: boolean;
 }
 
+export interface FrameStamp {
+  readonly label: 'c2s' | 's2c';
+  readonly edge: 'clientIn' | 'serverIn' | 'clientOut' | 'dropped';
+  readonly atMs: number;
+  readonly bytes: number;
+  readonly conn: number;
+}
+
 export interface ProxyStats {
   readonly connLog: readonly ConnectionClosureRecord[];
   readonly listening: boolean;
@@ -221,6 +229,8 @@ export interface ProxyStats {
   readonly tcpNoDelay: boolean;
   /** Window-stall override in effect at snapshot time (GA-6a injection; null = profile). */
   readonly stallOverride: { readonly c2s: number | null; readonly s2c: number | null };
+  /** ACK-WINDOW DIAGNOSTIC ONLY (slice 23): per-frame hop-edge stamps, node clock, capped. */
+  readonly c2sDropped: number;
   /** Paired achieved round-trip stall samples per the documented pairing rule. */
   /**
    * DIAGNOSTIC PROXY-LEG SUM — demoted at review of 74e84179, and the demotion is part of the
@@ -281,6 +291,16 @@ export interface WsDelayProxy {
    * counted in stats (`chunksHeld`), never silent, and NO native dedupe or TCP loss involved.
    */
   holdNext(direction: 'c2s' | 's2c' | 'both', count: number): void;
+  /**
+   * ACK-WINDOW DIAGNOSTIC ONLY (slice 23, never armed by any formal workload): drop the NEXT
+   * `count` c2s frames at this hop on every live connection — a genuine wire loss the server
+   * never sees, so no ack can ever exist for them. Counted (c2sDropped), labelled, no fake
+   * acknowledgement, no native dedupe.
+   */
+  armC2sDrop(count: number): void;
+  /** ACK-WINDOW DIAGNOSTIC ONLY: toggle per-frame hop-edge stamps (default OFF, capped). */
+  setFrameTrace(on: boolean): void;
+  diagStats(): { readonly c2sDropped: number; readonly frames: readonly FrameStamp[] };
   /** Sever every currently-proxied TCP pair (server-side socket first). A drop, labelled. */
   killSockets(): void;
   stats(): ProxyStats;
@@ -390,6 +410,8 @@ interface ConnectionEnv {
   readonly onLegSumSample: (sampleMs: number) => void;
   readonly tcpNoDelay: boolean;
   readonly stallOverride: { c2s: number | null; s2c: number | null };
+  onFrame: ((rec: FrameStamp) => void) | null;
+  c2sDrop: { left: number; dropped: number } | null;
 }
 
 class ProxyConnection {
@@ -505,6 +527,17 @@ class ProxyConnection {
   private enqueue(dir: DirectionState, data: Buffer): void {
     if (this.finished) return;
     const now = this.env.timer.nowMs();
+    // ACK-WINDOW DIAGNOSTIC seam: a targeted c2s WIRE loss (the frame departs no further than
+    // here; the server never sees it and can never ack it — a genuine lost input, no fake
+    // acknowledgement anywhere). Counted separately, NEVER inside chunksReceived.
+    if (dir.label === 'c2s' && this.env.c2sDrop !== null && this.env.c2sDrop.left > 0) {
+      this.env.c2sDrop.left -= 1;
+      this.env.c2sDrop.dropped += 1;
+      this.env.onFrame?.({ label: 'c2s', edge: 'clientIn', atMs: now, bytes: data.length, conn: this.index });
+      this.env.onFrame?.({ label: 'c2s', edge: 'dropped', atMs: now, bytes: data.length, conn: this.index });
+      return;
+    }
+    this.env.onFrame?.({ label: dir.label, edge: dir.label === 'c2s' ? 'clientIn' : 'serverIn', atMs: now, bytes: data.length, conn: this.index });
     // Suppression first: an armed hold counts the arrival (bytes DID reach the hop — this is
     // NOT a drop), records it in the inter-arrival and size populations, and never queues it.
     if (dir.holdRemaining !== null && dir.holdRemaining.left > 0) {
@@ -624,6 +657,7 @@ class ProxyConnection {
         dir.pumping = false;
         return;
       }
+      this.env.onFrame?.({ label: dir.label, edge: dir.label === 'c2s' ? 'serverIn' : 'clientOut', atMs: this.env.timer.nowMs(), bytes: chunk.data.length, conn: this.index });
       if (dest.write(chunk.data) === false) {
         dir.backpressurePauses += 1;
         dir.chunksBackpressured += 1;
@@ -775,6 +809,11 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
   const closeGraceMs = options.closeGraceMs ?? 5_000;
   /** Shared, mutable window-stall override (GA-6a injection; read at admission time). */
   const stallOverride: { c2s: number | null; s2c: number | null } = { c2s: null, s2c: null };
+  // ACK-WINDOW DIAGNOSTIC state (slice 23): shared across connections; null-safe, never armed
+  // unless a diagnostic explicitly turns it on.
+  const frameTrace: FrameStamp[] = [];
+  const diagDrop: { left: number; dropped: number } = { left: 0, dropped: 0 };
+  let traceOn = false;
   if (!isIPv4(options.targetHost)) throw new Error(`targetHost must be an IPv4 literal, got ${options.targetHost}`);
   if (!(options.profile.oneWayMs >= 0) || !(options.profile.jitterBudgetMs >= 0)) {
     throw new Error('profile stalls must be non-negative');
@@ -803,6 +842,8 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
       targetPort: options.targetPort,
       tcpNoDelay: options.tcpNoDelay ?? true,
       stallOverride,
+      onFrame: (rec) => { if (traceOn && frameTrace.length < 40_000) frameTrace.push(rec); },
+      c2sDrop: diagDrop,
       profile: options.profile,
       timer,
       maxBufferedBytesPerDirection,
@@ -845,7 +886,17 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
     setStall(direction, oneWayMs) {
       if (direction === 'c2s' || direction === 'both') stallOverride.c2s = oneWayMs;
       if (direction === 's2c' || direction === 'both') stallOverride.s2c = oneWayMs;
+    },    armC2sDrop(count: number): void {
+      // ACK-WINDOW DIAGNOSTIC ONLY: arms the shared per-connection drop quota (slice 23).
+      diagDrop.left = count;
     },
+    setFrameTrace(on: boolean): void {
+      traceOn = on;
+    },
+    diagStats(): { c2sDropped: number; frames: readonly FrameStamp[] } {
+      return { c2sDropped: diagDrop.dropped, frames: [...frameTrace] };
+    },
+
     flushStalled(direction) {
       const labels = direction === 'both' ? (['c2s', 's2c'] as const) : ([direction] as const);
       for (const conn of [...live]) conn.flushStalled(labels);
@@ -874,6 +925,7 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
       }
       return {
         listening,
+        c2sDropped: diagDrop.dropped,
         stallOverride: { ...stallOverride },
         connLog: [...connLogDone, ...[...live].map((conn) => conn.lifecycle())],
         connections: { opened, closed: closedCount, active: live.size, errors },

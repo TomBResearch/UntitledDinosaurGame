@@ -707,8 +707,11 @@ candidate-bound CI: PR #7 routine all-green at 0a69d84, run 44790203558; workflo
 both sides 93ecb03c…606f; first diagnostic 44771876137 and dpa8e's 140 files byte-untouched).
 BOTH prior fixture defects cleared on hosted first-attempt bytes: every lan coordinate green
 under the SAME-OBSERVER-FRAME render gate (no cross-page race), and all 31 GA-scenario rows
-green (deterministic drain + behaviourally named mover wire). All 9 non-poor coordinates green
-with §2.2 OK, corrP95 0; p95−p50 recomputed from raw samples matches each artefact's recorded
+green (deterministic drain + behaviourally named mover wire). TEN of twelve coordinates green
+— the 9 LAN/moderate/elevated cells PLUS poor-1003; exactly TWO red (poor-1001, poor-1002)
+(TALLY CORRECTED per reviewer: the first draft of this section miscounted "9 non-poor"; the
+underlying per-coordinate table above is unchanged and correct). All ten green coordinates show
+§2.2 OK, corrP95 0; p95−p50 recomputed from raw samples matches each artefact's recorded
 achievedJitterMs to rounding (lan 1.9–2.1, moderate 5.3–6.8, elevated 13.6–15.2, poor-1003
 27.1 ms); max−min kept separately (spread ≤ 78.9 ms) and never labelled jitter.
 WHAT THE MOVER LEDGER RECORDS (poor-1001 AND poor-1002; poor-1003 green): during WARMUP, ~253 ms
@@ -747,3 +750,58 @@ Aggregator (exact, from its own log line): "gate-a-aggregate: 12/12 rows bound, 
 matrix INCOMPLETE-OR-RED, Gate A NOT-PASS (violations) (never PASS from this binder)" — 2 row-red
 + 2 lane-red + 2 check-red across poor-1001/poor-1002; decision remains NO PUBLISH: the verified
 report artifact is absent from the run (5 raw uploads only, exactly as the guards allow).
+
+## 19. Slice 23 — the ack-window diagnostic: the count-only stalled-ack rule cannot cover the poor envelope
+DIAGNOSTIC ONLY, pre-registered before any run (artifacts/.local/spike-001/dpa8h/
+PRE-REGISTRATION.md, addenda 1–6 record every failed MEASURING TOOL honestly — LCS pairing
+inapplicable because the hop is a TCP-byte proxy, a dead page instrument, five runs; attempts
+retained byte-wise, nothing rerolled into a nicer number; one dimension, bounded continuations,
+NEVER repeated until green for a RESULT — only for the instrument). Seven shapes, single attempt
+each, real room + real proxy poor profile (200/40) + real matched pings + the same deterministic
+pump; G overrides and pump phase are ISOLATED knobs of this env-gated cell (no CI route, no
+spike-CLI cell, no product default/pin/spec anywhere near them).
+RESULTS (all valid times and variances in the artifact): in-envelope runs at G=3 AND at the
+derived G (5 conservative / 4 declared basis; fastSpacingP01 = 67.5 ms measured) NEVER fired in
+any start phase locally (5/5 no-fire; probe p50 201.4–205.9 ms, p95 ≤ 238.6 ms inside the
+declared 240 ms envelope + 15 ms declared slack). The TERMINAL-LOST truth case fired at both
+values: at G=3 input age 259.3 ms — only 14.3 ms after the declared causal floor (245 ms) — and
+at G=5 age 515.1 ms; zero re-issued sends, exactly one dropped frame, REAL pending inputs only
+(no invented state, no fake ack seam exists). THE STRUCTURAL FINDING (arithmetic on retained
+bytes, holds on both envelope bases): post-send message inter-arrivals run p01 ≈ 61–70 ms, so a
+G=3 streak can COMPLETE in ≈183 ms — BEFORE an ack is causally possible at 245 ms. A count-only
+G cannot guarantee correctness at this envelope; R6's 14.3 ms margin shows how thin the line is
+even when the rule fires CORRECTLY. This EXPLAINS the hosted poor reds' shape without indicting
+the product: at ~200 ms RTT the stalled-ack count and the ack round trip are the same order, and
+host timing decides. OBSERVING ≠ TUNING: every value involved remains PROVISIONAL UNDER GA-11;
+nothing here ratifies, changes or production-tunes any threshold, and no client behaviour was
+altered.
+Time-based opportunity floor — necessary per the structural finding; EXACT RULE PROPOSED FOR
+ADR REVIEW, NOT ADOPTED, NOT WIRED: "INPUT_ACK_STALLED may trigger only when (a) the adopted
+delivery-count condition holds AND (b) the OLDEST pending input has been outstanding for at
+least estRoundTripMs + observedDeliverySpacingP99 + serviceAllowanceMs, where estRoundTripMs is
+the client's own measured RTT estimate (falling back to the configured RTT envelope when no
+estimate exists) and serviceAllowanceMs is a declared constant (5 ms)." If adopted, GA-5l's
+truth-case and the malformed-stamp controls must gain a floor-aware leg (they stay safe today:
+their streams are 0-stall LAN-like, where floor and count agree).
+SAFE NEXT CANDIDATE POLICY (for reviewer decision, contingent): keep G=3 as the provisional
+default for 0-stall/LAN-shape profiles where the floor and the count agree; for RTT-bearing
+profiles treat any poor-coordinate red as SUSPECT-BY-TIMING until either (i) the floor rule is
+adopted, or (ii) GA-11's representative deployment provides the population that decides the
+provisional values — no harness-side phase alignment or G bump may be used as a REMEDY (phase
+alignment here is a diagnostic control only and stays that way).
+EXACT OPEN NEED FOR GA-11 (representative deployment, NOT new host exposure): a nominated,
+production-like deployment per §15B prerequisites — authoritative server in a real region
+(nominated provider), real client machines over real ISP paths (the pinned browsers on machines
+in the target regions), the official profiles re-derived from THAT path topology, and the
+12-coordinate matrix executed against it by the owner. Absent that nomination nothing in this
+repo can stand in; this document deliberately proposes NO hosting, NO exposure, NO infrastructure.
+Hosted matrix dispatched: none. Gate A verdict: unchanged NOT-PASS; binder unchanged; both old
+evidence bundles (dpa8e 140 files, dpa8g 143 files) retained untouched.
+RACINESS OBSERVED WHILE VALIDATING (retained, both attempts at dpa8h/dec-leg-race/): the GA-5b
+dec leg went RED once locally (trigger "input-ack-stalled at 1" 231 ms after a correctly
+DECLINED staged stamp — the below-prefix outstanding slot §3.2 legitimately recovers from,
+counted during the pump-stopped quiet window; every disposition datum of the row itself held)
+and GREEN on the next single run. Named honestly: §19's structural finding in a 0-stall
+microcosm; the harness's dec quiet-window is racily strict against an ADMISSIBLE §3.2 recovery.
+Next-batch harness item (reviewer-approved, not executed here): make the dec observation
+stall-aware. Product claims and hosted greens stand; the red attempt is retained, not rerolled.

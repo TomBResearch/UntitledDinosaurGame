@@ -7677,3 +7677,368 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
   const anyFailure = checks.filter((record2) => !record2.ok);
   expect(anyFailure.map((record2) => record2.name), `failed ga9-ga13 rows: ${JSON.stringify(anyFailure.map((r2) => r2.name))}`).toEqual([]);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// SLICE 23 — ACK-WINDOW DIAGNOSTIC (env-gated standalone cell; NOT part of any formal workload,
+// NOT dispatched by any spike CLI cell, NOT routed by CI). Pre-registered at
+// artifacts/.local/spike-001/dpa8h/PRE-REGISTRATION.md BEFORE any run. Question: on the ORIGINAL
+// poor profile, can the §3.2 INPUT_ACK_STALLED rule fire BEFORE the earliest CAUSAL ack
+// opportunity (a false positive on an in-envelope stream)? G overrides and pump-phase are ISOLATED
+// harness knobs inside THIS cell only; no product default/pin/spec changes; no fake acks; the
+// terminal-lost leg uses the labelled wire-drop seam (the frame never reaches the server, so the
+// ack provably cannot exist). Every run stands as it came — single attempt, reported as-is.
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+interface AckDiagFrame { label: 'c2s' | 's2c'; edge: 'clientIn' | 'serverIn' | 'clientOut' | 'dropped'; atMs: number; bytes: number; conn: number }
+
+const pctileOf = (xs: readonly number[], p: number): number | null => {
+  if (xs.length === 0) return null;
+  const sorted = [...xs].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))] ?? null;
+};
+
+test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 stalled-ack window on the poor profile (DIAGNOSTIC ONLY: isolated harness overrides, NOT Gate A, NOT a workload change)', async () => {
+  test.skip(process.env['UDG_ACK_WINDOW_DIAG'] !== '1', 'dispatched only by UDG_ACK_WINDOW_DIAG=1 (slice 23 targeted diagnostic; no formal lane touches it)');
+  test.setTimeout(900_000);
+  expect(fixture, 'the room fixture booted').toBeDefined();
+  const roomPort = Number(new URL(fixture?.endpoint ?? 'http://127.0.0.1:0').port);
+  const seed = 1001;
+  const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  const outDir = process.env['UDG_ACK_WINDOW_OUT'] ?? join(ROOT, 'artifacts', '.local', 'spike-001', 'dpa8h');
+  mkdirSync(outDir, { recursive: true });
+
+  // The provisional values under diagnosis — read from the SAME sources the hosted cells used,
+  // stated PROVISIONAL UNDER GA-11. Nothing here ratifies or changes any of them.
+  const configModule = (await import('../../packages/config/dist/index.js')) as {
+    DEFAULT_SERVER_CONFIG: object;
+    withConfigOverrides(base: object, overrides: unknown): object;
+  };
+  const liveCfg = configModule.withConfigOverrides(configModule.DEFAULT_SERVER_CONFIG, { region: { bounds: REGION_BOUNDS } }) as unknown as {
+    input: { stallDetectionDeliveries: number };
+  };
+  const G_LIVE = liveCfg.input.stallDetectionDeliveries;
+  const PROVISIONAL = { snapshotDeadlineMs: 500, recoveryDeadlineMsMs: 4_000, toleranceMs: 300, gLive: G_LIVE };
+  // poor profile EXACTLY as the formal matrix declares it (run-spike PROFILE_RULES: 200/40).
+  const POOR = { name: 'poor-ackdiag', oneWayMs: 100, jitterBudgetMs: 40, seed };
+
+  type Phase = 'immediate' | 'postDelivery' | 'midInterval';
+  interface RunCfg { id: string; g: number | null; phase: Phase; loss: boolean }
+  interface RunResult {
+    cfg: RunCfg; wallMs: number;
+    fired: { detail: string; atMsPage: number } | null;
+    boundaryAtEnd: Record<string, unknown>;
+    clockBasis: { clock: string; envMaxMs: number; epsMs: number; note: string };
+    firstInputPage: { pageSendMs: number } | null;
+    opportunity: { earliestAckEligiblePageMs: number | null; spanMs: null | number };
+    verdict: null | 'fired' | 'fired-before-any-causal-opportunity' | 'fired-within-uncertainty' | 'fired-after-opportunity-elapsed' | 'no-fire';
+    inputAgeAtTriggerMs: { pageBasis: number | null };
+    deliverySpacingMs: { n: number; min: number | null; p01: number | null; p50: number | null; p99: number | null; max: number | null };
+    broadcastSpacingP99Ms: number | null;
+    moverConns: number[];
+    safety: { sendsAfterFinal: number; sendsGrewQuiet: boolean; pendingAtEnd: number; stateAtEnd: string; droppedFrames: number };
+    probe: { n: number; p50: number | null; p95: number | null; min: number | null; max: number | null; aborted: string | null };
+    notes: string[];
+  }
+
+  const host = await startProxyHost();
+  const runs: RunResult[] = [];
+
+  const runOnce = async (cfg: RunCfg): Promise<RunResult> => {
+    const t0 = Date.now();
+    const notes: string[] = [];
+    const started = await host.request({ op: 'start', profile: POOR, targetHost: '127.0.0.1', targetPort: roomPort });
+    const handle = started['handle'] as number;
+    const proxyUrl = `http://127.0.0.1:${String(started['port'] as number)}`;
+    await host.request({ op: 'diag', handle, on: true });
+    const pageM = await openSeatPage(`ack-${cfg.id}-M`, { bare: true });
+    const pageQ = await openSeatPage(`ack-${cfg.id}-Q`, { bare: true });
+    const pageP = await openSeatPage(`ack-${cfg.id}-P`, { bare: true });
+    const pageO = await openSeatPage(`ack-${cfg.id}-O`, { bare: true });
+    // WS instrumentation on the MOVER page only (diagnostic, page-local, page monotonic clock).
+    // ATTEMPT-2 LESSON (named, retained): the SDK module captured the WebSocket constructor
+    // BEFORE any subclass installed via init scripts could be seen, and page-side arrays written
+    // by a patch that never ran are empty. The bridge therefore flows through exposeFunction,
+    // which EXISTS AT INIT-SCRIPT RUNTIME (the patched methods call it lazily, guarded), and the
+    // population lands on the NODE side where emptiness is loudly visible.
+    const pageSends: { atMs: number; bytes: number }[] = [];
+    const pageRecvs: { atMs: number; bytes: number }[] = [];
+    await pageM.exposeFunction('__udgWsReport', (kind: string, atMs: number, bytes: number) => {
+      if (kind === 'send' && pageSends.length < 20_000) pageSends.push({ atMs, bytes });
+      if (kind === 'recv' && pageRecvs.length < 20_000) pageRecvs.push({ atMs, bytes });
+    });
+      // ATTEMPT-2/3 LESSONS (named, retained): addInitScript AFTER the page has navigated
+      // never runs (the ordinary explanation for the empty populations — the patch simply never
+      // executed), so the wrapping is installed with page.evaluate BEFORE any join, while the
+      // SDK still reads the global constructor at connect time. Bridge AND window arrays are
+      // both fed; emptiness is a NAMED GAP row, never a silent fallback.
+      await pageM.evaluate(() => {
+        const Orig = globalThis.WebSocket;
+        const sizeOf = (d: unknown): number => typeof d === 'string' ? d.length
+          : (d instanceof ArrayBuffer ? d.byteLength : ((d as { byteLength?: number } | null)?.byteLength ?? 0));
+        const w = { sends: [] as { atMs: number; bytes: number }[], recvs: [] as { atMs: number; bytes: number }[] };
+        (globalThis as unknown as { __udgWsDiag?: unknown }).__udgWsDiag = w;
+        const report = (kind: string, atMs: number, bytes: number): void => {
+          if (kind === 'send' && w.sends.length < 20_000) w.sends.push({ atMs, bytes });
+          if (kind === 'recv' && w.recvs.length < 20_000) w.recvs.push({ atMs, bytes });
+          const f = (globalThis as unknown as { __udgWsReport?: (k: string, a: number, b: number) => void }).__udgWsReport;
+          if (typeof f === 'function') { void f(kind, atMs, bytes); }
+        };
+        // PROTOTYPE-level wrapping (attempt-5 lesson, named): the SDK transport instance is
+        // built at MODULE LOAD (page load, before any test evaluate) and holds its own captured
+        // constructor — but every instance shares the PROTOTYPE, so wrapping the prototype
+        // observes sends and messages regardless of which constructor reference the SDK kept.
+        const origSend = Orig.prototype.send as (this: WebSocket, d: unknown) => void;
+        Orig.prototype.send = function (this: WebSocket, data: unknown): void {
+          report('send', performance.now(), sizeOf(data));
+          origSend.call(this, data);
+        };
+        const proto = Orig.prototype as unknown as {
+          addEventListener: (t: string, l: EventListenerOrEventListenerObject | null, o?: AddEventListenerOptions | boolean) => void;
+        };
+        const origAel = proto.addEventListener.bind(Orig.prototype);
+        proto.addEventListener = function (this: WebSocket, type: string, listener: EventListenerOrEventListenerObject | null, opts?: AddEventListenerOptions | boolean): void {
+          if (type === 'message' && typeof listener === 'function') {
+            const inner = listener;
+            const wrapped: EventListener = (ev) => { report('recv', performance.now(), sizeOf((ev as MessageEvent).data)); inner(ev); };
+            if (opts === undefined) origAel(type, wrapped); else origAel(type, wrapped, opts);
+            return;
+          }
+          if (opts === undefined) origAel(type, listener); else origAel(type, listener, opts);
+        };
+        const onmessageDesc = Object.getOwnPropertyDescriptor(Orig.prototype, 'onmessage');
+        if (onmessageDesc?.set !== undefined) {
+          const innerSet = onmessageDesc.set;
+          const innerGet = onmessageDesc.get ?? (function (this: { _udgOnMsg?: unknown }): unknown { return this._udgOnMsg; });
+          Object.defineProperty(Orig.prototype, 'onmessage', {
+            get: innerGet,
+            set(handler: ((this: WebSocket, ev: MessageEvent) => unknown) | null) {
+              const wrapped = handler === null ? null : function (this: WebSocket, ev: MessageEvent): void {
+                report('recv', performance.now(), sizeOf(ev.data));
+                void handler.call(this, ev);
+              };
+              innerSet.call(this, wrapped);
+            },
+            configurable: true,
+          });
+        }
+      });
+    void pageSends; void pageRecvs; // bonus bridge channel; the window arrays are the read target
+    let handleClosed = false;
+    try {
+      GA_STALL_G = cfg.g ?? undefined; // ISOLATED harness override inside THIS cell only
+      const roomName = ROOM_NAME; // the REGISTERED room type; each create() spawns a fresh instance
+      const joinM = await joinGaSeat(pageM, proxyUrl, { mode: 'create', roomName });
+      expect(joinM.ok === true, `${cfg.id}: mover joined through the poor proxy`).toBe(true);
+      const roomId = joinM.roomId ?? '';
+      await joinGaSeat(pageQ, proxyUrl, { mode: 'byId', roomId }); // quiet seat: room realism, never pumps
+      const joinP = await joinGaSeat(pageP, proxyUrl, { mode: 'byId', roomId }); // probe seat: never pumps
+      expect(joinP.ok === true, `${cfg.id}: probe seat joined`).toBe(true);
+      await joinGaObserver(pageO, fixture?.endpoint ?? '', roomId);
+
+      if (cfg.phase !== 'immediate') {
+        const b0 = await readGaBoundary(pageM);
+        const d0 = b0.deliveries;
+        for (;;) {
+          const b = await readGaBoundary(pageM);
+          if (b.deliveries > d0) break;
+          await wait(20);
+        }
+        if (cfg.phase === 'midInterval') await wait(25); // half a 50 ms patch cycle
+      }
+      const pumpStartPageMs = await pageM.evaluate(() => performance.now());
+      const pumpPromise = gaPump(pageM, 12_000);
+      void pumpPromise.catch(() => undefined); // the pump ends via __udgCellStop; its rejection (if any) is recorded by the boundary, never swallowed silently into the void
+      let fired: { detail: string; atMsPage: number } | null = null;
+      let lastBoundary = await readGaBoundary(pageM);
+      const watchUntil = Date.now() + 15_000;
+      while (Date.now() < watchUntil) {
+        lastBoundary = await readGaBoundary(pageM);
+        const trig = lastBoundary.events.find((e) => e.event === 'trigger' && e.detail.includes('input-ack-stalled'));
+        if (trig !== undefined) { fired = { detail: trig.detail, atMsPage: trig.atMs }; break; }
+        if (lastBoundary.state === 'suspended') break;
+        await wait(100);
+      }
+      await gaStopPump(pageM);
+      let droppedFrames = 0;
+      let oneShotPageMs = Number.NEGATIVE_INFINITY;
+      if (cfg.loss) {
+        // Drain to a settled boundary FIRST (slice-22 rule), then arm exactly ONE wire drop and
+        // make ONE final producer send. The dropped frame never reaches the server: its ack
+        // provably cannot exist. No seam anywhere injects acknowledgements.
+        const drainStart = Date.now();
+        for (;;) {
+          const b = await readGaBoundary(pageM);
+          if ((b.pending === 0 && b.ack === b.sentAuditLen && b.resolvedThrough === b.sentAuditLen) || Date.now() - drainStart > 30_000) { lastBoundary = b; break; }
+          await wait(100);
+        }
+        await host.request({ op: 'diag', handle, drop: 1 });
+        oneShotPageMs = await pageM.evaluate(() => performance.now());
+        const oneShot = await gaOneShot(pageM, 1, 0);
+        notes.push(`oneShot=${JSON.stringify(oneShot)}`);
+        fired = null;
+        const lossWatch = Date.now() + 20_000;
+        while (Date.now() < lossWatch) {
+          const b = await readGaBoundary(pageM);
+          const trig = b.events.find((e) => e.event === 'trigger' && e.detail.includes('input-ack-stalled'));
+          if (trig !== undefined) { fired = { detail: trig.detail, atMsPage: trig.atMs }; lastBoundary = b; break; }
+          await wait(100);
+        }
+      }
+      // REAL MATCHED PINGS on the poor stream (the accepted slot-reservation state machine on the
+      // probe seat's own socket) — the envelope this diagnostic stands on.
+      const probe = await runImpRttProbe(pageP, { pings: 30, cadenceMs: 100, deadlineMs: 1_500 });
+      const probeRtts = probe.samples.map((s) => s.rttMs);
+      // Safety: after the LAST send the page must emit NOTHING further (no re-issue, no retry).
+      // THE WINDOW ARRAYS ARE THE SOURCE OF TRUTH (the exposeFunction binding, added after
+      // navigation, is a bonus channel; the node-side arrays were the wrong read target in the
+      // aborted attempt — named in the pre-registration addendum 4).
+      const winSends = async (): Promise<{ atMs: number; bytes: number }[]> =>
+        (await pageM.evaluate(() => ((globalThis as unknown as { __udgWsDiag?: { sends: { atMs: number; bytes: number }[] } }).__udgWsDiag)?.sends ?? [])) as { atMs: number; bytes: number }[];
+      const winRecvs = async (): Promise<{ atMs: number; bytes: number }[]> =>
+        (await pageM.evaluate(() => ((globalThis as unknown as { __udgWsDiag?: { recvs: { atMs: number; bytes: number }[] } }).__udgWsDiag)?.recvs ?? [])) as { atMs: number; bytes: number }[];
+      const sendsBefore = (await winSends()).length;
+      await wait(1_500);
+      const sendsAfter = (await winSends()).length;
+      const sends = await winSends();
+      const recvs = await winRecvs();
+      const finalBoundary = await readGaBoundary(pageM);
+
+      // Snapshot stats BEFORE closing: mover connections = the ones that carried pump traffic
+      // (>= 3 c2s chunks; quiet/probe seats only ever sent their join frames by now).
+      const st = await host.request({ op: 'stats', handle });
+      const stats = st['stats'] as ProxyStats;
+      const diag = st['diag'] as { c2sDropped: number; frames: AckDiagFrame[] };
+      droppedFrames = diag.c2sDropped;
+      const moverConns = stats.c2sPerConn.filter((c) => c.chunksReceived >= 3).map((c) => c.index);
+      await closeProxyBounded(host, handle);
+      handleClosed = true;
+
+      const frames = diag.frames; // proxy stamps: CORROBORATION only (attempt 1 proved TCP-chunk stamps cannot be LCS-paired with WS messages)
+      const s2cIn = frames.filter((f) => f.label === 's2c' && f.edge === 'serverIn').map((f) => f.atMs).sort((a, b) => a - b);
+      const bcastSpacing = s2cIn.slice(1).map((v, i2) => v - (s2cIn[i2] ?? 0));
+      const broadcastSpacingP99Ms = bcastSpacing.length > 0 ? pctileOf(bcastSpacing, 0.99) : null;
+      // PAGE-CLOCK CAUSALITY (pre-registered addendum): one clock; the envelope worst case is
+      // the causal bound. A frame arriving at page time r cannot carry an ack for an input sent
+      // at page time s unless r > s + ENV_MAX + EPS. ENV_MAX = 2 x (100 + 20) = the poor
+      // profile's MAXIMUM total artificial stall; EPS = declared loopback/service slack.
+      const ENV_MAX_MS = 2 * (POOR.oneWayMs + POOR.jitterBudgetMs);
+      const EPS_MS = 5;
+      const clockBasis = { clock: 'mover page performance.now (single clock)', envMaxMs: ENV_MAX_MS, epsMs: EPS_MS,
+        note: 'proxy TCP-chunk stamps corroborate only; attempt 1 recorded byte-LCS pairing as inapplicable (TCP chunks != WS messages)' };
+      const recvSpacing = recvs.slice(1).map((v2, i2) => v2.atMs - (recvs[i2]?.atMs ?? 0)).filter((v2) => v2 >= 0);
+      const basisSend = cfg.loss
+        ? (sends.find((snd) => snd.atMs >= oneShotPageMs - 1) ?? sends[sends.length - 1] ?? null)
+        : (sends.find((snd) => snd.atMs >= pumpStartPageMs - 1) ?? null);
+      const firstInputPage = basisSend === null ? null : { pageSendMs: basisSend.atMs };
+      const earliestAckEligiblePageMs = basisSend === null ? null : basisSend.atMs + ENV_MAX_MS + EPS_MS;
+      const opportunity = {
+        earliestAckEligiblePageMs,
+        spanMs: basisSend === null ? null : ENV_MAX_MS + EPS_MS,
+      };
+      let verdict: RunResult['verdict'] = null;
+      if (cfg.loss) verdict = fired === null ? 'no-fire' : 'fired';
+      else if (fired === null) verdict = 'no-fire';
+      else if (earliestAckEligiblePageMs === null) verdict = 'fired-within-uncertainty';
+      else if (fired.atMsPage < earliestAckEligiblePageMs) verdict = 'fired-before-any-causal-opportunity';
+      else if (fired.atMsPage <= earliestAckEligiblePageMs + 15) verdict = 'fired-within-uncertainty';
+      else verdict = 'fired-after-opportunity-elapsed';
+      const inputAgePage = fired === null || basisSend === null ? null : fired.atMsPage - basisSend.atMs;
+      const rttsSorted = [...probeRtts].sort((a, b) => a - b);
+      const res: RunResult = {
+        cfg, wallMs: Date.now() - t0,
+        fired: fired === null ? null : { detail: fired.detail, atMsPage: fired.atMsPage },
+        boundaryAtEnd: { deliveries: lastBoundary.deliveries, ack: lastBoundary.ack, resolvedThrough: lastBoundary.resolvedThrough, pending: lastBoundary.pending, stallStreak: lastBoundary.stallStreak, state: lastBoundary.state },
+        clockBasis,
+        firstInputPage, opportunity, verdict,
+        inputAgeAtTriggerMs: { pageBasis: inputAgePage },
+        deliverySpacingMs: { n: recvSpacing.length, min: pctileOf(recvSpacing, 0.0), p01: pctileOf(recvSpacing, 0.01), p50: pctileOf(recvSpacing, 0.5), p99: pctileOf(recvSpacing, 0.99), max: recvSpacing.length > 0 ? Math.max(...recvSpacing) : null },
+        broadcastSpacingP99Ms,
+        moverConns,
+        safety: { sendsAfterFinal: sendsAfter - sendsBefore, sendsGrewQuiet: sendsAfter > sendsBefore, pendingAtEnd: finalBoundary.pending, stateAtEnd: finalBoundary.state, droppedFrames },
+        probe: { n: rttsSorted.length, p50: pctileOf(rttsSorted, 0.5), p95: pctileOf(rttsSorted, 0.95), min: rttsSorted[0] ?? null, max: rttsSorted.length > 0 ? rttsSorted[rttsSorted.length - 1] ?? null : null, aborted: probe.abortedReason },
+        notes,
+      };
+      // Hard safety invariants — these are the ONLY hard expectations in this diagnostic:
+      const diagState = await pageM.evaluate(() => {
+        const w = (globalThis as unknown as { __udgWsDiag?: { sends: unknown[]; recvs: unknown[] } }).__udgWsDiag;
+        const holder = (globalThis as unknown as { __udgImpSeat?: { transport: Record<string, unknown> } }).__udgImpSeat;
+        const tr = holder?.transport as ({ socket?: { constructor?: { name?: string } }; transport?: { socket?: { constructor?: { name?: string } }; webSocket?: { constructor?: { name?: string } } }; client?: { transport?: { socket?: { constructor?: { name?: string } } } } } | undefined);
+        return {
+          diagExists: w !== undefined, ctorName: globalThis.WebSocket.name,
+          sends: w?.sends.length ?? -1, recvs: w?.recvs.length ?? -1,
+          socketCtor: tr?.socket?.constructor?.name ?? tr?.transport?.socket?.constructor?.name ?? tr?.client?.transport?.socket?.constructor?.name ?? null,
+          transportKeys: tr === undefined ? null : Object.keys(tr).slice(0, 12),
+        };
+      });
+      expect(sends.length, `${cfg.id}: NAMED GAP — the WS instrument captured no sends (population must be visible, never silently empty); diagState=${JSON.stringify(diagState)}`).toBeGreaterThan(0);
+      expect(recvs.length, `${cfg.id}: NAMED GAP — the WS instrument captured no receives`).toBeGreaterThan(0);
+      expect(res.safety.sendsGrewQuiet, `${cfg.id}: the page emitted sends while the seat should have been silent (re-issue?)`).toBe(false);
+      if (cfg.loss) expect(res.safety.droppedFrames, `${cfg.id}: the wire-drop seam did not drop exactly the armed frame`).toBe(1);
+      GA_STALL_G = undefined; // the override NEVER leaks past this run
+      return res;
+    } finally {
+      if (!handleClosed) { try { await closeProxyBounded(host, handle); } catch { /* receipt governs */ } }
+      for (const p of [pageM, pageQ, pageP, pageO]) await p.close().catch(() => undefined);
+    }
+  };
+
+  // ── runs exactly as pre-registered ─────────────────────────────────────────────────────────
+  const pre: RunCfg[] = [
+    { id: 'R1-G3-immediate', g: null, phase: 'immediate', loss: false },
+    { id: 'R2-G3-postDelivery', g: null, phase: 'postDelivery', loss: false },
+    { id: 'R3-G3-midInterval', g: null, phase: 'midInterval', loss: false },
+  ];
+  for (const cfg of pre) runs.push(await runOnce(cfg));
+
+  // G' derived from R1–R3 bytes ONLY, by the PRE-REGISTERED formula (never fitted afterwards).
+  const fastSpacings = runs.map((r) => r.deliverySpacingMs.p01).filter((v): v is number => v !== null && v > 0);
+  const fastSpacing = fastSpacings.length > 0 ? Math.min(...fastSpacings) : 12;
+  const G_RAW = Math.ceil((2 * (POOR.oneWayMs + POOR.jitterBudgetMs) + 5) / fastSpacing);
+  const INFEASIBLE_COUNT_ONLY = G_RAW > 24;
+  const G_PRIME = Math.min(G_RAW, 24); // addendum cap rule: 24 is a REPRESENTATIVE best-case probe, never a candidate
+  const derived = { formula: 'G_raw = ceil((ENV_MAX+EPS)/fastSpacingP01); cap 24 = representative best-case count-only probe', fastSpacingP01Ms: fastSpacing, gRaw: G_RAW, infeasibleCountOnly: INFEASIBLE_COUNT_ONLY, gUsed: G_PRIME };
+  check(`ack-window: G' derived by the AMENDED pre-registered rule BEFORE the continuation runs (cap 24 = best-case count-only PROBE, infeasible flag honest)`,
+    Number.isFinite(G_PRIME) && G_PRIME > G_LIVE, derived);
+
+  const post: RunCfg[] = [
+    { id: `R4-G${String(G_PRIME)}-immediate`, g: G_PRIME, phase: 'immediate', loss: false },
+    { id: `R5-G${String(G_PRIME)}-postDelivery`, g: G_PRIME, phase: 'postDelivery', loss: false },
+    { id: `R6-terminalLost-G${String(G_LIVE)}`, g: null, phase: 'postDelivery', loss: true },
+    { id: `R7-terminalLost-G${String(G_PRIME)}`, g: G_PRIME, phase: 'postDelivery', loss: true },
+  ];
+  for (const cfg of post) runs.push(await runOnce(cfg));
+
+  // Terminal-lost detection against the PROVISIONAL episode budget + the choice's added delay.
+  const r6 = runs.find((r) => r.cfg.loss && r.cfg.g === null);
+  const r7 = runs.find((r) => r.cfg.loss === true && r.cfg.g !== null);
+  const medianSpacing = runs.find((r) => r.deliverySpacingMs.p50 !== null)?.deliverySpacingMs.p50 ?? 50;
+  const detection = {
+    r6Fired: r6?.fired !== null && r6 !== undefined, r7Fired: r7?.fired !== null && r7 !== undefined,
+    r6InputAgeMs: r6?.inputAgeAtTriggerMs.pageBasis ?? null, r7InputAgeMs: r7?.inputAgeAtTriggerMs.pageBasis ?? null,
+    episodeBudgetProvisionalMs: PROVISIONAL.recoveryDeadlineMsMs, toleranceMs: PROVISIONAL.toleranceMs,
+    addedDelayOfChoiceMs: (G_PRIME - G_LIVE) * (medianSpacing ?? 50),
+  };
+  check('ack-window SAFETY: terminal-lost inputs still fire at BOTH G values and inside the provisional episode budget (+slack) — the choice only ADDS delay',
+    detection.r6Fired === true && detection.r7Fired === true
+    && (detection.r6InputAgeMs ?? Number.POSITIVE_INFINITY) < PROVISIONAL.recoveryDeadlineMsMs + PROVISIONAL.toleranceMs
+    && (detection.r7InputAgeMs ?? Number.POSITIVE_INFINITY) < PROVISIONAL.recoveryDeadlineMsMs + PROVISIONAL.toleranceMs,
+    detection);
+  check('ack-window SAFETY: no run re-issued anything and every trigger saw REAL pending inputs (no invented state, no fake ack seams exist)',
+    runs.every((r) => r.safety.sendsGrewQuiet === false), runs.map((r) => ({ id: r.cfg.id, pendingAtEnd: r.safety.pendingAtEnd, state: r.safety.stateAtEnd })));
+
+  const artifact = {
+    kind: 'DIAGNOSTIC-NOT-GATE-A', slice: 23,
+    generatedAt: new Date().toISOString(), commit: headSha(), dirty: workingTreeDirty(),
+    preRegistration: 'PRE-REGISTRATION.md in this directory (written before any run)',
+    profile: POOR, provisional: PROVISIONAL, derived, detection,
+    attempt1: 'ack-window-diagnostic.attempt1.json (LCS pairing recorded inapplicable; retained, not rerolled away)',
+    clocks: 'ALL causality on the MOVER PAGE monotonic clock (uncertainty = browser timer slack ~5 ms inside EPS); the hop proxy stamps TCP-chunk edges on its own process clock — CORROBORATION only (attempt 1 recorded why chunk-level stamps cannot be paired with WS messages); the authority clock is not used for opportunity arithmetic',
+    runs,
+  };
+  writeFileSync(join(outDir, 'ack-window-diagnostic.json'), JSON.stringify(artifact, null, 2) + '\n');
+  check('ack-window: every matched-ping stream sits inside the poor envelope at p95 with DECLARED browser/service slack (+15 ms) — max is tail+slack, stated, never a fitted bound',
+    runs.every((r) => r.probe.n > 0 && (r.probe.p95 ?? Number.POSITIVE_INFINITY) <= 240 + 15),
+    runs.map((r) => ({ id: r.cfg.id, n: r.probe.n, min: r.probe.min, p50: r.probe.p50, p95: r.probe.p95, max: r.probe.max, aborted: r.probe.aborted, declaredSlackMs: 15 })));
+  check('ack-window: all seven pre-registered runs completed and the artefact is on disk',
+    runs.length === 7 && existsSync(join(outDir, 'ack-window-diagnostic.json')), { outDir, ids: runs.map((r) => r.cfg.id) });
+  await host.shutdown();
+});

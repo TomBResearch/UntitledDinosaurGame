@@ -89,7 +89,17 @@ interface KillCmd {
   readonly handle: number;
 }
 
-type Cmd = StartCmd | HandleCmd | StallCmd | FlushCmd | HoldNextCmd | KillCmd | ShutdownCmd;
+/** ACK-WINDOW DIAGNOSTIC ONLY (slice 23): per-handle trace toggle / targeted c2s wire drop. */
+interface DiagCmd {
+  readonly ch: 'cmd';
+  readonly id: number;
+  readonly op: 'diag';
+  readonly handle: number;
+  readonly on?: boolean;
+  readonly drop?: number;
+}
+
+type Cmd = StartCmd | HandleCmd | StallCmd | FlushCmd | HoldNextCmd | KillCmd | DiagCmd | ShutdownCmd;
 
 const write = (line: Record<string, unknown>): void => {
   process.stdout.write(`${JSON.stringify(line)}\n`);
@@ -203,6 +213,17 @@ const handle = (cmd: Cmd): void => {
     write({ ch: 'reply', id: cmd.id, ok: true, held: cmd.direction, count: cmd.count, ...stamp() });
     return;
   }
+  if (cmd.op === 'diag') {
+    const diagEntry = proxies.get(cmd.handle);
+    if (diagEntry === undefined) {
+      write({ ch: 'reply', id: cmd.id, ok: false, error: `no proxy handle ${String(cmd.handle)}` });
+      return;
+    }
+    if (cmd.on !== undefined) diagEntry.proxy.setFrameTrace(cmd.on);
+    if (cmd.drop !== undefined) diagEntry.proxy.armC2sDrop(cmd.drop);
+    write({ ch: 'reply', id: cmd.id, ok: true, diag: true, ...stamp() });
+    return;
+  }
   if (cmd.op === 'kill') {
     const killEntry = proxies.get(cmd.handle);
     if (killEntry === undefined) {
@@ -240,6 +261,7 @@ const handle = (cmd: Cmd): void => {
     write({
       ch: 'reply', id: cmd.id, ok: true,
       stats: entry.proxy.stats() satisfies ProxyStats,
+      diag: entry.proxy.diagStats(),
       throttle: { worstThrottleDeltaUsec, worstThrottleDeltaEvents },
     });
     return;
