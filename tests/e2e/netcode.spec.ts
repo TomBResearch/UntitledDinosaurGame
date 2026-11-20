@@ -2587,6 +2587,57 @@ const runImpMover = async (page: Page, frames: number, axis: 'x' | 'z'): Promise
     };
   }, { frames, axis });
 
+/**
+ * MOVER EVENT LEDGER (slice 22, named evidence gap from hosted poor-1002: the cell could not
+ * name WHICH client rule stopped the seat — the stop itself was visible, the reason string was
+ * not persisted). Continuously binds every mover state/recovery event to the browser clock, the
+ * phase it happened in and the epoch, alongside last-accepted delivery, ack/prefix/sent/
+outstanding, the surfaced connectionError and the predictor state. Reads the SAME client domain
+ * surface the ga-boundary reader uses (recoveryLedger names the trigger exactly). Pure observer:
+ * it changes nothing.
+ */
+const startMoverLedger = (page: Page): Promise<{ samples: Record<string, unknown>[]; events: Record<string, unknown>[] }> =>
+  page.evaluate(async () => {
+    const g = globalThis as unknown as { __udgLedgerStop?: boolean; __udgCellPumpStartedAt?: number };
+    g.__udgLedgerStop = false;
+    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+    if (holder === undefined) return { samples: [], events: [] };
+    const p = holder.predictor;
+    const samples: Record<string, unknown>[] = [];
+    const events: Record<string, unknown>[] = [];
+    let lastEventsLen = 0;
+    const started = performance.now();
+    for (;;) {
+      const rows = p.deliveryLedger();
+      const d = rows.length > 0 ? rows[rows.length - 1]!.delivery : undefined;
+      const evs = p.recoveryLedger().map((r) => ({ event: r.event, detail: r.detail, atMs: r.atMs }));
+      const connError = (p as unknown as { connectionError(): { code: string; message: string; atMs: number } | null }).connectionError();
+      const snap: Record<string, unknown> = {
+        atMs: performance.now(),
+        sincePumpMs: typeof g.__udgCellPumpStartedAt === 'number' ? performance.now() - g.__udgCellPumpStartedAt : null,
+        epoch: d?.epoch ?? holder.transport.issuedEpoch(),
+        state: p.stateName(),
+        ack: d?.ack ?? -1,
+        prefix: d?.resolvedThrough ?? -1,
+        sent: p.sentAudit().length,
+        outstanding: p.pendingJournal().length,
+        deliveries: rows.length,
+        lastAccepted: d === undefined ? null : { atMs: d.atMs, authorityTick: d.authorityTick, epoch: d.epoch },
+        authorityTick: d?.authorityTick ?? -1,
+        connectionError: connError === null ? null : { code: connError.code, message: connError.message.slice(0, 240), atMs: connError.atMs },
+        eventsLen: evs.length,
+      };
+      samples.push(snap);
+      if (evs.length > lastEventsLen) {
+        for (const e of evs.slice(lastEventsLen)) events.push({ ...e, atClockMs: snap['atMs'], epoch: snap['epoch'], state: snap['state'] });
+        lastEventsLen = evs.length;
+      }
+      if (g.__udgLedgerStop === true || samples.length >= 2400 || performance.now() - started > 185_000) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return { samples, events };
+  });
+
 /* ------------------------------------------------------------------ accepted RTT probe (slice 6d)
  *
  * The probe's slot-reservation state machine lives in tools/load-test/src/rtt-probe.ts —
@@ -2602,6 +2653,16 @@ const runImpMover = async (page: Page, frames: number, axis: 'x' | 'z'): Promise
 const PROBE_MODULE_URL = `/@fs${join(ROOT, 'tools', 'load-test', 'dist', 'rtt-probe.js')}`;
 /** Same pipeline, same principle: the phase-window analyzer and the canonical route run in the PAGE as the UNIT-TESTED module, not as a page-side re-implementation. */
 const ACK_LEDGER_MODULE_URL = `/@fs${join(ROOT, 'tools', 'load-test', 'dist', 'ack-ledger.js')}`;
+const RENDER_LAG_MODULE_URL = `/@fs${join(ROOT, 'tools', 'load-test', 'dist', 'render-lag.js')}`;
+
+/** The page-side assessment shape (mirrors tools/load-test/src/render-lag.ts exactly). */
+interface RenderAssessment {
+  frames: number; identity: string; epochs: number[];
+  aheadFrames: number; noExtrapolation: boolean;
+  minLagTicks: number | null; maxLagTicks: number | null; meanLagTicks: number | null;
+  discontinuities: number; holdingFrames: number; maxHowOldMs: number | null;
+}
+interface RenderFramesResult { rawCount: number; assessment: RenderAssessment; frames: Record<string, unknown>[] }
 
 interface RttProbeWindow {
   readonly samples: readonly { readonly sentAtMs: number; readonly receivedAtMs: number; readonly rttMs: number; readonly sdkMs: number }[];
@@ -3373,8 +3434,12 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
           );
         } catch (error) {
           // A refusal (e.g. ADR-0003 recovery in effect) must END the pump and be REPORTED —
-          // never reject the page evaluate and destroy the cell mid-window.
-          return { sendError: String(error instanceof Error ? error.message : error) };
+          // never reject the page evaluate and destroy the cell mid-window. The refusal is ALSO
+          // published synchronously (slice 22) so the node side can early-stop instead of
+          // burning the remaining window on a seat the fixture provably cannot restart.
+          const reason = String(error instanceof Error ? error.message : error);
+          (globalThis as unknown as { __udgCellSendError?: string }).__udgCellSendError = reason;
+          return { sendError: reason };
         }
         await new Promise((resolve) => setTimeout(resolve, 60));
       }
@@ -3456,6 +3521,9 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
     cellCheck('cell: canonical route PRE-VALIDATED — spawn puts the whole 48 m square inside the ±50 m region, so no leg can be clamped (provable, not merely observed)',
       spawnOk, { spawn, square: 'x∈[spawn, spawn+48], z∈[spawn, spawn+48]', bounds: '±50 m (100 m region)' });
 
+    // ---- the mover event ledger starts BEFORE the pump: every state/recovery transition is
+    // bound to clock, phase and epoch from the first moment of the cell (slice 22).
+    const moverLedgerPromise = startMoverLedger(pageM);
     const pumpMs = 20_000 + 120_000 + 30_000;
     const pump = startRoutePump(pageM, pumpMs);
     // Phase boundaries are pump-clock waits, not node-side wall sleeps (slice 12): the warmup ends
@@ -3486,21 +3554,102 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
       const samples: { atMs: number; x: number; z: number }[] = [];
       const ticks: number[] = [];
       for (let i = 0; i < 64; i += 1) { // 64 × 2 s ≥ the whole (>= 120 s) measure window on the observer side
+        if ((globalThis as unknown as { __udgFramesStop?: boolean }).__udgFramesStop === true) break; // slice 22 early-stop
         const s = read();
         if (s !== null) { samples.push({ atMs: s.atWall - args.bridge.wall + args.bridge.perf, x: s.x, z: s.z }); ticks.push(s.tick); }
         await new Promise((resolve) => setTimeout(resolve, 2_000));
       }
       return { samples, lastTick: ticks.at(-1) ?? null };
     }, { sessionId: joinM.sessionId, bridge: clockBridge });
-    const probe = await probePromise;
+    // ---- render frames AT THE OBSERVER'S OWN FRAME BOUNDARY (slice 22): every ~100 ms, in ONE
+    // synchronous read on this page, fold the snapshot, take the latest VALIDATED authority tick
+    // for the mover and the render pose this frame would show. The pose is compared ONLY against
+    // this page's validated tick — never another page's counter — and the pure assessor
+    // (render-lag.ts, unit-pinned: intentionally-ahead FAILS, delayed passes) runs in the page.
+    const renderFramesPromise = pageO.evaluate(async (args): Promise<RenderFramesResult> => {
+      const mod = (await import(/* @vite-ignore */ args.moduleUrl)) as {
+        assessObserverRenderSeries(frames: unknown[]): RenderAssessment;
+      };
+      const g = globalThis as unknown as { __udgFramesStop?: boolean };
+      g.__udgFramesStop = false;
+      const frames: Record<string, unknown>[] = [];
+      const startedAt = performance.now();
+      let rawCount = 0;
+      for (;;) {
+        const holder = (globalThis as unknown as SeatWindow).__udgSpikeSeat;
+        if (holder === undefined) break;
+        holder.presentation.observe(holder.seat.snapshot());
+        const t = holder.presentation.peers()
+          .map((peer) => holder.presentation.trackOf(peer))
+          .find((tr) => tr?.sessionId === args.sessionId);
+        if (t !== undefined) {
+          const pose = holder.presentation.renderPose(args.sessionId, performance.now(), 60);
+          if (pose !== undefined) {
+            rawCount += 1;
+            if (frames.length < 1600) {
+              frames.push({
+                atMs: performance.now(), sessionId: args.sessionId, epoch: t.epoch,
+                authorityTick: t.lastSample.tick,
+                fromTick: pose.fromTick, toTick: pose.toTick, alpha: pose.alpha,
+                holding: pose.holding, howOldMs: pose.howOldMs,
+              });
+            }
+          }
+        }
+        if (g.__udgFramesStop === true || performance.now() - startedAt > args.maxMs) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return { rawCount, assessment: mod.assessObserverRenderSeries(frames), frames };
+    }, { sessionId: joinM.sessionId, moduleUrl: RENDER_LAG_MODULE_URL, maxMs: 130_000 });
     // The measure window ends at the >= 120 000 ms pump-clock guard — NOT at probe completion
     // (that ordering was the LAN bug: pings are a window inside the measure window, not the
     // window itself). For profiles whose ping loop outlasts 120 s (elevated: ~127 s) the wait is
     // already satisfied at probe end and the window is the probe span — recorded as such.
-    const measureEnd = await waitPumpPhase(pageM, 140_025, 150_025, 'measureEnd');
+    // EARLY-STOP (slice 22): a send-gate stop ends the pump BEFORE the window; the fixture
+    // (joinImpSeat wires NO rejoin into DirectMotionPredictor) provably cannot restart the seat,
+    // so burning ~2 more minutes on it measures nothing new. The stop is stamped, everything
+    // downstream stays honestly RED, the artefact is still written with full identity/ledger,
+    // and NO compliant resync/closed period can pass: the send gate keeps refusing to the end.
+    const raced = await Promise.race([
+      pump.then((r): { early: string } | null => (r.sendError === null ? null : { early: r.sendError })),
+      probePromise.then((p) => ({ probe: p })),
+    ]);
+    let probe: Awaited<typeof probePromise>;
+    let earlyStop: { reason: string } | null = null;
+    let measureEnd: Awaited<ReturnType<typeof waitPumpPhase>>;
+    if (raced !== null && 'probe' in raced) {
+      probe = raced.probe;
+      measureEnd = await waitPumpPhase(pageM, 140_025, 150_025, 'measureEnd');
+    } else {
+      earlyStop = { reason: raced === null ? 'the route pump finished before the probe settled without a declared window end' : (raced as { early: string }).early };
+      await pageM.evaluate(() => {
+        (globalThis as unknown as { __udgCellStop?: boolean }).__udgCellStop = true;
+        (globalThis as unknown as { __udgFramesStop?: boolean }).__udgFramesStop = true;
+      });
+      measureEnd = await pageM.evaluate(() => {
+        const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+        if (holder === undefined) throw new Error('the cell mover is not joined');
+        const started = (globalThis as unknown as { __udgCellPumpStartedAt?: number }).__udgCellPumpStartedAt;
+        const atMs = performance.now();
+        const w = globalThis as unknown as { __udgCellMarks?: Record<string, number> };
+        w.__udgCellMarks = { ...(w.__udgCellMarks ?? {}), measureEnd: atMs };
+        return { atMs, lastProcessed: holder.transport.handle().lastProcessed, elapsedMs: typeof started === 'number' ? atMs - started : -1, capped: false };
+      });
+      const probeSettled = await Promise.race([
+        probePromise.then((p) => ({ p })),
+        new Promise<{ timedOut: true }>((resolve) => setTimeout(() => resolve({ timedOut: true as const }), 15_000)),
+      ]);
+      probe = 'p' in probeSettled
+        ? probeSettled.p
+        : { samples: [], lateDiscarded: 0, retiredUnconfirmed: 0, slotPoisoned: false, socketClosed: true, epochChanged: false, notSent: 100, clockElapsedMs: 0, wallElapsedMs: 0, abortedReason: 'the probe never settled within 15 s of the early stop' } as unknown as Awaited<typeof probePromise>;
+    }
     const trackSamples = await trackSamplesPromise;
     const measureMsBrowser = measureEnd.atMs - measureStart.atMs;
     const cpuAfter = readCpuThrottle();
+    // stop the frame recorder and the mover ledger at the window boundary, then collect both.
+    await pageO.evaluate(() => { (globalThis as unknown as { __udgFramesStop?: boolean }).__udgFramesStop = true; });
+    await pageM.evaluate(() => { (globalThis as unknown as { __udgLedgerStop?: boolean }).__udgLedgerStop = true; });
+    const moverLedger = await moverLedgerPromise;
 
     // ---- the ledger, analysed IN THE PAGE over the browser monotonic clock by the module the
     // unit tests pin (warm-up rows EXCLUDED and counted; every eligible ack counted once, zeros
@@ -3584,18 +3733,19 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
     cellCheck('cell: the observer path — the mover travelled the CANONICAL ROUTE unobstructed for the whole window: stationary intervals 0, boundary plateaus 0, out-of-bounds 0, range inside ±50 m; discontinuities (tick regressions + epoch changes) 0',
       motion.range.maxX - motion.range.minX > 30 && motion.range.maxZ - motion.range.minZ > 30 && motion.medianSpeedMps >= 1.5 && motion.stationaryIntervals === 0 && motion.boundaryPlateaus === 0 && motion.outOfBounds === 0 && motion.range.minX >= -50 && motion.range.maxX <= 50 && motion.range.minZ >= -50 && motion.range.maxZ <= 50 && discontinuities === 0,
       { motion, discontinuities, duplicateSamples, delta: moverTrack?.delta, note: 'gate = tick regressions + epoch changes; duplicateSamples RECORDED (s2c stalls can re-deliver identical samples)' });
-    // render lag in ONE comparable authority-tick space: the highest authority tick the MOVER's
-    // own delivery ledger accepted, minus the tick of the sample the observer's presentation
-    // last adopted for that peer. The mover is read first, so the number UNDERSTATES the lag by
-    // the inter-read gap — stated, not hidden. (The imp mover page carries the predictor's
-    // ledger, not the presentation surface — this is the observable lower bound.)
-    const moverSelfTick = await pageM.evaluate(() => {
+    // ---- render delay AT THE OBSERVER'S OWN FRAME BOUNDARY (slice 22). The hosted lan-1002
+    // first attempt proved the old CROSS-PAGE point sample (mover-page ledger tick, then
+    // observer-page adopted tick) races two monotonic counters on fast profiles — lagTicks −2
+    // without any observer rendering ahead of its authority. The gate is now the same-frame
+    // series; the old construction is RECORDED ONLY (never dropped, never gating).
+    const renderFrames = await renderFramesPromise;
+    const legacyMoverSelfTick = await pageM.evaluate(() => {
       const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
       if (holder === undefined) throw new Error('the cell mover is not joined');
       const accepted = holder.predictor.deliveryLedger().filter((d) => d.accepted);
       return accepted.at(-1)?.delivery.authorityTick ?? null;
     });
-    const observerRenderedTick = await pageO.evaluate((sid) => {
+    const legacyObserverRenderedTick = await pageO.evaluate((sid) => {
       const holder = (globalThis as unknown as SeatWindow).__udgSpikeSeat;
       if (holder === undefined) return null;
       holder.presentation.observe(holder.seat.snapshot());
@@ -3604,10 +3754,26 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
         .find((tr) => tr?.sessionId === sid);
       return t?.lastSample.tick ?? null;
     }, joinM.sessionId);
-    const renderLag = { observerRenderedTick, moverSelfTick, lagTicks: observerRenderedTick === null || moverSelfTick === null ? null : moverSelfTick - observerRenderedTick };
-    cellCheck('cell: render delay is OBSERVED (mover-accepted authority tick minus the observer\'s adopted sample tick — a lower bound, mover read first) and non-negative; magnitude recorded, not threshold-gated',
-      renderLag.lagTicks !== null && renderLag.lagTicks >= -1,
-      renderLag);
+    const renderLagLegacy = {
+      observerRenderedTick: legacyObserverRenderedTick,
+      moverSelfTick: legacyMoverSelfTick,
+      lagTicks: legacyObserverRenderedTick === null || legacyMoverSelfTick === null ? null : legacyMoverSelfTick - legacyObserverRenderedTick,
+      role: 'RECORDED ONLY — the cross-page point sample is retired as a gate (hosted run 44771876137 lan-1002 protocol race), retained as a diagnostic',
+    };
+    cellCheck('cell: render delay is OBSERVED AT THE OBSERVER\'S OWN FRAME BOUNDARY — every frame compares its render pose against THIS PAGE\'S latest VALIDATED authority sample for the mover (same page, same instant — no cross-page counter race); NO frame renders ahead of validated authority (no extrapolation), alpha within [0,1], peer identity kept, epoch stamped; interpolation-delay magnitude RECORDED, not threshold-gated',
+      renderFrames.assessment.frames >= 100 && renderFrames.assessment.noExtrapolation === true && renderFrames.assessment.identity === joinM.sessionId,
+      { assessment: renderFrames.assessment, rawFramesCaptured: renderFrames.rawCount, moverSession: joinM.sessionId });
+    cellCheck('cell: render DISCONTINUITIES (render-target tick regressions between consecutive frames inside one epoch) are 0 — reported SEPARATELY from interpolation delay; an epoch transition is a new timeline, not a regression; a delayed or holding frame is legitimate and never penalised',
+      renderFrames.assessment.frames >= 100 && renderFrames.assessment.discontinuities === 0,
+      {
+        discontinuities: renderFrames.assessment.discontinuities,
+        epochs: renderFrames.assessment.epochs,
+        minLagTicks: renderFrames.assessment.minLagTicks,
+        maxLagTicks: renderFrames.assessment.maxLagTicks,
+        meanLagTicks: renderFrames.assessment.meanLagTicks,
+        holdingFrames: renderFrames.assessment.holdingFrames,
+        maxHowOldMs: renderFrames.assessment.maxHowOldMs,
+      });
 
     // ---- controls that CATCH what the review named. (a) warm-up leakage: shifting the boundary
     // 60 s earlier must ADD rows — if it didn't, the filter would be decorative. (b) the
@@ -3650,6 +3816,11 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
       { answered: probe.samples.length, lateDiscarded: probe.lateDiscarded, retiredUnconfirmed: probe.retiredUnconfirmed, abortedReason: probe.abortedReason, hostThrottleDuringMeasure: cpuBefore !== null && cpuAfter !== null ? { throttledUsecDelta: cpuAfter.throttledUsec - cpuBefore.throttledUsec, throttledEventsDelta: cpuAfter.throttledEvents - cpuBefore.throttledEvents } : null });
     cellCheck('cell: §2.2 achieved-RTT validity (median within 10 ms of 100 ms, jitter p95−p50 within 20 ms + 10 tolerance) — ACTUAL verdict on the FULL window; honestly failing if missed',
       probeValidity.valid, { requested: plan.profile.rttMs, achieved: probeValidity.achieved, jitterP95P50: probeValidity.achievedJitterMs, reasons: probeValidity.reasons, n: probe.samples.length });
+    // The early-stop FACT, named and attributed — fixture configuration, never a product rejoin
+    // claim, and never a pass: a window cut short by a send-gate stop stays RED on every check.
+    cellCheck('cell: EARLY-STOP POLICY (slice 22) — the window ran its declared length; no recovery-stopped seat cut it short. joinImpSeat constructs DirectMotionPredictor with NO rejoin wiring, so a seat stopped by ADR-0003 §3.2 CANNOT resume in this fixture: “no rejoin connection” is FIXTURE CONFIGURATION (hosted poor-1002), never a measured product rejoin failure — and the stop can never silently pass, because the send gate keeps refusing and the mover ledger names the trigger exactly',
+      earlyStop === null,
+      { earlyStop, rejoinConfigured: false, moverEvents: moverLedger.events.slice(0, 12) });
 
     // Stop the route pump BEFORE closing anything and await its finite exit — a page closed
     // under a running evaluate is a rejected promise, not a teardown.
@@ -3670,7 +3841,7 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
       { activeResourcesAfterClose: hostShutdown.receipt?.activeResourcesAfterClose ?? null, exitCode: hostShutdown.exitCode, signal: hostShutdown.signal, pumpFinished });
 
     const record = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       // A local run of a matrix coordinate is DIAGNOSTIC by construction; only the formal dispatch
       // (UDG_GATE_A_FORMAL=1, hosted per §4 once T-7 exists) on an official coordinate over a
       // clean tree may produce a kind-GATE-A artefact — and even that is a row artefact, not a
@@ -3699,7 +3870,23 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
       route: { kind: 'canonical 12s/48m square (+x,+z,-x,-z), spawn-verified unobstructed', spawn, motion, holdControl: holdAudit },
       acceptedRttProbe: { rules: 'slot reservation (rtt-probe.ts, unit-tested, imported UNCHANGED by the page via the loopback pipeline); 100 pings at 1180 ms predeclared cadence spanning the measure window', outcome: probe, summary: { validity: probeValidity } },
       ackLedger: { report, warmupLeakControl: { leakedMeasuredBoundaries: ledger.leakedMeasuredBoundaries, honestMeasuredBoundaries: report.measuredBoundaries }, correctionClaim: probeValidity.valid ? (targetClaim ? 'MET' : 'MISSED') : 'NOT-CLAIMED (network invalid)' },
-      renderLag,
+      moverLedger: {
+        rejoinConfigured: false,
+        rejoinNote: 'joinImpSeat wires DirectMotionPredictor with NO rejoin route: a recovery-stopped mover seat stays stopped for the rest of the window. This is FIXTURE CONFIGURATION — “no rejoin connection” is not a product rejoin claim — and it equally means no compliant resync/closed period can silently pass the window.',
+        sampleCount: moverLedger.samples.length,
+        events: moverLedger.events,
+        samples: moverLedger.samples.slice(0, 1600),
+        samplesTruncated: moverLedger.samples.length > 1600,
+      },
+      earlyStop,
+      renderLag: {
+        protocol: 'slice 22: at ONE observer frame boundary the render pose is compared against THIS page\'s latest VALIDATED authority sample (identity + epoch kept); delay and discontinuity reported separately; the cross-page point sample is retired to a recorded diagnostic',
+        assessment: renderFrames.assessment,
+        rawFramesCaptured: renderFrames.rawCount,
+        framesRecorded: renderFrames.frames.length,
+        frames: renderFrames.frames,
+        legacyPointSample: renderLagLegacy,
+      },
       cgroupThrottle: { beforeMeasure: cpuBefore, afterMeasure: cpuAfter, proxyHostWorstThrottle: settled.throttle },
       proxyLegSumDiagnostic: { stats: settled.stats },
       isolation: { loopbackOnly: nonLoopback.length === 0, csp: 'none-on-dev-server', contexts: 2 },
@@ -4407,6 +4594,67 @@ const readGaBoundary = (page: Page): Promise<GaBoundary> =>
   }, {});
 
 /**
+ * PAGE-SIDE boundary recorder (slice 22): the node-side 100 ms poll loop could miss the
+ * pending≥1 window entirely when the trigger fires fast (a fully drained, quiet wire arms the
+ * stall streak within ~3 deliveries ≈ 150 ms — two retained reds proved the poll RACE, not the
+ * product). This recorder samples every 50 ms IN THE PAGE (same clock as the seat), starts
+ * before staging, and self-stops at the input-ack-stalled trigger. It reads the same client
+ * domain surface as readGaBoundary; it changes nothing.
+ */
+interface PollSnap extends GaBoundary { atMs: number }
+const startGaPoller = (page: Page): Promise<boolean> =>
+  page.evaluate(async () => {
+    const g = globalThis as unknown as { __udgPoll?: PollSnap[]; __udgPollStop?: boolean };
+    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+    if (holder === undefined) return false;
+    const p = holder.predictor;
+    const snap = (): PollSnap => {
+      const rows = p.deliveryLedger();
+      const d = rows.length > 0 ? rows[rows.length - 1]!.delivery : undefined;
+      return {
+        atMs: performance.now(),
+        deliveries: rows.length,
+        ack: d?.ack ?? -1,
+        resolvedThrough: d?.resolvedThrough ?? -1,
+        epoch: d?.epoch ?? -1,
+        gapStart: d?.gapStart ?? -1,
+        gapEnd: d?.gapEnd ?? -1,
+        retired: d?.retiredUnrepresented ?? -1,
+        pending: p.pendingJournal().length,
+        stallStreak: (p as unknown as { stallStreak: number }).stallStreak,
+        sentAuditLen: p.sentAudit().length,
+        state: p.stateName(),
+        authorityTick: d?.authorityTick ?? -1,
+        events: p.recoveryLedger().map((r) => ({ event: r.event, detail: r.detail, atMs: r.atMs })),
+      };
+    };
+    g.__udgPoll = [];
+    g.__udgPollStop = false;
+    const loop = (): void => {
+      if (g.__udgPollStop === true) return;
+      const s = snap();
+      g.__udgPoll!.push(s);
+      if (s.events.some((e) => e.event === 'trigger' && e.detail.startsWith('input-ack-stalled'))) {
+        g.__udgPollStop = true;
+        return;
+      }
+      setTimeout(loop, 50);
+    };
+    loop();
+    return true;
+  });
+const collectGaPoller = (page: Page, maxMs: number): Promise<PollSnap[]> =>
+  page.evaluate(async (args): Promise<PollSnap[]> => {
+    const g = globalThis as unknown as { __udgPoll?: PollSnap[]; __udgPollStop?: boolean };
+    const started = Date.now();
+    for (;;) {
+      if (g.__udgPollStop === true) return g.__udgPoll ?? [];
+      if (Date.now() - started > args.maxMs) { g.__udgPollStop = true; return g.__udgPoll ?? []; }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }, { maxMs });
+
+/**
  * GA observer seat: the PUBLIC spike observer seam (joinPredictionSeat + createRemotePresentation),
  * joined DIRECT (never through the impairment proxy — the observer's context is the unaffected one).
  * The imp-side join (joinGaSeat) has no presentation; CF/S1 evidence rows need peer TRACKS seen by
@@ -4641,6 +4889,39 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
       await wait(50);
     }
   };
+  // c2s receipts per connection at the hop (slice 22). The mover's wire is identified NOT by
+  // open order but BEHAVIOURALLY: it is the connection the harness's own BASELINE PUMP wrote
+  // through (largest positive chunk delta between pump start and pump stop). The hosted red and
+  // a local epoch-leg red both proved open-order guessing false: other client transports (the
+  // matchmaking HTTP socket, SDK internals) can open earlier or later than the mover WS.
+  const perConnC2s = async (handle: number): Promise<{ index: number; chunksReceived: number; open: boolean }[]> => {
+    const startedAt = Date.now();
+    for (;;) {
+      const st = (await host.request({ op: 'stats', handle })) as Record<string, unknown>;
+      const per = ((st['stats'] ?? st) as Record<string, unknown>)['c2sPerConn'] as { index: number; chunksReceived: number; open: boolean }[] | undefined;
+      if (Array.isArray(per)) return per;
+      if (Date.now() - startedAt > 2_000) throw new Error('proxy c2sPerConn unreadable for 2 s (host hiccup)');
+      await wait(50);
+    }
+  };
+  const countOnConn = (per: { index: number; chunksReceived: number }[], idx: number): number =>
+    per.find((c) => c.index === idx)?.chunksReceived ?? 0;
+  const identifyMoverConn = async (
+    handle: number,
+    atJoin: { index: number; chunksReceived: number }[],
+    bag: Record<string, unknown>,
+  ): Promise<number> => {
+    const after = await perConnC2s(handle);
+    let moverIdx = -1;
+    let best = 0;
+    for (const c of after) {
+      const before = atJoin.find((b) => b.index === c.index)?.chunksReceived ?? 0;
+      if (c.chunksReceived - before > best) { best = c.chunksReceived - before; moverIdx = c.index; }
+    }
+    bag['moverConnection'] = { moverIdx, baselineChunks: best, perConn: after };
+    if (moverIdx === -1) throw new Error('the baseline pump moved NO connection at the hop — the mover wire cannot be identified, and a quiet window over an unnamed wire is no measurement');
+    return moverIdx;
+  };
   const chainAtMs = (roomId: string, tick: number): number | null =>
     gatedRoom(roomId).journal().chain.find((row) => row.tick === tick)?.atMs ?? null;
 
@@ -4691,6 +4972,7 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
         // the page-close cascade (a pending pump promise rejecting when the helper closes).
         cellCheck(`scenario ${tag} ERRORED (recorded honestly; later scenarios proceed)`, false, {
           error: String(error instanceof Error ? error.message : error),
+          errorOrigin: error instanceof Error ? (error.stack ?? '').split('\n').slice(1, 4).map((l) => l.trim().slice(0, 160)).join(' | ') : null,
           forensicBag: bag ?? null,
         });
       }
@@ -5368,43 +5650,78 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
     // first (predictor.test.ts, preserved), then the rule went into the granted adapter.
     // Controls: compliant idle, benign in-flight release.
     await scenario('ga5l', ROOM_NAME, async (ctx) => {
+      const connAtJoinL = await perConnC2s(ctx.handle); // BEFORE any traffic: the mover wire is named by the pump, not by order
       const pumpOn = gaPump(ctx.pageM); void pumpOn;
       await wait(1_500);
       await gaStopPump(ctx.pageM);
-      await wait(900); // drain: quiet wire, nothing outstanding
-      const quiet = await readGaBoundary(ctx.pageM);
+      // DETERMINISTIC PRE-ARM DRAIN (slice 22, hosted first-attempt lesson): the old fixed
+      // 900 ms drain armed while CLIENT-side confirmations still lagged (deliveries 26 behind
+      // ack 30 on the hosted runner), letting one durable re-issue cross the hop inside the
+      // quiet window. Wait instead on the mover's OWN domain until the ack AND the resolvedThrough
+      // prefix sit EXACTLY at the last sent stamp with an empty pending journal. Bounded, single
+      // pass — a drain that never settles is NOT warmed: the quiet window measures what it
+      // measures and a genuine breach stays red.
+      const drainStarted = Date.now();
+      let drain: GaBoundary;
+      for (;;) {
+        const b = await readGaBoundary(ctx.pageM);
+        if ((b.pending === 0 && b.ack === b.sentAuditLen && b.resolvedThrough === b.sentAuditLen) || Date.now() - drainStarted > 30_000) { drain = b; break; }
+        await wait(100);
+      }
+      const moverIdent = await ctx.pageM.evaluate(() => {
+        const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+        return holder === undefined ? null : { sessionId: holder.sessionId, epoch: holder.transport.issuedEpoch() };
+      });
+      const quiet = drain;
       sL['quiet'] = quiet;
+      sL['preArmDrain'] = {
+        drained: quiet.pending === 0 && quiet.ack === quiet.sentAuditLen && quiet.resolvedThrough === quiet.sentAuditLen,
+        waitedMs: Date.now() - drainStarted,
+        boundary: { deliveries: quiet.deliveries, ack: quiet.ack, resolvedThrough: quiet.resolvedThrough, pending: quiet.pending, sentAuditLen: quiet.sentAuditLen, epoch: quiet.epoch },
+        quietWindowAttribution: 'the reserved 400 ms window has exactly ONE possible c2s writer: the route pump is stopped, no RTT probe is armed in this cell, and the GA observer never sends — a chunk inside the window is a GENUINE breach, recorded and failing, never warmed',
+        moverIdent,
+      };
       sL['tickWindowStart'] = gatedRoom(ctx.roomId).tickRecords.length;
       const w0 = await statCountAt(ctx.handle, 'c2s', 'chunksReceived');
+      const moverIdxL = await identifyMoverConn(ctx.handle, connAtJoinL, sL);
+      const moverWireL = async (): Promise<number> => countOnConn(await perConnC2s(ctx.handle), moverIdxL);
+      const m0q = await moverWireL();
       await wait(400);
       const w0b = await statCountAt(ctx.handle, 'c2s', 'chunksReceived');
-      sL['c2sQuietDelta'] = w0b - w0;
+      const m0 = await moverWireL();
+      sL['c2sQuietDelta'] = m0 - m0q; // MOVER-scoped (slice 22): the NAMED connection, not the aggregate
+      sL['c2sQuietDeltaAggregate'] = w0b - w0;
+      sL['quietAttribution'] = 'the MOVER wire is the connection the BASELINE PUMP wrote through (bag moverConnection names the index and the hop’s full per-connection counts); the pump is stopped, no probe is armed in this cell, and the GA observer never sends through this hop — a chunk on the MOVER wire inside the reserved window is a GENUINE breach, recorded and failing, never warmed';
       // Arm the TERMINAL suppression of EXACTLY ONE c2s chunk (labelled harness seam).
+      await startGaPoller(ctx.pageM); // page-side 50 ms recorder, live BEFORE the arm
       await host.request({ op: 'holdNext', handle: ctx.handle, direction: 'c2s', count: 1 });
       const lostSend = await gaOneShot(ctx.pageM, 1, 0);
       sL['lostSend'] = lostSend;
       let wire1: number;
+      let wire1Mover: number;
       const wireStarted = Date.now();
       for (;;) {
         wire1 = await statCountAt(ctx.handle, 'c2s', 'chunksReceived');
-        if (wire1 > w0b || Date.now() - wireStarted > 5_000) break;
+        wire1Mover = await moverWireL();
+        if (wire1Mover > m0 || Date.now() - wireStarted > 5_000) break;
         await wait(50);
       }
-      sL['wireReceiptDelta'] = wire1 - w0b;
+      sL['wireReceiptDelta'] = wire1Mover - m0; // the STAGED chunk on the mover's own connection
+      sL['wireReceiptDeltaAggregate'] = wire1 - w0b;
       const heldStats = await host.request({ op: 'stats', handle: ctx.handle });
       const heldDir = ((heldStats['stats'] ?? heldStats) as Record<string, unknown>)['c2s'] as Record<string, unknown> | undefined;
       sL['chunksHeld'] = heldDir?.['chunksHeld'] ?? null;
       sL['holdRemaining'] = heldDir?.['holdRemaining'] ?? null;
-      // Poll the observable boundary every 100 ms until the trigger fires.
-      const samplesL: { atMs: number; snap: GaBoundary }[] = [];
-      const fireStarted = Date.now();
-      let fired: GaBoundary | null;
-      for (;;) {
-        const snap = await readGaBoundary(ctx.pageM);
-        samplesL.push({ atMs: Date.now(), snap });
-        if (snap.events.some((e) => e.event === 'trigger' && e.detail.startsWith('input-ack-stalled'))) { fired = snap; break; }
-        if (Date.now() - fireStarted > 20_000) throw new Error('no input-ack-stalled trigger within 20 s of terminal suppression: state=' + snap.state + ' tail=' + JSON.stringify(snap.events.slice(-3)));
-        await wait(100);
+      // Collect the PAGE-SIDE record (slice 22): it began before the arm and self-stopped at
+      // the trigger; the stall window is traced from the FIRST sample whose pending ≥ 1 (the
+      // staged slot journals synchronously), so no fast trigger can outrun the observation.
+      const allPollsL = await collectGaPoller(ctx.pageM, 20_000);
+      const i0L = allPollsL.findIndex((s) => s.pending >= 1);
+      const samplesL: { atMs: number; snap: GaBoundary }[] = (i0L === -1 ? allPollsL : allPollsL.slice(i0L)).map((s) => ({ atMs: s.atMs, snap: s as GaBoundary }));
+      const fired: GaBoundary | null = samplesL.find((s) => s.snap.events.some((e) => e.event === 'trigger' && e.detail.startsWith('input-ack-stalled')))?.snap ?? null;
+      if (fired === null) {
+        const last = samplesL.at(-1)?.snap ?? allPollsL.at(-1);
+        throw new Error('no input-ack-stalled trigger within 20 s of terminal suppression: state=' + (last?.state ?? 'no polls') + ' tail=' + JSON.stringify(last?.events.slice(-3) ?? []));
       }
       const triggerIdx = fired.events.findIndex((e) => e.event === 'trigger' && e.detail.startsWith('input-ack-stalled'));
       const triggerEvent = fired.events[triggerIdx]!;
@@ -5442,7 +5759,7 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
       sL['closeObservations'] = closeObsL;
       const G = GA_STALL_G ?? 3;
 
-      cellCheck(`GA-5l suppression is SOUND as test-only APPLICATION-DELIVERY suppression (not native dedupe, not TCP loss): exactly ONE distinct admitted input (producer stamp ${String(lostSend.seq)} = sentCount + 1, strictly increasing) was staged while pending was 0; its single c2s chunk earned a WIRE RECEIPT at the harness hop (delta ${String(wire1 - w0b)}, chunksHeld ${String(sL['chunksHeld'])}) and NEVER reached the application (consumed stamps for the mover after the arm: ${String(consumedL.length)}); the c2s wire was quiet for 400 ms before the arm (delta ${String(w0b - w0)})`,
+      cellCheck(`GA-5l suppression is SOUND as test-only APPLICATION-DELIVERY suppression (not native dedupe, not TCP loss): exactly ONE distinct admitted input (producer stamp ${String(lostSend.seq)} = sentCount + 1, strictly increasing) was staged while pending was 0; its single c2s chunk earned a WIRE RECEIPT on the MOVER connection at the harness hop (delta ${String(wire1Mover - m0)}, chunksHeld ${String(sL['chunksHeld'])}) and NEVER reached the application (consumed stamps for the mover after the arm: ${String(consumedL.length)}); the MOVER c2s wire was quiet for 400 ms before the arm (delta ${String(m0 - m0q)}; aggregate ${String(w0b - w0)} context only)`,
         (sL['quiet'] as GaBoundary).pending === 0 &&
         (sL['c2sQuietDelta'] as number) === 0 &&
         lostSend.seq > 0 &&
@@ -5742,17 +6059,36 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
     ): Promise<void> => {
       await scenario(tag, ROOM_NAME, async (ctx) => {
         const wireChunks = async (): Promise<number> => statCountAt(ctx.handle, 'c2s', 'chunksReceived');
+        const connAtJoin = await perConnC2s(ctx.handle); // BEFORE any traffic: name the mover wire by behaviour, not order
         const pumpOn = gaPump(ctx.pageM); void pumpOn;
         await wait(1_400); // LEGITIMATE MONOTONE BASELINE: producer stamps sentCount + 1
         await gaStopPump(ctx.pageM); // from here the seam controls every send on this wire
-        await wait(700);             // drain: quiet wire, nothing outstanding
-        const quiet = await readGaBoundary(ctx.pageM);
+        // DETERMINISTIC PRE-STAGING DRAIN (slice 22, same protocol as the GA-5l arm): wait on the
+        // client's OWN domain until ack AND prefix sit exactly at the last sent stamp with an
+        // empty pending journal — a fixed sleep can arm while client-side confirmations still
+        // lag and a durable re-issue crosses the "quiet" wire. Bounded single pass: a drain that
+        // never settles is recorded and the quiet-window assertion fails honestly, never warmed.
+        const drainStarted = Date.now();
+        let drain: GaBoundary;
+        for (;;) {
+          const b = await readGaBoundary(ctx.pageM);
+          if ((b.pending === 0 && b.ack === b.sentAuditLen && b.resolvedThrough === b.sentAuditLen) || Date.now() - drainStarted > 30_000) { drain = b; break; }
+          await wait(100);
+        }
+        bag['preStagingDrain'] = { drained: drain.pending === 0 && drain.ack === drain.sentAuditLen && drain.resolvedThrough === drain.sentAuditLen, waitedMs: Date.now() - drainStarted };
+        const quiet = drain;
+        const moverIdx = await identifyMoverConn(ctx.handle, connAtJoin, bag);
+        const moverWire = async (): Promise<number> => countOnConn(await perConnC2s(ctx.handle), moverIdx);
         const seen0 = await reportGaTracks(ctx.pageO);
         const track0 = seen0.tracks.find((t) => t.sessionId === ctx.sessionId);
         const baselineMoved = (track0?.delta.x ?? 0) >= 0.4;
         const w0q = await wireChunks();
+        const m0q = await moverWire();
         await wait(400);
         const w0 = await wireChunks();
+        const m0 = await moverWire();
+        bag['preStagingQuietDelta'] = { mover: m0 - m0q, aggregate: w0 - w0q, attribution: 'the MOVER wire is the connection the BASELINE PUMP wrote through (bag moverConnection names the index and the hop’s per-connection counts); the assertion gates the MOVER wire, the aggregate is context only' };
+        await startGaPoller(ctx.pageM); // page-side 50 ms recorder, live BEFORE the raw staging send
         const staged = await ctx.pageM.evaluate(async (args: { kind: string }) => {
           const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
           if (holder === undefined) throw new Error(`${args.kind}: malformed-stamp control needs the bare seat`);
@@ -5775,10 +6111,12 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
         }, { kind });
         const tickAtStaging = gatedRoom(ctx.roomId).tickRecords.length;
         let w1: number;
+        let m1: number;
         const wireStarted = Date.now();
         for (;;) {
           w1 = await wireChunks();
-          if (w1 > w0 || Date.now() - wireStarted > 5_000) break;
+          m1 = await moverWire();
+          if (m1 > m0 || Date.now() - wireStarted > 5_000) break;
           await wait(50);
         }
         const seen1 = await reportGaTracks(ctx.pageO);
@@ -5851,8 +6189,21 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
           bag['postSend'] = post;
           bag['motionAfterLegit'] = (trackEnd?.lastSample.x ?? 0) - (track1?.lastSample.x ?? 0);
           bag['trackEnd'] = trackEnd?.lastSample ?? null;
-          cellCheck(`GA-5b CONTROL ${kind}: the FOREIGN-EPOCH malformed stamp (seq ${String(staged.stagedSeq)} ABOVE the watermark, sessionEpoch ${String(staged.epochSent)} never issued) earns its own WIRE RECEIPT (delta ${String(w1 - w0)}) and is then refused WITH NAMES and nothing else: dequeued exactly once, the room records EXACTLY ONE refusal — in its own refusal ledger, on the SAME tick record that consumed the staged stamp, under the room's seat-entity identity (NOT the join sessionId: attempts 1-2 guessed the wrong attribution space and are retained red beside this correction) — and the core journals a refused:epoch disposition (EPOCH_MISMATCH; every refusal in this fresh room's journal is a refused:epoch, none from any other cause) — a journalled NEUTRAL step: the observer's z stays |z| < 0.05 m (the distinctive content was applied NOWHERE) while the NEXT LEGITIMATE producer send moves the seat again (>= 0.15 m, route survives). Zero accepted old/wrong epoch: every accepted delivery keeps the real epoch, no room seat ever carries the bogus epoch, the client's epoch never moves. NOTHING IS OUTSTANDING after a refused-and-dispositioned stamp, so NO recovery episode may fire (zero triggers — a recovery here would itself be the falsely named cause) and the guard equality ack === resolvedThrough holds at EVERY poll (the watermark advances over stamps that have their own disposition, ColyseusInputAdapter.ts:190-193). Baseline soundness: monotone stamps consumed EXACTLY once each, the mover visibly moved, the wire quiet 400 ms before the staging`,
-            (w1 - w0) >= 1 &&
+          bag['conjuncts'] = {
+            receipt: (m1 - m0) >= 1,
+            consumedOnce: windowConsumed.filter((q) => q === staged.stagedSeq).length === 1,
+            oneNamedRefusal: rt.domain === 1 && rt.entities.length === 1 && refusedOnStagedRec.length === 1 && (refusedOnStagedRec[0]?.count ?? 0) === 1 && refusedOnStagedRec[0]?.entityId === rt.entities[0],
+            journalMatch: refusedEpochRows.length >= 1 && journalWindow.length === refusedEpochRows.length,
+            silent: signals.length === 0 && closures.length === 0,
+            guard: guardEq, noTriggers: triggers.length === 0, pendingZero: endB.pending === 0,
+            epochKept: endB.epoch === staged.realEpoch && !seatEpochsSeen.includes(staged.epochSent),
+            deliveriesRealEpoch: snapEnd.acceptedDeliveries.every((d) => d.epoch !== staged.epochSent),
+            zUnapplied: Math.abs(trackEnd?.lastSample.z ?? Number.POSITIVE_INFINITY) < 0.05,
+            routeSurvived: (bag['motionAfterLegit'] as number) >= 0.15 && post.seq > 0 && endB.state === 'tracking',
+            baseline: baselineMoved && baselineUnique, quietMoverWire: (m0 - m0q) === 0, noFalseNames: noFalseNames(endB.events),
+          };
+          cellCheck(`GA-5b CONTROL ${kind}: the FOREIGN-EPOCH malformed stamp (seq ${String(staged.stagedSeq)} ABOVE the watermark, sessionEpoch ${String(staged.epochSent)} never issued) earns its own WIRE RECEIPT on the mover connection (delta ${String(m1 - m0)}) and is then refused WITH NAMES and nothing else: dequeued exactly once, the room records EXACTLY ONE refusal — in its own refusal ledger, on the SAME tick record that consumed the staged stamp, under the room's seat-entity identity (NOT the join sessionId: attempts 1-2 guessed the wrong attribution space and are retained red beside this correction) — and the core journals a refused:epoch disposition (EPOCH_MISMATCH; every refusal in this fresh room's journal is a refused:epoch, none from any other cause) — a journalled NEUTRAL step: the observer's z stays |z| < 0.05 m (the distinctive content was applied NOWHERE) while the NEXT LEGITIMATE producer send moves the seat again (>= 0.15 m, route survives). Zero accepted old/wrong epoch: every accepted delivery keeps the real epoch, no room seat ever carries the bogus epoch, the client's epoch never moves. NOTHING IS OUTSTANDING after a refused-and-dispositioned stamp, so NO recovery episode may fire (zero triggers — a recovery here would itself be the falsely named cause) and the guard equality ack === resolvedThrough holds at EVERY poll (the watermark advances over stamps that have their own disposition, ColyseusInputAdapter.ts:190-193). Baseline soundness: monotone stamps consumed EXACTLY once each, the mover visibly moved, the wire quiet 400 ms before the staging`,
+            (m1 - m0) >= 1 &&
             windowConsumed.filter((q) => q === staged.stagedSeq).length === 1 &&
             rt.domain === 1 && rt.entities.length === 1 && refusedOnStagedRec.length === 1 &&
             refusedOnStagedRec[0]?.count === 1 && refusedOnStagedRec[0]?.entityId === rt.entities[0] &&
@@ -5863,24 +6214,22 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
             snapEnd.acceptedDeliveries.every((d) => d.epoch !== staged.epochSent) &&
             Math.abs(trackEnd?.lastSample.z ?? Number.POSITIVE_INFINITY) < 0.05 &&
             (bag['motionAfterLegit'] as number) >= 0.15 && post.seq > 0 && endB.state === 'tracking' &&
-            baselineMoved && baselineUnique && (w0 - w0q) === 0 && noFalseNames(endB.events),
+            baselineMoved && baselineUnique && (m0 - m0q) === 0 && noFalseNames(endB.events),
             bag);
+          await ctx.pageM.evaluate(() => { (globalThis as unknown as { __udgPollStop?: boolean }).__udgPollStop = true; }); // the epoch shape must NEVER trigger; stop the recorder
           return;
         }
 
         // dup/dec: the pre-buffer decline is SILENT by construction (the branch under refinement).
         // The client's own journal holds the slot the raw send consumed and NOTHING resolves it —
         // ack/prefix frozen — so the contract's blind input-ack-stalled recovery must fire.
-        const samplesL: { atMs: number; snap: GaBoundary }[] = [];
-        const fireStarted = Date.now();
-        let fired: GaBoundary | null = null;
-        for (;;) {
-          const snap = await readGaBoundary(ctx.pageM);
-          samplesL.push({ atMs: Date.now(), snap });
-          if (snap.events.some((e) => e.event === 'trigger' && e.detail.startsWith('input-ack-stalled'))) { fired = snap; break; }
-          if (Date.now() - fireStarted > 20_000) break;
-          await wait(100);
-        }
+        // PAGE-SIDE record (slice 22): started before the raw staging send and self-stopped at
+        // the trigger; the stall window is traced from the FIRST sample whose pending ≥ 1, so a
+        // fast trigger cannot outrun the observation (a retained red was exactly this poll race).
+        const allPolls = await collectGaPoller(ctx.pageM, 20_000);
+        const i0 = allPolls.findIndex((s) => s.pending >= 1);
+        const samplesL: { atMs: number; snap: GaBoundary }[] = (i0 === -1 ? allPolls : allPolls.slice(i0)).map((s) => ({ atMs: s.atMs, snap: s as GaBoundary }));
+        const fired: GaBoundary | null = samplesL.find((s) => s.snap.events.some((e) => e.event === 'trigger' && e.detail.startsWith('input-ack-stalled')))?.snap ?? null;
         const G = GA_STALL_G ?? 3;
         let episode: GaBoundary['events'] = [];
         let triggerEvent: GaBoundary['events'][number] | null = null;
@@ -5920,15 +6269,25 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
         bag['afterRecovery'] = { ack: endB2.ack, resolvedThrough: endB2.resolvedThrough, epoch: endB2.epoch, state: endB2.state, triggers: endB2.events.filter((e) => e.event === 'trigger').map((e) => e.detail) };
         bag['trackEnd'] = trackEnd?.lastSample ?? null;
         bag['rejoinAttempts'] = endB2.events.filter((e) => e.event === 'rejoin-attempt').length;
-        cellCheck(`GA-5b CONTROL ${kind}: the ${kind === 'dup' ? 'SAME-DOMAIN DUPLICATE' : 'DECREASING'} stamp ${String(staged.stagedSeq)} (watermark ${String(staged.lastSeq)}) earns its own WIRE RECEIPT (delta ${String(w1 - w0)}) and is declined PRE-BUFFER exactly as the pinned seam dictates (RoomInput.capture -> InputBuffer.accept, value <= _lastSeq dropped BEFORE the buffer): the stamp's consumed count stays EXACTLY 1 (${kind === 'dup' ? 'its own legitimate original dequeue' : 'the baseline frame that first carried it'}), the room names NOTHING for the decline (refusal delta ${String(rtD.domain)}, no signal, no closure — the silence IS the PE-1 limitation, now measured on the two shapes the refinement names), the distinctive z content is applied NOWHERE (|z| < 0.05 m) while the baseline mover visibly moved (${String(baselineMoved)}) and baseline stamps were consumed EXACTLY once each (unique: ${String(baselineUnique)}). Zero falsely named cause: no client event or room record ever says dedupe/duplicate/stale/decline/retired`,
-          (w1 - w0) >= 1 &&
+        cellCheck(`GA-5b CONTROL ${kind}: the ${kind === 'dup' ? 'SAME-DOMAIN DUPLICATE' : 'DECREASING'} stamp ${String(staged.stagedSeq)} (watermark ${String(staged.lastSeq)}) earns its own WIRE RECEIPT on the mover connection (delta ${String(m1 - m0)}) and is declined PRE-BUFFER exactly as the pinned seam dictates (RoomInput.capture -> InputBuffer.accept, value <= _lastSeq dropped BEFORE the buffer): the stamp's consumed count stays EXACTLY 1 (${kind === 'dup' ? 'its own legitimate original dequeue' : 'the baseline frame that first carried it'}), the room names NOTHING for the decline (refusal delta ${String(rtD.domain)}, no signal, no closure — the silence IS the PE-1 limitation, now measured on the two shapes the refinement names), the distinctive z content is applied NOWHERE (|z| < 0.05 m) while the baseline mover visibly moved (${String(baselineMoved)}) and baseline stamps were consumed EXACTLY once each (unique: ${String(baselineUnique)}). Zero falsely named cause: no client event or room record ever says dedupe/duplicate/stale/decline/retired`,
+          (m1 - m0) >= 1 &&
           consumedCountOfStaged === 1 &&
-          (w0 - w0q) === 0 &&
+          (m0 - m0q) === 0 &&
           rtD.domain === 0 && rtD.entities.length === 0 && signals.length === 0 && closures.length === 0 &&
           Math.abs(trackEnd?.lastSample.z ?? Number.POSITIVE_INFINITY) < 0.05 &&
           baselineMoved && baselineUnique && staged.lastSeq >= 4 &&
           noFalseNames(endB2.events),
           bag);
+        bag['blindConjuncts'] = {
+          fired: fired !== null,
+          triggerNamed: triggerEvent !== null && triggerEvent.detail.startsWith('input-ack-stalled'),
+          streakIsG: (fired?.stallStreak ?? -1) === G, noEarlierTrigger: !earlierTrigger,
+          frozen: frozenAllAlong, gapNever, retiredZero, heldPending, discardAfter,
+          recovered: recovered?.events.some((e) => e.event === 'snapshot-recovered') ?? false,
+          rejoinBounded: (bag['rejoinAttempts'] as number) <= 2,
+          guardAfter: endB2.ack === endB2.resolvedThrough,
+          noWrongRoute: !endB2.events.some((e) => e.event === 'trigger' && (e.detail.startsWith('snapshot-deadline') || e.detail.includes('gap-named') || e.detail.includes('retired'))),
+        };
         cellCheck(`GA-5b CONTROL ${kind} BLIND RECOVERY WITH AN INPUT OUTSTANDING: the raw send's slot sits unresolved in the seat's OWN journal (the adapter journals every onSend), so ack AND prefix stay frozen at every poll (ack ${String(quiet.ack)} / resolvedThrough ${String(quiet.resolvedThrough)} unchanged) and the §3.2 rule MUST fire: exactly ONE trigger, input-ack-stalled with the streak EXACTLY at G=${String(G)} (observed ${String(fired?.stallStreak ?? -1)}), no trigger before it, no gap named (0..0), retired 0 throughout, the pending entry HELD until the trigger and discarded ONCE after it; the episode ends in snapshot-recovered within ${String(EPISODE_BUDGET_MS)}+${String(BUDGET_TOLERANCE_MS)} ms on a bounded rejoin (<= 2 attempts), the recovery is BLIND (no decline signal exists — the room named nothing above), the guard equality ack === resolvedThrough holds after it, the epoch never becomes any bogus value, and NO deadline/gap/retired route participates — an earlier draft of this control predicted 'no episode, nothing outstanding' for these shapes and is SUPERSEDED by its own evidence: a below-prefix bypass stamp still consumes a SLOT the prefix can never resolve, which is exactly the outstanding input §3.2 recovers from`,
           fired !== null && triggerEvent !== null &&
           triggerEvent.detail.startsWith('input-ack-stalled') &&

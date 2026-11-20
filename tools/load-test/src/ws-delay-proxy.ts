@@ -208,6 +208,13 @@ export interface ProxyStats {
   readonly connLog: readonly ConnectionClosureRecord[];
   readonly listening: boolean;
   readonly connections: { readonly opened: number; readonly closed: number; readonly active: number; readonly errors: number };
+  /**
+   * Per-connection c2s receipts by OPEN ORDER at this hop (slice 22): index 0 is the FIRST
+   * connection — in the ga scenario cells that is the mover, which joins before every other
+   * seat. Quiet-wire preconditions use this to measure the NAMED mover wire instead of an
+   * aggregate that other seats' transport frames could pollute.
+   */
+  readonly c2sPerConn: readonly { readonly index: number; readonly chunksReceived: number; readonly open: boolean }[];
   readonly c2s: DirectionStats;
   readonly s2c: DirectionStats;
   /** The proxy sockets' TCP_NODELAY setting at run time (harness-only A/B knob; default true). */
@@ -386,6 +393,7 @@ interface ConnectionEnv {
 }
 
 class ProxyConnection {
+  readonly index: number;
   private readonly c2s: DirectionState;
   private readonly s2c: DirectionState;
   private readonly upstream: Socket;
@@ -400,7 +408,8 @@ class ProxyConnection {
   private firstFin: 'client' | 'upstream' | 'proxy' | 'none' = 'none';
   private closeInitiated = false;
 
-  constructor(private readonly client: Socket, private readonly env: ConnectionEnv, closeGraceMs: number) {
+  constructor(private readonly client: Socket, private readonly env: ConnectionEnv, closeGraceMs: number, index: number) {
+    this.index = index;
     this.closeGraceMs = closeGraceMs;
     this.openedAtMs = env.timer.nowMs();
     this.c2s = newDirection('c2s', env.profile.seed);
@@ -778,6 +787,8 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
   /** Stats of finished connections, accumulated so the run record still sees their samples. */
   let c2sDone = blankDirection();
   let s2cDone = blankDirection();
+  /** Per-connection c2s receipts by OPEN ORDER (slice 22): isolates the named mover wire. */
+  const c2sPerConnDone: { index: number; chunksReceived: number }[] = [];
   let opened = 0;
   let closedCount = 0;
   let errors = 0;
@@ -799,6 +810,7 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
         const snap = done.snapshot();
         c2sDone = mergeStats(c2sDone, snap.c2s);
         s2cDone = mergeStats(s2cDone, snap.s2c);
+        c2sPerConnDone.push({ index: done.index, chunksReceived: snap.c2s.chunksReceived });
         connLogDone.push(done.lifecycle());
         live.delete(done);
         closedCount += 1;
@@ -812,7 +824,7 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
       onLegSumSample: (sample) => {
         legSumSamples.push(sample);
       },
-    }, closeGraceMs);
+    }, closeGraceMs, opened);
     opened += 1;
     live.add(conn);
   });
@@ -865,6 +877,10 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
         stallOverride: { ...stallOverride },
         connLog: [...connLogDone, ...[...live].map((conn) => conn.lifecycle())],
         connections: { opened, closed: closedCount, active: live.size, errors },
+        c2sPerConn: [
+          ...c2sPerConnDone.map((c) => ({ index: c.index, chunksReceived: c.chunksReceived, open: false as const })),
+          ...[...live].map((conn) => ({ index: conn.index, chunksReceived: conn.snapshot().c2s.chunksReceived, open: true as const })),
+        ].sort((a, b) => a.index - b.index),
         c2s,
         s2c,
         proxyLegSumSamples: [...legSumSamples],

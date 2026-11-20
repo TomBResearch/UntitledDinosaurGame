@@ -601,23 +601,30 @@ lane ("loaded blob == candidate blob"); binder published NO report (ceiling NOT-
 12/12 rows bound, 5 violations: ROW-RED lan-1002 + poor-1002, LANE ×2, SCENARIO-STATUS ×1).
 Evidence dir dpa8e (140 files sha256-manifested, downloaded once, local-only).
 
-Per-coordinate first-attempt outcomes (RTT p50 / p95 / jitter p95−p50 ms over the 100 accepted
-slot-reservation pings; correction p95 m; eligible matched deliveries; browser-measured warmup /
-measure ms; §2.2 achieved-RTT validity):
-| coordinate | p50 | p95 | jitter | corrP95 | elig | warm/ms | meas/ms | §2.2 | outcome (elapsed) |
-|---|---|---|---|---|---|---|---|---|---|
-| lan 1001 | 5.00 | 6.70 | 4.60 | 0.0000 | 1197 | 20001 | 120039 | OK | green (2.8m) |
-| lan 1002 | 4.80 | 6.91 | 5.00 | 0.0000 | 1197 | 20023 | 120017 | OK | RED 1 check (2m45s) |
-| lan 1003 | 4.90 | 6.41 | 5.50 | 0.0000 | 1196 | 20012 | 120034 | OK | green (2.7m) |
-| moderate 1001 | 51.75 | 58.70 | 16.80 | 0.0000 | 1227 | 20022 | 123208 | OK | green |
-| moderate 1002 | 51.60 | 57.80 | 17.80 | 0.0000 | 1228 | 20002 | 123198 | OK | green |
-| moderate 1003 | 51.80 | 58.20 | 17.20 | 0.0000 | 1228 | 20002 | 123215 | OK | green |
-| elevated 1001 | 102.90 | 115.91 | 38.80 | 0.0000 | 1279 | 20012 | 128305 | OK | green |
-| elevated 1002 | 101.85 | 115.23 | 35.50 | 0.0000 | 1279 | 20021 | 128141 | OK | green |
-| elevated 1003 | 100.95 | 114.60 | 32.20 | 0.0000 | 1275 | 20022 | 128116 | OK | green |
-| poor 1001 | 205.15 | 226.21 | 71.70 | 0.0000 | 1381 | 20008 | 138516 | OK | green (3.1m) |
-| poor 1002 | n/a | n/a | n/a | n/a | 0 | 20024 | 120023 | FAIL(no-achieved-samples) | RED 9 checks (2m47s) |
-| poor 1003 | 201.90 | 229.22 | 68.70 | 0.0000 | 1378 | 20001 | 138316 | OK | green (2.9m) |
+Per-coordinate first-attempt outcomes (RTT p50 / p95 / jitter AS p95−p50 ms over the 100 accepted
+slot-reservation pings — RECOMPUTED FROM THE RETAINED RAW SAMPLES (slice 22) AND MATCHING the
+artefacts’ own recorded achievedJitterMs to rounding (pipeline nearest-rank vs linear
+interpolation differ ≤ 0.1 ms; the recorded pipeline values are printed). CORRECTION
+(reviewer-caught): the FIRST publication of this table MISLABELLED its jitter column — the
+numbers shown there were max−min, not p95−p50 (e.g. elevated-1001 true p95−p50 = 115.91 −
+102.90 = 13.01 ms, not 38.80). The mislabel is recorded here rather than silently deleted; the
+column is replaced, the spread (max−min) is kept separately and NAMED, and no §2.2 verdict
+changes — the pipeline computed §2.2 on p95−p50 all along, with no conflicting metadata found.
+correction p95 m; eligible matched deliveries; browser-measured warmup / measure ms):
+| coordinate | p50 | p95 | jitter p95−p50 | spread max−min | corrP95 | elig | warm/ms | meas/ms | §2.2 | outcome (elapsed) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| lan 1001 | 5.00 | 6.70 | 1.70 | 4.60 | 0.0000 | 1197 | 20001 | 120039 | OK | green (2.8m) |
+| lan 1002 | 4.80 | 6.91 | 2.10 | 5.00 | 0.0000 | 1197 | 20023 | 120017 | OK | RED 1 check (2m45s) |
+| lan 1003 | 4.90 | 6.41 | 1.50 | 5.50 | 0.0000 | 1196 | 20012 | 120034 | OK | green (2.7m) |
+| moderate 1001 | 51.75 | 58.70 | 7.00 | 16.80 | 0.0000 | 1227 | 20022 | 123208 | OK | green |
+| moderate 1002 | 51.60 | 57.80 | 6.20 | 17.80 | 0.0000 | 1228 | 20002 | 123198 | OK | green |
+| moderate 1003 | 51.80 | 58.20 | 6.40 | 17.20 | 0.0000 | 1228 | 20002 | 123215 | OK | green |
+| elevated 1001 | 102.90 | 115.91 | 13.00 | 38.80 | 0.0000 | 1279 | 20012 | 128305 | OK | green |
+| elevated 1002 | 101.85 | 115.23 | 13.40 | 35.50 | 0.0000 | 1279 | 20021 | 128141 | OK | green |
+| elevated 1003 | 100.95 | 114.60 | 13.70 | 32.20 | 0.0000 | 1275 | 20022 | 128116 | OK | green |
+| poor 1001 | 205.15 | 226.21 | 21.10 | 71.70 | 0.0000 | 1381 | 20008 | 138516 | OK | green (3.1m) |
+| poor 1002 | n/a | n/a | n/a | n/a | n/a | 0 | 20024 | 120023 | FAIL(no-achieved-samples) | RED 9 checks (2m47s) |
+| poor 1003 | 201.90 | 229.22 | 27.40 | 68.70 | 0.0000 | 1378 | 20001 | 138316 | OK | green (2.9m) |
 Scenario lane: ga9-ga13 green (28.5s), ga11-calibration green (1.1m), ga-scenarios RED 1 row
 (3m08s): GA-5l soundness — c2sQuietDelta was 1 where 0 was required (one extra c2s chunk crossed
 the hop inside the 400 ms pre-arm quiet window); suppression itself held intact (wireReceipt 1,
@@ -631,11 +638,15 @@ gate then held for the rest of the window ("sending is stopped: ADR-0003 recover
 motion froze at x=0.8 (63/64 intervals stationary), the probe refused its first ping
 (abortedReason socket-closed, notSent 99 — a dead socket was never posed as a slow reply), and the
 cell reported itself INVALID (no-achieved-samples) rather than being re-hashed. CAUSALITY, stated
-to evidence not names: the stop IS a client trigger — the two client-local candidates are the
-GA-11-configured snapshot watchdog (clientSnapshotDeadlineMs = 500, the production value) and the
-delivery-counted input-ack-stalled rule; the episode REASON STRING is not persisted in the
-full-window artefact, so this cell cannot name which fired (named evidence gap, not a mystery to
-guess at). The same profile/settings passed seeds 1001 and 1003 on the same runner class, so this
+to evidence not names: the stop IS client-side — but WHICH client rule fired cannot be named from
+that artefact: the episode reason string was not persisted (named evidence gap, closed by the
+mover event ledger in slice 22, which records the recoveryLedger trigger detail verbatim). What
+can be stated without speculation: the fixture (joinImpSeat) constructs DirectMotionPredictor
+with NO rejoin wiring and an explicitly passed snapshotDeadlineMs: 500 — a value PROVISIONAL
+under GA-11, not a ratified production value — so “no rejoin connection appears afterwards” is
+FIXTURE CONFIGURATION, not a measured product rejoin failure; and because the seat cannot
+resume, no compliant mid-window resync or closed period can silently pass — the send gate keeps
+refusing and every downstream check stays red, exactly as retained. The same profile/settings passed seeds 1001 and 1003 on the same runner class, so this
 is a timing-sensitive cold-start stop (hosted runner, dev-server + browser cold start), not a
 uniform GA-11 timeout failure; ga11-calibration ran green alongside. Smallest corrective actions,
 in order: (1) harness-only — persist the mover's recovery event log (trigger, timestamps, episode
@@ -647,3 +658,45 @@ GA-11 production-directed populations stay Not-Run/blocked, the proposed GA-5b/G
 stays DRAFT (PE-1 unmet), no thresholds changed, no rerun, verdict ceiling unchanged.
 GA-3/GA-13 legs ran green hosted (inside ga9-ga13 + ga-scenarios' other 30 checks). Nothing here
 closes, narrows or rehashes anything; all three reds stay red with first attempts retained.
+
+## 18. Slice 22 — closing the three first-attempt reds' measurement gaps (harness/evidence only, no production)
+Old retained evidence is IMMUTABLE (dpa8e stays byte-for-byte; no rerun erases a red: hosted
+lan-1002, poor-1002 and the GA-5l row remain red AT 44771876137 and are cited as such).
+(1) FULL-WINDOW MOVER EVENT LEDGER + EARLY STOP. The cell now runs a 250 ms page-side ledger
+bound to clock, phase and epoch: predictor state, ack/prefix/sent/outstanding, last accepted
+delivery, the surfaced connectionError and every recoveryLedger event VERBATIM (the trigger
+detail string is where snapshot-deadline-expired and input-ack-stalled name themselves — the
+poor-1002 gap is closed forward). A send-gate stop now ends the window EARLY (the refusal is
+published synchronously), the artefact is still written with full identity, ledger and hashes,
+and the window checks stay honestly RED on the truncated window. joinImpSeat wires NO rejoin —
+recorded in the artefact (rejoinConfigured: false) as FIXTURE CONFIGURATION: it neither indicts
+the product nor lets any resync/closed period pass. snapshotDeadlineMs: 500 passed by the
+fixture is PROVISIONAL under GA-11; nothing here deploys or ratifies any setting.
+(2) RENDER DELAY AT THE OBSERVER'S OWN FRAME BOUNDARY. New pure rule
+(tools/load-test/src/render-lag.ts, unit-pinned 7/7: an INTENTIONALLY-AHEAD observer FAILS, a
+delayed/holding observer PASSES, backwards jumps name themselves as discontinuities separately
+from delay, mixed identities are refused, an empty series cannot pass). The cell records
+~1200 same-frame samples per run (pose fromTick/toTick/alpha/holding/howOldMs against THIS
+page's latest validated authority tick, identity + epoch kept); the old cross-page point sample
+is retained as a NAMED diagnostic only. Local verification: lan-1001 1232 frames, aheadFrames 0,
+discontinuities 0, green (2.7m); poor-1002 local 1250 frames green (2.9m) — the hosted stop did
+NOT reproduce locally (host cold-start condition; retained hosted red stands).
+(3) GA-5L/LEG QUIET WINDOWS: DETERMINISTIC DRAIN + BEHAVIOURAL CONNECTION IDENTITY. All
+pre-staging/pre-arm waits now drain the CLIENT's own domain (ack AND prefix exactly at the last
+sent stamp, pending empty; bounded single pass, never warmed), and the quiet window gates the
+MOVER WIRE — the connection identified by the baseline pump's own traffic, not by open order.
+Why order failed, from retained bytes: the epoch leg showed the aggregate moving +2 while
+index 0 moved 0 — the mover WS is NOT always connection 0 (client internals open other sockets
+at the hop), so both the hosted GA-5l breach and a local dec-leg breach were measured against an
+UNNAMED aggregate; attribution is now behavioural and the hop's FULL per-connection counts ride
+in the artefact (moverConnection). A breach on the named mover wire inside the reserved 400 ms
+is genuine, recorded and failing; no retries. Controls (target identity, terminal loss, idle,
+blind-recovery, epoch) retained unchanged; blind and epoch rows now carry named conjunct maps
+and every errored scenario captures the throw's origin line, so future reds self-attribute.
+Local verification: ga-scenarios 31/31 green (2.9m) after the fix; the batch's own intermediate
+red runs (two drain/identity iterations, three ERRORED rows + one epoch conjunct red caused by
+this batch's own harness edits) are retained on disk at dpa8f, not rerolled.
+Also: proxy stats gained c2sPerConn (per-connection c2s receipts by open order); errorOrigin on
+scenario errors; §17's jitter column corrected in place with the mislabel recorded. All new
+artefacts are schemaVersion 4 and kind DIAGNOSTIC-NOT-GATE-A — diagnostics, published nowhere.
+Hosted: NO dispatch. Thresholds, production config, ADR, gate state: untouched.
