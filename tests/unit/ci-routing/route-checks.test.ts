@@ -210,6 +210,26 @@ describe('CI router — spike/netcode/load-test paths route to existing lanes (g
     expectOnly(['tests/spikes/notes.md'], ['records']);
   });
 
+  it('routes the client probe scripts to the lanes that execute what they probe — through the PRE-EXISTING rules, untouched by the spike rule', () => {
+    // The two client-side probes named by the grant, plus their siblings: every `tests/probes/**`
+    // path was ALREADY routed static + server + runtime before `spike-netcode-fast` existed, and
+    // still is. Those are the executable lanes: static type-checks the script, the runtime lane
+    // builds the dist the probe imports and runs the transport it exercises.
+    for (const probe of [
+      'tests/probes/colyseus-client.probe.ts',
+      'tests/probes/colyseus-roundtrip.probe.ts',
+      'tests/probes/colyseus-server.probe.ts',
+      'tests/probes/pr14-gate-a.probe.ts',
+    ]) {
+      expectOnly([probe], ['runtime', 'server', 'static']);
+    }
+    // And provably NOT via the spike rule: `unit` executes no probe script, so its appearance on a
+    // probe path would mean the spike patterns were widened past their grant.
+    const decision = routePaths(['tests/probes/colyseus-client.probe.ts']).decisions[0];
+    expect(decision?.rules).not.toContain('spike-netcode-fast');
+    expect(flagsOf(['tests/probes/colyseus-roundtrip.probe.ts']).unit).toBe(false);
+  });
+
   it('a spike route can never select evidence capture, the acceptance lane, or the full Gate A matrix (C-07, T-8)', () => {
     const spikePaths = [
       'tests/e2e/netcode.spec.ts',

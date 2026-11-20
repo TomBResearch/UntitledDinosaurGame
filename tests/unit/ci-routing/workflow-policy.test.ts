@@ -322,6 +322,18 @@ describe('CI workflows — full capture is an explicit act, and a routine run is
     const runtimeBlock = job(routine, 'runtime');
     expect(runtimeBlock).toContain('test:spike');
     expect(runtimeBlock).toContain('--cell lan-smoke');
+    // The smoke launches browsers, so the pinned chromium install must sit in the SAME job, at
+    // step level, immediately BEFORE the spike invocation — the AC-1 trace and system suites in
+    // that lane must not be structured to depend on it, and a fresh runner without a cached
+    // browser would otherwise fail. The pattern is the repo's own (no `--with-deps`, no new
+    // action references; the checkout above already sets persist-credentials: false).
+    const installAt = runtimeBlock.indexOf('playwright install chromium');
+    const spikeAt = runtimeBlock.indexOf('test:spike');
+    expect(installAt, 'the runtime lane never installs chromium for the browser smoke').toBeGreaterThan(-1);
+    expect(installAt, 'chromium must be installed before the smoke runs').toBeLessThan(spikeAt);
+    expect(runtimeBlock).not.toContain('playwright install --with-deps');
+    const runtimeUses = [...runtimeBlock.matchAll(/uses:\s*(\S+)/gu)].map((match) => match[1] as string);
+    expect(runtimeUses.every((spec) => /^actions\/(checkout|setup-node)@/u.test(spec))).toBe(true);
     // Exactly one lane runs the smoke: no other job may invoke the spike runner, so a netcode
     // change cannot accidentally start browser work in four lanes.
     for (const id of jobIds(routine)) {
