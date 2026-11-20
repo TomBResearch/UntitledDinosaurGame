@@ -56,6 +56,7 @@ export interface GateAReport {
   readonly generatedAt: string;
   readonly candidate: string;
   readonly runId: string | null;
+  readonly lanes: Record<string, string>;
   readonly expectedCoordinates: readonly { profile: string; seed: number }[];
   readonly rows: readonly GateARowReport[];
   readonly toolchain: Record<string, string | null>;
@@ -95,10 +96,19 @@ export const aggregateGateA = (options: {
   candidateSha: string;
   scenariosDir?: string;
   runId?: string | null;
+  /** Mandatory lane results (profile/scenarios). Anything but 'success' refuses, EVEN IF every file is complete. */
+  lanes?: Record<string, string>;
 }): GateAReport => {
   const violations: GateAViolation[] = [];
   const v = (code: string, detail: string): void => { violations.push({ code, detail }); };
   if (!/^[0-9a-f]{40}$/u.test(options.candidateSha)) v('GATEA-AGG-CANDIDATE', `candidate "${options.candidateSha}" is not a full 40-hex sha`);
+  // Failure propagation (slice-13 review): a mandatory lane that went red, was skipped, or was
+  // cancelled is a failure of the dispatch — the binder must refuse even when the artefact tree
+  // happens to be complete (files can exist while a step after the upload failed, or a reroll
+  // raced the aggregator). Completeness of bytes never outranks the lane's own verdict.
+  for (const [lane, result] of Object.entries(options.lanes ?? {})) {
+    if (result !== 'success') v('GATEA-AGG-LANE', `mandatory lane "${lane}" finished "${result}" — refused even if every artefact is present (a red/skipped/cancelled lane is not a green dispatch)`);
+  }
 
   const files: string[] = [];
   walkCellFiles(options.rootDir, files);
@@ -209,6 +219,7 @@ export const aggregateGateA = (options: {
     generatedAt: new Date().toISOString(),
     candidate: options.candidateSha,
     runId: options.runId ?? null,
+    lanes: options.lanes ?? {},
     expectedCoordinates: [...expected.values()],
     rows,
     toolchain: (() => {

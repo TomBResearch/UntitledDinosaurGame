@@ -11,9 +11,12 @@
  * appears as a verdict anywhere in the bytes.
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+
+const ROOT = resolve(import.meta.dirname, '..', '..', '..');
 
 import { describe, expect, it } from 'vitest';
 
@@ -90,11 +93,15 @@ const perfectScenarios = (status: 'run-green' | 'run-red' | 'not-run' = 'run-gre
   return dir;
 };
 
+const LANES_OK = { profile: 'success', scenarios: 'success' };
+/** every existing case runs with both mandatory lanes green, so lane failures are tested distinctly */
+const agg = (options: Parameters<typeof aggregateGateA>[0]): ReturnType<typeof aggregateGateA> =>
+  aggregateGateA({ lanes: { ...LANES_OK }, ...options });
 const codesOf = (violations: readonly { readonly code: string }[]): string[] => violations.map((violation) => violation.code);
 
 describe('gate-a binder — a perfect tree binds, and STILL says Gate A is NOT-PASS', () => {
   it('binds all twelve coordinates to candidate, coordinate, bytes and toolchain', () => {
-    const report = aggregateGateA({ rootDir: perfectRows(), scenariosDir: perfectScenarios(), candidateSha: CANDIDATE, runId: 'manual-1' });
+    const report = agg({ rootDir: perfectRows(), scenariosDir: perfectScenarios(), candidateSha: CANDIDATE, runId: 'manual-1' });
     expect(report.violations).toEqual([]);
     expect(report.rows).toHaveLength(12);
     expect(report.matrixVerdict).toBe('ROWS-COMPLETE-ALL-GREEN');
@@ -110,7 +117,7 @@ describe('gate-a binder — a perfect tree binds, and STILL says Gate A is NOT-P
   });
 
   it('refuses a non-40-hex candidate by name', () => {
-    const report = aggregateGateA({ rootDir: perfectRows(), scenariosDir: perfectScenarios(), candidateSha: 'abc123' });
+    const report = agg({ rootDir: perfectRows(), scenariosDir: perfectScenarios(), candidateSha: 'abc123' });
     expect(codesOf(report.violations)).toContain('GATEA-AGG-CANDIDATE');
   });
 });
@@ -119,7 +126,7 @@ describe('gate-a binder — missing, duplicate, omitted, unexpected', () => {
   it('an omitted coordinate is MISSING (blocked, not passed)', () => {
     const root = mkdtempSync(join(tmpdir(), 'gate-a-rows-'));
     for (const profile of GATE_A_PROFILES) for (const seed of GATE_A_SEEDS) if (!(profile === 'poor' && seed === 1003)) writeRow(root, profile, seed, rowDoc(profile, seed));
-    const report = aggregateGateA({ rootDir: root, scenariosDir: perfectScenarios(), candidateSha: CANDIDATE });
+    const report = agg({ rootDir: root, scenariosDir: perfectScenarios(), candidateSha: CANDIDATE });
     const missing = report.violations.filter((violation) => violation.code === 'GATEA-AGG-MISSING');
     expect(missing).toHaveLength(1);
     expect(missing[0]?.detail).toContain('poor/1003');
@@ -128,13 +135,13 @@ describe('gate-a binder — missing, duplicate, omitted, unexpected', () => {
 
   it('two artefacts for one coordinate are DUPLICATES', () => {
     const root = perfectRows((_docs, r) => writeRow(join(r, 'reroll'), 'elevated', 1002, rowDoc('elevated', 1002)));
-    const report = aggregateGateA({ rootDir: root, scenariosDir: perfectScenarios(), candidateSha: CANDIDATE });
+    const report = agg({ rootDir: root, scenariosDir: perfectScenarios(), candidateSha: CANDIDATE });
     expect(report.violations.some((violation) => violation.code === 'GATEA-AGG-DUPLICATE' && violation.detail.includes('elevated/1002'))).toBe(true);
   });
 
   it('a coordinate outside the twelve official pairs is UNEXPECTED', () => {
     const root = perfectRows((_docs, r) => writeRow(r, 'elevated', 1004, rowDoc('elevated', 1004)));
-    const report = aggregateGateA({ rootDir: root, scenariosDir: perfectScenarios(), candidateSha: CANDIDATE });
+    const report = agg({ rootDir: root, scenariosDir: perfectScenarios(), candidateSha: CANDIDATE });
     expect(codesOf(report.violations)).toContain('GATEA-AGG-UNEXPECTED');
   });
 });
@@ -142,7 +149,7 @@ describe('gate-a binder — missing, duplicate, omitted, unexpected', () => {
 describe('gate-a binder — tamper refusals (bytes must agree with everything else)', () => {
   const tamper = (name: string, mutate: (docs: Map<string, Record<string, unknown>>, root: string) => void, code: string): void => {
     it(name, () => {
-      const report = aggregateGateA({ rootDir: perfectRows(mutate), scenariosDir: perfectScenarios(), candidateSha: CANDIDATE });
+      const report = agg({ rootDir: perfectRows(mutate), scenariosDir: perfectScenarios(), candidateSha: CANDIDATE });
       expect(codesOf(report.violations)).toContain(code);
     });
   };
@@ -162,36 +169,128 @@ describe('gate-a binder — tamper refusals (bytes must agree with everything el
   it('a scenario artefact from another candidate is refused by name', () => {
     const dir = perfectScenarios();
     writeFileSync(join(dir, 'spike-cell-ga9-ga13.json'), JSON.stringify({ identity: { commit: OTHER }, checks: [] }));
-    const report = aggregateGateA({ rootDir: perfectRows(), scenariosDir: dir, candidateSha: CANDIDATE });
+    const report = agg({ rootDir: perfectRows(), scenariosDir: dir, candidateSha: CANDIDATE });
     expect(codesOf(report.violations)).toContain('GATEA-AGG-SCENARIO-IDENTITY');
   });
 
   it('a scenario lane that says red stays red; a status it invents is refused', () => {
-    const redReport = aggregateGateA({ rootDir: perfectRows(), scenariosDir: perfectScenarios('run-red'), candidateSha: CANDIDATE });
+    const redReport = agg({ rootDir: perfectRows(), scenariosDir: perfectScenarios('run-red'), candidateSha: CANDIDATE });
     expect(codesOf(redReport.violations)).toContain('GATEA-AGG-SCENARIO-RED');
     const dir = perfectScenarios();
     writeFileSync(join(dir, 'gate-a-scenario-status.json'), JSON.stringify({ cells: [{ cell: 'ga9-ga13', status: 'vibes-green', gaps: [] }] }));
-    const invented = aggregateGateA({ rootDir: perfectRows(), scenariosDir: dir, candidateSha: CANDIDATE });
+    const invented = agg({ rootDir: perfectRows(), scenariosDir: dir, candidateSha: CANDIDATE });
     expect(codesOf(invented.violations)).toContain('GATEA-AGG-SCENARIO-STATUS');
   });
 
   it('no scenario status file means no inferred scenario lane', () => {
     const dir = mkdtempSync(join(tmpdir(), 'gate-a-scen-empty-'));
-    const report = aggregateGateA({ rootDir: perfectRows(), scenariosDir: dir, candidateSha: CANDIDATE });
+    const report = agg({ rootDir: perfectRows(), scenariosDir: dir, candidateSha: CANDIDATE });
     expect(codesOf(report.violations)).toContain('GATEA-AGG-SCENARIO-STATUS');
   });
 });
 
 describe('gate-a binder — thresholds mirror the adopted profile table', () => {
-  it('GATE_A_THRESHOLDS equals SPIKE_PROFILES exactly (no runner-private drift)', async () => {
-    const loadTest = (await import('../../../tools/load-test/dist/run-spike.js')) as {
-      SPIKE_PROFILES: Record<string, { rttMs: number; jitterBudgetMs: number }>;
-    };
+  it('GATE_A_THRESHOLDS equals the adopted SPIKE_PROFILES source table exactly (no runner-private drift)', () => {
+    // The adopted table is read FROM ITS SOURCE (tools/load-test/src/run-spike.ts), not from a built
+    // dist: the root `pnpm typecheck` chain builds @udg/checks and the packages but NEVER
+    // tools/load-test, so a module-import tripwire here once broke the static lane on a clean
+    // checkout (hosted run 44744981957, retained in dpa7z). Source text is the truth this mirror
+    // must match, and parsing it needs no build phase at all.
+    const source = readFileSync(join(ROOT, 'tools', 'load-test', 'src', 'run-spike.ts'), 'utf8');
     for (const profile of GATE_A_PROFILES) {
-      expect(GATE_A_THRESHOLDS[profile]).toEqual({
-        rttMs: loadTest.SPIKE_PROFILES[profile]!.rttMs,
-        jitterBudgetMs: loadTest.SPIKE_PROFILES[profile]!.jitterBudgetMs,
-      });
+      const row = new RegExp(`${profile}: \\{ name: '${profile}', rttMs: (\\d+), jitterBudgetMs: (\\d+)`, 'u').exec(source);
+      expect(row, `${profile} is missing from the adopted SPIKE_PROFILES table`).not.toBeNull();
+      expect(GATE_A_THRESHOLDS[profile]).toEqual({ rttMs: Number(row?.[1]), jitterBudgetMs: Number(row?.[2]) });
     }
+  });
+});
+
+describe('gate-a binder — mandatory lane results outrank complete files (role of the supplied files)', () => {
+  it('refers every ordinary case through the green-lane wrapper', () => {
+    // (structure guard: agg is the single funnel; the lane tests below call the raw binder)
+    expect(typeof agg).toBe('function');
+    expect(typeof aggregateGateA).toBe('function');
+  });
+
+  it('a RED mandatory lane refuses even when the full twelve-file set is complete and green', () => {
+    const report = aggregateGateA({
+      rootDir: perfectRows(),
+      scenariosDir: perfectScenarios(),
+      candidateSha: CANDIDATE,
+      lanes: { profile: 'failure', scenarios: 'success' },
+    });
+    const lane = report.violations.find((violation) => violation.code === 'GATEA-AGG-LANE');
+    expect(lane?.detail).toContain('profile');
+    expect(report.gateA).toBe('NOT-PASS (violations)');
+    // the rows still bind (bytes are reported honestly) — but the dispatch is refused
+    expect(report.rows).toHaveLength(12);
+  });
+
+  it('a SKIPPED or CANCELLED lane is refused too, and unknown results are not treated as success', () => {
+    for (const result of ['skipped', 'cancelled', 'neutral', '']) {
+      const report = aggregateGateA({
+        rootDir: perfectRows(),
+        scenariosDir: perfectScenarios(),
+        candidateSha: CANDIDATE,
+        lanes: { profile: 'success', scenarios: result },
+      });
+      expect(codesOf(report.violations), `result "${result}" must refuse`).toContain('GATEA-AGG-LANE');
+    }
+  });
+
+  it('all lanes green over the complete set is the only publishable shape', () => {
+    const report = aggregateGateA({
+      rootDir: perfectRows(),
+      scenariosDir: perfectScenarios(),
+      candidateSha: CANDIDATE,
+      lanes: { profile: 'success', scenarios: 'success' },
+    });
+    expect(report.violations).toEqual([]);
+    expect(report.lanes).toEqual({ profile: 'success', scenarios: 'success' });
+  });
+});
+
+describe('gate-a binder — offline fixture conformance of the CLI the workflow gates on (exit codes are the contract)', () => {
+  // No actionlint / system YAML parser exists in this offline environment (actionlint, yamllint,
+  // ruby, PyYAML, perl YAML::Tiny all probed ABSENT at review time, and no deps may be added), so
+  // job semantics the static tests cannot see are pinned at the point the workflow actually
+  // depends on: the binder CLI's exit status behind `publishable`. These spawn the real command.
+  const cli = join(ROOT, 'tools', 'checks', 'dist', 'evidence.js');
+
+  const run = (args: string[]): { status: number | null; out: string; err: string } => {
+    const executed = spawnSync(process.execPath, [cli, 'gate-a-aggregate', ...args], { cwd: ROOT, encoding: 'utf8', timeout: 120_000 });
+    return { status: executed.status, out: executed.stdout ?? '', err: executed.stderr ?? '' };
+  };
+
+  it('complete green tree with both lanes success exits 0 and writes the report', () => {
+    const out = join(mkdtempSync(join(tmpdir(), 'gate-a-cli-')), 'report.json');
+    const r = run(['--dir', perfectRows(), '--scenarios', perfectScenarios(), '--candidate', CANDIDATE, '--out', out, '--lanes', 'profile=success,scenarios=success']);
+    expect(r.status).toBe(0);
+    const report = JSON.parse(readFileSync(out, 'utf8')) as Record<string, unknown>;
+    expect(report['matrixVerdict']).toBe('ROWS-COMPLETE-ALL-GREEN');
+    expect(String(report['gateA'])).toBe('NOT-PASS (open gaps)');
+  });
+
+  it('complete files but a failed upstream lane exit 1 with GATEA-AGG-LANE named on stderr', () => {
+    const out = join(mkdtempSync(join(tmpdir(), 'gate-a-cli-')), 'report.json');
+    const r = run(['--dir', perfectRows(), '--scenarios', perfectScenarios(), '--candidate', CANDIDATE, '--out', out, '--lanes', 'profile=failure,scenarios=success']);
+    expect(r.status).toBe(1);
+    expect(r.err).toContain('GATEA-AGG-LANE');
+  });
+
+  it('a short (non-40-hex) candidate exits 1 before reading anything, naming the candidate rule', () => {
+    const out = join(mkdtempSync(join(tmpdir(), 'gate-a-cli-')), 'report.json');
+    const r = run(['--dir', perfectRows(), '--scenarios', perfectScenarios(), '--candidate', 'abc123', '--out', out]);
+    expect(r.status).toBe(1);
+    expect(r.err).toContain('GATEA-AGG-CANDIDATE');
+  });
+
+  it('missing artefacts exit 1 with every omitted coordinate named (blocked, never silently passed)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gate-a-rows-'));
+    writeRow(root, 'lan', 1001, rowDoc('lan', 1001));
+    const out = join(mkdtempSync(join(tmpdir(), 'gate-a-cli-')), 'report.json');
+    const r = run(['--dir', root, '--scenarios', perfectScenarios(), '--candidate', CANDIDATE, '--out', out, '--lanes', 'profile=success,scenarios=success']);
+    expect(r.status).toBe(1);
+    expect(r.err.match(/GATEA-AGG-MISSING/gu)?.length).toBe(11);
   });
 });

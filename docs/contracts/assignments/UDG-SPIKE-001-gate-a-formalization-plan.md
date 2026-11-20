@@ -311,3 +311,43 @@ that this batch neither performs nor pre-empt — no merge happened here, nothin
 the formal matrix remains blocked for a PASS by the GA-11 production populations and the unresolved
 GA-5b/GA-12 policy exactly as before. Full YAML acceptance is the runner's at first dispatch; local
 validation is the policy suite above plus the structural parse it performs.
+
+## 13. Slice-14 update (2026-11-20): bounded T-7 corrections + the static-lane root red, kept and fixed
+
+**Root red, kept and attributed.** Hosted run 44744981957 (PR #7 @ e733c42) went red in
+`routine / static`, step 6 "Typecheck every populated workspace":
+`gate-a-aggregate.test.ts(187): TS2307 Cannot find module tools/load-test/dist/run-spike.js`.
+Reproduced verbatim on a truly clean clone (fresh checkout, install, `pnpm typecheck`, zero dists
+present): the root typecheck chain builds `@udg/checks` and the packages but never `tools/load-test`,
+so a module-import tripwire in a test is a build-order assumption. The log and the reproduction are
+retained (`dpa7z/`); the fix changed only the responsible file: the threshold mirror now reads the
+adopted `SPIKE_PROFILES` table FROM ITS SOURCE TEXT (`tools/load-test/src/run-spike.ts`) — the same
+drift check, needing no build phase, portable on the pinned Node 24.22.2, and clean-clone typecheck
+returns 0. No suppression, no rerun-to-hide.
+
+**T-7 corrections (this batch), all inside the supplied workflow + binder + their tests.**
+(1) The dispatch input is the assignment's exact `candidate_sha`; `run_id` is an optional printable
+label (`[A-Za-z0-9._-]{1,64}`, validated BEFORE checkout/install in every job) while every artefact
+name carries the immutable `github.run_id` as the dispatch identity. (2) Per-profile
+`timeout-minutes: 30` (and 30 for scenarios) per §4's ≤ 30-minute overall matrix target — the old
+150-minute cap would have hidden a stalled lane for hours. (3) Failure propagation: the evidence job
+passes `--lanes profile=<needs.profile.result>,scenarios=<needs.scenarios.result>` (via env) and the
+binder refuses ANY non-success value (`GATEA-AGG-LANE`) — red, skipped, cancelled or unknown — even
+when all twelve files happen to be complete; proven by mock (complete set + failed upstream) and by
+CLI exit-code fixture tests (the contract the publish gate actually keys on). (4) Mandatory
+no-artefact for malformed/short/wrong SHA: every upload sits behind
+`if: always() && steps.inputgate.outcome == 'success' && steps.headbind.outcome == 'success'`.
+(5) Diagnostic honesty: the standalone aggregate report is published as
+`gate-a-report-diagnostic-…` and the lane states in-file that it is never a verified evidence
+bundle — a bona fide candidate bundle follows the accepted bounded path (authorized capture plan →
+bundle directory → `pnpm evidence:verify`, i.e. `evidence.js verify --run <BUNDLE>`, re-deriving
+every digest from the manifest), which stays with acceptance.yml. (6) Inputs still never reach a
+shell body; pins, permissions and persist-credentials unchanged; no other workflow was touched.
+
+**Validation limits.** actionlint, yamllint, ruby/PyYAML/perl-YAML were all probed ABSENT in this
+offline environment and no dependency may be added, so full YAML job-graph acceptance remains the
+runner's own at first dispatch; what CAN be conformance-tested offline is: the policy suite (static
+semantics of every grant rule), the binder module tests, and the new CLI exit-code fixture tests.
+GitHub still discovers dispatchable workflows only from `main`; nothing here merges or dispatches,
+and the formal matrix stays blocked for a PASS by GA-11 production populations and unresolved
+GA-5b/GA-12 policy — with open gaps this lane publishes labelled diagnostics only, never a bundle.

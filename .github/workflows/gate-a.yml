@@ -32,16 +32,16 @@
 #   the other three's evidence, but every mandatory failure fails its job, and no step retries.
 
 name: gate-a (formal matrix — manual dispatch)
-run-name: gate-a formal matrix ${{ inputs.run_id }} @ ${{ inputs.candidate }}
+run-name: gate-a formal matrix ${{ inputs.run_id }} @ ${{ inputs.candidate_sha }}
 
 on:
   workflow_dispatch:
     inputs:
-      candidate:
-        description: 'Full 40-hex candidate SHA. Checked out exactly; refused before install/test if it is not 40-hex or does not match HEAD.'
+      candidate_sha:
+        description: 'Full 40-hex candidate SHA (assignment §4 dispatch input). Checked out exactly; refused before install/test if it is not 40-hex or does not match HEAD.'
         required: true
       run_id:
-        description: 'Evidence run id (names the artefacts of this dispatch).'
+        description: 'Optional printable run label for artefact names (validated before any upload). The immutable dispatch identity is always the workflow run id.'
         required: false
         default: 'manual-1'
 
@@ -63,7 +63,10 @@ jobs:
   profile:
     name: matrix / ${{ matrix.profile }} (seeds 1001→1003, ordered, first attempts only)
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    # Assignment §4: per-profile 30 minutes; the four profile jobs run in parallel, which is what
+    # makes the ≤ 30-minute overall matrix target reachable (a 150-minute cap would hide a stalled
+    # lane for five hours and make the target unassertable).
+    timeout-minutes: 30
     strategy:
       # Diagnostics: one red profile must not cancel the other three — their evidence is the run.
       # This is not a retry knob: nothing reruns, and every attempted coordinate keeps its red.
@@ -71,29 +74,37 @@ jobs:
       matrix:
         profile: [lan, moderate, elevated, poor]
     env:
-      CANDIDATE: ${{ inputs.candidate }}
+      CANDIDATE: ${{ inputs.candidate_sha }}
       PROFILE: ${{ matrix.profile }}
       # The formal schedule policy: the runner stamps GATE-A kinds only under this flag, on an
       # official coordinate, over a clean tree (the cell itself enforces all three).
       UDG_GATE_A_FORMAL: '1'
       UDG_SPIKE_OUT: artifacts/.local/spike-001/gate-a
     steps:
-      - name: Refuse a candidate that is not a full 40-hex sha (before checkout, install or test)
+      - name: Validate every dispatch input BEFORE checkout/install (40-hex candidate; printable bounded label)
+        id: inputgate
+        env:
+          INPUT_RUN_ID: ${{ inputs.run_id }}
         run: |
           set -euo pipefail
           case "$CANDIDATE" in
-            *[!0-9a-f]*) echo "::error::candidate contains characters outside [0-9a-f]"; exit 1 ;;
+            *[!0-9a-f]*) echo "::error::candidate_sha contains characters outside [0-9a-f]"; exit 1 ;;
           esac
-          if [ "${#CANDIDATE}" -ne 40 ]; then echo "::error::candidate must be exactly 40 hex characters"; exit 1; fi
+          if [ "${#CANDIDATE}" -ne 40 ]; then echo "::error::candidate_sha must be exactly 40 hex characters"; exit 1; fi
+          case "$INPUT_RUN_ID" in
+            ""|*[!A-Za-z0-9._-]*) echo "::error::run_id must be 1-64 printable characters from [A-Za-z0-9._-]"; exit 1 ;;
+          esac
+          if [ "${#INPUT_RUN_ID}" -gt 64 ]; then echo "::error::run_id label is too long"; exit 1; fi
 
       - name: Check out the exact candidate (read-only, no credentials)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.candidate }}
+          ref: ${{ inputs.candidate_sha }}
           persist-credentials: false
           fetch-depth: 0
 
       - name: Bind the checkout to the dispatched candidate BEFORE any install or test
+        id: headbind
         run: |
           set -euo pipefail
           head_sha="$(git rev-parse HEAD)"
@@ -137,8 +148,8 @@ jobs:
             exit 1
           fi
 
-      - name: Upload this profile's artefacts (always — a red row's bytes are evidence too)
-        if: always()
+      - name: Upload this profile's artefacts (a red ROW's bytes are evidence — but ONLY behind a passed input/HEAD gate: a malformed, short or wrong SHA uploads nothing, ever)
+        if: always() && steps.inputgate.outcome == 'success' && steps.headbind.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gate-a-rows-${{ matrix.profile }}-${{ inputs.run_id }}-${{ github.run_id }}
@@ -149,26 +160,34 @@ jobs:
   scenarios:
     name: scenarios / ga9-ga13 + ga-scenarios + ga11-calibration (separate lane; statuses and gaps stated, never inferred)
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 30
     env:
-      CANDIDATE: ${{ inputs.candidate }}
+      CANDIDATE: ${{ inputs.candidate_sha }}
       UDG_GATE_A_FORMAL: '1'
       UDG_SPIKE_OUT: artifacts/.local/spike-001/gate-a-scenarios
     steps:
-      - name: Refuse a candidate that is not a full 40-hex sha (before checkout, install or test)
+      - name: Validate every dispatch input BEFORE checkout/install (40-hex candidate; printable bounded label)
+        id: inputgate
+        env:
+          INPUT_RUN_ID: ${{ inputs.run_id }}
         run: |
           set -euo pipefail
           case "$CANDIDATE" in
-            *[!0-9a-f]*) echo "::error::candidate contains characters outside [0-9a-f]"; exit 1 ;;
+            *[!0-9a-f]*) echo "::error::candidate_sha contains characters outside [0-9a-f]"; exit 1 ;;
           esac
-          if [ "${#CANDIDATE}" -ne 40 ]; then echo "::error::candidate must be exactly 40 hex characters"; exit 1; fi
+          if [ "${#CANDIDATE}" -ne 40 ]; then echo "::error::candidate_sha must be exactly 40 hex characters"; exit 1; fi
+          case "$INPUT_RUN_ID" in
+            ""|*[!A-Za-z0-9._-]*) echo "::error::run_id must be 1-64 printable characters from [A-Za-z0-9._-]"; exit 1 ;;
+          esac
+          if [ "${#INPUT_RUN_ID}" -gt 64 ]; then echo "::error::run_id label is too long"; exit 1; fi
       - name: Check out the exact candidate (read-only, no credentials)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.candidate }}
+          ref: ${{ inputs.candidate_sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Bind the checkout to the dispatched candidate BEFORE any install or test
+        id: headbind
         run: |
           set -euo pipefail
           head_sha="$(git rev-parse HEAD)"
@@ -242,8 +261,8 @@ jobs:
               note: "statuses are read from this lane\u2019s own artefacts; gaps are the declared blockers, stated here so the binder never infers either",
             }, null, 2));
           '
-      - name: Upload the scenario lane (always)
-        if: always()
+      - name: Upload the scenario lane (behind the same input/HEAD gate — no artefacts from a malformed dispatch)
+        if: always() && steps.inputgate.outcome == 'success' && steps.headbind.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gate-a-scenarios-${{ inputs.run_id }}-${{ github.run_id }}
@@ -261,24 +280,35 @@ jobs:
       contents: read
       actions: read
     env:
-      CANDIDATE: ${{ inputs.candidate }}
+      CANDIDATE: ${{ inputs.candidate_sha }}
       INPUT_RUN_ID: ${{ inputs.run_id }}
       RUN_ID: ${{ github.run_id }}
+      # Mandatory lane results reach the binder here (env, never interpolated shell). The binder
+      # refuses a red/skipped/cancelled lane even when every artefact file happens to be present.
+      LANES: profile=${{ needs.profile.result }},scenarios=${{ needs.scenarios.result }}
     steps:
-      - name: Refuse a candidate that is not a full 40-hex sha (before checkout, install or test)
+      - name: Validate every dispatch input BEFORE checkout/install (40-hex candidate; printable bounded label)
+        id: inputgate
+        env:
+          INPUT_RUN_ID: ${{ inputs.run_id }}
         run: |
           set -euo pipefail
           case "$CANDIDATE" in
-            *[!0-9a-f]*) echo "::error::candidate contains characters outside [0-9a-f]"; exit 1 ;;
+            *[!0-9a-f]*) echo "::error::candidate_sha contains characters outside [0-9a-f]"; exit 1 ;;
           esac
-          if [ "${#CANDIDATE}" -ne 40 ]; then echo "::error::candidate must be exactly 40 hex characters"; exit 1; fi
+          if [ "${#CANDIDATE}" -ne 40 ]; then echo "::error::candidate_sha must be exactly 40 hex characters"; exit 1; fi
+          case "$INPUT_RUN_ID" in
+            ""|*[!A-Za-z0-9._-]*) echo "::error::run_id must be 1-64 printable characters from [A-Za-z0-9._-]"; exit 1 ;;
+          esac
+          if [ "${#INPUT_RUN_ID}" -gt 64 ]; then echo "::error::run_id label is too long"; exit 1; fi
       - name: Check out the exact candidate (read-only, no credentials)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.candidate }}
+          ref: ${{ inputs.candidate_sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Bind the checkout to the dispatched candidate BEFORE any install or test
+        id: headbind
         run: |
           set -euo pipefail
           head_sha="$(git rev-parse HEAD)"
@@ -319,22 +349,26 @@ jobs:
           set +e
           node tools/checks/dist/evidence.js gate-a-aggregate \
             --dir /tmp/gate-a/rows --scenarios /tmp/gate-a/scenarios \
-            --candidate "$CANDIDATE" --out /tmp/gate-a/gate-a-report.json --run-id "$RUN_ID"
+            --candidate "$CANDIDATE" --out /tmp/gate-a/gate-a-report.json --run-id "$RUN_ID" --lanes "$LANES"
           bind_status=$?
           set -e
           if [ "$bind_status" -eq 0 ]; then echo "publishable=true" >> "$GITHUB_OUTPUT"; else echo "publishable=false" >> "$GITHUB_OUTPUT"; fi
           exit "$bind_status"
 
-      - name: Publish the evidence report ONLY for a complete green matrix (an unsuccessful dispatch publishes no bundle)
+      # This report is a DIAGNOSTIC aggregate — never call it a verified evidence bundle. A bona
+      # fide candidate bundle follows the accepted path: run the authorized capture plan into a
+      # bundle directory, then `pnpm evidence:verify` (evidence.js verify --run <BUNDLE>), which
+      # re-derives every file's digest from the manifest. That path stays with acceptance.yml.
+      - name: Publish the DIAGNOSTIC aggregate report (labelled diagnostic; only for a complete green matrix)
         if: steps.bind.outputs.publishable == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: gate-a-evidence-${{ inputs.run_id }}-${{ github.run_id }}
+          name: gate-a-report-diagnostic-${{ inputs.run_id }}-${{ github.run_id }}
           path: /tmp/gate-a/gate-a-report.json
           if-no-files-found: error
 
       - name: Say the true thing when nothing publishable exists
         if: always() && steps.bind.outputs.publishable != 'true'
         run: |
-          echo "::error::this dispatch produced no publishable evidence bundle: the binder refused (missing / duplicate / mismatched / red rows stay exactly that). Gate A remains NOT-PASS regardless — the report states the open gaps."
+          echo "::error::this dispatch published nothing — not even a diagnostic report: the binder refused (missing / duplicate / mismatched / red rows, or a non-success mandatory lane, stay exactly that). Gate A remains NOT-PASS regardless; a verified evidence bundle would additionally require the accepted capture-plan + evidence:verify path, which this lane never claims to be."
           exit 1

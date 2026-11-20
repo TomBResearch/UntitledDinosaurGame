@@ -4164,16 +4164,23 @@ const main = (): number => {
     // missing artefact stays red/blocked in the report — and Gate A itself can only ever be
     // written NOT-PASS here while any recorded gap stands open. Exit 0 means only: the twelve
     // coordinates are present exactly once each, byte-bind to the candidate, and are green.
-    const usage = 'usage: evidence.js gate-a-aggregate --dir <rowsDir> --scenarios <scenariosDir> --candidate <40-hex> --out <report.json> [--run-id <id>]';
+    const usage = 'usage: evidence.js gate-a-aggregate --dir <rowsDir> --scenarios <scenariosDir> --candidate <40-hex> --out <report.json> [--run-id <id>] [--lanes name=result,...]';
     const candidate = requireFlag(flags, 'candidate', usage);
     const rowsDir = resolve(process.cwd(), requireFlag(flags, 'dir', usage));
     const scenariosDirRaw = flagString(flags, 'scenarios');
     const outFile = resolve(process.cwd(), requireFlag(flags, 'out', usage));
+    const lanesRaw = flagString(flags, 'lanes');
+    const lanes: Record<string, string> = {};
+    if (lanesRaw !== undefined) for (const pair of lanesRaw.split(',')) {
+      const [name, result] = pair.split('=');
+      if (name !== undefined && result !== undefined) lanes[name.trim()] = result.trim();
+    }
     const report = aggregateGateA({
       rootDir: rowsDir,
       candidateSha: candidate,
       ...(scenariosDirRaw === undefined ? {} : { scenariosDir: resolve(process.cwd(), scenariosDirRaw) }),
       ...(flagString(flags, 'run-id') === undefined ? {} : { runId: flagString(flags, 'run-id') as string }),
+      ...(lanesRaw === undefined ? {} : { lanes }),
     });
     writeJson(outFile, report);
     for (const violation of report.violations) process.stderr.write(`::error::${violation.code}: ${violation.detail}\n`);

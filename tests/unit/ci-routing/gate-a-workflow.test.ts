@@ -47,6 +47,20 @@ const runBlocks = (block: string): string[] => {
 };
 
 describe('gate-a workflow — manual, pinned, read-only', () => {
+  it('names the assignment §4 dispatch inputs exactly: candidate_sha (required) + an optional printable run label', () => {
+    expect(text).toMatch(/^ {6}candidate_sha:\n {8}description:/mu);
+    expect(/^ {6}candidate:/mu.test(text), 'the old `candidate` input name must be gone').toBe(false);
+    expect(text).toMatch(/^ {6}run_id:$/mu);
+    // the label is validated BEFORE any upload (and before install): printable-only, bounded length
+    const block = jobBlock('profile');
+    expect(block).toContain('run_id must be 1-64 printable characters');
+    expect(block.indexOf('printable characters')).toBeLessThan(block.indexOf('pnpm install --frozen-lockfile'));
+    // and the immutable identity in every artefact name is github.run_id, not the mutable label
+    for (const name of [...text.matchAll(/name: gate-a-[^\n]+/gu)].map((m) => m[0])) {
+      expect(name, `artefact name drops the immutable run id: ${name}`).toContain('github.run_id');
+    }
+  });
+
   it('triggers ONLY on a manual dispatch (never push, never pull_request, never a schedule)', () => {
     const triggerBlock = /^\s*on:\n(?:[^\n]*\n)*?(?=\n[a-z])/mu.exec(text) ?? /^\non:\n((?:.|\n)*?)\npermissions:/u.exec(text);
     const onSection = text.slice(text.indexOf('\non:\n'), text.indexOf('\npermissions:'));
@@ -96,8 +110,8 @@ describe('gate-a workflow — the candidate is bound before anything executes', 
       expect(installAt).toBeGreaterThan(-1);
       expect(shapeAt).toBeLessThan(installAt);
       expect(headBindAt).toBeLessThan(installAt);
-      const checkout = /uses: actions\/checkout@[^\n]+\n(?:[^\n]*\n)*?[^\n]*ref: \$\{\{ inputs\.candidate \}\}/u.test(block);
-      expect(checkout, 'the checkout must be of inputs.candidate itself').toBe(true);
+      const checkout = /uses: actions\/checkout@[^\n]+\n(?:[^\n]*\n)*?[^\n]*ref: \$\{\{ inputs\.candidate_sha \}\}/u.test(block);
+      expect(checkout, 'the checkout must be of inputs.candidate_sha itself').toBe(true);
     });
   }
 });
@@ -111,6 +125,7 @@ describe('gate-a workflow — the matrix shape the grant fixed', () => {
     // The seeds: exactly the adopted official set, ordered, pinned against the dispatcher's own list.
     const seeds = /GATE_A_SEEDS: '([^']+)'/u.exec(text)?.[1]?.split(' ').map(Number) ?? [];
     expect(seeds).toEqual([...dispatchModule.SPIKE_OFFICIAL_SEEDS]);
+    expect(block).toMatch(/timeout-minutes: 30\b/u);
     // Each leg dispatches ONLY its own coordinate; no capture-plan label appears anywhere.
     expect(block).toContain('--cell full-window --profile "$PROFILE" --seed "$seed"');
     for (const label of ['spike-lan-1001', 'elevated-full', 'evidence:capture', 'run-contract']) {
@@ -128,7 +143,7 @@ describe('gate-a workflow — the matrix shape the grant fixed', () => {
     for (const gap of ['GA-11 production', 'PE-1', 'UDG-007', 'GA-5b']) {
       expect(block, `the lane must state the ${gap} gap explicitly`).toContain(gap);
     }
-    expect(block).toContain('if: always()'); // red lanes still upload: a red row's bytes are evidence
+    expect(block).toContain('if: always()'); // red lanes still state their status
   });
 });
 
@@ -142,17 +157,36 @@ describe('gate-a workflow — aggregation binds and never launders', () => {
     expect(block).toContain('gate-a-aggregate');
     expect(block).toContain('publishable=true');
     expect(block).toContain("if: steps.bind.outputs.publishable == 'true'");
-    expect(block).toContain('no publishable evidence bundle');
+    expect(block).toContain('published nothing — not even a diagnostic report');
     // The binder's refusal is a hard step failure — not a warning dressed as a pass.
     expect(block).toContain('exit "$bind_status"');
   });
 
-  it('artefact names are scoped per lane, unique, and carry the dispatch identity', () => {
+  it('artefact names are scoped per lane, unique, carry the immutable dispatch identity, and the report is labelled diagnostic', () => {
     const names = [...text.matchAll(/name: (gate-a-[^\n]+)/gu)].map((match) => match[1] as string);
     expect(names).toContain('gate-a-rows-${{ matrix.profile }}-${{ inputs.run_id }}-${{ github.run_id }}');
     expect(names).toContain('gate-a-scenarios-${{ inputs.run_id }}-${{ github.run_id }}');
-    expect(names).toContain('gate-a-evidence-${{ inputs.run_id }}-${{ github.run_id }}');
+    expect(names).toContain('gate-a-report-diagnostic-${{ inputs.run_id }}-${{ github.run_id }}');
+    expect(names.some((name) => name.startsWith('gate-a-evidence-')), 'a standalone report must not be named an evidence bundle').toBe(false);
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('uploads only behind the input/HEAD gates — a malformed, short or wrong SHA publishes nothing', () => {
+    for (const job of ['profile', 'scenarios']) {
+      const block = jobBlock(job);
+      const uploads = block.split('\n').filter((line) => line.includes('uses: actions/upload-artifact@')).length;
+      const gated = block.split('\n').filter((line) => /if: always\(\) && steps\.inputgate\.outcome == 'success' && steps\.headbind\.outcome == 'success'/u.test(line)).length;
+      expect(gated, `${job}: every upload must be gated on the gates`).toBe(uploads);
+    }
+  });
+
+  it('mandatory-lane results reach the binder (a red/skipped/cancelled lane refuses even over complete files)', () => {
+    const block = jobBlock('evidence');
+    expect(block).toContain('LANES: profile=${{ needs.profile.result }},scenarios=${{ needs.scenarios.result }}');
+    expect(block).toContain('--lanes "$LANES"');
+    // diagnostic honesty: the lane names itself a diagnostic and points at the accepted verify path
+    expect(block).toContain('never call it a verified evidence bundle');
+    expect(block).toContain('evidence:verify');
   });
 
   it('every job bounds its wall clock, and the whole file prints no secret', () => {
