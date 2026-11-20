@@ -395,6 +395,47 @@ describe('UDG-SPIKE-001 ws-delay-proxy — withheld-window flush and labelled dr
     echo.close();
   });
 
+  it('holdNext suppresses EXACTLY the armed number of c2s chunks from APPLICATION DELIVERY: the bytes arrive and are counted at the hop, the held chunk never departs while the scenario lives, and every LATER chunk on the SAME connection routes normally (GA-5l seam — suppression, not dedupe, not a drop)', async () => {
+    const clock = new FakeClock();
+    const peer: { socket: Socket | null } = { socket: null };
+    let upstreamGot = 0;
+    const echo = createServer((socket) => {
+      peer.socket = socket;
+      socket.on('data', (data) => { upstreamGot += data.length; });
+    });
+    const echoPort = await listen(echo);
+    const profile = { name: 'unit', oneWayMs: 0, jitterBudgetMs: 0, seed: 1001 };
+    const proxy = await createWsDelayProxy({ listenPort: 0, targetHost: '127.0.0.1', targetPort: echoPort, profile, timer: clock });
+    const client = connect({ host: '127.0.0.1', port: proxy.port });
+    client.on('error', () => { /* RST at teardown */ });
+    await new Promise<void>((resolve) => client.once('connect', resolve));
+    await until(() => peer.socket !== null, 'upstream connection');
+
+    client.write(Buffer.from([7])); // a normal chunk BEFORE the arm routes normally
+    for (let round = 0; round < 100 && upstreamGot < 1; round += 1) { clock.advance(5); await realSleep(3); }
+    expect(upstreamGot, 'pre-arm chunk reached the application').toBe(1);
+
+    proxy.holdNext('c2s', 1); // arm the suppression for EXACTLY ONE chunk
+    client.write(Buffer.from([9])); // THE suppressed input: arrives at the hop, never departs
+    await until(() => proxy.stats().c2s.chunksReceived >= 2, 'the held chunk was RECEIVED at the hop (arrival, not a drop)');
+    for (let round = 0; round < 40; round += 1) { clock.advance(25); await realSleep(5); }
+    expect(upstreamGot, 'the held chunk never reaches the application while the scenario lives').toBe(1);
+
+    client.write(Buffer.from([11])); // quota SPENT — later traffic on the same connection is fine
+    for (let round = 0; round < 100 && upstreamGot < 2; round += 1) { clock.advance(5); await realSleep(3); }
+    expect(upstreamGot, 'the same connection routes later chunks normally (a bounded rejoin stays possible)').toBe(2);
+
+    const stats = proxy.stats();
+    expect(stats.c2s.chunksHeld, 'the suppression is COUNTED, never silent').toBe(1);
+    expect(stats.c2s.holdRemaining).toBe(0);
+    expect(stats.c2s.chunksReceived, 'the bytes were RECEIVED at the hop — this is not a TCP drop').toBe(3);
+    expect(stats.c2s.chunksDelivered).toBe(2);
+    expect(stats.c2s.chunksDropped).toBe(0);
+    client.destroy();
+    await proxy.close();
+    echo.close();
+  });
+
   it('killSockets severs the proxied pair — both endpoints observe an ordinary close, and the proxy counts the closure', async () => {
     const clock = new FakeClock();
     const peer: { socket: Socket | null; closed: boolean } = { socket: null, closed: false };

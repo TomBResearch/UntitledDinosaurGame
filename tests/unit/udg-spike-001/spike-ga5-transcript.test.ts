@@ -116,8 +116,8 @@ describe('UDG-SPIKE-001 GA-5b transcript validator (red invalid/mismatch control
   });
 
   it('RED: an accepted original that never got consumed while a decline is claimed is caught', () => {
-    const forged: Ga5Transcript = { ...healthy(), dequeues: [] };
-    forged.deliveries = [delivery({ ack: 0, resolvedThrough: 0 })];
+    const base = healthy();
+    const forged: Ga5Transcript = { ...base, dequeues: [], deliveries: [delivery({ ack: 0, resolvedThrough: 0 })] };
     expect(auditGa5Transcript(forged).some((i) => i.includes('original-not-consumed'))).toBe(true);
   });
 

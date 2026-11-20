@@ -73,6 +73,15 @@ interface FlushCmd {
   readonly direction: 'c2s' | 's2c' | 'both';
 }
 
+interface HoldNextCmd {
+  readonly ch: 'cmd';
+  readonly id: number;
+  readonly op: 'holdNext';
+  readonly handle: number;
+  readonly direction: 'c2s' | 's2c' | 'both';
+  readonly count: number;
+}
+
 interface KillCmd {
   readonly ch: 'cmd';
   readonly id: number;
@@ -80,7 +89,7 @@ interface KillCmd {
   readonly handle: number;
 }
 
-type Cmd = StartCmd | HandleCmd | StallCmd | FlushCmd | KillCmd | ShutdownCmd;
+type Cmd = StartCmd | HandleCmd | StallCmd | FlushCmd | HoldNextCmd | KillCmd | ShutdownCmd;
 
 const write = (line: Record<string, unknown>): void => {
   process.stdout.write(`${JSON.stringify(line)}\n`);
@@ -182,6 +191,16 @@ const handle = (cmd: Cmd): void => {
     }
     flushEntry.proxy.flushStalled(cmd.direction);
     write({ ch: 'reply', id: cmd.id, ok: true, flushed: cmd.direction, ...stamp() });
+    return;
+  }
+  if (cmd.op === 'holdNext') {
+    const holdEntry = proxies.get(cmd.handle);
+    if (holdEntry === undefined) {
+      write({ ch: 'reply', id: cmd.id, ok: false, error: `no proxy handle ${String(cmd.handle)}` });
+      return;
+    }
+    holdEntry.proxy.holdNext(cmd.direction, cmd.count);
+    write({ ch: 'reply', id: cmd.id, ok: true, held: cmd.direction, count: cmd.count, ...stamp() });
     return;
   }
   if (cmd.op === 'kill') {

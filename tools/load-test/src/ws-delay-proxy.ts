@@ -143,6 +143,16 @@ export interface DirectionStats {
   readonly chunksDelivered: number;
   /** Chunks released ahead of their pinned departure by an explicit harness FLUSH (labelled). */
   readonly chunksFlushed: number;
+  /**
+   * APPLICATION-DELIVERY SUPPRESSION (GA-5l, slice 8): chunks TERMINALLY withheld from the
+   * application by the labelled `holdNext` harness op. The bytes ARE RECEIVED at this hop and
+   * counted (`chunksReceived`, bytes, inter-arrival) and NEVER depart — this is suppression of
+   * delivery to the application, never a TCP drop. A held chunk can be released ONLY by
+   * teardown; it never re-enters the delay tube.
+   */
+  readonly chunksHeld: number;
+  /** Remaining holdNext suppression quota on this direction (scenario-scoped, never flushed). */
+  readonly holdRemaining: number;
   /** Structural constant zero: this primitive has no drop path. Kept visible so zero is CHECKED. */
   readonly chunksDropped: number;
   /** Delivery-sequence audit. Structurally zero; counted anyway. */
@@ -256,6 +266,14 @@ export interface WsDelayProxy {
    * DOMAIN, where the client's quarantine REFUSES it — the refusal is the evidence.
    */
   flushStalled(direction: 'c2s' | 's2c' | 'both'): void;
+  /**
+   * GA-5l (slice 8): suppress the NEXT `count` chunks of ONE direction TERMINALLY on every
+   * LIVE connection — the honest application-delivery suppression seam: bytes arrive here
+   * (counted), the application never gets them, the socket stays OPEN, and later traffic on the
+   * same connection (the quota is per connection) routes normally. A labelled harness action,
+   * counted in stats (`chunksHeld`), never silent, and NO native dedupe or TCP loss involved.
+   */
+  holdNext(direction: 'c2s' | 's2c' | 'both', count: number): void;
   /** Sever every currently-proxied TCP pair (server-side socket first). A drop, labelled. */
   killSockets(): void;
   stats(): ProxyStats;
@@ -306,6 +324,11 @@ interface DirectionState {
   wake: (() => void) | null;
   /** Chunks delivered after a harness flush released them ahead of their pinned departure. */
   flushedChunks: number;
+  /** Shared holdNext quota (GA-5l): ONE object per PROXY so one arm suppresses exactly one
+   * chunk across ALL live connections — connections opened later (the bounded rejoin) share
+   * the SPENT counter and can never be suppressed. Null when no hold is armed. */
+  holdRemaining: { left: number } | null;
+  chunksHeld: number;
   sourceClosed: boolean;
   /** For c2s: achieved stall of the newest chunk already delivered upstream (leg-sum pairing). */
   lastForwardAchievedMs: number | null;
@@ -340,6 +363,8 @@ const newDirection = (label: 'c2s' | 's2c', seed: number): DirectionState => ({
   pumping: false,
   wake: null,
   flushedChunks: 0,
+  holdRemaining: null,
+  chunksHeld: 0,
   sourceClosed: false,
   lastForwardAchievedMs: null,
   maxTimerLagMs: 0,
@@ -457,9 +482,35 @@ class ProxyConnection {
     this.client.destroy();
   }
 
+  /**
+   * Arm application-delivery suppression: the NEXT `count` chunks of these directions are held
+   * TERMINALLY (arrived-and-counted at this hop, never delivered while the scenario lives).
+   * The quota is per live connection, so the SAME connection's later traffic — a bounded
+   * rejoin's join frame, for instance — routes normally once the quota is spent.
+   */
+  holdQuota(dir: 'c2s' | 's2c', remaining: { left: number }): void {
+    if (dir === 'c2s') this.c2s.holdRemaining = remaining;
+    else this.s2c.holdRemaining = remaining;
+  }
+
   private enqueue(dir: DirectionState, data: Buffer): void {
     if (this.finished) return;
     const now = this.env.timer.nowMs();
+    // Suppression first: an armed hold counts the arrival (bytes DID reach the hop — this is
+    // NOT a drop), records it in the inter-arrival and size populations, and never queues it.
+    if (dir.holdRemaining !== null && dir.holdRemaining.left > 0) {
+      dir.holdRemaining.left -= 1;
+      dir.chunksHeld += 1;
+      dir.bytesReceived += data.length;
+      dir.chunksReceived += 1;
+      if (dir.lastAdmissionMs !== null) {
+        const gapMs = Math.max(0, now - dir.lastAdmissionMs);
+        if (dir.interArrivalGapsMs.length < 4_000) dir.interArrivalGapsMs.push(Number(Math.trunc(gapMs * 100) / 100));
+        if (gapMs > dir.maxInterArrivalMs) dir.maxInterArrivalMs = gapMs;
+      }
+      dir.lastAdmissionMs = now;
+      return;
+    }
     const centredBaseMs = this.env.profile.oneWayMs - this.env.profile.jitterBudgetMs / 2;
     const overrideMs = this.env.stallOverride[dir.label];
     const centred = overrideMs === null ? centredBaseMs : Math.max(0, overrideMs - this.env.profile.jitterBudgetMs / 2);
@@ -659,6 +710,8 @@ const directionStats = (d: DirectionState): DirectionStats => ({
   chunksDelivered: d.chunksDelivered,
   /** Chunks released ahead of their pinned departure by an explicit harness FLUSH (labelled). */
   chunksFlushed: d.flushedChunks,
+  chunksHeld: d.chunksHeld,
+  holdRemaining: d.holdRemaining === null ? 0 : d.holdRemaining.left,
   chunksDropped: 0,
   orderViolations: d.orderViolations,
   backpressurePauses: d.backpressurePauses,
@@ -681,6 +734,10 @@ const mergeStats = (a: DirectionStats, b: DirectionStats): DirectionStats => ({
   chunksReceived: a.chunksReceived + b.chunksReceived,
   chunksDelivered: a.chunksDelivered + b.chunksDelivered,
   chunksFlushed: a.chunksFlushed + b.chunksFlushed,
+  chunksHeld: a.chunksHeld + b.chunksHeld,
+  // the quota object is SHARED per proxy; directions/connections report the SAME counter —
+  // max, never a sum (a sum would double-count the shared value).
+  holdRemaining: Math.max(a.holdRemaining, b.holdRemaining),
   chunksDropped: 0,
   orderViolations: a.orderViolations + b.orderViolations,
   backpressurePauses: a.backpressurePauses + b.backpressurePauses,
@@ -780,6 +837,17 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
     flushStalled(direction) {
       const labels = direction === 'both' ? (['c2s', 's2c'] as const) : ([direction] as const);
       for (const conn of [...live]) conn.flushStalled(labels);
+    },
+    holdNext(direction, count) {
+      const labels = direction === 'both' ? (['c2s', 's2c'] as const) : ([direction] as const);
+      // ONE SHARED quota object for the whole proxy: the arm suppresses EXACTLY `count`
+      // chunks across all live connections (the scenario's predeclared quiet-wire check pins
+      // WHICH chunk that is), and connections opened afterwards — the bounded rejoin's —
+      // share the SPENT counter and can never be suppressed.
+      const quota = { left: count };
+      for (const conn of [...live]) {
+        for (const label of labels) conn.holdQuota(label, quota);
+      }
     },
     killSockets() {
       for (const conn of [...live]) conn.killSockets();

@@ -577,6 +577,7 @@ interface PredictorSettings {
   readonly rejoinWindowMs: number;
   readonly maxRejoinsPerWindow: number;
   readonly rejoinBackoffMs: readonly number[];
+  readonly stallDetectionDeliveries: number;
   readonly clock: PredictorClock;
   readonly ledgerLimit: number;
   readonly rejoin?: (() => Promise<PredictionTransport>) | undefined;
@@ -591,6 +592,14 @@ export interface PredictorOptions {
   readonly rejoinWindowMs?: number;
   readonly maxRejoinsPerWindow?: number;
   readonly rejoinBackoffMs?: readonly number[];
+  /**
+   * `G` of the §3.2 stalled-acknowledgement rule — the SAME named field the spec config owns
+   * (`input.stallDetectionDeliveries`, packages/config/src/input.ts; default 3 there). An
+   * outstanding input whose ack AND inputResolvedThrough advance NEITHER across G consecutive
+   * state deliveries, epoch unchanged, fires `input-ack-stalled` — the only client-side recourse
+   * for a loss the server cannot name (ADR-0003 §3.2, GA-5b's recovery half).
+   */
+  readonly stallDetectionDeliveries?: number;
   readonly clock?: PredictorClock;
   /** A host-performed rejoin: leave + fresh join + issued-epoch wait, returning a rearmed transport. */
   readonly rejoin?: () => Promise<PredictionTransport>;
@@ -647,6 +656,10 @@ export class DirectMotionPredictor {
   /** Advertised fixed step in seconds, captured when the reconciler was armed (instrumenter dt). */
   private advertisedStepSeconds: number | null = null;
   private deadlineHandle: TimerToken | null = null;
+  /** §3.2 stalled-ack observation: the last delivery's (ack, resolvedThrough, epoch) boundary
+   * and how many CONSECUTIVE deliveries have left it unmoved while inputs are outstanding. */
+  private stallStreak = 0;
+  private stallBoundary: { readonly ack: number; readonly resolvedThrough: number; readonly epoch: number } | null = null;
   private recoveryStartedAt: number | null = null;
   private episodeExpired = false;
   /**
@@ -681,6 +694,9 @@ export class DirectMotionPredictor {
       rejoinWindowMs: options.rejoinWindowMs ?? 60_000,
       maxRejoinsPerWindow: options.maxRejoinsPerWindow ?? 2,
       rejoinBackoffMs: options.rejoinBackoffMs ?? [250, 500, 1000],
+      // Mirrors INPUT_ENVELOPE_DEFAULTS.stallDetectionDeliveries (packages/config) — the scenario
+      // wiring passes the config value explicitly; this default keeps standalone users coherent.
+      stallDetectionDeliveries: options.stallDetectionDeliveries ?? 3,
       clock: options.clock ?? wallClock,
       ledgerLimit: options.ledgerLimit ?? 512,
       ...(options.rejoin === undefined ? {} : { rejoin: options.rejoin }),
@@ -1127,6 +1143,14 @@ export class DirectMotionPredictor {
       this.captureAckCheckpoint(delivery);
       this.pruneByResolution(delivery);
       this.restartDeadline();
+      // INPUT_ACK_STALLED (ADR-0003 §3.2): defined solely from client-observable quantities —
+      // an outstanding input, NEITHER the ack watermark NOR inputResolvedThrough advancing,
+      // epoch unchanged, across G consecutive state deliveries (the named spec config field
+      // stallDetectionDeliveries). The deadline alone cannot own this case: it RESTARTS on every
+      // accepted delivery, so a live state stream keeps refreshing it exactly when the loss is
+      // real. No server queue depth is consulted — no supported client API exposes it (§3.2).
+      if (this.observeStalledAck(delivery)) return; // the episode began on THIS delivery; the
+      // snapshot-completion branch below belongs to the NEW domain, never to this one.
       this.snapshotReady = true;
       if (this.state === 'recovering') {
         // Snapshot recovery of the NEW domain: the first accepted delivery on the replacement
@@ -1158,6 +1182,31 @@ export class DirectMotionPredictor {
     // deadline, and NEVER let a reconcile run against this pair (tick() skips while !ok).
     if (this.state === 'tracking') this.state = 'waiting-boundary';
     this.armDeadlineIfNeeded();
+  }
+
+  /** Returns true when the stalled-ack trigger fired on this delivery (the caller must not
+   * continue processing it: an episode now owns the domain). */
+  private observeStalledAck(delivery: VerifiedDelivery): boolean {
+    if ((this.state !== 'tracking' && this.state !== 'waiting-boundary') || this.pending.size === 0) {
+      // Compliant idle (nothing outstanding) or an episode already running: no expectation.
+      this.stallStreak = 0;
+      this.stallBoundary = null;
+      return false;
+    }
+    const prev = this.stallBoundary;
+    if (prev !== null && prev.epoch === delivery.epoch && prev.ack === delivery.ack && prev.resolvedThrough === delivery.resolvedThrough) {
+      this.stallStreak += 1;
+    } else {
+      // A moved (or first-observed) boundary starts a fresh window AT this delivery: the first
+      // unmoved neighbour reaches the count only when the NEXT delivery also fails to move it.
+      this.stallStreak = 1;
+    }
+    this.stallBoundary = { ack: delivery.ack, resolvedThrough: delivery.resolvedThrough, epoch: delivery.epoch };
+    if (this.stallStreak >= this.options.stallDetectionDeliveries) {
+      this.enterRecovery('input-ack-stalled', this.pending.size);
+      return true;
+    }
+    return false;
   }
 
   /** Pruning authority: the server's disposition prefix ONLY. The ack watermark prunes nothing. */

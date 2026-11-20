@@ -1,4 +1,4 @@
-# PROPOSED-0003a (rev 2) — Dedupe observability and the terminal-dedup sub-assertion: a decision proposal for ADR-0003 GA-5b / GA-12
+# PROPOSED-0003a (rev 3) — Dedupe observability and the terminal-dedup sub-assertion: a decision proposal for ADR-0003 GA-5b / GA-12
 
 > **Status: PROPOSAL — NOT ACCEPTED, and deliberately NOT an edit of ADR-0003.**
 > ADR-0003 remains the accepted text, unchanged. This revision exists because **rev 1 failed review**:
@@ -152,8 +152,47 @@ schedule only. Filing the request is compatible with choosing A or B′ now.
   rev-1 correlation row this document retracts). The retired Case-B fixture is deleted with a
   comment at its site in `netcode.spec.ts` pointing here.
 - Rev 1 of this proposal is superseded by this rev 2; the retraction is §0, in-document.
+- Rev 2 is superseded by rev 3 for ONE sub-claim, in-document (§6): the client-recovery half of
+  GA-5b was worded on an assumption its own evidence refutes.
 - Accepted-code anchors: `ColyseusInputAdapter.ts:190-193` (prefix rule),
   `ColyseusPredictionAdapter.ts:339-340` (guard equality), `@colyseus/core@0.18.27`
   `build/input/{RoomInput,InputBuffer}.mjs` (accept-before-buffer).
 - GA-11 calibration (companion): cell `ga11-calibration` — see api-map §14.8 for the corrected
   leg naming and per-leg achieved validity; production-directed evaluation Not-Run.
+
+## 6. Rev 3 (slice 8) — the mandated stalled-ack rule exists now, and one wording is corrected
+
+Rev 2 (and the ga5t row it carried) stated that the raw-bypass terminal decline leaves the client
+with NOTHING to recover from — "no pending entry for a raw bypass send". That wording was WRONG,
+and the preserved evidence proves it locally: the granted adapter journals EVERY send through the
+handle's `onSend` listener, so a bypass send leaves the measuring client's OWN journal holding the
+slot it stamped — `pendingSamples` in the retained dpa6d/dpa6e transcripts show exactly that
+(stamp 16 pending through the whole window). What made "no episode" true was not the absence of an
+expectation but the absence of the rule: ADR-0003 §3.2 has always defined `INPUT_ACK_STALLED` over
+precisely this observable (an outstanding input, NEITHER the ack watermark NOR `inputResolvedThrough`
+moving across G consecutive deliveries, epoch unchanged), and slice 8 implemented it in the granted
+adapter after a red-first unit proof (`predictor.test.ts`; the 500 ms deadline cannot substitute —
+it restarts on every accepted delivery, so a live publication stream refreshes it forever).
+
+Measured consequences, in `ga-scenarios` (`ga5t` extended, `ga5l` new, api-map §14.10):
+
+- On the ga5t seat the decline shape now takes EXACTLY ONE recovery route — a blind
+  `input-ack-stalled` episode (never a deadline/gap/retired route) ending in snapshot recovery.
+  The client is no longer silently frozen; it recovers WITHOUT NAMING, which is what §3.2 mandates
+  for a loss the server cannot identify. The ABSENCE proofs are unchanged: the decline still
+  contributes zero consumptions, zero refusals, no gap, no closure, and its content never reaches
+  an observer.
+- A genuinely lost admitted input (test-only application-delivery suppression at the harness hop:
+  bytes received and counted, application never receives them — never TCP loss, never dedupe)
+  triggers the same rule at exactly G, recovers bounded, and the room reports the loss
+  UNIDENTIFIABLE (retired 0, queue 0, no signal) — the GA-5b recovery half, measured.
+
+What does NOT change: the invariant (an admissible producer cannot generate a terminal pre-buffer
+decline), PE-1…PE-5 as the closure prerequisite (the decline remains SILENT on the wire and in
+every room record — the stall rule is blind recovery, not a decline signal, and neither fixes nor
+masks PE-1), and the exclusion of a legitimate-producer terminal fixture. The GA-5b client-recovery
+sub-claim is therefore narrowed, not closed: BLIND recovery from the terminal shape is evidenced
+for a client whose journal holds the bypass slot; recovery that KNOWS what happened remains
+blocked on PE-1, and the server-side disposition gap this proposal exists to decide stays exactly
+as §3 lays it out. No option's adoption status changed; this revision adds one correction and the
+measurements beside it.

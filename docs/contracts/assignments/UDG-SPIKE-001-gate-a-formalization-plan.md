@@ -94,3 +94,19 @@ No workflow file created or edited; no dispatch; no full-matrix run; no rerun of
   prerequisite; `dedupeClosureEnabled` false); GA-10a/GA-10b (UDG-007); production-directed GA-11
   populations (Not-Run; missing conditions named); GA-3/GA-9 formal legs and GA-13 replay legs
   (runnable, not yet built); hosted dispatch (needs T-5…T-7 merged).
+
+## 6. Slice-8 update (2026-11-24)
+
+- Diagnostic success, current: ga-scenarios 24/24 (dpa7c/p/q), ga9-ga13 5/5 (dpa7m/r),
+  ga11-calibration 5/5 with the stall rule live (dpa7s); units 575/575 (stalled-ack rule red-first
+  + `holdNext` seam included); lint/boundaries/tsc green; lockfile byte-identical.
+- Blockers MOVED: GA-9 formal legs and GA-13 replay legs are no longer "runnable, not yet built" —
+  the `ga9-ga13` cell builds and passes them (determinism byte-exact with declared normalizations;
+  replay through the accepted Phase-1 machinery with the §2.2 exact-or-named-ULP comparison;
+  sanitisation with a firing control). GA-5b's client-recovery sub-leg is NARROWED, not closed
+  (`PROPOSED-0003a` rev 3 §6): blind recovery from the terminal shape is now MEASURED (the §3.2
+  stalled-ack rule, implemented in the granted adapter, fires once and recovers); recovery that
+  KNOWS what happened remains blocked on PE-1.
+- Blockers UNCHANGED: GA-12 positive PE-1; GA-10a/GA-10b (UDG-007); production-directed GA-11
+  populations (Not-Run); hosted dispatch (needs T-5…T-7 merged). Nothing adopted; no ADR edit; no
+  workflow edits or dispatch; no Gate A verdict.

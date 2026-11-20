@@ -1535,3 +1535,66 @@ narrated). No inference is drawn from a leg that failed its declared profile; th
 labelled NO-IMPAIRMENT-SOURCE. The batch remains calibration-only: every population loopback,
 production-directed evaluation Not-Run with the missing representative conditions named, nothing
 adopted.
+
+## 14.10. The stalled-ack rule the contract always mandated gets implemented, and one distinct admitted input stops being silent (slice 8, 2026-11-24)
+
+ADR-0003 §3.2 defines `INPUT_ACK_STALLED` solely from client-observable quantities — an outstanding
+input whose SDK acknowledgement AND `inputResolvedThrough` advance NEITHER across G consecutive
+state deliveries, epoch unchanged (`stallDetectionDeliveries`, the named spec config in
+`packages/config/src/input.ts`, default 3). Slice 8 proved the rule was **contract-mandated and
+unimplemented**: the adapter owned only the 500 ms snapshot deadline, and that deadline RESTARTS on
+every accepted delivery — a still-flowing state stream refreshed the timer forever, so an input
+lost while publications continue was the one §3.2 case with NO client-side recourse. The unit
+harness proved that RED first (`predictor.test.ts`, four tests: fire-at-G, benign-in-flight,
+compliant-idle, and the config-seam override), then the rule went into the granted adapter
+(`observeStalledAck`, wired into the verified-accepted path; a fired trigger returns true so the
+same delivery cannot also complete a recovery — an early draft learned that the accept-branch
+would otherwise undo the episode in the same call). The scenario cell now measures the whole shape
+for real (rows in `ga-scenarios`, scenario `ga5l`):
+
+* **A test-only application-delivery suppression seam, because no production one exists and none
+  was invented.** The spike proxy gains a labelled `holdNext(direction, count)`: the NEXT `count`
+  chunks of that direction, across ONE SHARED per-proxy quota, are TERMINALLY withheld from the
+  application — the bytes are RECEIVED at the hop and counted (`chunksReceived`, bytes,
+  inter-arrival, new `chunksHeld`) and never depart; connections opened later (the bounded
+  rejoin's) share the SPENT counter and route normally. This is suppression of delivery to the
+  application — never TCP loss, never native dedupe (the suppressed input is a fresh
+  producer-stamp `sentCount + 1`, strictly ABOVE the watermark, which `accept()` cannot decline).
+  A per-connection quota was the first draft and is preserved as refuted (dpa7a: the SDK's extra
+  connections each got armed, the rejoin's join frame got suppressed, the episode expired — the
+  shared quota fixes it honestly, and the unit test asserts quota-spent-later-routes-normally).
+* **The measurement came out exactly as the contract predicts**: trigger `input-ack-stalled` with
+  the observed streak EXACTLY at G=3, ack and prefix frozen at every poll of the window, no gap
+  named, retired 0, the pending entry HELD until the trigger and discarded ONCE after it, nothing
+  reissued (send-audit delta 1), bounded rejoin, fresh snapshot, movement resumes; the room, which
+  never received the input, reports the loss UNIDENTIFIABLE (retired 0, queue 0, no signal) — what
+  GA-5b says the client must recover from. Controls: compliant idle (pending 0 → no expectation),
+  benign in-flight released after TWO frozen deliveries (< G → in flight is not lost).
+* **The ga5t transcript gained a measured consequence, and the evidence corrected the prose.**
+  The adapter journals every send through the handle's `onSend`, so the raw-bypass replay leaves
+  the MEASURING client's own journal holding a slot no prefix can resolve — the preserved
+  pendingSamples (dpa6d/dpa6e) refute the earlier "no pending entry" wording, and with the
+  mandated rule now implemented that stuck entry triggers exactly one blind `input-ack-stalled`
+  recovery on the ga5t seat. Nothing about the ABSENCE proof changed (the decline still contributes
+  zero consumptions, no gap, no closure, the z content never reaches the observer); what changed
+  is that the client is no longer silently frozen — it recovers BLINDLY, as §3.2 requires, and
+  PE-1 remains unmet and un-masked (the only route that shape takes is the stall rule; no room
+  record appears). The proposal carries this as rev 3.
+
+Part B added the `ga9-ga13` cell: GA-9 solo-vs-shared determinism over the room's OWN journal
+StateRows (identity `entityId` and the absolute `lastAuthorityTick` normalized with the fields
+declared; every locomotion byte exact; digests equal across solo/repeat/shared, ticks strictly
+consecutive), with the detector controls carrying the claim (the mover-flipped step diverges at
+EXACTLY its step — after dpa7j caught a vacuous SYMMETRIC flip; the ungated leg diverges because
+timing is part of the record); and GA-13 replaying the real room journal through the accepted
+Phase-1 machinery (`toReplayInputs → replayRun`, `compareJournal` over `journalFromPersisted` —
+the reviewer's boundary) with blanked digests still replaying identical, a tampered prologue
+refused, and a mutated input payload detected. Replay's canonical-state comparison states its
+equality BOTH ways: exact hash equality when it holds, and a 4-ULP numeric companion whose first
+observation (one velocity.z, one ULP, one tick, dispositions/chain otherwise identical) is
+preserved in dpa7j — re-executing floating point is a fact, and the tolerance is named three
+orders of magnitude below any physical claim rather than hidden. Two first-attempt facts are kept
+as findings, not smoothed: held-room steps past ~400 ms start replacing the seat transport
+(dpa7k), and publications already inside the delay tube at stall-open are legitimately accepted
+BEFORE the trigger — the GA-7 quarantine tally is trigger-scoped and counts them separately
+(dpa7o, where the conflated tally first flaked).

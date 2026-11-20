@@ -1055,3 +1055,84 @@ describe('UDG-SPIKE-001 — one shared step function on the prediction side (sli
     expect(stepper.calls).toBe(200);
   });
 });
+
+// ───────────────────────── INPUT_ACK_STALLED (ADR-0003 §3.2) — red/fixed pair, slice 8
+// The accepted contract defines the stalled-acknowledgement signal solely from client-observable
+// quantities: an OUTSTANDING input whose SDK acknowledgement AND inputResolvedThrough advance
+// NEITHER across G consecutive state deliveries, epoch unchanged (G =
+// INPUT_ENVELOPE_DEFAULTS.stallDetectionDeliveries, the named spec config in packages/config).
+// Before this slice the adapter owned only the 500 ms snapshot deadline — which RESTARTS on every
+// accepted delivery — so a genuinely lost input riding a still-flowing state stream was the one
+// case with NO client-side recourse: every unrelated delivery refreshed the timer. These tests
+// were RED against that behavior and drive the fix; the controls (ack advancing, idle with no
+// pending, boundary-advancing deliveries) are the no-false-positive half.
+
+describe('UDG-SPIKE-001 §3.2 INPUT_ACK_STALLED — stall detection under a still-flowing state stream', () => {
+  const buildStall = (overrides: Record<string, unknown> = {}) => {
+    const clock = createFakeClock();
+    const fake = createFakeTransport(7);
+    const next = createFakeTransport(8);
+    const rejoin = vi.fn(async () => toTransport(next));
+    const predictor = new DirectMotionPredictor(toTransport(fake), {
+      speed: 4,
+      clock: toClock(clock),
+      rejoin,
+      snapshotDeadlineMs: 500,
+      recoveryDeadlineMs: 4000,
+      rejoinWindowMs: 60_000,
+      maxRejoinsPerWindow: 2,
+      rejoinBackoffMs: [250, 500, 1000],
+      ...overrides,
+    });
+    predictor.attach();
+    fake.patch({ lastAuthorityTick: 1, z: 1.5 });
+    return { clock, fake, next, predictor, rejoin };
+  };
+
+  it('FIRES on the Gth consecutive delivery whose ack AND resolvedThrough neither moved (epoch unchanged), entering the standard §3.2 episode', () => {
+    const { fake, predictor } = buildStall();
+    predictor.send({ generation: 1, moveX: 1, moveZ: 0 }, true); // one distinct admitted input, stamp sentCount+1
+    const g = 3; // INPUT_ENVELOPE_DEFAULTS.stallDetectionDeliveries
+    // deliveries keep flowing (tick advances, position updates) but the ack watermark and the
+    // resolved prefix stay stuck — the room never got the input: a test-suppressed delivery.
+    for (let i = 1; i <= g - 1; i += 1) {
+      fake.patch({ lastAuthorityTick: 1 + i, z: 1.5 + i });
+      expect(predictor.stateName(), `must NOT fire before the Gth unmoved delivery (saw ${String(i)})`).toBe('tracking');
+    }
+    fake.patch({ lastAuthorityTick: 1 + g, z: 1.5 + g });
+    expect(predictor.stateName()).toBe('recovering');
+    const trigger = predictor.recoveryLedger().find((entry) => entry.event === 'trigger');
+    expect(trigger?.detail, 'the named trigger is the stalled-ack rule, not a deadline or a gap').toMatch(/input-ack-stalled/);
+    // no premature prune: the discarded pending count in the trigger detail is the outstanding 1
+    expect(trigger?.detail).toMatch(/1$/);
+  });
+
+  it('does NOT fire when the ack or prefix advances within the window (benign in-flight patch)', () => {
+    const { fake, predictor } = buildStall();
+    predictor.send({ generation: 1, moveX: 1, moveZ: 0 }, true);
+    fake.patch({ lastAuthorityTick: 2, z: 2 });
+    fake.patch({ lastAuthorityTick: 3, z: 3 });
+    // the input is DISPOSED on the third delivery — ack and prefix move together, as a real
+    // dequeue does (ack alone could only arrive as a refusal: ack-ahead-of-resolution).
+    fake.patch({ lastAuthorityTick: 4, z: 4, ackTo: 1, inputResolvedThrough: 1 });
+    expect(predictor.stateName()).toBe('tracking');
+    expect(predictor.recoveryLedger().some((entry) => entry.event === 'trigger')).toBe(false);
+  });
+
+  it('does NOT fire while nothing is outstanding (compliant idle with a static record)', () => {
+    const { fake, predictor } = buildStall();
+    for (let i = 1; i <= 7; i += 1) fake.patch({ lastAuthorityTick: 1 + i });
+    expect(predictor.stateName()).toBe('tracking');
+    expect(predictor.recoveryLedger().some((entry) => entry.event === 'trigger')).toBe(false);
+  });
+
+  it('reads G from the named spec config seam (explicit stallDetectionDeliveries: 2 fires one delivery earlier)', () => {
+    const { fake, predictor } = buildStall({ stallDetectionDeliveries: 2 });
+    predictor.send({ generation: 1, moveX: 0, moveZ: 1 }, true);
+    fake.patch({ lastAuthorityTick: 2, z: 2 });
+    expect(predictor.stateName()).toBe('tracking');
+    fake.patch({ lastAuthorityTick: 3, z: 3 });
+    expect(predictor.stateName()).toBe('recovering');
+    expect(predictor.recoveryLedger().find((entry) => entry.event === 'trigger')?.detail).toMatch(/input-ack-stalled/);
+  });
+});
