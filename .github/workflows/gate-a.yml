@@ -86,6 +86,8 @@ jobs:
         env:
           INPUT_RUN_ID: ${{ inputs.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          DISPATCH_REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # First-attempt guard (formal): a runner REUSE keeps the same run_id with run_attempt > 1.
@@ -101,6 +103,11 @@ jobs:
             ""|*[!A-Za-z0-9._-]*) echo "::error::run_id must be 1-64 printable characters from [A-Za-z0-9._-]"; exit 1 ;;
           esac
           if [ "${#INPUT_RUN_ID}" -gt 64 ]; then echo "::error::run_id label is too long"; exit 1; fi
+          # Conductor guard: the matrix executes ONLY main's copy of this definition. A dispatch
+          # at any other ref that carries this file would run THAT revision — refused here, before
+          # checkout or install, with nothing uploaded and nothing written.
+          if [ "$DISPATCH_REF" != "refs/heads/main" ]; then echo "::error::conductor guard: dispatched on $DISPATCH_REF — only refs/heads/main may run this definition"; exit 1; fi
+          if [ "$EVENT_NAME" != "workflow_dispatch" ]; then echo "::error::conductor guard: event $EVENT_NAME — this definition runs ONLY on manual dispatch"; exit 1; fi
 
       - name: Check out the exact candidate (read-only, no credentials)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,6 +129,38 @@ jobs:
             echo "::error::the checked-out tree is dirty; a formal matrix leg requires a clean tree"
             exit 1
           fi
+
+      - name: Conductor guard — bind the LOADED definition revision to the candidate definition byte-for-byte (no bypass; fail closed)
+        id: defbind
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_PATH: .github/workflows/gate-a.yml
+        run: |
+          set -euo pipefail
+          # github.workflow_sha names the commit the runner ACTUALLY loaded this definition from.
+          # An unavailable value is refused, not skipped: without an attested loaded revision the
+          # binding is unverifiable, and unverifiable must mean not-run (fail closed).
+          if [ -z "${WORKFLOW_SHA}" ]; then
+            echo "::error::github.workflow_sha is unavailable — cannot attest the loaded definition revision; refusing"; exit 1
+          fi
+          case "$WORKFLOW_SHA" in
+            *[!0-9a-f]*) echo "::error::github.workflow_sha is not 40-hex"; exit 1 ;;
+          esac
+          if [ "${#WORKFLOW_SHA}" -ne 40 ]; then echo "::error::github.workflow_sha must be exactly 40 hex characters"; exit 1; fi
+          # The source object must be verifiable LOCALLY inside the verified full-history
+          # candidate repository (the checkout above uses fetch-depth: 0 and its HEAD was bound
+          # to the candidate BEFORE any install; read-only plumbing only — no fetch, no
+          # credentials, nothing written). A loaded revision the candidate repository cannot
+          # account for is refused.
+          if ! git cat-file -e "${WORKFLOW_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::loaded-definition commit ${WORKFLOW_SHA} is not an object in the verified full-history candidate repository — refusing"; exit 1
+          fi
+          loaded_blob="$(git show "${WORKFLOW_SHA}:${WORKFLOW_PATH}" | git hash-object --stdin)"
+          candidate_blob="$(git show "${CANDIDATE}:${WORKFLOW_PATH}" | git hash-object --stdin)"
+          if [ "$loaded_blob" != "$candidate_blob" ]; then
+            echo "::error::loaded definition blob ${loaded_blob} (at ${WORKFLOW_SHA}) differs from the candidate's ${candidate_blob} — refusing; no bypass exists"; exit 1
+          fi
+          echo "definition bind OK: loaded blob ${loaded_blob} == candidate blob ${candidate_blob}"
 
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -155,7 +194,7 @@ jobs:
           fi
 
       - name: Upload this profile's artefacts — a red ROW's bytes are evidence, but ONLY behind passed input/HEAD gates (a malformed, short or wrong SHA uploads nothing, ever)
-        if: always() && steps.inputgate.outcome == 'success' && steps.headbind.outcome == 'success'
+        if: always() && steps.inputgate.outcome == 'success' && steps.headbind.outcome == 'success' && steps.defbind.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gate-a-rows-${{ matrix.profile }}-${{ inputs.run_id }}-${{ github.run_id }}
@@ -177,6 +216,8 @@ jobs:
         env:
           INPUT_RUN_ID: ${{ inputs.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          DISPATCH_REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # First-attempt guard (formal): a runner REUSE keeps the same run_id with run_attempt > 1.
@@ -192,6 +233,11 @@ jobs:
             ""|*[!A-Za-z0-9._-]*) echo "::error::run_id must be 1-64 printable characters from [A-Za-z0-9._-]"; exit 1 ;;
           esac
           if [ "${#INPUT_RUN_ID}" -gt 64 ]; then echo "::error::run_id label is too long"; exit 1; fi
+          # Conductor guard: the matrix executes ONLY main's copy of this definition. A dispatch
+          # at any other ref that carries this file would run THAT revision — refused here, before
+          # checkout or install, with nothing uploaded and nothing written.
+          if [ "$DISPATCH_REF" != "refs/heads/main" ]; then echo "::error::conductor guard: dispatched on $DISPATCH_REF — only refs/heads/main may run this definition"; exit 1; fi
+          if [ "$EVENT_NAME" != "workflow_dispatch" ]; then echo "::error::conductor guard: event $EVENT_NAME — this definition runs ONLY on manual dispatch"; exit 1; fi
       - name: Check out the exact candidate (read-only, no credentials)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -205,6 +251,38 @@ jobs:
           head_sha="$(git rev-parse HEAD)"
           if [ "$head_sha" != "$CANDIDATE" ]; then echo "::error::HEAD $head_sha is not the dispatched candidate"; exit 1; fi
           if [ -n "$(git status --porcelain)" ]; then echo "::error::dirty tree"; exit 1; fi
+      - name: Conductor guard — bind the LOADED definition revision to the candidate definition byte-for-byte (no bypass; fail closed)
+        id: defbind
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_PATH: .github/workflows/gate-a.yml
+        run: |
+          set -euo pipefail
+          # github.workflow_sha names the commit the runner ACTUALLY loaded this definition from.
+          # An unavailable value is refused, not skipped: without an attested loaded revision the
+          # binding is unverifiable, and unverifiable must mean not-run (fail closed).
+          if [ -z "${WORKFLOW_SHA}" ]; then
+            echo "::error::github.workflow_sha is unavailable — cannot attest the loaded definition revision; refusing"; exit 1
+          fi
+          case "$WORKFLOW_SHA" in
+            *[!0-9a-f]*) echo "::error::github.workflow_sha is not 40-hex"; exit 1 ;;
+          esac
+          if [ "${#WORKFLOW_SHA}" -ne 40 ]; then echo "::error::github.workflow_sha must be exactly 40 hex characters"; exit 1; fi
+          # The source object must be verifiable LOCALLY inside the verified full-history
+          # candidate repository (the checkout above uses fetch-depth: 0 and its HEAD was bound
+          # to the candidate BEFORE any install; read-only plumbing only — no fetch, no
+          # credentials, nothing written). A loaded revision the candidate repository cannot
+          # account for is refused.
+          if ! git cat-file -e "${WORKFLOW_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::loaded-definition commit ${WORKFLOW_SHA} is not an object in the verified full-history candidate repository — refusing"; exit 1
+          fi
+          loaded_blob="$(git show "${WORKFLOW_SHA}:${WORKFLOW_PATH}" | git hash-object --stdin)"
+          candidate_blob="$(git show "${CANDIDATE}:${WORKFLOW_PATH}" | git hash-object --stdin)"
+          if [ "$loaded_blob" != "$candidate_blob" ]; then
+            echo "::error::loaded definition blob ${loaded_blob} (at ${WORKFLOW_SHA}) differs from the candidate's ${candidate_blob} — refusing; no bypass exists"; exit 1
+          fi
+          echo "definition bind OK: loaded blob ${loaded_blob} == candidate blob ${candidate_blob}"
+
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -274,7 +352,7 @@ jobs:
             }, null, 2));
           '
       - name: Upload the scenario lane (behind the same input/HEAD gate — no artefacts from a malformed dispatch)
-        if: always() && steps.inputgate.outcome == 'success' && steps.headbind.outcome == 'success'
+        if: always() && steps.inputgate.outcome == 'success' && steps.headbind.outcome == 'success' && steps.defbind.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gate-a-scenarios-${{ inputs.run_id }}-${{ github.run_id }}
@@ -305,6 +383,8 @@ jobs:
         env:
           INPUT_RUN_ID: ${{ inputs.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          DISPATCH_REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # First-attempt guard (formal): a runner REUSE keeps the same run_id with run_attempt > 1.
@@ -320,6 +400,11 @@ jobs:
             ""|*[!A-Za-z0-9._-]*) echo "::error::run_id must be 1-64 printable characters from [A-Za-z0-9._-]"; exit 1 ;;
           esac
           if [ "${#INPUT_RUN_ID}" -gt 64 ]; then echo "::error::run_id label is too long"; exit 1; fi
+          # Conductor guard: the matrix executes ONLY main's copy of this definition. A dispatch
+          # at any other ref that carries this file would run THAT revision — refused here, before
+          # checkout or install, with nothing uploaded and nothing written.
+          if [ "$DISPATCH_REF" != "refs/heads/main" ]; then echo "::error::conductor guard: dispatched on $DISPATCH_REF — only refs/heads/main may run this definition"; exit 1; fi
+          if [ "$EVENT_NAME" != "workflow_dispatch" ]; then echo "::error::conductor guard: event $EVENT_NAME — this definition runs ONLY on manual dispatch"; exit 1; fi
       - name: Check out the exact candidate (read-only, no credentials)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -332,6 +417,38 @@ jobs:
           set -euo pipefail
           head_sha="$(git rev-parse HEAD)"
           if [ "$head_sha" != "$CANDIDATE" ]; then echo "::error::HEAD $head_sha is not the dispatched candidate"; exit 1; fi
+      - name: Conductor guard — bind the LOADED definition revision to the candidate definition byte-for-byte (no bypass; fail closed)
+        id: defbind
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_PATH: .github/workflows/gate-a.yml
+        run: |
+          set -euo pipefail
+          # github.workflow_sha names the commit the runner ACTUALLY loaded this definition from.
+          # An unavailable value is refused, not skipped: without an attested loaded revision the
+          # binding is unverifiable, and unverifiable must mean not-run (fail closed).
+          if [ -z "${WORKFLOW_SHA}" ]; then
+            echo "::error::github.workflow_sha is unavailable — cannot attest the loaded definition revision; refusing"; exit 1
+          fi
+          case "$WORKFLOW_SHA" in
+            *[!0-9a-f]*) echo "::error::github.workflow_sha is not 40-hex"; exit 1 ;;
+          esac
+          if [ "${#WORKFLOW_SHA}" -ne 40 ]; then echo "::error::github.workflow_sha must be exactly 40 hex characters"; exit 1; fi
+          # The source object must be verifiable LOCALLY inside the verified full-history
+          # candidate repository (the checkout above uses fetch-depth: 0 and its HEAD was bound
+          # to the candidate BEFORE any install; read-only plumbing only — no fetch, no
+          # credentials, nothing written). A loaded revision the candidate repository cannot
+          # account for is refused.
+          if ! git cat-file -e "${WORKFLOW_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::loaded-definition commit ${WORKFLOW_SHA} is not an object in the verified full-history candidate repository — refusing"; exit 1
+          fi
+          loaded_blob="$(git show "${WORKFLOW_SHA}:${WORKFLOW_PATH}" | git hash-object --stdin)"
+          candidate_blob="$(git show "${CANDIDATE}:${WORKFLOW_PATH}" | git hash-object --stdin)"
+          if [ "$loaded_blob" != "$candidate_blob" ]; then
+            echo "::error::loaded definition blob ${loaded_blob} (at ${WORKFLOW_SHA}) differs from the candidate's ${candidate_blob} — refusing; no bypass exists"; exit 1
+          fi
+          echo "definition bind OK: loaded blob ${loaded_blob} == candidate blob ${candidate_blob}"
+
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

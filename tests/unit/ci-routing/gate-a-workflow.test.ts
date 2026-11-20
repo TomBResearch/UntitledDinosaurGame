@@ -220,13 +220,41 @@ describe('gate-a workflow — aggregation binds and never launders', () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it('uploads only behind the input/HEAD gates — a malformed, short or wrong SHA publishes nothing', () => {
+  it('uploads only behind the input/HEAD/definition gates — a malformed, short or wrong SHA, or ANY definition mismatch, publishes nothing', () => {
     for (const job of ['profile', 'scenarios']) {
       const block = jobBlock(job);
       const uploads = block.split('\n').filter((line) => line.includes('uses: actions/upload-artifact@')).length;
-      const gated = block.split('\n').filter((line) => /if: always\(\) && steps\.inputgate\.outcome == 'success' && steps\.headbind\.outcome == 'success'/u.test(line)).length;
-      expect(gated, `${job}: every upload must be gated on the gates`).toBe(uploads);
+      const gated = block.split('\n').filter((line) => /if: always\(\) && steps\.inputgate\.outcome == 'success' && steps\.headbind\.outcome == 'success' && steps\.defbind\.outcome == 'success'/u.test(line)).length;
+      expect(gated, `${job}: every upload must be gated on ALL THREE guards`).toBe(uploads);
     }
+  });
+
+  it('conductor guards: only main + manual dispatch + attempt 1 may run; the LOADED definition must byte-equal the candidate definition, with NO bypass of any kind', () => {
+    // (a) no override knob exists — an acknowledgment input would defeat fail-closed semantics
+    expect(text, 'no drift/acknowledgment input may ever exist').not.toContain('definition_drift_ack');
+    expect(text).not.toContain('DRIFT_ACK');
+    expect(text, 'no drift bookkeeping reporting survives').not.toContain('GITHUB_STEP_SUMMARY');
+    // (b) the loaded revision is attested by github.workflow_sha (never github.sha, which is the
+    //     checkout context of another revision), and an unavailable value REFUSES (fail closed)
+    expect(text, 'github.sha must not stand in for the loaded definition revision').not.toMatch(/github\.sha\b/u);
+    // (c) source verification is LOCAL-ONLY inside the verified full-history candidate repository:
+    //     no fetch fallback, no extra credentials, nothing written
+    expect(text, 'no fetch fallback for the source object — local git plumbing or refusal').not.toMatch(/git fetch/u);
+    for (const job of ['profile', 'scenarios', 'evidence']) {
+      const block = jobBlock(job);
+      expect(block).toContain('WORKFLOW_SHA: ${{ github.workflow_sha }}');
+      expect(block).toContain('github.workflow_sha is unavailable');
+      expect(block).toContain('is not an object in the verified full-history candidate repository');
+      expect(block).toContain('differs from the candidate');
+      expect(block).toContain('no bypass exists');
+      // main-ref, manual-event and first-attempt gates in EVERY job
+      expect(block).toContain('refs/heads/main');
+      expect(block).toContain('EVENT_NAME" != "workflow_dispatch"');
+      expect(block).toContain('RUN_ATTEMPT" != "1"');
+    }
+    // the conductor-guarded definition is byte-identical to the release branch copy (checked at
+    // release time by git plumbing; here the marker pins that this candidate carries it)
+    expect(text).toContain('bind the LOADED definition revision');
   });
 
   it('mandatory-lane results reach the binder (a red/skipped/cancelled lane refuses even over complete files)', () => {
