@@ -10,6 +10,8 @@
  * rather than duplicated across the five root scripts that forward to it.
  */
 
+import { join } from 'node:path';
+
 import {
   E2E_SUITES,
   UNAVAILABLE_SUITES,
@@ -142,12 +144,73 @@ const runImplementedSuite = (command: string, forwarded: readonly string[]): num
   return result.exitCode;
 };
 
+/* ------------------------------------------------------------------ UDG-SPIKE-001 spike dispatch (grant T-1b)
+ *
+ * `pnpm test:spike -- --id UDG-SPIKE-001 [cell] [profile] [seed]` is the ONLY spike dispatch that
+ * exists. The refusal for every other id is UNTOUCHED: UDG-SPIKE-002 and UDG-SPIKE-003 own no
+ * harness, and their `test:spike` guard still answers with the owning task and never a pass.
+ * Cells: `self-check` (default) is the pure-Node proxy/statistics/trace loop; `elevated-full` is
+ * the candidate-bound Gate A LOCAL DIAGNOSTIC cell (20 s warmup + 120 s measure, two browser
+ * contexts, accepted-socket RTT, matched-ack corrections) inside tests/e2e/netcode.spec.ts.
+ * Neither is an official matrix cell — the harness labels every run it produces as diagnostic.
+ */
+export const SPIKE_DISPATCH_ID = 'UDG-SPIKE-001';
+
+const stringFlag = (flags: Record<string, string | boolean>, key: string): string | null =>
+  typeof flags[key] === 'string' ? String(flags[key]) : null;
+
+export const spikeHandled = (flags: Record<string, string | boolean>): boolean =>
+  stringFlag(flags, 'id') === SPIKE_DISPATCH_ID;
+
+export const spikeDispatch = (flags: Record<string, string | boolean>): number => {
+  const root = process.cwd();
+  const cell = stringFlag(flags, 'cell') ?? 'self-check';
+  const profile = stringFlag(flags, 'profile') ?? 'elevated';
+  const seed = stringFlag(flags, 'seed') ?? '1001';
+  if (cell !== 'self-check' && cell !== 'elevated-full') {
+    process.stderr.write(`test:spike --id ${SPIKE_DISPATCH_ID}: unknown cell "${cell}". Cells: self-check | elevated-full\n`);
+    return 2;
+  }
+  if (!/^\d+$/.test(seed)) {
+    process.stderr.write(`test:spike --id ${SPIKE_DISPATCH_ID}: --seed must be an integer, got "${seed}"\n`);
+    return 2;
+  }
+  const build = runCommand(['node', join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(root, 'tools', 'load-test', 'tsconfig.json')], { cwd: root, timeoutMs: 180_000 });
+  if (build.exitCode !== 0) {
+    process.stderr.write('test:spike: the load-test harness failed to build:\n');
+    process.stdout.write(build.stdout);
+    process.stderr.write(build.stderr);
+    return build.exitCode;
+  }
+  if (cell === 'self-check') {
+    const result = runCommand(['node', join(root, 'tools', 'load-test', 'dist', 'run-spike.js'), '--self-check', '--profile', profile, '--seed', seed], { cwd: root, timeoutMs: 10 * 60 * 1000 });
+    process.stdout.write(result.stdout);
+    process.stderr.write(result.stderr);
+    if (result.timedOut) process.stderr.write('test:spike self-check timed out after 10 minutes\n');
+    return result.timedOut ? 124 : result.exitCode;
+  }
+  const result = runCommand(
+    ['pnpm', 'exec', 'playwright', 'test', 'tests/e2e/netcode.spec.ts', '--project=chromium', '-g', 'spike cell: elevated-full'],
+    { cwd: root, timeoutMs: 30 * 60 * 1000, env: { UDG_SPIKE_CELL: 'elevated-full', UDG_SPIKE_SEED: seed } },
+  );
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
+  if (result.timedOut) process.stderr.write('test:spike elevated-full cell timed out after 30 minutes\n');
+  return result.timedOut ? 124 : result.exitCode;
+};
+
 const main = (): number => {
   const { positionals, flags } = parseArgs(process.argv.slice(2));
   const command = positionals[0];
   const forwarded = Object.entries(flags).map(([key, value]) =>
     value === true ? `--${key}` : `--${key}=${value}`,
   );
+  if (command === 'test:spike' && spikeHandled(flags)) {
+    // Announce loudly that THIS is the spike harness dispatch and that what it produces is a
+    // diagnostic — never a Gate A matrix cell, never a merge, never a verdict.
+    process.stdout.write(`dispatching the ${SPIKE_DISPATCH_ID} spike harness (cell=${stringFlag(flags, 'cell') ?? 'self-check'}; DIAGNOSTIC only — never an official matrix cell, never Gate A)\n`);
+    return spikeDispatch(flags);
+  }
   const result = guardUnavailable(command, forwarded);
   if (result.exitCode === 0) {
     // Announce the dispatch, then hand the terminal to Playwright: the first line is what a reader of a CI log

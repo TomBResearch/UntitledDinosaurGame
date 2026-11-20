@@ -1105,3 +1105,74 @@ FULL 20 s/120 s windows (a 5% hiccup rate must not flip p95 at n = 700+ the way 
 and idle-phase probe windows recorded alongside the loaded cell — which is exactly what this slice
 now emits per run: raw samples, summaries, controls, drift, throttle, overhead, connLog, teardown
 receipts. No threshold moved; the rule fired on every run above, on VALID and INVALID alike.
+
+## 14.3. Slot reservation on the ping seam, and the Gate A LOCAL cell wiring (slice 6d, 2026-11-20)
+
+The review of `4db1a0f` named a real crossing: `Room.ping` stores ONE callback slot
+(`@colyseus/sdk@0.18.9` `src/Room.ts:307-317`) and the PING frame carries no request id
+(echo path `src/Room.ts:788-791`), so under the OLD harness a late echo arriving after the
+fixed 1500 ms grace fired the FOLLOWING ping's callback — a sample attributed to the wrong
+send. The fix is a state machine, not a longer grace.
+
+**`tools/load-test/src/rtt-probe.ts`** is a pure, dependency-injected window runner. A send
+reserves the slot; a reply deadline RETIRES the sample but the slot STAYS RESERVED until the
+original echo is positively observed (a late-echo counter cell the still-pending callback
+increments). Only then may the next ping go. If no confirmation arrives within `confirmCapMs`
+the slot is POISONED: the window STOPS, remaining opportunities are counted `notSent`, and no
+ping is ever sent on that socket from that window again — measurement continues only after a
+verified returned callback or on a separately labelled new connection/domain. A socket-epoch
+change mid-window stops the cell (`epoch-changed`: slot continuity across a rejoin is not
+knowable from outside). A refused send on a closed socket stops as `socket-closed`, never as a
+retirement cascade. Nothing is ever subtracted; late echoes are counted discards.
+
+The machine runs UNCHANGED in both worlds. Node unit tests drive it with a virtual clock and
+scripted echo delivery — 6/6 in `tests/unit/udg-spike-001/spike-rtt-probe.test.ts`, pinning: a
+late echo arriving LATER than the old 1500 ms grace is confirmed before the next send (no
+crossing); no echo poisons at the cap with every later opportunity not-sent and zero further
+sends; recovery after a confirmed late echo; epoch change stops the window; closed-socket
+refusal; and the accounting invariant (every send ends sampled, confirmed-discarded, or the one
+poison stop). The browser imports the SAME compiled module through the loopback vite pipeline
+(`/@fs…/tools/load-test/dist/rtt-probe.js`) and supplies real timers, `performance.now`, the
+adapter's `pingLatency` pass-through and the epoch guard — the page and the tests cannot drift.
+
+**Wiring (grants T-1b/T-2/T-3, DPA-2 zero-dependency path).** `tools/load-test/package.json`
+exists with ZERO dependencies and ZERO devDependencies (the build script invokes the repo's
+existing TypeScript), so `@udg/load-test` joined the pnpm workspace and the lockfile is
+BYTE-IDENTICAL after `pnpm install` — there is nothing to resolve. `pnpm test:spike --
+--id UDG-SPIKE-001 [--cell self-check|elevated-full] [--profile …] [--seed …]` now dispatches
+the harness (announce line states DIAGNOSTIC, never an official matrix cell); a bare
+`test:spike`, `--id UDG-SPIKE-002`, `--id UDG-SPIKE-003` and unknown cells still refuse or exit 2
+with the owning task named — verified against the built dispatcher, and the UDG-001 (50/50) and
+UDG-SPIKE-001 (17/17) contract suites needed NO change: every refusal the contract still demands
+is intact.
+
+**The elevated-full cell** (`spike cell: elevated-full` in `tests/e2e/netcode.spec.ts`, skipped
+unless dispatched) is candidate-bound and LABELLED DIAGNOSTIC: exact commit sha + dirty flag +
+node/pnpm/playwright + seed in the record; two TRUE browser contexts reaching the room ONLY
+through the proxy port; FULL windows (20 000 ms warmup, then ≥120 000 ms measured); the accepted
+RTT as 100 slot-reserving SDK pings on the mover's own socket; matched-ack corrections sampled
+across the window with zeros RETAINED and invalidations counted apart against the pre-registered
+0.15 m p95 target; cgroup throttle receipts around the measure window; loopback-only request
+isolation (CSP is absent on the dev server — recorded, not assumed); bounded teardown with the
+host's finite-exit receipt. Raw first dispatch (`dpa2d/`, tree dirty with the slice itself):
+every harness check PASS — 100/100 pings answered, `abortedReason: null`, nothing not-sent, zero
+retention, corrections p95 0.0 m (< 0.15 target), teardown `exit 0`/`[]` — and the §2.2 verdict
+itself FAILS honestly at n = 100 on a window with ZERO runner throttling: median 112.2 ms
+(+12.2 over the 100 ms requested), jitter p95−p50 40.3 ms over the 20 ms budget. At full window
+size under continuous authored motion the browser-thread tail (p95 152.5, max 186.7 ms) is part
+of the achieved path; short-window quiet runs (§14.2) understated it. That is stated, not
+subtracted: the §2.2 rule as written is NOT satisfied by this candidate on this runner's
+full-window loaded cell, and no threshold was touched to make it so.
+
+**Missing obligations, plainly.** This slice does not run Gate A and passes nothing. Still owed
+at Gate A (assignment §8, adoption record): GA-5a/5b (dedupe naming vs terminal dedupe),
+GA-6a/6b/6c (client-local deadline expiry, bounded rejoin ladder, both branches), GA-7
+(retirement containment, both branches), GA-10a/GA-10b (navigation effects, outstanding at
+UDG-007), GA-11 (measure and justify PRODUCTION envelope settings — today's numbers are test
+settings), GA-12 with PE-1…PE-5 (positive validation before any dedupe-triggered closure;
+`INPUT_STRAND_SUSPECTED` stays diagnostic), and CF-1/CF-3/CF-4 must each be resolved by actual
+Gate A evidence or block the gate. The official matrix itself — non-diagnostic plans, the full
+client counts, hosted first-attempt green, candidate binding to a clean commit — is the Gate A
+dispatch, not this cell. Also unchanged and reported: the UDG-004 camera-artefact 6-hour
+freshness expiry (a re-capture work item) and the `recovery resumes…` case's in-run flake under
+episodic runner throttling.

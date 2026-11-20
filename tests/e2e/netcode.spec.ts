@@ -46,7 +46,7 @@ import { pathToFileURL } from 'node:url';
 
 import { chromium, expect, test, type Browser, type Page } from '@playwright/test';
 
-import { networkValidity, summarizeCorrections, summarizeDelays } from '../../tools/load-test/src/statistics.ts';
+import { MIN_ELIGIBLE_ACKS_PER_RUN, nearestRank, networkValidity, summarizeCorrections, summarizeDelays } from '../../tools/load-test/src/statistics.ts';
 import { captureEnvironmentRecord, impairmentSourceRecord, planSpikeRun } from '../../tools/load-test/src/run-spike.ts';
 import { createTraceWriter, readTrace } from '../../tools/load-test/src/trace-writer.ts';
 import type { ProxyStats } from '../../tools/load-test/src/ws-delay-proxy.ts';
@@ -2571,149 +2571,79 @@ const runImpMover = async (page: Page, frames: number, axis: 'x' | 'z'): Promise
     };
   }, { frames, axis });
 
-/* ------------------------------------------------------------------ accepted RTT probe (slice 6c)
+/* ------------------------------------------------------------------ accepted RTT probe (slice 6d)
  *
- * The ACCEPTED achieved-round-trip metric is the pinned SDK's own protocol ping on THE JOINED
- * SOCKET: `room.ping(callback)` sends one `Protocol.PING` byte frame (`@colyseus/sdk@0.18.9`
- * src/Room.ts:307-317) and the pinned server echoes it synchronously with `client.raw(...)`
- * (`@colyseus/core@0.18.27` build/Room.mjs:1436-1437) — protocol level, no room code, no tick,
- * no patch involvement. The client SDK fires the callback EXACTLY ONCE when the echo arrives
- * (Room.ts:788-791, slot cleared on fire; a stale echo can never double-resolve). The probe's
- * OWN monotonic clock (`performance.now`) brackets send and matching receive; the SDK's own
- * measurement rides along as a drift receipt, never subtracted. Rules enforced here:
- * - SINGLE IN-FLIGHT: the loop never issues a ping while one is unanswered; after a retirement
- *   it waits a grace for the late echo to fire the (still-registered) old callback before the
- *   next send, so the SDK's single callback slot can never be crossed;
- * - a REPLY DEADLINE retires the sample as invalid — it is never estimated, never reused;
- * - a late echo is DISCARDED and counted, never converted into a sample;
- * - no parallel socket: the probe calls `transport.pingLatency` on the seat's own transport —
- *   the exact connection carrying inputs and patches.
+ * The probe's slot-reservation state machine lives in tools/load-test/src/rtt-probe.ts —
+ * UNIT-TESTED deterministically in node and IMPORTED BY THE PAGE (vite /@fs over the loopback
+ * pipeline) so the browser and the tests run the SAME code. The page supplies the dependencies:
+ * the monotonic clock, real timers, the seat transport's public pingLatency pass-through (which
+ * REFUSES on a closed socket), and an epoch guard. Contract (review of 4db1a0f): a retirement
+ * keeps the slot RESERVED until the original echo is positively observed; no confirmation within
+ * confirmCapMs POISONS the cell — the window stops, remaining opportunities are not-sent, and
+ * NO FURTHER PING is ever sent on that socket from that window. Measurement continues only
+ * after a verified returned callback, or on a separately labelled new connection.
  */
+const PROBE_MODULE_URL = `/@fs${join(ROOT, 'tools', 'load-test', 'dist', 'rtt-probe.js')}`;
+
 interface RttProbeWindow {
   readonly samples: readonly { readonly sentAtMs: number; readonly receivedAtMs: number; readonly rttMs: number; readonly sdkMs: number }[];
-  readonly retired: readonly { readonly sentAtMs: number; readonly deadlineMs: number }[];
   readonly lateDiscarded: number;
-  /** Set when pingLatency REFUSED (socket closed): the SDK would silently no-op — death, not delay. */
-  readonly socketClosedAtMs: number | null;
-  /** Tail of the predictor's recovery ledger — the death/trigger record, if any, with its codes. */
-  readonly recoveryTail: readonly { readonly kind: string; readonly detail: string }[];
+  readonly retiredUnconfirmed: number;
+  readonly slotPoisoned: boolean;
+  readonly socketClosed: boolean;
+  readonly epochChanged: boolean;
+  readonly abortedReason: string | null;
+  readonly notSent: number;
   readonly clockElapsedMs: number;
   readonly wallElapsedMs: number;
-  readonly notSent: number;
 }
 
 const runImpRttProbe = async (
   page: Page,
-  opts: { pings: number; cadenceMs: number; deadlineMs: number },
+  opts: { pings: number; cadenceMs: number; deadlineMs: number; confirmCapMs?: number },
 ): Promise<RttProbeWindow> =>
   page.evaluate(async (args) => {
     const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
     if (holder === undefined) throw new Error('the impairment mover is not joined');
     if (typeof holder.transport.pingLatency !== 'function') throw new Error('the seat transport exposes no pingLatency pass-through');
-    const samples: { sentAtMs: number; receivedAtMs: number; rttMs: number; sdkMs: number }[] = [];
-    const retired: { sentAtMs: number; deadlineMs: number }[] = [];
-    let lateDiscarded = 0;
-    let socketClosedAtMs: number | null = null;
-    let notSent = 0;
-    const clockStart = performance.now();
-    const wallStart = Date.now();
-    for (let i = 0; i < args.pings; i += 1) {
-      const slot = { fired: false };
-      const sentAtMs = performance.now();
-      let refusedClosed = false;
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          if (!slot.fired) {
-            slot.fired = true;
-            retired.push({ sentAtMs, deadlineMs: args.deadlineMs });
-            resolve();
-          }
-        }, args.deadlineMs);
-        try {
-          holder.transport.pingLatency!((ms) => {
-            const receivedAtMs = performance.now();
-            if (slot.fired) {
-              lateDiscarded += 1; // echo of an already-retired ping: discarded, never sampled
-              return;
-            }
-            slot.fired = true;
-            clearTimeout(timer);
-            samples.push({ sentAtMs, receivedAtMs, rttMs: receivedAtMs - sentAtMs, sdkMs: ms });
-            resolve();
-          });
-        } catch {
-          refusedClosed = true;
-          slot.fired = true;
-          clearTimeout(timer);
-          resolve();
-        }
-      });
-      if (refusedClosed) {
-        socketClosedAtMs = performance.now() - clockStart;
-        notSent = args.pings - i - 1;
-        break;
-      }
-      // Single in-flight: after a retirement the unanswered echo may still be coming — give it a
-      // grace to fire the OLD callback (which only counts a discard) before the next send.
-      const waited = performance.now() - sentAtMs;
-      const grace = retired.length > 0 && retired[retired.length - 1]?.sentAtMs === sentAtMs ? 1_500 : 0;
-      await new Promise((r) => setTimeout(r, Math.max(0, args.cadenceMs - waited) + grace));
-    }
-    await new Promise((r) => setTimeout(r, 250)); // let any onLeave/recovery record settle in
-    const ledger = holder.predictor.recoveryLedger().slice(-4).map((rec) => ({ kind: String(rec.event), detail: String(rec.detail ?? '') }));
-    return { samples, retired, lateDiscarded, socketClosedAtMs, recoveryTail: ledger, notSent, clockElapsedMs: performance.now() - clockStart, wallElapsedMs: Date.now() - wallStart };
-  }, opts);
+    const mod = (await import(/* @vite-ignore */ args.moduleUrl)) as {
+      runProbeWindow(deps: unknown, options: unknown): Promise<RttProbeWindow>;
+    };
+    const deps = {
+      nowMs: () => performance.now(),
+      sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+      after: (ms: number, cb: () => void) => {
+        const t = setTimeout(cb, ms);
+        return () => clearTimeout(t);
+      },
+      sendPing: (onEcho: (ms: number) => void) => {
+        holder.transport.pingLatency!(onEcho);
+      },
+      epochNow: () => holder.transport.issuedEpoch(),
+    };
+    return mod.runProbeWindow(deps, {
+      pings: args.pings,
+      cadenceMs: args.cadenceMs,
+      deadlineMs: args.deadlineMs,
+      confirmCapMs: args.confirmCapMs ?? 5_000,
+    });
+  }, { moduleUrl: PROBE_MODULE_URL, ...opts });
 
-/** Missing-reply control: normal ping → short-deadline ping (MUST retire; late echo MUST be
- * discarded) → normal ping again (probe recovers cleanly). Every step's outcome is returned. */
+/** Missing-reply control, three separate windows on the seat's socket, ordered so nothing is
+ * ever sent on a reserved/poisoned slot: (1) a normal ping answers; (2) a short-deadline ping
+ * RETIRES and its late echo is POSITIVELY confirmed as a discard (no abort); (3) a normal ping
+ * again on the verified-free slot. The impossible-confirmation poison case is deterministically
+ * unit-tested; on a live seat we never deliberately poison before other windows, because a
+ * poisoned socket is finished for measurement. */
 const runImpRttMissingReplyControl = async (
   page: Page,
   opts: { normalDeadlineMs: number; shortDeadlineMs: number },
-): Promise<{ before: { ok: boolean }; short: { retired: boolean; lateDiscardedWithinGrace: boolean }; after: { ok: boolean } }> =>
-  page.evaluate(async (args) => {
-    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
-    if (holder === undefined) throw new Error('the impairment mover is not joined');
-    const one = (deadlineMs: number): Promise<{ ok: boolean; late: { n: number }; rttMs?: number; sdkMs?: number; socketClosed?: boolean }> =>
-      new Promise((resolve) => {
-        const slot = { fired: false };
-        const late = { n: 0 }; // LIVE reference: a late echo increments it after the resolve
-        const sentAtMs = performance.now();
-        const timer = setTimeout(() => {
-          if (slot.fired) return;
-          slot.fired = true;
-          resolve({ ok: false, late });
-        }, deadlineMs);
-        try {
-          holder.transport.pingLatency!((ms) => {
-            if (slot.fired) {
-              late.n += 1;
-              return;
-            }
-            slot.fired = true;
-            clearTimeout(timer);
-            resolve({ ok: true, late, rttMs: performance.now() - sentAtMs, sdkMs: ms });
-          });
-        } catch {
-          slot.fired = true;
-          clearTimeout(timer);
-          resolve({ ok: false, late, socketClosed: true });
-        }
-      });
-    const before = await one(args.normalDeadlineMs);
-    // The short deadline is below the true RTT on the elevated path — retirement is REQUIRED.
-    const short = await one(args.shortDeadlineMs);
-    // Wait for the late echo to fire the old (retired) callback before issuing the next ping.
-    const graceStart = performance.now();
-    while (short.late.n === 0 && performance.now() - graceStart < 2_000) {
-      await new Promise((r) => setTimeout(r, 25));
-    }
-    const after = await one(args.normalDeadlineMs);
-    return {
-      before: { ok: before.ok, socketClosed: before.socketClosed === true },
-      short: { retired: short.ok === false && short.socketClosed !== true, lateDiscardedWithinGrace: short.late.n > 0 },
-      after: { ok: after.ok, socketClosed: after.socketClosed === true },
-    };
-  }, opts);
+): Promise<{ before: RttProbeWindow; short: RttProbeWindow; after: RttProbeWindow }> => {
+  const before = await runImpRttProbe(page, { pings: 1, cadenceMs: 100, deadlineMs: opts.normalDeadlineMs });
+  const short = await runImpRttProbe(page, { pings: 1, cadenceMs: 100, deadlineMs: opts.shortDeadlineMs, confirmCapMs: 2_000 });
+  const after = await runImpRttProbe(page, { pings: 1, cadenceMs: 100, deadlineMs: opts.normalDeadlineMs });
+  return { before, short, after };
+};
 
 /** Nearest-rank median, the SAME convention as the statistics module. */
 const medianOf = (xs: readonly number[]): number | null => {
@@ -2997,9 +2927,9 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
     achievedRttSamples: lanProbe.samples.map((sample) => sample.rttMs),
   });
   const lanProbeThrottle = lanSettled.throttle;
-  check('rtt probe[lan]: the ACCEPTED achieved RTT is the pinned SDK\'s public protocol ping on the seat\'s OWN joined socket (transport.pingLatency → room.ping on the playing WebSocket — no parallel echo socket, no private hook, no leg-sum/patch conflation); a socket that dies mid-probe is reported as DEATH (socketClosed + recovery ledger), never as slow replies',
-    lanProbe.socketClosedAtMs === null && lanProbe.samples.length === 24 && lanProbe.retired.length === 0 && lanProbe.lateDiscarded === 0,
-    { sent: 24, answered: lanProbe.samples.length, retired: lanProbe.retired.length, lateDiscarded: lanProbe.lateDiscarded, socketClosedAtMs: lanProbe.socketClosedAtMs, notSent: lanProbe.notSent, recoveryTail: lanProbe.recoveryTail, hostThrottleAtProbe: lanProbeThrottle });
+  check('rtt probe[lan]: the ACCEPTED achieved RTT is the pinned SDK\'s public protocol ping on the seat\'s OWN joined socket (transport.pingLatency → room.ping on the playing WebSocket); slot-reservation contract held (no retirement, no poison, no epoch change, nothing not-sent) — a late-echo crossing is structurally impossible and a poisoned slot stops the cell',
+    lanProbe.abortedReason === null && lanProbe.samples.length === 24 && lanProbe.retiredUnconfirmed === 0 && lanProbe.slotPoisoned === false && lanProbe.socketClosed === false && lanProbe.epochChanged === false && lanProbe.notSent === 0,
+    { answered: lanProbe.samples.length, lateDiscarded: lanProbe.lateDiscarded, retiredUnconfirmed: lanProbe.retiredUnconfirmed, slotPoisoned: lanProbe.slotPoisoned, socketClosed: lanProbe.socketClosed, epochChanged: lanProbe.epochChanged, notSent: lanProbe.notSent, abortedReason: lanProbe.abortedReason, hostThrottleAtProbe: lanProbeThrottle });
   check('rtt probe[lan]: raw LAN ping record — p50/p95/jitter(p95−p50)/count under the SAME §2.2 formula; a median or jitter miss fails this check honestly, and the ONLY tolerated short-run failure is insufficient-evidence',
     lanProbeValidity.reasons.every((reason) => reason.startsWith('insufficient-evidence')),
     { requested: planLan.profile.rttMs, achieved: lanProbeValidity.achieved, jitterP95P50: lanProbeValidity.achievedJitterMs, reasons: lanProbeValidity.reasons });
@@ -3145,9 +3075,9 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
     achievedRttSamples: elevProbe.samples.map((sample) => sample.rttMs),
   });
   const elevProbeThrottle = (await host.request({ op: 'stats', handle: handleElev }))['throttle'] as { worstThrottleDeltaUsec: number; worstThrottleDeltaEvents: number } | undefined;
-  check('rtt probe[elevated]: raw elevated ping RTT through the 100/20 proxy on the PLAYING socket — p50/p95/jitter/count under the SAME §2.2 formula; median/jitter misses fail honestly; only insufficient-evidence is tolerated as the short-run floor; socket DEATH (socketClosed + recovery ledger + host throttle at probe end) is reported as the measured blocker it is, never disguised as latency',
-    elevProbe.socketClosedAtMs === null && elevProbe.retired.length === 0 && elevProbe.lateDiscarded === 0 && elevProbeValidity.reasons.every((reason) => reason.startsWith('insufficient-evidence')),
-    { requested: planElev.profile.rttMs, achieved: elevProbeValidity.achieved, jitterP95P50: elevProbeValidity.achievedJitterMs, retired: elevProbe.retired.length, lateDiscarded: elevProbe.lateDiscarded, reasons: elevProbeValidity.reasons, socketClosedAtMs: elevProbe.socketClosedAtMs, notSent: elevProbe.notSent, recoveryTail: elevProbe.recoveryTail, hostThrottleAtProbe: elevProbeThrottle });
+  check('rtt probe[elevated]: raw elevated ping RTT through the 100/20 proxy on the PLAYING socket — p50/p95/jitter/count under the SAME §2.2 formula; median/jitter misses fail honestly; only insufficient-evidence is tolerated as the short-run floor; slot-reservation must hold (poison/close/epoch would stop the cell and fail here AS A MEASURED BLOCKER, never disguised as latency)',
+    elevProbe.abortedReason === null && elevProbe.retiredUnconfirmed === 0 && elevProbeValidity.reasons.every((reason) => reason.startsWith('insufficient-evidence')),
+    { requested: planElev.profile.rttMs, achieved: elevProbeValidity.achieved, jitterP95P50: elevProbeValidity.achievedJitterMs, lateDiscarded: elevProbe.lateDiscarded, retiredUnconfirmed: elevProbe.retiredUnconfirmed, slotPoisoned: elevProbe.slotPoisoned, socketClosed: elevProbe.socketClosed, epochChanged: elevProbe.epochChanged, notSent: elevProbe.notSent, abortedReason: elevProbe.abortedReason, reasons: elevProbeValidity.reasons, hostThrottleAtProbe: elevProbeThrottle });
   const elevProbeDrift = probeDrift(elevProbe);
   check('rtt probe[elevated]: monotonic-clock receipts on the impaired path (same send→matching-receive bracket, SDK drift stated, clock sanity)',
     elevProbeDrift.everyOk, elevProbeDrift);
@@ -3172,14 +3102,16 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
     achievedRttSamples: quietProbe.samples.map((sample) => sample.rttMs),
   });
   check('rtt probe[elevated]: the QUIET-WINDOW record (tick-gate held, room background traffic stopped) — p50/p95/jitter/count under the SAME §2.2 formula; loaded and quiet medians both stated, no cherry-picking: the LOADED cell stays exactly as measured',
-    quietProbe.socketClosedAtMs === null && quietProbe.retired.length === 0
+    quietProbe.abortedReason === null && quietProbe.retiredUnconfirmed === 0
     && quietProbeValidity.reasons.every((reason) => reason.startsWith('insufficient-evidence')),
     { requested: planElev.profile.rttMs, achieved: quietProbeValidity.achieved, jitterP95P50: quietProbeValidity.achievedJitterMs, reasons: quietProbeValidity.reasons, loadedMedianMs: elevProbeValidity.achieved?.p50, s2cBytesQuietWindow: ((await host.request({ op: 'stats', handle: handleElev }))['stats'] as ProxyStats).s2c.bytesReceived });
   // (when the seat socket died upstream of this control, before/after report socketClosed:true —
   // the check below then fails WITH the death record, exactly as it should.)
-  check('rtt probe control: a MISSING REPLY is an invalid-sample OPPORTUNITY, never a silent pass — the 30 ms-deadline ping RETIRED, its late echo was DISCARDED (never converted into a sample), and the next ping answered cleanly (exactly-once state recovered)',
-    missingReplyControl.before.ok === true && missingReplyControl.short.retired === true && missingReplyControl.short.lateDiscardedWithinGrace === true && missingReplyControl.after.ok === true,
-    missingReplyControl);
+  check('rtt probe control: a MISSING/late reply is handled by SLOT RESERVATION — the 30 ms-deadline ping RETIRED, its late echo was POSITIVELY confirmed as a discard (counted, never sampled), and the next ping answered only on the VERIFIED-FREE slot; the impossible-confirmation poison case (stop the cell, mark not-sent, never resend on the slot) is deterministically unit-tested (6/6)',
+    missingReplyControl.before.samples.length === 1
+    && missingReplyControl.short.samples.length === 0 && missingReplyControl.short.lateDiscarded === 1 && missingReplyControl.short.abortedReason === null
+    && missingReplyControl.after.samples.length === 1 && missingReplyControl.after.abortedReason === null,
+    { before: missingReplyControl.before.abortedReason, short: { retiredConfirmedDiscard: missingReplyControl.short.lateDiscarded, aborted: missingReplyControl.short.abortedReason }, after: missingReplyControl.after.abortedReason });
 
   // Patch/movement independence: with the authority tick held (test-only tick gate; exactly one
   // step per 300 ms) the seat's MOVEMENT freezes while the protocol ping keeps answering — the
@@ -3201,15 +3133,15 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
   const fullMedian = medianOf(elevProbe.samples.map((sample) => sample.rttMs));
   const ctlMedian = medianOf(ctlProbe.samples.map((sample) => sample.rttMs));
   const patchIndependence = {
-    ctlAnswered: ctlProbe.samples.length, ctlRetired: ctlProbe.retired.length,
-    ctlSocketClosedAtMs: ctlProbe.socketClosedAtMs, ctlRecoveryTail: ctlProbe.recoveryTail,
+    ctlAnswered: ctlProbe.samples.length, ctlRetiredUnconfirmed: ctlProbe.retiredUnconfirmed,
+    ctlAborted: ctlProbe.abortedReason, ctlNotSent: ctlProbe.notSent,
     ctlMedianMs: ctlMedian, fullMedianMs: fullMedian,
     observerMovedMetresDuringHold: Number(ctlMovedMetres.toFixed(3)),
     s2cBytesDuringCtl: statsAfterCtl.s2c.bytesReceived - statsBeforeCtl.s2c.bytesReceived,
     c2sBytesDuringCtl: statsAfterCtl.c2s.bytesReceived - statsBeforeCtl.c2s.bytesReceived,
   };
   check('rtt probe control: PATCH/MOVEMENT INDEPENDENCE — under a tick hold the seat\'s movement freezes (observer advances < 1 m) while EVERY ping still answers exactly once at cadence with a comparable median: the RTT sample is the ping\'s own causal reply on the same socket, not a repatched patch',
-    ctlProbe.samples.length === 10 && ctlProbe.retired.length === 0 && ctlMovedMetres < 1
+    ctlProbe.samples.length === 10 && ctlProbe.abortedReason === null && ctlMovedMetres < 1
     && fullMedian !== null && ctlMedian !== null && Math.abs(ctlMedian - fullMedian) < Math.max(20, fullMedian * 0.5),
     { ...patchIndependence, observerBaselineReset: obsBeforeCtl.tracks.length >= 0, note: 'byte counts include ping frames (1 B up / 1 B down each) plus residual wire traffic under the hold' });
 
@@ -3261,10 +3193,10 @@ test('impairment proxy smoke: paired browser seats through the WS delay proxy �
     },
     acceptedRttProbe: {
       seam: '@colyseus/sdk@0.18.9 public Room.ping (src/Room.ts:307-317 one Protocol.PING byte on the joined socket; :788-791 echo fires the callback EXACTLY ONCE and clears the slot) echoed synchronously by @colyseus/core@0.18.27 (build/Room.mjs:1436-1437 client.raw) — protocol layer, no room code, no tick/patch involvement. Reached via transport.pingLatency on the seat\'s own joined transport (additive optional pass-through in the contract-owned adapter). Excluded seams: client.getLatency (separate probe connection + Date.now wall clock), room.clock RTT estimator (smoothed server-time estimate, not a raw round trip), proxy leg-sum (demoted above).',
-      rules: 'single in-flight (grace after retirement so a late echo fires the OLD callback and is discarded, never crossed); reply deadline retires the sample as invalid — never estimated, never reused; late echoes counted as discards; no subtraction anywhere.',
-      lan: { cadenceMs: 100, deadlineMs: 1_000, rawSamplesMs: lanProbe.samples.map((sample) => sample.rttMs), sdkMs: lanProbe.samples.map((sample) => sample.sdkMs), retired: lanProbe.retired, lateDiscarded: lanProbe.lateDiscarded, socketClosedAtMs: lanProbe.socketClosedAtMs, notSent: lanProbe.notSent, recoveryTail: lanProbe.recoveryTail, hostThrottleAtProbe: lanProbeThrottle, summary: lanProbeValidity, drift: lanProbeDrift },
-      elevated: { cadenceMs: 100, deadlineMs: 1_000, rawSamplesMs: elevProbe.samples.map((sample) => sample.rttMs), sdkMs: elevProbe.samples.map((sample) => sample.sdkMs), retired: elevProbe.retired, lateDiscarded: elevProbe.lateDiscarded, socketClosedAtMs: elevProbe.socketClosedAtMs, notSent: elevProbe.notSent, recoveryTail: elevProbe.recoveryTail, hostThrottleAtProbe: elevProbeThrottle, summary: elevProbeValidity, drift: elevProbeDrift },
-      elevatedQuietWindow: { cadenceMs: 150, deadlineMs: 1_000, rawSamplesMs: quietProbe.samples.map((sample) => sample.rttMs), sdkMs: quietProbe.samples.map((sample) => sample.sdkMs), retired: quietProbe.retired, lateDiscarded: quietProbe.lateDiscarded, socketClosedAtMs: quietProbe.socketClosedAtMs, notSent: quietProbe.notSent, recoveryTail: quietProbe.recoveryTail, summary: quietProbeValidity, drift: probeDrift(quietProbe) },
+      rules: 'SLOT RESERVATION (review of 4db1a0f): a retirement keeps the slot RESERVED until the original echo is positively observed; no confirmation within confirmCapMs POISONS the cell — the window stops, remaining opportunities are not-sent, and no ping is ever sent on that slot again; the slot is never overwritten on an elapsed grace; reply deadlines retire samples as invalid — never estimated, never reused; late echoes are counted discards; epoch change mid-window stops the cell; no subtraction anywhere. The state machine is unit-tested deterministically (6/6) and imported UNCHANGED by the page via the loopback vite pipeline.',
+      lan: { cadenceMs: 100, deadlineMs: 1_000, rawSamplesMs: lanProbe.samples.map((sample) => sample.rttMs), sdkMs: lanProbe.samples.map((sample) => sample.sdkMs), lateDiscarded: lanProbe.lateDiscarded, retiredUnconfirmed: lanProbe.retiredUnconfirmed, slotPoisoned: lanProbe.slotPoisoned, socketClosed: lanProbe.socketClosed, epochChanged: lanProbe.epochChanged, notSent: lanProbe.notSent, abortedReason: lanProbe.abortedReason, hostThrottleAtProbe: lanProbeThrottle, summary: lanProbeValidity, drift: lanProbeDrift },
+      elevated: { cadenceMs: 100, deadlineMs: 1_000, rawSamplesMs: elevProbe.samples.map((sample) => sample.rttMs), sdkMs: elevProbe.samples.map((sample) => sample.sdkMs), lateDiscarded: elevProbe.lateDiscarded, retiredUnconfirmed: elevProbe.retiredUnconfirmed, slotPoisoned: elevProbe.slotPoisoned, socketClosed: elevProbe.socketClosed, epochChanged: elevProbe.epochChanged, notSent: elevProbe.notSent, abortedReason: elevProbe.abortedReason, hostThrottleAtProbe: elevProbeThrottle, summary: elevProbeValidity, drift: elevProbeDrift },
+      elevatedQuietWindow: { cadenceMs: 150, deadlineMs: 1_000, rawSamplesMs: quietProbe.samples.map((sample) => sample.rttMs), sdkMs: quietProbe.samples.map((sample) => sample.sdkMs), lateDiscarded: quietProbe.lateDiscarded, retiredUnconfirmed: quietProbe.retiredUnconfirmed, slotPoisoned: quietProbe.slotPoisoned, socketClosed: quietProbe.socketClosed, epochChanged: quietProbe.epochChanged, notSent: quietProbe.notSent, abortedReason: quietProbe.abortedReason, summary: quietProbeValidity, drift: probeDrift(quietProbe) },
       controls: { missingReply: missingReplyControl, patchIndependence },
       overheadBytes: { pingUp: 1, pongDown: 1, source: 'sdk Room.ts:316 connection.send(sharedBuffer.subarray(0, 1)); core Room.mjs:1437 client.raw(one-byte PING frame)', pingsSent: { lan: 24, elevated: 24 + 3 + 10 }, elevBytesDuringCtlWindow: { c2s: statsAfterCtl.c2s.bytesReceived - statsBeforeCtl.c2s.bytesReceived, s2c: statsAfterCtl.s2c.bytesReceived - statsBeforeCtl.s2c.bytesReceived } },
     },
@@ -3325,3 +3257,197 @@ limitations.push('Local prediction and forced correction (slice 4, revised after
 limitations.push('Gate A per-tick and safety-on-transition rows are not evaluated here: a browser sees patched deliveries, not the authority journal, and the 100 ms patch interval over a 50 ms step means one delivery carries two consumed ticks. The transient `movementMode` of a consumed direct intent is therefore recorded and not asserted. Those rows wait for the Gate A run against the journal.');
 limitations.push('Slice 5 review items, closed at the amendment round: (1) the step relation is ONE exported function used by BOTH sides of the spike — apps/client flatStep is imported by the adapter/browser pages/instrumenter, and (owner-approved amendment A-1, assignments §3.5) the netcode harness room and the AC-1 trace step the authority through tests/support/step-kernel/kernel-stepper.mjs wrapping that same dist export via the trusted stepperFactory seam; production default FlatReferenceStepper unchanged (parity + sentinel + module-identity checks pin this). (3) matched-ack checkpoints are corroborated per adoption (adoptionLedger conservation on real behaviour, direct-vs-reconstructed boundaries, coverage holes fail the metric) with the refused-then-advancing single-batch browser control. (2) retirement is asserted as TWO events by exact identity and BOTH now hold end to end: EVENT 1 (offender closed through the §3.1/§3.3 branch, code 4100, closure tick before the replacement\'s snapshot tick) and EVENT 2 (new session/epoch domain, fresh snapshot before any fresh input, replacement MOVES ≥0.4 m with zero nominal corrections) at the default and deferred rejoin cadences. The earlier "replacement never moves" finding is RESCINDED: it was this fixture\'s mover continuing the old generation sequence across the new epoch (protocol §4.2; MAX_GENERATION_FORWARD_GAP screen refuses such frames with a neutral step); the suite retains that breach as a RED scenario reproduced with a same-seat positive control, and the legacy EITHER-check is pinned as the control that a broken replacement could pass but the strict claim cannot. The named-gap/stalled-ack/termination matrix coverage remains outstanding.');
 
+
+/* ------------------------------------------------------------------ Gate A local cell (slice 6d, grant T-3)
+ *
+ * `pnpm test:spike -- --id UDG-SPIKE-001 --cell elevated-full` dispatches THIS cell and nothing
+ * else. It is a DIAGNOSTIC: one candidate-bound local elevated run with the FULL Gate A windows
+ * (20 s warmup + 120 s measure), two TRUE browser contexts, the accepted achieved RTT measured
+ * on the mover's own playing socket by the slot-reserving SDK-ping state machine, matched-ack
+ * corrections sampled with zero retention and invalidations counted apart, p95 raw correction
+ * against the 0.15 m target, loopback-only isolation, bounded teardown with receipts, the stable
+ * seed recorded, and candidate identity (exact commit sha + dirty flag) in the record. Actual
+ * verdicts only: validity misses fail the cell honestly, a stopped probe fails it as a MEASURED
+ * BLOCKER, and the disposition says what it is — a local diagnostic, not Gate A, not a matrix
+ * cell, not a verdict. The ordinary netcode suite never runs it (skipped unless dispatched).
+ */
+const readCpuThrottle = (): { throttledUsec: number; throttledEvents: number } | null => {
+  try {
+    const stat = readFileSync('/sys/fs/cgroup/cpu.stat', 'utf8');
+    const usec = /\nthrottled_usec (\d+)/.exec(stat)?.[1];
+    const events = /\nthrottled_usec \d+\n(nr_throttled (\d+))/.exec(stat)?.[2] ?? /\nnr_throttled (\d+)/.exec(stat)?.[1];
+    return usec === undefined ? null : { throttledUsec: Number(usec), throttledEvents: Number(events ?? '0') };
+  } catch {
+    return null;
+  }
+};
+
+// eslint-disable-next-line no-empty-pattern -- Playwright requires the destructured args object even when the cell uses only testInfo.
+test('spike cell: elevated-full — candidate-bound Gate A local diagnostic cell (full 20s warmup + 120s measure; NOT Gate A, NOT a matrix cell)', async ({}, testInfo) => {
+  test.skip(process.env['UDG_SPIKE_CELL'] !== 'elevated-full', 'dispatched only by `pnpm test:spike -- --id UDG-SPIKE-001 --cell elevated-full` (grant T-3); the ordinary netcode suite never runs the full-window cell');
+  test.setTimeout(330_000);
+  expect(fixture, 'the room fixture booted').toBeDefined();
+  const seed = Number(process.env['UDG_SPIKE_SEED'] ?? '1001');
+  const roomPort = Number(new URL(fixture?.endpoint ?? 'http://127.0.0.1:0').port);
+  const plan = planSpikeRun({ profile: 'elevated', seed, diagnostic: { reason: 'gate-a-local-cell-elevated-full' } });
+
+  // candidate identity — the cell BINDS to the exact bytes it ran.
+  const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
+  const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim().length > 0;
+
+  const cellChecks: { name: string; ok: boolean; detail: unknown }[] = [];
+  const cellCheck = (name: string, ok: boolean, detail: unknown): void => {
+    cellChecks.push({ name, ok, detail });
+    check(name, ok, detail);
+  };
+  const nonLoopback: string[] = [];
+
+  const host = await startProxyHost();
+  let handle = -1;
+  let pageM: Page | undefined;
+  let pageO: Page | undefined;
+  let hostShutdown: Awaited<ReturnType<typeof host.shutdown>> | null = null;
+  try {
+    const start = await host.request({ op: 'start', profile: plan.impairment, targetHost: '127.0.0.1', targetPort: roomPort });
+    handle = start['handle'] as number;
+    const proxyUrl = `http://127.0.0.1:${String(start['port'] as number)}`;
+    pageM = await openSeatPage('cell-M', { bare: true });
+    pageO = await openSeatPage('cell-O', { bare: true });
+    for (const page of [pageM, pageO]) {
+      page.on('request', (request) => {
+        const url = new URL(request.url());
+        if (url.protocol === 'http:' || url.protocol === 'https:') {
+          if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') nonLoopback.push(request.url());
+        }
+      });
+    }
+    const joinM = await joinImpSeat(pageM, proxyUrl, { mode: 'create', roomName: ROOM_NAME });
+    const roomId = joinM.roomId ?? '';
+    const joinO = await joinSeat(pageO, { mode: 'byId', roomId }, proxyUrl);
+
+    cellCheck('cell: DIAGNOSTIC label + candidate binding (exact sha, dirty flag recorded, seed recorded, NOT an official matrix cell)',
+      plan.official === false && /^[0-9a-f]{40}$/.test(sha) && Number.isInteger(seed),
+      { commit: sha, dirty, seed, label: plan.label, profile: plan.profile });
+    cellCheck('cell: TWO TRUE browser contexts, both seats reaching the room ONLY through the proxy port',
+      pageM.context() !== pageO.context() && joinM.ok === true && joinO.ok === true && Number(new URL(proxyUrl).port) !== roomPort,
+      { proxyPort: start['port'], roomPort });
+    cellCheck('cell: loopback isolation — every page request so far is to 127.0.0.1/localhost (CSP is absent on this dev server; isolation is enforced by loopback-only endpoints, recorded not assumed)',
+      nonLoopback.length === 0, { nonLoopback, csp: 'none-on-dev-server' });
+
+    // ---- mover pump: continuous authored motion for the WHOLE cell (warmup + measure + tail).
+    const pumpMs = 20_000 + 120_000 + 12_000;
+    const pump = pageM.evaluate(async (args) => {
+      const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+      if (holder === undefined) throw new Error('the cell mover is not joined');
+      const startedAt = performance.now();
+      while (performance.now() - startedAt < args.pumpMs) {
+        holder.generation += 1;
+        holder.predictor.send({ generation: holder.generation, moveX: 1, moveZ: 0 }, true);
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      }
+      return holder.transport.handle().lastProcessed;
+    }, { pumpMs }).catch((error) => `pump ended: ${String(error)}`);
+
+    await new Promise((resolve) => setTimeout(resolve, 20_000)); // FULL warmup window
+    const measureStart = Date.now();
+    const cpuBefore = readCpuThrottle();
+
+    // ---- measure window: the accepted-RTT probe (100 pings over ~100 s on the mover's OWN
+    // playing socket, slot-reserving state machine) while ledger snapshots are sampled alongside.
+    const probePromise = runImpRttProbe(pageM, { pings: 100, cadenceMs: 1_000, deadlineMs: 1_500, confirmCapMs: 5_000 });
+    const snapshots: ImpLedger[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+      snapshots.push(await readImpLedger(pageM));
+    }
+    const probe = await probePromise;
+    const measureMs = Date.now() - measureStart;
+    const cpuAfter = readCpuThrottle();
+
+    const settled = await settleProxy(host, handle);
+    const observer = await reportSeat(pageO);
+    const moverTrack = observer.tracks.find((track) => track.sessionId === joinM.sessionId);
+
+    // ---- matched-ack correction ledger: zeros RETAINED, invalidations counted APART, p95 raw
+    // correction against the pre-registered 0.15 m target. No subtraction anywhere.
+    const rows = snapshots.at(-1)?.rows ?? [];
+    const measuredRows = rows.filter((row) => row.status === 'measured');
+    const magnitudes = measuredRows.map((row) => row.magnitude);
+    const zeroCorrections = magnitudes.filter((m) => m === 0).length;
+    const p95Correction = measuredRows.length > 0 ? nearestRank(magnitudes, 0.95) : null;
+    const p50Correction = measuredRows.length > 0 ? nearestRank(magnitudes, 0.5) : null;
+    const invalidations = rows.filter((row) => row.status === 'invalidated-missing-frames').length;
+    const anchored = rows.filter((row) => row.status === 'anchored').length;
+
+    const probeValidity = networkValidity({
+      requestedRttMs: plan.profile.rttMs,
+      declaredJitterBudgetMs: plan.profile.jitterBudgetMs,
+      achievedRttSamples: probe.samples.map((sample) => sample.rttMs),
+    });
+
+    cellCheck('cell: the observer (second context) saw the mover travel through the proxy during the full window',
+      (moverTrack?.delta.x ?? 0) > 0 && (moverTrack?.tickRegressions ?? 1) === 0,
+      { delta: moverTrack?.delta, regressions: moverTrack?.tickRegressions });
+    cellCheck('cell: FULL windows ran — >=20000 ms warmup then >=120000 ms measure (recorded, not assumed)',
+      measureMs >= 120_000, { warmupMs: 20_000, measureMs });
+    cellCheck('cell: ACCEPTED achieved RTT (SDK protocol ping, slot-reserving state machine on the mover\'s own socket) — slot-reservation contract held for the WHOLE 100-ping window: no poison, no socket death, no epoch change, nothing not-sent. A stop would be reported HERE as the measured blocker and the cell would be INVALID, never retried away',
+      probe.abortedReason === null && probe.slotPoisoned === false && probe.socketClosed === false && probe.epochChanged === false && probe.notSent === 0,
+      { answered: probe.samples.length, lateDiscarded: probe.lateDiscarded, retiredUnconfirmed: probe.retiredUnconfirmed, abortedReason: probe.abortedReason, clockElapsedMs: Math.round(probe.clockElapsedMs), hostThrottleDuringMeasure: cpuBefore !== null && cpuAfter !== null ? { throttledUsecDelta: cpuAfter.throttledUsec - cpuBefore.throttledUsec, throttledEventsDelta: cpuAfter.throttledEvents - cpuBefore.throttledEvents } : null, proxyThrottle: settled.throttle });
+    cellCheck('cell: §2.2 achieved-RTT validity on the FULL window (median within 10 ms of 100 ms requested, jitter p95−p50 within the 20 ms declared budget) — ACTUAL verdict, honestly failing if missed',
+      probeValidity.valid, { requested: plan.profile.rttMs, achieved: probeValidity.achieved, jitterP95P50: probeValidity.achievedJitterMs, reasons: probeValidity.reasons, n: probe.samples.length });
+    cellCheck('cell: matched-ack corrections — eligible >=100 (MIN_ELIGIBLE_ACKS_PER_RUN), ZERO RETENTION (zeros recorded, none filtered), invalidations counted APART, p95 raw correction < 0.15 m target — ACTUAL verdict',
+      measuredRows.length >= MIN_ELIGIBLE_ACKS_PER_RUN && p95Correction !== null && p95Correction < 0.15,
+      { eligible: measuredRows.length, zeroCorrections, invalidations, anchored, p50CorrectionMetres: p50Correction, p95CorrectionMetres: p95Correction, targetMetres: 0.15, ledgerRowsRetained: rows.length });
+    cellCheck('cell: the raw proxy record still satisfies its own queue-health formula (demoted diagnostic; leg-sum is NOT the accepted RTT)',
+      settled.stats.c2s.orderViolations === 0 && settled.stats.s2c.orderViolations === 0,
+      { c2sOrder: settled.stats.c2s.orderViolations, s2cOrder: settled.stats.s2c.orderViolations, legSumValidity: networkValidity({ requestedRttMs: plan.profile.rttMs, declaredJitterBudgetMs: plan.profile.jitterBudgetMs, achievedRttSamples: settled.stats.proxyLegSumSamples }).valid });
+
+    const teardown = {
+      proxyStats: settled.stats,
+      moverLastProcessed: await pump,
+    };
+    await pageM.close();
+    await pageO.close();
+    const closeStats = await closeProxyBounded(host, handle);
+    handle = -1;
+    hostShutdown = await host.shutdown();
+    cellCheck('cell: bounded teardown with receipts — proxy closed, host exited FINITE (exit 0) with NO active resources, both contexts closed',
+      hostShutdown.receipt !== null && hostShutdown.exitCode === 0 && JSON.stringify(hostShutdown.receipt.activeResourcesAfterClose) === '[]' && closeStats.c2s.bytesReceived > 0,
+      { activeResourcesAfterClose: hostShutdown.receipt?.activeResourcesAfterClose ?? null, exitCode: hostShutdown.exitCode, signal: hostShutdown.signal, moverLastProcessed: teardown.moverLastProcessed });
+    cellCheck('cell: no non-loopback request was ever made from either context', nonLoopback.length === 0, { nonLoopback: nonLoopback.slice(0, 5) });
+
+    const record = {
+      schemaVersion: 1,
+      kind: 'DIAGNOSTIC — Gate A local cell, candidate-bound; NOT Gate A, NOT a matrix cell, NOT a merge, NOT a verdict; disposition: evidence for the Gate A recipe only',
+      identity: { commit: sha, dirty, node: process.version, pnpm: spawnSync('pnpm', ['--version'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim(), playwright: (JSON.parse(readFileSync(join(ROOT, 'node_modules', '@playwright', 'test', 'package.json'), 'utf8')) as { version: string }).version, seed, generatedAt: new Date().toISOString() },
+      plan: { label: plan.label, profile: plan.profile, impairment: plan.impairment },
+      windows: { warmupMs: 20_000, measureMs },
+      acceptedRttProbe: {
+        rules: 'slot reservation (rtt-probe.ts, unit-tested 6/6, imported UNCHANGED by the page): retirement reserves the slot until positive echo confirmation; no confirmation within confirmCapMs poisons the cell and STOPS it',
+        outcome: probe,
+        summary: { validity: probeValidity },
+      },
+      matchedAckCorrections: { eligible: measuredRows.length, zeroCorrections, invalidations, anchored, p50CorrectionMetres: p50Correction, p95CorrectionMetres: p95Correction, targetMetres: 0.15, minEligible: MIN_ELIGIBLE_ACKS_PER_RUN },
+      cgroupThrottle: { beforeMeasure: cpuBefore, afterMeasure: cpuAfter, proxyHostWorstThrottle: settled.throttle },
+      proxyLegSumDiagnostic: { validity: networkValidity({ requestedRttMs: plan.profile.rttMs, declaredJitterBudgetMs: plan.profile.jitterBudgetMs, achievedRttSamples: settled.stats.proxyLegSumSamples }).valid, stats: settled.stats },
+      isolation: { loopbackOnly: nonLoopback.length === 0, csp: 'none-on-dev-server', contexts: 2 },
+      teardown: {
+        proxyCloseReceipt: closeStats.c2s.bytesReceived > 0 && closeStats.s2c.bytesReceived > 0,
+        hostExit: { exitCode: hostShutdown.exitCode, signal: hostShutdown.signal, activeResourcesAfterClose: hostShutdown.receipt?.activeResourcesAfterClose ?? null },
+      },
+      checks: cellChecks,
+    };
+    mkdirSync(OUT_DIR, { recursive: true });
+    writeFileSync(join(OUT_DIR, 'spike-cell-elevated-full.json'), JSON.stringify(record, null, 2));
+    await testInfo.attach('spike-cell-elevated-full.json', { path: join(OUT_DIR, 'spike-cell-elevated-full.json'), contentType: 'application/json' });
+  } finally {
+    if (handle >= 0) {
+      try { await closeProxyBounded(host, handle); } catch { /* reported by the shutdown receipt below */ }
+    }
+    if (hostShutdown === null) {
+      // Failure guard ONLY: the happy path already shut the host down above and never re-enters.
+      try { hostShutdown = await host.shutdown(); } catch { /* the assertion below reports a host that never exited finite */ }
+    }
+  }
+  expect(hostShutdown !== null && hostShutdown.receipt !== null && hostShutdown.exitCode === 0, 'the proxy host exited FINITELY with a receipt (guard)').toBe(true);
+});
