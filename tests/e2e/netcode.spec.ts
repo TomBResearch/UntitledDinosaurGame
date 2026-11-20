@@ -41,7 +41,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -5919,6 +5919,14 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
   const SystemScheduler = adapterMod['SystemScheduler'] as new () => unknown;
 
   const N_STEPS = 12;
+  // FORMAL vs DIAGNOSTIC (slice 10, T-5 wiring): UDG_GATE_A_FORMAL=1 is the plan's declared formal
+  // schedule policy — the pre-registered gated cadence below with NO automatic retry: a rotation-
+  // contaminated leg goes red there, it is never retried away. Without the flag the cell is
+  // DIAGNOSTIC and rotation retries (recorded, capped) are allowed — but a green selected from
+  // retries can only ever be a diagnostic green, which is what the artifact's kind field says.
+  const formalMode = process.env['UDG_GATE_A_FORMAL'] === '1';
+  const HARNESS_SCHEDULE = { ingestMs: 150, publishMs: 140, joinSettleMs: 400, tailSettleMs: 300, stepWallMsApprox: 290 };
+  const ARTEFACT_KIND = formalMode ? 'GATE-A' : 'DIAGNOSTIC-NOT-GATE-A';
   const SCRIPT: readonly { mx: number; mz: number }[] = [
     { mx: 1, mz: 0 }, { mx: 1, mz: 0 }, { mx: 0, mz: 1 }, { mx: -1, mz: 0 },
     { mx: 0, mz: -1 }, { mx: Math.SQRT1_2, mz: Math.SQRT1_2 }, { mx: -Math.SQRT1_2, mz: Math.SQRT1_2 },
@@ -6033,11 +6041,10 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
   const rotations: { tag: string; contamination: string }[] = [];
   const legAttempts: Record<string, string[]> = {};
   const runLegClean = async (tag: string, mode: Parameters<typeof runLeg>[1]): Promise<Ga9Leg> => {
-    // TWO-seat legs met the rotation more often than once in this slice's runs (every contamination
-    // preserved in rotations/legAttempts — dpa7u records the exact rate); they get up to THREE
-    // RECORDED attempts, single-seat legs two. An attempt that exhausts the budget is NOT massaged:
-    // its rows go red and the envelope owns them.
-    const maxAttempts = 3;
+    // One RECORDED re-run budget for the harness envelope (rotation, dpa7k/dpa7u) — DIAGNOSTIC mode
+    // only. In formal mode there are NO retries at all: the envelope contaminating a formal leg is
+    // the finding, not a flake to reroll, and no green can be selected from retries.
+    const maxAttempts = formalMode ? 1 : 3;
     let last = await runLeg(tag, mode);
     legAttempts[tag] = [last.tag];
     for (let attempt = 1; attempt < maxAttempts && last.contamination !== undefined; attempt += 1) {
@@ -6262,6 +6269,88 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
     referenceMismatchTicks.length === 1 && comparison.equal && ulpHashTicks.length === 0,
     { referenceMismatchTicks, liveVelocityBytes: referenceMismatch.map(({ live }) => velocityOf(live)), replayedVelocityBytes: referenceMismatch.map(({ replayed }) => (replayed === undefined ? null : velocityOf(replayed))), dispositionsEqual: referenceDispositionsEqual, referenceTip: referenceComparison.replayedTip, liveTip: comparison.liveTip, kernelExactTip: comparison.replayedTip });
 
+  // ── GA-13 PER-SCENARIO JOURNALS (slice 10): every leg that ran persists its structured journal
+  // (refusing to persist an unsanitised one) and replays through the SAME accepted machinery and
+  // producing kernel stepper to EXACT dispositions / canonical state bytes / chain tip. This is the
+  // wiring the formal matrix reuses per scenario: the persisted journal is the artefact a reviewer
+  // replays, and ga-replays.json carries the normalized ORIGINAL and REPLAYED bytes line-for-line.
+  const legReplay = (leg: Ga9Leg): {
+    tag: string; ok: boolean; refusal: string | null; dispositionsEqual: boolean; stateBytesEqual: boolean;
+    exactEqual: boolean; tipEqual: boolean; liveTip: string | null; replayedTip: string | null;
+    mismatchTicks: number[]; originalBytes: string[]; replayedBytes: string[];
+  } => {
+    const rowsOut: Record<string, unknown>[] = [];
+    const chainOut: Record<string, unknown>[] = [];
+    const cfg = (leg.liveConfig ?? {}) as { movement?: { speed?: number } };
+    const speed = cfg.movement?.speed ?? fixture?.movementSpeed ?? 0;
+    const result = replayRun({
+      prologue: leg.prologue ?? {},
+      inputs: toReplayInputs([...leg.journal.rows], [...leg.journal.chain]),
+      config: leg.liveConfig,
+      stepper: kernelModule.kernelStepperFactory(speed),
+      scheduler: new SystemScheduler(),
+      sink: { recordRow: (row: Record<string, unknown>) => { rowsOut.push(row); }, recordTickChain: (record: Record<string, unknown>) => { chainOut.push(record); } },
+      runId: `spike-ga13-${leg.tag}`,
+    });
+    const view = journalReplay.journalFromPersisted({ prologue: leg.prologue, rows: leg.journal.rows, chain: leg.journal.chain, dropped: leg.journal.dropped });
+    const comp = journalReplay.compareJournal(view.rows, view.chain, rowsOut, chainOut);
+    const liveStates = view.rows.filter((r) => r['type'] === 'state') as Record<string, unknown>[];
+    const outStates = rowsOut.filter((r) => r['type'] === 'state') as Record<string, unknown>[];
+    const originalBytes = liveStates.map((r) => JSON.stringify(r['state'] as never));
+    const replayedBytes = outStates.map((r) => JSON.stringify(r['state'] as never));
+    return {
+      tag: leg.tag,
+      ok: result.ok === true,
+      refusal: result.ok === true ? null : String(result.reason ?? 'refused'),
+      dispositionsEqual: JSON.stringify(journalReplay.dispositionHistogram(view.rows)) === JSON.stringify(journalReplay.dispositionHistogram(rowsOut)),
+      stateBytesEqual: originalBytes.length === replayedBytes.length && originalBytes.every((line, index) => line === replayedBytes[index]),
+      exactEqual: comp.equal,
+      tipEqual: comp.liveTip !== null && comp.liveTip === comp.replayedTip,
+      liveTip: comp.liveTip,
+      replayedTip: comp.replayedTip,
+      mismatchTicks: liveStates.filter((r, index) => r['stateHash'] !== outStates[index]?.['stateHash']).map((r) => Number(r['tick'])),
+      originalBytes,
+      replayedBytes,
+    };
+  };
+  const gateDir = join(OUT_DIR, 'gate');
+  // Journals belong to THIS run: a stale journal from an earlier attempt riding into a bundle is
+  // exactly the stale-artefact failure the identity rules exist to catch, so the directory is
+  // cleared before the cell writes.
+  rmSync(gateDir, { recursive: true, force: true });
+  mkdirSync(gateDir, { recursive: true });
+  const cleanLegs = legs.filter((leg) => leg.error === undefined && leg.contamination === undefined);
+  const legReplays = cleanLegs.map((leg) => legReplay(leg));
+  const journalsPersisted: { tag: string; sha256: string; sanitisedBeforeWrite: true }[] = [];
+  for (const leg of cleanLegs) {
+    const journalFile = { schemaVersion: 1, kind: ARTEFACT_KIND, taskId: 'UDG-SPIKE-001', implementationSha: sha, seed, tag: leg.tag, mode: leg.mode, roomId: leg.roomId, prologue: leg.prologue, rows: leg.journal.rows, chain: leg.journal.chain, dropped: leg.journal.dropped };
+    const text = JSON.stringify(journalFile);
+    // Refuse to persist an unsanitised journal: the scanner passes the real rows or the write does
+    // not happen and the row below goes red naming the leg.
+    if (sanitisationIssues(leg.journal.rows as never[]).length !== 0) continue;
+    writeFileSync(join(gateDir, `journal-${leg.tag}.json`), `${text}\n`);
+    journalsPersisted.push({ tag: leg.tag, sha256: sha256(text), sanitisedBeforeWrite: true });
+  }
+  const allLegsExact = legReplays.length === cleanLegs.length && cleanLegs.length >= 5
+    && legReplays.every((rec) => rec.ok && rec.dispositionsEqual && rec.stateBytesEqual && rec.exactEqual && rec.tipEqual && rec.mismatchTicks.length === 0);
+  cellCheck('GA-13 PER-SCENARIO JOURNALS — every CLEAN leg that ran (solo, repeat, shared, peer-issued, red, ungated-free; contaminated attempts are recorded and never persisted or counted) PERSISTED its structured journal under the cell output — the gate/ directory is cleared at cell start so no stale journal can ride in, and sanitisationIssues is scan-checked BEFORE the write (an unsanitised journal is refused, not filed) — and REPLAYED through the accepted Phase-1 machinery with the producing shared-kernel stepper to EXACT dispositions, EXACT canonical state bytes, EXACT per-tick hashes and the SAME chain tip — including the two-seat rooms and the deliberately ungated leg (replay does not care how ticks were scheduled, only that the journalled inputs and deliveries reproduce the decisions). In FORMAL mode there are no retries, so contamination here means FEWER clean legs and a red row: the envelope owns it, nothing is retried into a green',
+    allLegsExact && journalsPersisted.length === legReplays.length && legReplays.every((rec) => rec.refusal === null),
+    { legs: legReplays.map((rec) => ({ tag: rec.tag, ok: rec.ok, exact: rec.exactEqual, tipEqual: rec.tipEqual, stateBytesEqual: rec.stateBytesEqual, dispositionsEqual: rec.dispositionsEqual, mismatchTicks: rec.mismatchTicks, liveTip: rec.liveTip, replayedTip: rec.replayedTip })), journalsPersisted });
+  const gaReplaysDocument = {
+    schemaVersion: 1,
+    kind: ARTEFACT_KIND,
+    taskId: 'UDG-SPIKE-001',
+    implementationSha: sha,
+    seed,
+    formalMode,
+    harnessPolicy: { schedule: HARNESS_SCHEDULE, retries: formalMode ? 'NONE (formal schedule policy: contamination is the finding)' : 'recorded, capped at 3, DIAGNOSTIC-only — a retry-selected green is never a Gate A row' },
+    legs: legReplays,
+  };
+  writeFileSync(join(OUT_DIR, 'ga-replays.json'), `${JSON.stringify(gaReplaysDocument)}\n`);
+  if (process.env['UDG_GATE_A_REPLAYS_OUT'] !== undefined) {
+    writeFileSync(process.env['UDG_GATE_A_REPLAYS_OUT'], `${JSON.stringify(gaReplaysDocument)}\n`);
+  }
+
   // COVERAGE + INTEGRITY (slice 9): the honest inventory of which scenario journals ACTUALLY
   // replay-compared vs were only checked structurally or are missing — recorded inside the cell
   // that can attest to it, not in prose elsewhere — plus artifact self-consistency: every leg's
@@ -6273,14 +6362,14 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
     && comparison.liveTip !== null && journalReplay.chainTipOf(solo.journal.chain) === comparison.liveTip;
   const journalCoverage = {
     replayedAndComparedExact: [
-      'ga9-ga13 SOLO leg — real room journal replayed through the accepted machinery with the producing kernel stepper: dispositions/states/hashes/tip EXACT (this cell)',
+      'ga9-ga13 EVERY leg that ran (solo/repeat/shared/peerB/red/free) — persisted structured journal (gate/journal-<tag>.json) replayed EXACT: dispositions, canonical state bytes, per-tick hashes, chain tip (slice 10)',
       'ga9-ga13 SOLO leg, DIGEST-BLANKED copy — identical outputs (P03-g)',
     ],
     structuralOnly: [
-      'ga9-ga13 repeat/shared/peerB/red/free legs — per-entity digests, tick consecutiveness and row populations compared/recorded; their journals are captured in the artifact but NOT replayed (replay-comparison is the solo leg\'s; the formal matrix Owes a replay leg per scenario)',
+      'contaminated leg ATTEMPTS (rotation) — recorded in rotations/legAttempts, not persisted, not replayed, not counted toward any claim',
     ],
     ledgerExtractsNotJournals: [
-      'ga-scenarios 24 rows (ga6a/b/c, ga7/ga7t, ga5t, ga5l/ga5li/ga5lb, CF rows) — the scenario rooms yield LEDGER EXTRACTS (consumed stamps, close observations, tick signals, transcripts), not persisted journals: NO scenario journal from ga-scenarios is replayed; named MISSING for the GA-13 formal legs',
+      'ga-scenarios 24 rows (ga6a/b/c, ga7/ga7t, ga5t, ga5l/ga5li/ga5lb, CF rows) — the scenario rooms yield LEDGER EXTRACTS (consumed stamps, close observations, tick signals, transcripts), not persisted journals: NO scenario journal from ga-scenarios is replayed; named MISSING for the GA-13 formal legs (the per-leg wiring above is what they will reuse)',
       'ga11-calibration — loopback populations, no authority journal',
       'elevated-full / ab-controls — metric traces, no authority journal capture',
     ],
@@ -6292,7 +6381,7 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
     digestRecomputedOk && tipConsistent && coverageHonest,
     { digestRecomputedOk, tipConsistent, coverageHonest, journalCoverage });
 
-  const artifactText = JSON.stringify({ sha, dirty, seed, legs, replay: { liveTip: comparison.liveTip, replayedTip: comparison.replayedTip } });
+  const artifactText = JSON.stringify({ sha, dirty, seed, formalMode, legs, replay: { liveTip: comparison.liveTip, replayedTip: comparison.replayedTip } });
   const roots = checksSupport.machineRoots(ROOT, join(ROOT, 'artifacts'), undefined);
   const cleanPass = checksSupport.sanitiseMachineText(artifactText, roots) === artifactText;
   const injectedSample = `read config from ${join(ROOT, 'packages/config/secrets.env')} token=abc123 /home/someone/.aws/credentials`;
@@ -6308,8 +6397,9 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(join(OUT_DIR, 'spike-cell-ga9-ga13.json'), `${JSON.stringify({
     schemaVersion: 1,
-    kind: 'DIAGNOSTIC-NOT-GATE-A',
-    identity: { sha, dirty, seed, dispatchedBy: 'pnpm test:spike --id UDG-SPIKE-001 --cell ga9-ga13' },
+    kind: ARTEFACT_KIND,
+    identity: { sha, dirty, seed, formalMode, dispatchedBy: 'pnpm test:spike --id UDG-SPIKE-001 --cell ga9-ga13' },
+    harnessPolicy: { schedule: HARNESS_SCHEDULE, retries: formalMode ? 'none (formal)' : 'recorded <=3, DIAGNOSTIC-only' },
     script: SCRIPT,
     steps: N_STEPS,
     legs: legs.map((leg) => ({ tag: leg.tag, mode: leg.mode, roomId: leg.roomId, baselineTick: leg.baselineTick, steps: leg.steps, contentDigest: leg.contentDigest, fullDigest: leg.fullDigest, globalRows: leg.globalRows, journalRows: leg.journal.rows, contamination: leg.contamination ?? null, error: leg.error ?? null })),
@@ -6357,6 +6447,7 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
     sanitisation: { cleanPass, detectorFires, journalScanClean, journalScanFires },
     journalCoverage,
     integrity: { digestRecomputedOk, tipConsistent },
+    perScenarioJournals: { gateDir: `artifacts/.local/spike-001/<run>/gate`, persisted: journalsPersisted, replays: legReplays.map((rec) => ({ tag: rec.tag, ok: rec.ok, exactEqual: rec.exactEqual, tipEqual: rec.tipEqual, stateBytesEqual: rec.stateBytesEqual, dispositionsEqual: rec.dispositionsEqual, mismatchTicks: rec.mismatchTicks, liveTip: rec.liveTip, replayedTip: rec.replayedTip })) },
     checks,
   }, null, 2)}\n`);
   try {

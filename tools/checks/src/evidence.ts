@@ -798,6 +798,46 @@ export const replayEquivalenceIssues = (directory: string): ManifestIssue[] => [
   ),
 ];
 
+/**
+ * Gate A candidate identity constants (T-5, UDG-SPIKE-001 assignment §3.3/§4 — added by APPEND;
+ * the five accepted plans below are byte-identical and this block changes no existing behaviour).
+ *
+ * The rule this block exists to enforce: a Gate A row may carry PASS only when the artefact it
+ * cites is a FORMAL artefact (kind `GATE-A`) bound to the exact candidate sha; DIAGNOSTIC,
+ * BLOCKED, INVALID, NOT_RUN and OUTSTANDING rows state what they are and force the bundle's
+ * Gate A verdict to NOT-PASS. Nothing here re-tags a diagnostic artefact, and no status here
+ * passes a gate — the Gate A decision belongs to the delegated approver (§Delegation).
+ */
+export const GATE_A_PHASE_LABEL = 'gate-a';
+export const GATE_A_MEASUREMENTS_SCOPE = 'gate-a';
+/** Artefact kinds a Gate A row may cite. Only GATE-A may support PASS. */
+export const GATE_A_ARTEFACT_KINDS = ['GATE-A', 'DIAGNOSTIC-NOT-GATE-A'] as const;
+export const GATE_A_ROW_STATUSES = ['PASS', 'FAIL', 'BLOCKED', 'INVALID', 'NOT_RUN', 'DIAGNOSTIC', 'OUTSTANDING'] as const;
+/** The register the matrix must fill — ADR-0003's rows plus the CF items Gate A must resolve (§2.5). */
+export const GA_ROW_REGISTER: readonly Readonly<{ id: string; note: string }>[] = [
+  { id: 'GA-1', note: 'compliant burst (B=8) then idle: retiredUnrepresentation-free, depth < 32, resolved reaches the highest stamp, zero resyncs' },
+  { id: 'GA-2', note: 'pressure without closure: throttle obeyed within one RTT, zero closures, zero retirements' },
+  { id: 'GA-3', note: 'confirmed retirement with prevention disabled: closure within closureMaxMs, residue bounded/named/attributed' },
+  { id: 'GA-4', note: 'refused frames represented: refused inside dequeuedCount, not retired, advances resolved, one neutral step journaled' },
+  { id: 'GA-5a', note: 'dedupe then later stamp: gap named as a range, subtraction zero, client resyncs, no closure without PE-1..PE-5' },
+  { id: 'GA-5b', note: 'terminal dedupe: bounded §3.2 recovery despite unidentifiable loss; server reports UNIDENTIFIABLE, never a cause' },
+  { id: 'GA-6', note: 'stalled delivery stream, client-local deadline: sub-cases 6a/6b/6c per ADR-0003' },
+  { id: 'GA-7', note: 'final publication withheld: loss and serverQueuedAtClose recorded, recovery inside the closure window, nothing applied twice' },
+  { id: 'GA-8', note: 'same-delivery comparison: every trigger evaluation cites ONE delivery' },
+  { id: 'GA-9', note: 'isolation: per-entity projection identical to the solo baseline; room-wide ordinals compared as growth only' },
+  { id: 'GA-10', note: 'exactly-once across an epoch change — the committable half; zero-effect measurements reported as zero-effect' },
+  { id: 'GA-10a', note: 'one committed identity exactly once — DEFERRED to UDG-007; OUTSTANDING with reason + owner, never PASS at Gate A' },
+  { id: 'GA-10b', note: 'deliberate reissue under a new identity — DEFERRED to UDG-007; OUTSTANDING with reason + owner, never PASS at Gate A' },
+  { id: 'GA-11', note: 'production settings measured and justified; both inequalities evaluated on declared-source populations; failing to measure IS the failure' },
+  { id: 'GA-12', note: 'PE-1..PE-5 positive evidence for the dedupe closure signal; no suspected-dedupe closure' },
+  { id: 'GA-13', note: 'evidence integrity: every scenario journal replays to the same dispositions, canonical state and chain tip; no machine path, token or credential anywhere' },
+];
+export const GATE_A_CF_ROWS: readonly Readonly<{ id: string; note: string }>[] = [
+  { id: 'CF-1', note: 'W-7 delivery count vs GA-6c premise — resolved by actual Gate A evidence or blocks the gate' },
+  { id: 'CF-3', note: 'post-close input observation vs GA-6c/GA-7 containment — resolved by actual Gate A evidence or blocks the gate' },
+  { id: 'CF-4', note: 'P-2b refusal wording vs GA-7 branch attribution — resolved by actual Gate A evidence or blocks the gate' },
+];
+
 /** What a foundation run has to prove, in the order the repository contract lists it. */
 export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
   'UDG-001': {
@@ -1508,6 +1548,349 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       { label: 'test-contract-UDG-003', argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-003'] },
     ],
   },
+  // T-5 (UDG-SPIKE-001 assignment §3.3): the Gate A candidate plan, APPENDED as a new key. The five
+  // accepted plans above are byte-identical (guarded by tests/unit/udg-spike-001/gate-a-evidence.test.ts
+  // against recorded digests); CAPTURE_PLANS is append-only (M-2); the report schema and the verifier
+  // status logic are untouched by this entry. A candidate run is bound to a full-40-hex candidate_sha
+  // (§4: dispatched only via the reviewed gate-a.yml once T-7 exists; until then any run under this
+  // selector is a LOCAL dry-run and is labelled as such by its artefacts). Automatic retries are OUT
+  // of eligible formal cells (playwright.config.ts retries: 0; the spike harness's rotation retries are
+  // DIAGNOSTIC-only and a green selected from retries cannot enter a Gate A row).
+  'UDG-SPIKE-001': {
+    taskId: 'UDG-SPIKE-001',
+    requiredFiles: [
+      'environment.json',
+      'commands.json',
+      'junit.xml',
+      'build.log',
+      'measurements/UDG-SPIKE-001.json',
+      'ga-rows.json',
+      'ga-replays.json',
+    ],
+    requiresMeasurements: true,
+    // Every one of these must parse and declare this run's taskId + schemaVersion: a placeholder or a
+    // file copied from another run cannot stand in (the accepted identity rule).
+    identityArtefacts: ['measurements/UDG-SPIKE-001.json', 'ga-rows.json', 'ga-replays.json'],
+    measurementsIntoBundle: true,
+    phase: {
+      label: GATE_A_PHASE_LABEL,
+      note:
+        'Gate A candidate bundle for UDG-SPIKE-001: the 4-profile x 3-seed matrix plus the GA-row register. '
+        + 'A bundle under this selector is Gate A evidence ONLY when ga-rows.json carries a GATE-A artefact for '
+        + 'every row and the register verdict is PASS; anything else — including any DIAGNOSTIC row — is a dry-run '
+        + 'or a partial record and can never be read as Gate A passing. GA-10a/GA-10b stay OUTSTANDING (UDG-007).',
+      measurementsScope: GATE_A_MEASUREMENTS_SCOPE,
+    },
+    reportProse: {
+      profiles:
+        'Spike Gate A runs record LAN, moderate, elevated and poor profiles with achieved RTT and jitter statistics '
+        + 'under the accepted networkValidity rule; the elevated profile carries the numerical correction gate.',
+      notApplicable: [
+        { path: 'assets/', reason: 'The spike consumes no region asset; region bounds are supplied and validated explicitly (owner decision D5).' },
+      ],
+      summaryCiNote: {
+        noCiRun:
+          'Gate A evidence is candidate-bound (§4): with no hosted dispatch until T-7 is merged and reviewed, any '
+          + 'bundle under this selector is a LOCAL dry-run and stays DIAGNOSTIC. A routine green is not evidence (C-07).',
+        ciRun:
+          'The hosted Gate A matrix run, identified by the url field, re-asserts the candidate binding against every '
+          + 'captured report.json (T-7). It is not a Gate A pass by itself: the delegated approver records the decision.',
+      },
+    },
+    thresholds: {
+      'toolchain.node': '=== "v24.22.2" (owner clarification C-01; the candidate run refuses other runtimes)',
+      'toolchain.pnpmCli': '=== "12.18.0" (owner clarification C-01)',
+      'candidate.sha': '=== the full-40-hex dispatch candidate_sha, equal to report.implementationSha and to the checkout (evidence.js gate-a-check re-asserts; refused before install otherwise)',
+      'candidate.workingTree': 'workingTreeDirty === false (a dirty tree captures nothing)',
+      'matrix.cells': '=== 12 runs (lan|moderate|elevated|poor x seeds 1001,1002,1003), each 20 s warm-up + 120 s measurement, each with achieved networkValidity under its OWN declared profile; an INVALID run stays INVALID',
+      'corrections.p95': '< 0.15 m raw horizontal on the elevated profile, unobstructed (acceptance-gates.md §7.3 as adopted)',
+      'retries.forbidden': '=== 0 automatic retries in every eligible formal cell; rotation-retried harness attempts are DIAGNOSTIC-only and cannot produce a Gate A row PASS',
+      'gateA.rows': `=== every id in GA_ROW_REGISTER present exactly once with a status in {${GATE_A_ROW_STATUSES.join(', ')}}; PASS ONLY with a kind-GATE-A artefact digest; GA-10a/GA-10b OUTSTANDING with reason + owner (UDG-007)`,
+      'gateA.verdict': '=== "PASS" only if every row is PASS and every matrix leg is VALID; any DIAGNOSTIC / BLOCKED / INVALID / NOT_RUN / OUTSTANDING row forces "NOT-PASS" — masquerade is an issue, not a verdict',
+      'ga13.replay': 'every captured scenario journal replays EXACT (dispositions, canonical state bytes, per-tick hashes, chain tip) through the accepted machinery with the PRODUCING shared-kernel stepper; ga-replays.json carries the normalized original and replayed bytes',
+      'evidence.sanitised': '=== no machine path, token or credential in any artefact (scanForSecrets + sanitisationIssues clean)',
+    },
+    commands: [
+      { label: 'install-frozen', argv: ['pnpm', 'install', '--frozen-lockfile'] },
+      { label: 'typecheck', argv: ['pnpm', 'typecheck'] },
+      { label: 'lint', argv: ['pnpm', 'lint'], env: { UDG_BOUNDARY_REPORT: 'BUNDLE/boundary-report.json' } },
+      { label: 'build', argv: ['pnpm', 'build'], buildLog: true },
+      { label: 'test', argv: ['pnpm', 'test'], env: { UDG_EVIDENCE_JUNIT: 'BUNDLE/junit.xml' }, junit: true },
+      { label: 'test-contract-UDG-SPIKE-001', argv: ['pnpm', 'test:contract', '--', '--task', 'UDG-SPIKE-001'] },
+      { label: 'test-e2e-netcode', argv: ['pnpm', 'test:e2e', '--', '--suite', 'netcode'], env: { UDG_GATE_A_FORMAL: '1' } },
+      // The 12 matrix cells, sequential seeds inside each profile (assignment §4). UDG_GATE_A_FORMAL=1
+      // switches the spike harness to the FORMAL schedule policy: the pre-registered gated cadence with
+      // NO automatic retry — a rotation-contaminated leg makes that cell red, it is not retried away.
+      { label: 'spike-lan-1001', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'ga9-ga13', '--profile', 'lan', '--seed', '1001'], env: { UDG_GATE_A_FORMAL: '1', UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-SPIKE-001.json', UDG_GATE_A_ROWS_OUT: 'BUNDLE/ga-rows.json', UDG_GATE_A_REPLAYS_OUT: 'BUNDLE/ga-replays.json' }, measurements: true },
+      { label: 'spike-lan-1002', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'lan', '--seed', '1002'] },
+      { label: 'spike-lan-1003', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'lan', '--seed', '1003'] },
+      { label: 'spike-moderate-1001', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'moderate', '--seed', '1001'] },
+      { label: 'spike-moderate-1002', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'moderate', '--seed', '1002'] },
+      { label: 'spike-moderate-1003', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'moderate', '--seed', '1003'] },
+      { label: 'spike-elevated-1001', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'elevated', '--seed', '1001'] },
+      { label: 'spike-elevated-1002', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'elevated', '--seed', '1002'] },
+      { label: 'spike-elevated-1003', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'elevated', '--seed', '1003'] },
+      { label: 'spike-poor-1001', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'poor', '--seed', '1001'] },
+      { label: 'spike-poor-1002', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'poor', '--seed', '1002'] },
+      { label: 'spike-poor-1003', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'poor', '--seed', '1003'] },
+      // The register gate: refuses a register that hides a non-PASS row behind a PASS verdict,
+      // that cites a diagnostic artefact as PASS, or that lost the candidate binding. Runs BEFORE
+      // the bundle is published; a refusal exits 1 and captures nothing as a pass.
+      { label: 'gate-a-check', argv: ['node', 'tools/checks/dist/evidence.js', 'gate-a-check', '--run', 'BUNDLE', '--candidate', 'CANDIDATE_SHA'] },
+    ],
+  },
+};
+
+/**
+ * Gate A register + candidate binding (T-5). These are GATES, not audits: `gate-a-register` refuses
+ * to write a PASS for a row whose artefact is not a formal GATE-A artefact, and `gate-a-check`
+ * refuses a bundle whose register hides a non-PASS row behind a PASS verdict, lost the candidate
+ * sha, ran on a dirty tree or the wrong toolchain, deferred GA-10a/GA-10b without naming the owner,
+ * or left a machine path anywhere in the Gate A artefacts. None of this passes a gate: the Gate A
+ * decision belongs to the delegated approver, and a NOT-PASS verdict that says what it is passes
+ * these checks — honesty is never the issue, masquerade is.
+ */
+export interface GateARowRecord {
+  readonly id: string;
+  readonly status: string;
+  readonly reason?: string;
+  readonly owner?: string;
+  readonly artefact?: { readonly kind: string; readonly sha256: string; readonly path?: string };
+}
+
+/** Verdict over a row set: PASS only when EVERY row is PASS. Anything else is NOT-PASS, visibly. */
+export const gateAVerdictFor = (rows: readonly GateARowRecord[], cfRows: readonly GateARowRecord[] = []): string =>
+  rows.length > 0 && [...rows, ...cfRows].every((row) => row.status === 'PASS') ? 'PASS' : 'NOT-PASS';
+
+export interface GateARegisterFile {
+  readonly schemaVersion: number;
+  readonly taskId: string;
+  readonly implementationSha: string;
+  readonly runId?: string;
+  readonly rows: readonly GateARowRecord[];
+  readonly cfRows?: readonly GateARowRecord[];
+  readonly networkValidity?: string;
+  readonly verdict: string;
+}
+
+export type GateAIssueCode =
+  | 'GATEA-CANDIDATE-SHA'
+  | 'GATEA-IDENTITY'
+  | 'GATEA-CHECKOUT-MISMATCH'
+  | 'GATEA-DIRTY'
+  | 'GATEA-TOOLCHAIN'
+  | 'GATEA-REGISTER-MISSING'
+  | 'GATEA-ROW-MISSING'
+  | 'GATEA-ROW-DUPLICATE'
+  | 'GATEA-ROW-STATUS'
+  | 'GATEA-ROW-MASQUERADE'
+  | 'GATEA-ROW-PASS-UNPROVEN'
+  | 'GATEA-OUTSTANDING-INCOMPLETE'
+  | 'GATEA-VERDICT-MASQUERADE'
+  | 'GATEA-ROLE'
+  | 'GATEA-DECISION-MASQUERADE'
+  | 'GATEA-REPLAYS'
+  | 'GATEA-SECRETS';
+
+export interface GateAIssue {
+  readonly code: GateAIssueCode;
+  readonly detail: string;
+}
+
+const readJsonOptional = (absolutePath: string): Record<string, unknown> | null => {
+  const raw = readOptional(absolutePath);
+  if (raw === undefined) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Build the register from an operator-supplied rows manifest. A row may keep PASS only if the
+ * artefact file it cites parses and declares kind `GATE-A`; citing a DIAGNOSTIC-NOT-GATE-A
+ * artefact DEMOTES the row to DIAGNOSTIC here (the builder refuses the masquerade rather than
+ * writing it), so no downstream step ever sees a PASS that its own bytes disprove.
+ */
+export const buildGateARegister = (options: {
+  readonly candidateSha: string;
+  readonly runId?: string;
+  readonly rowsFile: string;
+}): { readonly register: GateARegisterFile; readonly demotions: readonly string[] } => {
+  const supplied = readJsonOptional(options.rowsFile);
+  if (supplied === null) throw new Error(`rows manifest unreadable: ${options.rowsFile}`);
+  if (typeof supplied['candidateSha'] === 'string' && supplied['candidateSha'] !== options.candidateSha) {
+    throw new Error(`rows manifest is bound to ${String(supplied['candidateSha'])}, not the declared candidate ${options.candidateSha}`);
+  }
+  const demotions: string[] = [];
+  const toRow = (entry: Record<string, unknown>, fallbackStatus: string): GateARowRecord => {
+    const id = String(entry['id'] ?? '');
+    let status = typeof entry['status'] === 'string' ? entry['status'] : fallbackStatus;
+    let reason = typeof entry['reason'] === 'string' ? entry['reason'] : undefined;
+    const artefactPath = typeof entry['artefactPath'] === 'string' ? entry['artefactPath'] : undefined;
+    let artefact: GateARowRecord['artefact'];
+    if (artefactPath !== undefined && existsSync(artefactPath)) {
+      const artefactDoc = readJsonOptional(artefactPath);
+      const kind = typeof artefactDoc?.['kind'] === 'string' ? String(artefactDoc['kind']) : 'UNKNOWN';
+      artefact = { kind, sha256: sha256File(artefactPath), path: artefactPath.replace(/^.*artifacts\//, 'artifacts/') };
+      if (status === 'PASS' && kind !== 'GATE-A') {
+        demotions.push(`${id}: PASS refused — cited artefact declares kind "${kind}" (only GATE-A can support PASS); row recorded as DIAGNOSTIC`);
+        status = 'DIAGNOSTIC';
+        reason = `${reason ?? ''} [register] ${demotions[demotions.length - 1]}`.trim();
+      }
+    } else if (status === 'PASS') {
+      demotions.push(`${id}: PASS refused — cited artefact is absent (${String(artefactPath ?? 'none given')})`);
+      status = 'NOT_RUN';
+      reason = `${reason ?? ''} [register] artefact absent`.trim();
+    }
+    const row: Record<string, unknown> = { id, status };
+    if (reason !== undefined) row['reason'] = reason;
+    if (typeof entry['owner'] === 'string') row['owner'] = entry['owner'];
+    if (artefact !== undefined) row['artefact'] = artefact;
+    return row as unknown as GateARowRecord;
+  };
+  const suppliedRows = Array.isArray(supplied['rows']) ? (supplied['rows'] as unknown[]).filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null) : [];
+  const suppliedCf = Array.isArray(supplied['cfRows']) ? (supplied['cfRows'] as unknown[]).filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null) : [];
+  const rows = GA_ROW_REGISTER.map((spec) => {
+    const match = suppliedRows.find((entry) => String(entry['id'] ?? '') === spec.id);
+    return toRow(match ?? { id: spec.id, reason: 'no entry in the rows manifest' }, 'NOT_RUN');
+  });
+  const cfRows = GATE_A_CF_ROWS.map((spec) => {
+    const match = suppliedCf.find((entry) => String(entry['id'] ?? '') === spec.id);
+    return toRow(match ?? { id: spec.id, reason: 'no entry in the rows manifest' }, 'NOT_RUN');
+  });
+  const networkValidity = typeof supplied['networkValidity'] === 'string' ? supplied['networkValidity'] : undefined;
+  const register: GateARegisterFile = {
+    schemaVersion: EVIDENCE_SCHEMA_VERSION,
+    taskId: 'UDG-SPIKE-001',
+    implementationSha: options.candidateSha,
+    ...(options.runId === undefined ? {} : { runId: options.runId }),
+    rows,
+    cfRows,
+    ...(networkValidity === undefined ? {} : { networkValidity }),
+    verdict: gateAVerdictFor(rows, cfRows) === 'PASS' && (networkValidity === undefined || networkValidity === 'VALID') ? 'PASS' : 'NOT-PASS',
+  };
+  return { register, demotions };
+};
+
+/**
+ * Re-assert everything a Gate A bundle must be standing on, from the bundle's OWN bytes.
+ * The function is deliberately table-driven and offline: the same call works against a hosted
+ * T-7 artefact directory and a local dry-run bundle, and the unit suite drives every negative
+ * case without a network or a browser.
+ */
+export const gateACandidateIssues = (
+  absoluteRunDir: string,
+  options: { readonly candidateSha: string; readonly headSha?: string },
+): readonly GateAIssue[] => {
+  const issues: GateAIssue[] = [];
+  const push = (code: GateAIssueCode, detail: string): void => { issues.push({ code, detail }); };
+  if (!/^[0-9a-f]{40}$/.test(options.candidateSha)) {
+    push('GATEA-CANDIDATE-SHA', `candidate sha "${options.candidateSha}" is not a full 40-hex commit sha — nothing is bound`);
+    return issues;
+  }
+  const report = readJsonOptional(join(absoluteRunDir, 'report.json'));
+  if (report === null) {
+    push('GATEA-IDENTITY', 'report.json is absent or unreadable — the bundle cannot be bound to any candidate');
+    return issues;
+  }
+  if (report['taskId'] !== 'UDG-SPIKE-001') push('GATEA-IDENTITY', `report.taskId is ${String(report['taskId'])}, not UDG-SPIKE-001`);
+  if (report['implementationSha'] !== options.candidateSha) {
+    push('GATEA-IDENTITY', `report.implementationSha ${String(report['implementationSha'])} is not the declared candidate ${options.candidateSha} — the bytes are not attributable to this candidate`);
+  }
+  if (options.headSha !== undefined && report['implementationSha'] !== options.headSha) {
+    push('GATEA-CHECKOUT-MISMATCH', `the bundle ran ${String(report['implementationSha'])} but the checkout under review is ${options.headSha}`);
+  }
+  if (report['workingTreeDirty'] !== false) push('GATEA-DIRTY', 'workingTreeDirty is not false — a dirty tree captures nothing eligible');
+  const environment = readJsonOptional(join(absoluteRunDir, 'environment.json'));
+  if (environment === null) {
+    push('GATEA-TOOLCHAIN', 'environment.json is absent — the run cannot show its runtime pins');
+  } else {
+    if (environment['nodeVersion'] !== 'v24.22.2') push('GATEA-TOOLCHAIN', `nodeVersion is ${String(environment['nodeVersion'])}, not the pinned v24.22.2`);
+    if (environment['pnpmVersion'] !== '12.18.0') push('GATEA-TOOLCHAIN', `pnpmVersion is ${String(environment['pnpmVersion'])}, not the pinned 12.18.0`);
+  }
+  const register = readJsonOptional(join(absoluteRunDir, 'ga-rows.json'));
+  if (register === null) {
+    push('GATEA-REGISTER-MISSING', 'ga-rows.json is absent or unreadable — no GA row can be read as anything without the register');
+  } else {
+    if (register['schemaVersion'] !== EVIDENCE_SCHEMA_VERSION) push('GATEA-IDENTITY', `ga-rows.json schemaVersion is ${String(register['schemaVersion'])}, not ${String(EVIDENCE_SCHEMA_VERSION)}`);
+    if (register['taskId'] !== 'UDG-SPIKE-001') push('GATEA-IDENTITY', `ga-rows.json taskId is ${String(register['taskId'])}, not UDG-SPIKE-001`);
+    if (register['implementationSha'] !== options.candidateSha) push('GATEA-IDENTITY', `ga-rows.json binds ${String(register['implementationSha'])}, not the candidate`);
+    const rows = Array.isArray(register['rows']) ? register['rows'] as Record<string, unknown>[] : [];
+    const cfRows = Array.isArray(register['cfRows']) ? register['cfRows'] as Record<string, unknown>[] : [];
+    const allRows = [...rows, ...cfRows];
+    for (const spec of GA_ROW_REGISTER) {
+      const matches = rows.filter((row) => String(row['id']) === spec.id);
+      if (matches.length === 0) push('GATEA-ROW-MISSING', `${spec.id} is not in the register — a missing row is FAIL (assignment §2.4), never silence`);
+      if (matches.length > 1) push('GATEA-ROW-DUPLICATE', `${spec.id} appears ${String(matches.length)} times`);
+    }
+    for (const row of allRows) {
+      const id = String(row['id']);
+      const status = String(row['status']);
+      if (!(GATE_A_ROW_STATUSES as readonly string[]).includes(status)) push('GATEA-ROW-STATUS', `${id}: status "${status}" is not one of ${GATE_A_ROW_STATUSES.join(', ')}`);
+      const artefact = typeof row['artefact'] === 'object' && row['artefact'] !== null ? row['artefact'] as Record<string, unknown> : undefined;
+      if (status === 'PASS') {
+        if (artefact === undefined || artefact['kind'] !== 'GATE-A' || !/^[0-9a-f]{64}$/.test(String(artefact['sha256'] ?? ''))) {
+          push('GATEA-ROW-PASS-UNPROVEN', `${id}: PASS without a kind-GATE-A artefact carrying a 64-hex digest`);
+        }
+        if (artefact?.['kind'] === 'DIAGNOSTIC-NOT-GATE-A') {
+          push('GATEA-ROW-MASQUERADE', `${id}: PASS cites a DIAGNOSTIC-NOT-GATE-A artefact — a diagnostic never closes a Gate A row`);
+        }
+      }
+      if ((id === 'GA-10a' || id === 'GA-10b') && status !== 'OUTSTANDING') {
+        push('GATEA-OUTSTANDING-INCOMPLETE', `${id} must be recorded OUTSTANDING until UDG-007, with the reason and the owning task named (assignment §2.4)`);
+      }
+      if ((id === 'GA-10a' || id === 'GA-10b') && status === 'OUTSTANDING'
+        && (typeof row['reason'] !== 'string' || row['reason'] === '' || row['owner'] !== 'UDG-007')) {
+        push('GATEA-OUTSTANDING-INCOMPLETE', `${id}: OUTSTANDING needs a non-empty reason and owner "UDG-007" named in the register`);
+      }
+    }
+    const parsedRows: GateARowRecord[] = allRows.map((row) => row as unknown as GateARowRecord);
+    const expectedVerdict = gateAVerdictFor(parsedRows);
+    const networkValidity = typeof register['networkValidity'] === 'string' ? register['networkValidity'] : undefined;
+    const honestVerdict = expectedVerdict === 'PASS' && (networkValidity === undefined || networkValidity === 'VALID') ? 'PASS' : 'NOT-PASS';
+    if (register['verdict'] !== honestVerdict) {
+      push('GATEA-VERDICT-MASQUERADE', `register verdict is ${String(register['verdict'])} but the rows compute ${honestVerdict} — verdict is a function of the rows, never a decision made beside them`);
+    }
+  }
+  const decision = readJsonOptional(join(absoluteRunDir, 'decisions', 'gate-a.json'));
+  if (decision !== null) {
+    if (decision['actor'] === 'implementer') {
+      push('GATEA-ROLE', 'the Gate A decision names the implementer as its actor — the decision belongs to the delegated reviewer/integration approver only');
+    }
+    const registerNow = readJsonOptional(join(absoluteRunDir, 'ga-rows.json'));
+    if (decision['decision'] === 'PASS' && registerNow?.['verdict'] !== 'PASS') {
+      push('GATEA-DECISION-MASQUERADE', 'a Gate A decision of PASS beside a register whose verdict is not PASS');
+    }
+  }
+  const replays = readJsonOptional(join(absoluteRunDir, 'ga-replays.json'));
+  if (replays === null) {
+    push('GATEA-REPLAYS', 'ga-replays.json is absent — GA-13 replays are claimed in the register but no captured bytes back them');
+  } else {
+    if (replays['taskId'] !== 'UDG-SPIKE-001' || replays['implementationSha'] !== options.candidateSha) {
+      push('GATEA-REPLAYS', 'ga-replays.json does not declare taskId UDG-SPIKE-001 bound to the candidate');
+    }
+    const legs = Array.isArray(replays['legs']) ? replays['legs'] as Record<string, unknown>[] : [];
+    if (legs.length === 0) push('GATEA-REPLAYS', 'ga-replays.json carries no legs');
+    for (const leg of legs) {
+      const tag = String(leg['tag']);
+      const original = Array.isArray(leg['originalBytes']) ? leg['originalBytes'] as unknown[] : null;
+      const replayed = Array.isArray(leg['replayedBytes']) ? leg['replayedBytes'] as unknown[] : null;
+      if (leg['exactEqual'] !== true || leg['tipEqual'] !== true) {
+        push('GATEA-REPLAYS', `leg ${tag} is not exact (exactEqual=${String(leg['exactEqual'])} tipEqual=${String(leg['tipEqual'])}) — GA-13 cannot be PASS over it`);
+      }
+      if (original === null || replayed === null || original.length !== replayed.length
+        || !original.every((line, index) => line === replayed[index])) {
+        push('GATEA-REPLAYS', `leg ${tag}: the captured original and replayed normalized bytes are missing or not line-for-line equal`);
+      }
+    }
+  }
+  for (const hit of scanForSecrets(absoluteRunDir, listFiles(absoluteRunDir))) {
+    push('GATEA-SECRETS', `${hit.file}:${String(hit.line)} matches ${hit.pattern}`);
+  }
+  return issues;
 };
 
 const SECRET_PATTERNS: readonly { readonly id: string; readonly pattern: RegExp }[] = [
@@ -1939,7 +2322,16 @@ export const capture = (root: string, taskId: string, outDir: string, keepGoing:
     // `BUNDLE/` is substituted in the argument vector as well as in the environment, so a plan can make a
     // command gate the artefacts of the very run being captured. The record keeps the placeholder, because a
     // record that stored the absolute path would carry a machine path into the bundle.
-    const argv = step.argv.map((argument) => argument.replace('BUNDLE/', `${absoluteRunDir}/`));
+    const argv = step.argv.map((argument) =>
+      // Exact-token substitution (added for the Gate A plan; no accepted plan carries these exact
+      // arguments, so accepted captures byte-substitute exactly as before): `BUNDLE` alone names the
+      // bundle directory, `CANDIDATE_SHA` carries the dispatch candidate so the final job can
+      // re-assert the binding against the captured bytes. An absent candidate env var substitutes the
+      // empty string and gate-a-check refuses it by name — a run without a declared candidate cannot
+      // self-certify.
+      argument === 'BUNDLE' ? absoluteRunDir
+        : argument === 'CANDIDATE_SHA' ? (process.env['UDG_CANDIDATE_SHA']?.trim() ?? '')
+          : argument.replace('BUNDLE/', `${absoluteRunDir}/`));
     const result: RunResult = runCommand(argv, {
       cwd: root,
       env,
@@ -3543,6 +3935,45 @@ const main = (): number => {
     for (const taskId of Object.keys(CAPTURE_PLANS).sort()) process.stdout.write(`${taskId}\n`);
     return 0;
   }
+  if (mode === 'gate-a-register') {
+    // T-5: assemble ga-rows.json from an operator rows manifest. A row citing a non-GATE-A artefact
+    // is DEMOTED here and the demotion is printed — the builder refuses to write a PASS its own
+    // bytes disprove, so no later step can launder it.
+    const usage = 'usage: evidence.js gate-a-register --candidate <40-hex> --rows <rows.json> --out <ga-rows.json> [--run-id <id>]';
+    const candidate = requireFlag(flags, 'candidate', usage);
+    const rowsFile = resolve(process.cwd(), requireFlag(flags, 'rows', usage));
+    const outFile = resolve(process.cwd(), requireFlag(flags, 'out', usage));
+    let built: { register: GateARegisterFile; demotions: readonly string[] };
+    try {
+      const runIdFlag = flagString(flags, 'run-id');
+      built = buildGateARegister(runIdFlag === undefined
+        ? { candidateSha: candidate, rowsFile }
+        : { candidateSha: candidate, rowsFile, runId: runIdFlag });
+    } catch (error) {
+      process.stderr.write(`::error::${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+    for (const demotion of built.demotions) process.stderr.write(`::notice::${demotion}\n`);
+    writeJson(outFile, built.register);
+    process.stdout.write(`ga-rows.json written: verdict ${built.register.verdict}, ${String(built.demotions.length)} demotion(s)\n`);
+    return 0;
+  }
+  if (mode === 'gate-a-check') {
+    // T-5: re-assert the candidate binding and the anti-masquerade rules from the bundle's own
+    // bytes (the pattern the accepted acceptance.yml guards use; T-7 re-runs exactly this call).
+    const usage = 'usage: evidence.js gate-a-check --run <bundleDir> --candidate <40-hex> [--head <40-hex>]';
+    const runDirectory = resolve(process.cwd(), requireFlag(flags, 'run', usage));
+    const candidate = flagString(flags, 'candidate') ?? '';
+    const headFlag = flagString(flags, 'head');
+    const issues = gateACandidateIssues(runDirectory, headFlag === undefined
+      ? { candidateSha: candidate }
+      : { candidateSha: candidate, headSha: headFlag });
+    for (const issue of issues) process.stderr.write(`::error::${issue.code}: ${issue.detail}\n`);
+    if (issues.length > 0) return 1;
+    const registerDoc = readJsonOptional(join(runDirectory, 'ga-rows.json'));
+    process.stdout.write(`gate-a-check PASS (binding honest): register verdict ${String(registerDoc?.['verdict'])} — a verdict of NOT-PASS is the truth being kept visible, not a failure of this check\n`);
+    return 0;
+  }
   if (mode === 'checksums') {
     const write = flags['write'] === true;
     const result = updateContractChecksums(process.cwd(), write);
@@ -3564,6 +3995,10 @@ const main = (): number => {
       '  evidence.js probes     --dir <probesDirectory>\n' +
       '                      (refuse probe evidence that is unattributed, misattributed, or hides a failed invocation)\n' +
       '  evidence.js plans      (list the task ids that have a capture plan)\n' +
+      '  evidence.js gate-a-register --candidate <40-hex> --rows <rows.json> --out <ga-rows.json> [--run-id <id>]\n' +
+      '                      (assemble the Gate A row register; PASS citing a non-GATE-A artefact is demoted, never written)\n' +
+      '  evidence.js gate-a-check --run <bundleDir> --candidate <40-hex> [--head <40-hex>]\n' +
+      '                      (re-assert the candidate binding, toolchain pins, clean tree, register honesty and replay equality from the bundle bytes)\n' +
       '  evidence.js checksums [--write]\n',
   );
   return 2;
