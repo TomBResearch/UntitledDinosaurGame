@@ -36,7 +36,7 @@
 | **GA-8** same-delivery comparison | Partially evidenced — the accepted guard already refuses cross-value deliveries (`ack === inputResolvedThrough` per row), and `ga5t` audits per-row equality | Formal assertion set: every trigger evaluation cites ONE delivery (guard ledger + `ga5t`-style per-row audit); zero cross-delivery comparisons |
 | **GA-9** isolation | Missing leg — needs paired runs (solo vs co-resident) and per-entity projection digests | Two-leg harness: capture `(clientSeq|null, disposition, dx, dy, entityStateDigest)` per entity; compare shared-vs-solo identical; room-wide ordinals as growth-only |
 | **GA-10** (committed half) | Partially evidenced — discrete effect ledger, consumed-unique per (domain,seq), abandon-Δ0 recorded in ga cells | Formal ledger comparison: charge-once per `(epoch, identity)`, cache/batch re-answers zero, `effectCount` monotone per epoch, ledger equality-replay assertion |
-| **GA-13** evidence integrity | Partially — journals are written per scenario and the replay substrate exists (`tests/support/replay/journal-replay.ts`) | Replay every formal scenario to identical dispositions/chain tip; sanitisation audit (no machine paths/tokens/credentials in any artefact); `stackCompatibility` asserted only where numeric gates actually pass |
+| **GA-13** evidence integrity | Partially — the `ga9-ga13` cell replays the solo leg's REAL journal to EXACT equality (dispositions, canonical state bytes, per-tick hashes, chain tip; digest-blanked identical; tamper refused; mutation detected) through the accepted Phase-1 machinery with the PRODUCING kernel stepper (slice 9, `dpa7u`); the cell's `journalCoverage` inventory names what replays-compared, what is structural-only, and which scenario journals are MISSING | Extend the replay leg to EVERY formal scenario (the ga-scenarios rooms currently yield ledger extracts only — persisted journals for those rooms are the owed artefact); sanitisation audit already general; `stackCompatibility` asserted only where numeric gates actually pass |
 | GA-10a/GA-10b | **Out of Gate A scope** — deferred to UDG-007; the matrix records them outstanding-elsewhere, never resolved | none (report wording only) |
 
 **Contract AC coverage (AC-1…AC-20 as applicable)**: the UDG-003 phase evidence matrices
@@ -110,3 +110,33 @@ No workflow file created or edited; no dispatch; no full-matrix run; no rerun of
 - Blockers UNCHANGED: GA-12 positive PE-1; GA-10a/GA-10b (UDG-007); production-directed GA-11
   populations (Not-Run); hosted dispatch (needs T-5…T-7 merged). Nothing adopted; no ADR edit; no
   workflow edits or dispatch; no Gate A verdict.
+
+## 7. Slice-9 update (2026-11-24)
+
+- **GA-13 exact replay CLOSED at the diagnostic lane** (`dpa7u`, `ga9-ga13` cell): the solo leg's
+  real journal replays to bit-level equality on the accepted canonical representation — states,
+  per-tick hashes and chain tip — when the replay steps with THE SAME shared-kernel stepper the
+  room produced the journal with (A-1 seam; function-object identity proven, sentinel advances).
+  The preserved one-ULP divergence is reclassified WITH A RECEIPT as a harness boundary error
+  (kernel wrapper velocity `(pose_next − pose_prev)/dt` vs `FlatReferenceStepper` velocity
+  `(moveX·speed·dt)/dt` — different doubles at the tick-18 pose; first field
+  `kinematic.velocity.x`; dispositions identical under both, so no dispatch decision moved;
+  it propagated only via stateHash → chain hash → tip). The repair is harness-side only
+  (`tests/e2e/netcode.spec.ts`): no production edit, no tolerance in any pass condition (the 4-ULP
+  companion survives solely as a non-gating diagnostic), no rounding change, no rehash, no journal
+  adjustment. A permanent RED CONTROL replays the same journal through the production default
+  every run and must reproduce exactly that divergence — a reverting harness goes red.
+- **GA-9 independent verification**: a peer-issued leg (seat B runs the script) carries the same
+  per-entity projection digest and the same entity-relative command/step/disposition ledger, while
+  the room-wide arrivalOrdinals of those rows differ and participate in nothing compared (proved,
+  not asserted). Digests/tips identical across seeds 1001/1002 (`dpa7u`, greens 8/8 ×2; five
+  refutations preserved, including the measured held-room rotation rate and the recorded-retry
+  policy).
+- Slice-8 carry-forward: the `holdNext` scope declaration (one c2s chunk, one named connection,
+  target stamp = quiet-ack+1, wire receipt, not control/seat/publication) is written into
+  `artifacts/.local/spike-001/dpa7u/README.md` from the PRESERVED dpa7q green (that cell was not
+  re-run — no repo evidence change was required); the stalled-ack + idle/in-flight controls stand;
+  `PROPOSED-0003a` and the acceptance-refinement remain PROPOSED/DRAFT only.
+- Remaining GA-13 boundary UNCHANGED: a replay leg per formal scenario under the T-5 plan (the
+  ga-scenarios rooms yield ledger extracts only — the cell's `journalCoverage` inventory names it).
+  Next is still T5–T8 on this reviewed exact candidate.
