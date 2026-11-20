@@ -47,6 +47,7 @@ import { pathToFileURL } from 'node:url';
 import { chromium, expect, test, type Browser, type Page } from '@playwright/test';
 
 import { MIN_ELIGIBLE_ACKS_PER_RUN, nearestRank, networkValidity, summarizeCorrections, summarizeDelays } from '../../tools/load-test/src/statistics.ts';
+import { auditMotion, type AckLedgerReport } from '../../tools/load-test/src/ack-ledger.ts';
 import { captureEnvironmentRecord, impairmentSourceRecord, planSpikeRun } from '../../tools/load-test/src/run-spike.ts';
 import { createTraceWriter, readTrace } from '../../tools/load-test/src/trace-writer.ts';
 import type { ProxyStats } from '../../tools/load-test/src/ws-delay-proxy.ts';
@@ -2584,6 +2585,8 @@ const runImpMover = async (page: Page, frames: number, axis: 'x' | 'z'): Promise
  * after a verified returned callback, or on a separately labelled new connection.
  */
 const PROBE_MODULE_URL = `/@fs${join(ROOT, 'tools', 'load-test', 'dist', 'rtt-probe.js')}`;
+/** Same pipeline, same principle: the phase-window analyzer and the canonical route run in the PAGE as the UNIT-TESTED module, not as a page-side re-implementation. */
+const ACK_LEDGER_MODULE_URL = `/@fs${join(ROOT, 'tools', 'load-test', 'dist', 'ack-ledger.js')}`;
 
 interface RttProbeWindow {
   readonly samples: readonly { readonly sentAtMs: number; readonly receivedAtMs: number; readonly rttMs: number; readonly sdkMs: number }[];
@@ -3283,15 +3286,13 @@ const readCpuThrottle = (): { throttledUsec: number; throttledEvents: number } |
 };
 
 // eslint-disable-next-line no-empty-pattern -- Playwright requires the destructured args object even when the cell uses only testInfo.
-test('spike cell: elevated-full — candidate-bound Gate A local diagnostic cell (full 20s warmup + 120s measure; NOT Gate A, NOT a matrix cell)', async ({}, testInfo) => {
+test('spike cell: elevated-full — candidate-bound Gate A local diagnostic cell (full 20s warmup + 120s measure on the browser monotonic clock; canonical unobstructed route; NOT Gate A, NOT a matrix cell)', async ({}, testInfo) => {
   test.skip(process.env['UDG_SPIKE_CELL'] !== 'elevated-full', 'dispatched only by `pnpm test:spike -- --id UDG-SPIKE-001 --cell elevated-full` (grant T-3); the ordinary netcode suite never runs the full-window cell');
-  test.setTimeout(330_000);
+  test.setTimeout(420_000);
   expect(fixture, 'the room fixture booted').toBeDefined();
   const seed = Number(process.env['UDG_SPIKE_SEED'] ?? '1001');
   const roomPort = Number(new URL(fixture?.endpoint ?? 'http://127.0.0.1:0').port);
   const plan = planSpikeRun({ profile: 'elevated', seed, diagnostic: { reason: 'gate-a-local-cell-elevated-full' } });
-
-  // candidate identity — the cell BINDS to the exact bytes it ran.
   const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
   const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim().length > 0;
 
@@ -3301,6 +3302,63 @@ test('spike cell: elevated-full — candidate-bound Gate A local diagnostic cell
     check(name, ok, detail);
   };
   const nonLoopback: string[] = [];
+
+  // ---- phase helpers on the BROWSER MONOTONIC CLOCK (the clock the ledger rows carry).
+  // `stamp` pairs performance.now() with the acknowledged-input counter IN ONE evaluate, so the
+  // opportunity count and the phase boundary cannot disagree by a tick of page scheduling.
+  interface PhaseStamp { atMs: number; lastProcessed: number }
+  const stampPhase = (page: Page, name: string): Promise<PhaseStamp> =>
+    page.evaluate((label) => {
+      const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+      if (holder === undefined) throw new Error('the cell mover is not joined');
+      const atMs = performance.now();
+      const stamped = { atMs, lastProcessed: holder.transport.handle().lastProcessed };
+      const w = globalThis as unknown as { __udgCellMarks?: Record<string, number> };
+      w.__udgCellMarks = { ...(w.__udgCellMarks ?? {}), [label]: atMs };
+      return stamped;
+    }, name);
+
+  // ---- the canonical predeclared route: 12 s legs on a 48 m square (+x → +z → −x → −z),
+  // driven by the SAME ack-ledger module the unit tests pin. provably inside the ±50 m region
+  // from any spawn at −49…−1 (verified below, BEFORE the window runs), so no authored leg can
+  // reach a bound — a clamp is structurally impossible on this route, not merely unobserved.
+  const startRoutePump = (page: Page, pumpMs: number): Promise<{ sendError: string | null }> =>
+    page.evaluate(async (args) => {
+      const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+      if (holder === undefined) throw new Error('the cell mover is not joined');
+      (globalThis as unknown as { __udgCellHold?: boolean }).__udgCellHold = false;
+      (globalThis as unknown as { __udgCellStop?: boolean }).__udgCellStop = false;
+      const stopped = (): boolean => (globalThis as unknown as { __udgCellStop?: boolean }).__udgCellStop === true;
+      const held = (): boolean => (globalThis as unknown as { __udgCellHold?: boolean }).__udgCellHold === true;
+      const mod = (await import(/* @vite-ignore */ args.moduleUrl)) as {
+        canonicalRoute: { legDirectionAt(elapsedMs: number): '+x' | '+z' | '-x' | '-z' };
+      };
+      const startedAt = performance.now();
+      while (performance.now() - startedAt < args.pumpMs && !stopped()) {
+        if (held()) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          continue;
+        }
+        const dir = mod.canonicalRoute.legDirectionAt(performance.now() - startedAt);
+        holder.generation += 1;
+        try {
+          holder.predictor.send(
+            {
+              generation: holder.generation,
+              moveX: dir === '+x' ? 1 : dir === '-x' ? -1 : 0,
+              moveZ: dir === '+z' ? 1 : dir === '-z' ? -1 : 0,
+            },
+            true,
+          );
+        } catch (error) {
+          // A refusal (e.g. ADR-0003 recovery in effect) must END the pump and be REPORTED —
+          // never reject the page evaluate and destroy the cell mid-window.
+          return { sendError: String(error instanceof Error ? error.message : error) };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      }
+      return { sendError: null as string | null };
+    }, { pumpMs, moduleUrl: ACK_LEDGER_MODULE_URL });
 
   const host = await startProxyHost();
   let handle = -1;
@@ -3324,60 +3382,89 @@ test('spike cell: elevated-full — candidate-bound Gate A local diagnostic cell
     const joinM = await joinImpSeat(pageM, proxyUrl, { mode: 'create', roomName: ROOM_NAME });
     const roomId = joinM.roomId ?? '';
     const joinO = await joinSeat(pageO, { mode: 'byId', roomId }, proxyUrl);
+    const clockBridge = await pageM.evaluate(() => ({ perf: performance.now(), wall: Date.now() }));
 
-    cellCheck('cell: DIAGNOSTIC label + candidate binding (exact sha, dirty flag recorded, seed recorded, NOT an official matrix cell)',
+    cellCheck('cell: DIAGNOSTIC label + candidate binding (exact sha, dirty flag, seed; NOT an official matrix cell)',
       plan.official === false && /^[0-9a-f]{40}$/.test(sha) && Number.isInteger(seed),
-      { commit: sha, dirty, seed, label: plan.label, profile: plan.profile });
-    cellCheck('cell: TWO TRUE browser contexts, both seats reaching the room ONLY through the proxy port',
-      pageM.context() !== pageO.context() && joinM.ok === true && joinO.ok === true && Number(new URL(proxyUrl).port) !== roomPort,
-      { proxyPort: start['port'], roomPort });
-    cellCheck('cell: loopback isolation — every page request so far is to 127.0.0.1/localhost (CSP is absent on this dev server; isolation is enforced by loopback-only endpoints, recorded not assumed)',
-      nonLoopback.length === 0, { nonLoopback, csp: 'none-on-dev-server' });
+      { commit: sha, dirty, seed, label: plan.label });
+    cellCheck('cell: TWO TRUE browser contexts, both seats reaching the room ONLY through the proxy port, loopback-only traffic',
+      pageM.context() !== pageO.context() && joinM.ok === true && joinO.ok === true && Number(new URL(proxyUrl).port) !== roomPort && nonLoopback.length === 0,
+      { proxyPort: start['port'], roomPort, nonLoopback: nonLoopback.slice(0, 3), csp: 'none-on-dev-server' });
 
-    // ---- mover pump: continuous authored motion for the WHOLE cell (warmup + measure + tail).
-    const pumpMs = 20_000 + 120_000 + 12_000;
-    const pump = pageM.evaluate(async (args) => {
-      const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
-      if (holder === undefined) throw new Error('the cell mover is not joined');
-      const startedAt = performance.now();
-      while (performance.now() - startedAt < args.pumpMs) {
-        holder.generation += 1;
-        holder.predictor.send({ generation: holder.generation, moveX: 1, moveZ: 0 }, true);
-        await new Promise((resolve) => setTimeout(resolve, 60));
-      }
-      return holder.transport.handle().lastProcessed;
-    }, { pumpMs }).catch((error) => `pump ended: ${String(error)}`);
+    // ---- route pre-validation: the spawn point must put the whole 48 m square inside the
+    // bounds. Read the mover's spawn from the observer's first published sample.
+    const spawn = await pageO.evaluate((sid) => {
+      const holder = (globalThis as unknown as SeatWindow).__udgSpikeSeat;
+      if (holder === undefined) return null;
+      holder.presentation.observe(holder.seat.snapshot());
+      const track = holder.presentation.peers()
+        .map((peer) => holder.presentation.trackOf(peer))
+        .find((tr) => tr?.sessionId === sid);
+      return track?.firstSample ?? null;
+    }, joinM.sessionId);
+    // worst-case authored leg is speedCeiling(4 m/s) × 12 s = 48 m; the square must stay at
+    // least 1.5 m inside the ±50 m bounds — farther than the plateau detector's 1 m band — so a
+    // CLAMP is structurally impossible on this route from this spawn, not merely unobserved.
+    const spawnOk = spawn !== null && spawn.x >= -48.5 && spawn.x + 48 <= 48.5 && spawn.z >= -48.5 && spawn.z + 48 <= 48.5;
+    cellCheck('cell: canonical route PRE-VALIDATED — spawn puts the whole 48 m square inside the ±50 m region, so no leg can be clamped (provable, not merely observed)',
+      spawnOk, { spawn, square: 'x∈[spawn, spawn+48], z∈[spawn, spawn+48]', bounds: '±50 m (100 m region)' });
 
-    await new Promise((resolve) => setTimeout(resolve, 20_000)); // FULL warmup window
-    const measureStart = Date.now();
+    const pumpMs = 20_000 + 120_000 + 30_000;
+    const pump = startRoutePump(pageM, pumpMs);
+    await new Promise((resolve) => setTimeout(resolve, 20_000)); // FULL warmup window (route running the whole time)
+    const measureStart = await stampPhase(pageM, 'measureStart');
     const cpuBefore = readCpuThrottle();
 
-    // ---- measure window: the accepted-RTT probe (100 pings over ~100 s on the mover's OWN
-    // playing socket, slot-reserving state machine) while ledger snapshots are sampled alongside.
-    const probePromise = runImpRttProbe(pageM, { pings: 100, cadenceMs: 1_000, deadlineMs: 1_500, confirmCapMs: 5_000 });
-    const snapshots: ImpLedger[] = [];
-    for (let i = 0; i < 12; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10_000));
-      snapshots.push(await readImpLedger(pageM));
-    }
+    // ---- measure window: 100 pings at the PREDECLARED 1180 ms cadence — span ≈ 116.9 s inside
+    // the 120 s window, on the mover's own playing socket, slot-reserving state machine.
+    const probePromise = runImpRttProbe(pageM, { pings: 100, cadenceMs: 1_180, deadlineMs: 1_500, confirmCapMs: 5_000 });
+    // observer path samples DURING the window (a concurrent evaluate on the OBSERVER page while
+    // the probe holds the mover page), converted onto the MOVER page's monotonic clock —
+    // performance.now origins differ per page; Date.now bridges them, drift negligible over 2 min.
+    const trackSamplesPromise = pageO.evaluate(async (args) => {
+      const read = (): { atWall: number; x: number; z: number; tick: number } | null => {
+        const holder = (globalThis as unknown as SeatWindow).__udgSpikeSeat;
+        if (holder === undefined) return null;
+        holder.presentation.observe(holder.seat.snapshot());
+        const t = holder.presentation.peers()
+          .map((peer) => holder.presentation.trackOf(peer))
+          .find((tr) => tr?.sessionId === args.sessionId);
+        if (t === undefined || t === null) return null;
+        return { atWall: Date.now(), x: t.lastSample.x, z: t.lastSample.z, tick: t.lastSample.tick };
+      };
+      const samples: { atMs: number; x: number; z: number }[] = [];
+      const ticks: number[] = [];
+      for (let i = 0; i < 58; i += 1) {
+        const s = read();
+        if (s !== null) { samples.push({ atMs: s.atWall - args.bridge.wall + args.bridge.perf, x: s.x, z: s.z }); ticks.push(s.tick); }
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+      return { samples, lastTick: ticks.at(-1) ?? null };
+    }, { sessionId: joinM.sessionId, bridge: clockBridge });
     const probe = await probePromise;
-    const measureMs = Date.now() - measureStart;
+    const measureEnd = await stampPhase(pageM, 'measureEnd');
+    const trackSamples = await trackSamplesPromise;
+    const measureMsBrowser = measureEnd.atMs - measureStart.atMs;
     const cpuAfter = readCpuThrottle();
 
-    const settled = await settleProxy(host, handle);
-    const observer = await reportSeat(pageO);
-    const moverTrack = observer.tracks.find((track) => track.sessionId === joinM.sessionId);
-
-    // ---- matched-ack correction ledger: zeros RETAINED, invalidations counted APART, p95 raw
-    // correction against the pre-registered 0.15 m target. No subtraction anywhere.
-    const rows = snapshots.at(-1)?.rows ?? [];
-    const measuredRows = rows.filter((row) => row.status === 'measured');
-    const magnitudes = measuredRows.map((row) => row.magnitude);
-    const zeroCorrections = magnitudes.filter((m) => m === 0).length;
-    const p95Correction = measuredRows.length > 0 ? nearestRank(magnitudes, 0.95) : null;
-    const p50Correction = measuredRows.length > 0 ? nearestRank(magnitudes, 0.5) : null;
-    const invalidations = rows.filter((row) => row.status === 'invalidated-missing-frames').length;
-    const anchored = rows.filter((row) => row.status === 'anchored').length;
+    // ---- the ledger, analysed IN THE PAGE over the browser monotonic clock by the module the
+    // unit tests pin (warm-up rows EXCLUDED and counted; every eligible ack counted once, zeros
+    // retained; duplicates/gaps/truncation fail completeness; reconciled against opportunities).
+    const ledger = await pageM.evaluate(async (args) => {
+      const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+      if (holder === undefined) throw new Error('the cell mover is not joined');
+      const w = globalThis as unknown as { __udgCellMarks?: Record<string, number> };
+      const marks = w.__udgCellMarks;
+      if (marks === undefined) throw new Error('no phase marks');
+      const mod = (await import(/* @vite-ignore */ args.moduleUrl)) as {
+        analyzeAckLedger(rows: unknown, window: unknown, opportunities: number, limit: number, tol: number): Record<string, unknown>;
+      };
+      const rows = holder.predictor.matchedCorrections();
+      const honest = mod.analyzeAckLedger(rows, { startMs: args.startMs, endMs: args.endMs }, args.opportunities, 20_000, 3);
+      const leaked = mod.analyzeAckLedger(rows, { startMs: args.startMs - 60_000, endMs: args.endMs }, args.opportunities, 20_000, 3);
+      return { honest, leakedEligibleAcks: (leaked as { eligibleAcks: number }).eligibleAcks, rowsTotal: rows.length };
+    }, { moduleUrl: ACK_LEDGER_MODULE_URL, startMs: measureStart.atMs, endMs: measureEnd.atMs, opportunities: measureEnd.lastProcessed - measureStart.lastProcessed });
+    const report = ledger.honest as unknown as AckLedgerReport;
 
     const probeValidity = networkValidity({
       requestedRttMs: plan.profile.rttMs,
@@ -3385,56 +3472,124 @@ test('spike cell: elevated-full — candidate-bound Gate A local diagnostic cell
       achievedRttSamples: probe.samples.map((sample) => sample.rttMs),
     });
 
-    cellCheck('cell: the observer (second context) saw the mover travel through the proxy during the full window',
-      (moverTrack?.delta.x ?? 0) > 0 && (moverTrack?.tickRegressions ?? 1) === 0,
-      { delta: moverTrack?.delta, regressions: moverTrack?.tickRegressions });
-    cellCheck('cell: FULL windows ran — >=20000 ms warmup then >=120000 ms measure (recorded, not assumed)',
-      measureMs >= 120_000, { warmupMs: 20_000, measureMs });
-    cellCheck('cell: ACCEPTED achieved RTT (SDK protocol ping, slot-reserving state machine on the mover\'s own socket) — slot-reservation contract held for the WHOLE 100-ping window: no poison, no socket death, no epoch change, nothing not-sent. A stop would be reported HERE as the measured blocker and the cell would be INVALID, never retried away',
-      probe.abortedReason === null && probe.slotPoisoned === false && probe.socketClosed === false && probe.epochChanged === false && probe.notSent === 0,
-      { answered: probe.samples.length, lateDiscarded: probe.lateDiscarded, retiredUnconfirmed: probe.retiredUnconfirmed, abortedReason: probe.abortedReason, clockElapsedMs: Math.round(probe.clockElapsedMs), hostThrottleDuringMeasure: cpuBefore !== null && cpuAfter !== null ? { throttledUsecDelta: cpuAfter.throttledUsec - cpuBefore.throttledUsec, throttledEventsDelta: cpuAfter.throttledEvents - cpuBefore.throttledEvents } : null, proxyThrottle: settled.throttle });
-    cellCheck('cell: §2.2 achieved-RTT validity on the FULL window (median within 10 ms of 100 ms requested, jitter p95−p50 within the 20 ms declared budget) — ACTUAL verdict, honestly failing if missed',
-      probeValidity.valid, { requested: plan.profile.rttMs, achieved: probeValidity.achieved, jitterP95P50: probeValidity.achievedJitterMs, reasons: probeValidity.reasons, n: probe.samples.length });
-    cellCheck('cell: matched-ack corrections — eligible >=100 (MIN_ELIGIBLE_ACKS_PER_RUN), ZERO RETENTION (zeros recorded, none filtered), invalidations counted APART, p95 raw correction < 0.15 m target — ACTUAL verdict',
-      measuredRows.length >= MIN_ELIGIBLE_ACKS_PER_RUN && p95Correction !== null && p95Correction < 0.15,
-      { eligible: measuredRows.length, zeroCorrections, invalidations, anchored, p50CorrectionMetres: p50Correction, p95CorrectionMetres: p95Correction, targetMetres: 0.15, ledgerRowsRetained: rows.length });
-    cellCheck('cell: the raw proxy record still satisfies its own queue-health formula (demoted diagnostic; leg-sum is NOT the accepted RTT)',
-      settled.stats.c2s.orderViolations === 0 && settled.stats.s2c.orderViolations === 0,
-      { c2sOrder: settled.stats.c2s.orderViolations, s2cOrder: settled.stats.s2c.orderViolations, legSumValidity: networkValidity({ requestedRttMs: plan.profile.rttMs, declaredJitterBudgetMs: plan.profile.jitterBudgetMs, achievedRttSamples: settled.stats.proxyLegSumSamples }).valid });
+    // ---- probe span == measure window (no shorter subwindow, no replay): derived from the
+    // sampling clock, not from node-side wall guesses.
+    const probeSpanMs = probe.clockElapsedMs;
+    // The state machine's PERIOD is cadence + one round trip (it sleeps between windows), so the
+    // declared expectation is derived, not fitted: (1180 + median RTT) × 99, tolerance ±8 s.
+    const expectedSpanMs = (1_180 + (probeValidity.achieved?.p50 ?? 110)) * 99;
+    cellCheck('cell: FULL windows verified from the SAMPLING CLOCK — warmup 20000 ms ran, then a measure window of >= 120000 ms of mover-page monotonic time; the ping window spans the WHOLE measure window at the predeclared cadence (period = cadence + round trip, derived span matches within 8 s; no shorter subwindow, no last-snapshot replay)',
+      measureMsBrowser >= 120_000 && Math.abs(probeSpanMs - expectedSpanMs) <= 8_000 && probeSpanMs >= measureMsBrowser - 15_000,
+      { measureMsBrowser: Math.round(measureMsBrowser), probeSpanMs: Math.round(probeSpanMs), expectedSpanMs: Math.round(expectedSpanMs), declaredCadenceMs: 1_180, pings: 100 });
 
-    const teardown = {
-      proxyStats: settled.stats,
-      moverLastProcessed: await pump,
-    };
+    // ---- observer motion audit (canonical route executed; stationary/clamp detectors; range).
+    const motion = auditMotion(trackSamples.samples, { x: REGION_BOUNDS.x, z: REGION_BOUNDS.z }, 4, 4_200, 1);
+    const observerReport = await reportSeat(pageO);
+    const moverTrack = observerReport.tracks.find((track) => track.sessionId === joinM.sessionId);
+    const discontinuities = (moverTrack?.tickRegressions ?? 1) + (moverTrack?.epochChanges ?? 1);
+    const duplicateSamples = moverTrack?.duplicateSamples ?? null;
+    cellCheck('cell: the observer path — the mover travelled the CANONICAL ROUTE unobstructed for the whole window: stationary intervals 0, boundary plateaus 0, out-of-bounds 0, range inside ±50 m; discontinuities (tick regressions + epoch changes) 0',
+      motion.range.maxX - motion.range.minX > 30 && motion.range.maxZ - motion.range.minZ > 30 && motion.medianSpeedMps >= 1.5 && motion.stationaryIntervals === 0 && motion.boundaryPlateaus === 0 && motion.outOfBounds === 0 && motion.range.minX >= -50 && motion.range.maxX <= 50 && motion.range.minZ >= -50 && motion.range.maxZ <= 50 && discontinuities === 0,
+      { motion, discontinuities, duplicateSamples, delta: moverTrack?.delta, note: 'gate = tick regressions + epoch changes; duplicateSamples RECORDED (s2c stalls can re-deliver identical samples)' });
+    // render lag in ONE comparable authority-tick space: the highest authority tick the MOVER's
+    // own delivery ledger accepted, minus the tick of the sample the observer's presentation
+    // last adopted for that peer. The mover is read first, so the number UNDERSTATES the lag by
+    // the inter-read gap — stated, not hidden. (The imp mover page carries the predictor's
+    // ledger, not the presentation surface — this is the observable lower bound.)
+    const moverSelfTick = await pageM.evaluate(() => {
+      const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+      if (holder === undefined) throw new Error('the cell mover is not joined');
+      const accepted = holder.predictor.deliveryLedger().filter((d) => d.accepted);
+      return accepted.at(-1)?.delivery.authorityTick ?? null;
+    });
+    const observerRenderedTick = await pageO.evaluate((sid) => {
+      const holder = (globalThis as unknown as SeatWindow).__udgSpikeSeat;
+      if (holder === undefined) return null;
+      holder.presentation.observe(holder.seat.snapshot());
+      const t = holder.presentation.peers()
+        .map((peer) => holder.presentation.trackOf(peer))
+        .find((tr) => tr?.sessionId === sid);
+      return t?.lastSample.tick ?? null;
+    }, joinM.sessionId);
+    const renderLag = { observerRenderedTick, moverSelfTick, lagTicks: observerRenderedTick === null || moverSelfTick === null ? null : moverSelfTick - observerRenderedTick };
+    cellCheck('cell: render delay is OBSERVED (mover-accepted authority tick minus the observer\'s adopted sample tick — a lower bound, mover read first) and non-negative; magnitude recorded, not threshold-gated',
+      renderLag.lagTicks !== null && renderLag.lagTicks >= -1,
+      renderLag);
+
+    // ---- controls that CATCH what the review named. (a) warm-up leakage: shifting the boundary
+    // 60 s earlier must ADD rows — if it didn't, the filter would be decorative. (b) the
+    // stationary detector: hold the route for ~2.5 s and require the auditor to count the dead
+    // interval, then resume — a detector that never fires is not evidence of motion.
+    const warmupLeakCaught = ledger.leakedEligibleAcks > report.eligibleAcks && report.excludedBeforeWindow > 0;
+    await pageM.evaluate(() => { (globalThis as unknown as { __udgCellHold?: boolean }).__udgCellHold = true; });
+    const heldSamples = await pageO.evaluate(async (args) => {
+      const out: { atMs: number; x: number; z: number }[] = [];
+      for (let i = 0; i < 3; i += 1) {
+        const holder = (globalThis as unknown as SeatWindow).__udgSpikeSeat;
+        if (holder !== undefined) {
+          holder.presentation.observe(holder.seat.snapshot());
+          const t = holder.presentation.peers()
+            .map((peer) => holder.presentation.trackOf(peer))
+            .find((tr) => tr?.sessionId === args.sessionId);
+          if (t !== undefined) out.push({ atMs: Date.now() - args.bridge.wall + args.bridge.perf, x: t.lastSample.x, z: t.lastSample.z });
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1_200));
+      }
+      return out;
+    }, { sessionId: joinM.sessionId, bridge: clockBridge });
+    await pageM.evaluate(() => { (globalThis as unknown as { __udgCellHold?: boolean }).__udgCellHold = false; });
+    const holdAudit = auditMotion(heldSamples, { x: REGION_BOUNDS.x, z: REGION_BOUNDS.z }, 4, 4_200, 1);
+    cellCheck('cell: CONTROLS fire — (a) warm-up leakage control: widening the window by 60 s ADDS eligible acks (so the real exclusion is real, excludedBefore=' + String(report.excludedBeforeWindow) + '); (b) stationary control: holding the route for ~2.5 s makes the SAME auditor count >=1 stationary interval (so its zero during the measure window means motion, not a blind detector)',
+      warmupLeakCaught && holdAudit.stationaryIntervals >= 1,
+      { leakedEligibleAcks: ledger.leakedEligibleAcks, honestEligibleAcks: report.eligibleAcks, excludedBeforeWindow: report.excludedBeforeWindow, holdStationaryIntervals: holdAudit.stationaryIntervals });
+
+    // ---- ledger completeness and correction record (claim conditioned on network validity).
+    cellCheck('cell: ledger COMPLETENESS on the phase window — every measurement-phase eligible ack counted EXACTLY ONCE (>= ' + String(MIN_ELIGIBLE_ACKS_PER_RUN) + '), zeros retained, duplicates 0, gaps 0, no truncation, reconciled against acknowledged opportunities (|delta| <= 3); invalidations counted APART',
+      report.complete === true && report.eligibleAcks >= MIN_ELIGIBLE_ACKS_PER_RUN && report.duplicateAcks === 0 && report.gapAcks === 0 && report.truncated === false,
+      report);
+    const p95 = report.correctionPercentiles?.p95 ?? null;
+    const targetClaim = probeValidity.valid ? p95 !== null && p95 < 0.15 : false;
+    cellCheck('cell: matched-ack correction — p50/p95/p99/max recorded over the phase window; the < 0.15 m target is CLAIMED ONLY WHEN THE NETWORK CELL IS VALID (§2.2 INVALID ⇒ claim is NOT-CLAIMED, never a green by omission)',
+      !probeValidity.valid || targetClaim,
+      { percentiles: report.correctionPercentiles, targetMetres: 0.15, networkValid: probeValidity.valid, claim: probeValidity.valid ? (targetClaim ? 'MET' : 'MISSED') : 'NOT-CLAIMED (network invalid)' });
+    cellCheck('cell: ACCEPTED achieved RTT — slot-reservation contract held across the WHOLE 100-ping full-window run (no poison/death/epoch change, nothing not-sent). A stop would be reported HERE as the measured blocker and the cell INVALID, never retried away',
+      probe.abortedReason === null && probe.slotPoisoned === false && probe.socketClosed === false && probe.epochChanged === false && probe.notSent === 0,
+      { answered: probe.samples.length, lateDiscarded: probe.lateDiscarded, retiredUnconfirmed: probe.retiredUnconfirmed, abortedReason: probe.abortedReason, hostThrottleDuringMeasure: cpuBefore !== null && cpuAfter !== null ? { throttledUsecDelta: cpuAfter.throttledUsec - cpuBefore.throttledUsec, throttledEventsDelta: cpuAfter.throttledEvents - cpuBefore.throttledEvents } : null });
+    cellCheck('cell: §2.2 achieved-RTT validity (median within 10 ms of 100 ms, jitter p95−p50 within 20 ms + 10 tolerance) — ACTUAL verdict on the FULL window; honestly failing if missed',
+      probeValidity.valid, { requested: plan.profile.rttMs, achieved: probeValidity.achieved, jitterP95P50: probeValidity.achievedJitterMs, reasons: probeValidity.reasons, n: probe.samples.length });
+
+    // Stop the route pump BEFORE closing anything and await its finite exit — a page closed
+    // under a running evaluate is a rejected promise, not a teardown.
+    await pageM.evaluate(() => { (globalThis as unknown as { __udgCellStop?: boolean }).__udgCellStop = true; });
+    const pumpFinished = await pump;
+    const settled = await settleProxy(host, handle);
+    cellCheck('cell: the raw proxy record still satisfies its own queue-health formula (demoted diagnostic; leg-sum is NOT the accepted RTT); the socket path CLOSES cleanly (no errored closures in the proxy connLog)',
+      settled.stats.c2s.orderViolations === 0 && settled.stats.s2c.orderViolations === 0 && settled.stats.connections.errors === 0,
+      { legSumValidity: networkValidity({ requestedRttMs: plan.profile.rttMs, declaredJitterBudgetMs: plan.profile.jitterBudgetMs, achievedRttSamples: settled.stats.proxyLegSumSamples }).valid, connections: settled.stats.connections });
+
     await pageM.close();
     await pageO.close();
     const closeStats = await closeProxyBounded(host, handle);
     handle = -1;
     hostShutdown = await host.shutdown();
-    cellCheck('cell: bounded teardown with receipts — proxy closed, host exited FINITE (exit 0) with NO active resources, both contexts closed',
-      hostShutdown.receipt !== null && hostShutdown.exitCode === 0 && JSON.stringify(hostShutdown.receipt.activeResourcesAfterClose) === '[]' && closeStats.c2s.bytesReceived > 0,
-      { activeResourcesAfterClose: hostShutdown.receipt?.activeResourcesAfterClose ?? null, exitCode: hostShutdown.exitCode, signal: hostShutdown.signal, moverLastProcessed: teardown.moverLastProcessed });
-    cellCheck('cell: no non-loopback request was ever made from either context', nonLoopback.length === 0, { nonLoopback: nonLoopback.slice(0, 5) });
+    cellCheck('cell: bounded teardown with receipts — proxy closed, host exited FINITE (exit 0) with NO active resources; the route pump ended finitely',
+      hostShutdown.receipt !== null && hostShutdown.exitCode === 0 && JSON.stringify(hostShutdown.receipt?.activeResourcesAfterClose) === '[]' && closeStats.c2s.bytesReceived > 0 && pumpFinished.sendError === null,
+      { activeResourcesAfterClose: hostShutdown.receipt?.activeResourcesAfterClose ?? null, exitCode: hostShutdown.exitCode, signal: hostShutdown.signal, pumpFinished });
 
     const record = {
-      schemaVersion: 1,
-      kind: 'DIAGNOSTIC — Gate A local cell, candidate-bound; NOT Gate A, NOT a matrix cell, NOT a merge, NOT a verdict; disposition: evidence for the Gate A recipe only',
+      schemaVersion: 2,
+      kind: 'DIAGNOSTIC — Gate A local cell, candidate-bound; NOT Gate A, NOT a matrix cell, NOT a merge, NOT a verdict',
       identity: { commit: sha, dirty, node: process.version, pnpm: spawnSync('pnpm', ['--version'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim(), playwright: (JSON.parse(readFileSync(join(ROOT, 'node_modules', '@playwright', 'test', 'package.json'), 'utf8')) as { version: string }).version, seed, generatedAt: new Date().toISOString() },
       plan: { label: plan.label, profile: plan.profile, impairment: plan.impairment },
-      windows: { warmupMs: 20_000, measureMs },
-      acceptedRttProbe: {
-        rules: 'slot reservation (rtt-probe.ts, unit-tested 6/6, imported UNCHANGED by the page): retirement reserves the slot until positive echo confirmation; no confirmation within confirmCapMs poisons the cell and STOPS it',
-        outcome: probe,
-        summary: { validity: probeValidity },
-      },
-      matchedAckCorrections: { eligible: measuredRows.length, zeroCorrections, invalidations, anchored, p50CorrectionMetres: p50Correction, p95CorrectionMetres: p95Correction, targetMetres: 0.15, minEligible: MIN_ELIGIBLE_ACKS_PER_RUN },
+      windows: { warmupMs: 20_000, measureMsBrowser, phaseMarks: { measureStart, measureEnd } },
+      route: { kind: 'canonical 12s/48m square (+x,+z,-x,-z), spawn-verified unobstructed', spawn, motion, holdControl: holdAudit },
+      acceptedRttProbe: { rules: 'slot reservation (rtt-probe.ts, unit-tested, imported UNCHANGED by the page via the loopback pipeline); 100 pings at 1180 ms predeclared cadence spanning the measure window', outcome: probe, summary: { validity: probeValidity } },
+      ackLedger: { report, warmupLeakControl: { leakedEligibleAcks: ledger.leakedEligibleAcks, honestEligibleAcks: report.eligibleAcks }, correctionClaim: probeValidity.valid ? (targetClaim ? 'MET' : 'MISSED') : 'NOT-CLAIMED (network invalid)' },
+      renderLag,
       cgroupThrottle: { beforeMeasure: cpuBefore, afterMeasure: cpuAfter, proxyHostWorstThrottle: settled.throttle },
-      proxyLegSumDiagnostic: { validity: networkValidity({ requestedRttMs: plan.profile.rttMs, declaredJitterBudgetMs: plan.profile.jitterBudgetMs, achievedRttSamples: settled.stats.proxyLegSumSamples }).valid, stats: settled.stats },
+      proxyLegSumDiagnostic: { stats: settled.stats },
       isolation: { loopbackOnly: nonLoopback.length === 0, csp: 'none-on-dev-server', contexts: 2 },
-      teardown: {
-        proxyCloseReceipt: closeStats.c2s.bytesReceived > 0 && closeStats.s2c.bytesReceived > 0,
-        hostExit: { exitCode: hostShutdown.exitCode, signal: hostShutdown.signal, activeResourcesAfterClose: hostShutdown.receipt?.activeResourcesAfterClose ?? null },
-      },
+      teardown: { hostExit: { exitCode: hostShutdown.exitCode, signal: hostShutdown.signal, activeResourcesAfterClose: hostShutdown.receipt?.activeResourcesAfterClose ?? null } },
       checks: cellChecks,
     };
     mkdirSync(OUT_DIR, { recursive: true });
@@ -3445,8 +3600,210 @@ test('spike cell: elevated-full — candidate-bound Gate A local diagnostic cell
       try { await closeProxyBounded(host, handle); } catch { /* reported by the shutdown receipt below */ }
     }
     if (hostShutdown === null) {
-      // Failure guard ONLY: the happy path already shut the host down above and never re-enters.
       try { hostShutdown = await host.shutdown(); } catch { /* the assertion below reports a host that never exited finite */ }
+    }
+  }
+  expect(hostShutdown !== null && hostShutdown.receipt !== null && hostShutdown.exitCode === 0, 'the proxy host exited FINITELY with a receipt (guard)').toBe(true);
+});
+
+/* ------------------------------------------------------------------ A/B latency controls (slice 6e)
+ *
+ * WHY is the achieved elevated median ~+12.5 ms over the requested 100 ms on a runner with zero
+ * throttling? This cell isolates it with four legs under IDENTICAL authored motion (the canonical
+ * route) and identical rendering (the same app page, same context settings), each leg a fresh
+ * pair of true browser contexts and its own room:
+ *
+ *   D — DIRECT: seats join the room endpoint with NO proxy. The floor: browser/SDK/loopback.
+ *   Z — ZERO-DELAY FIFO PROXY: the full proxy machinery (FIFO tube, instrumentation, second
+ *       socket pair) with oneWayMs 0 / jitter 0. Isolates the proxy path's own cost.
+ *   E — ELEVATED: the accepted profile (50 ms per direction, 20 ms budget). E − Z is the stall
+ *       path's contribution; compare against the tube's own achieved−requested excess.
+ *   N — NO-DELAY-OFF: Z's conditions with TCP_NODELAY off on both proxy sockets (documented,
+ *       harness-only knob, WITH its Z control leg). If coalescing/Nagle mattered, N ≠ Z.
+ *
+ * No kernel/SDK setting is touched; the policy stays symmetric half-RTT; nothing is subtracted
+ * from the accepted metric — the DIFFERENCES between legs are the diagnostic, recorded as such.
+ * Legs use an equal 20 s warmup + 60 s measure at 45 pings / 1300 ms — equal conditions across
+ * legs, while the ACCEPTED full-window cell remains `elevated-full`. Raw samples per leg are in
+ * spike-cell-ab-controls.json.
+ */
+const LEG_WARMUP_MS = 20_000;
+const LEG_MEASURE_MS = 60_000;
+const LEG_PINGS = 45;
+const LEG_CADENCE_MS = 1_300;
+
+interface LegRecord {
+  leg: string;
+  via: string;
+  tcpNoDelay: boolean | null;
+  probe: RttProbeWindow;
+  percentiles: { p50: number; p95: number; p99: number; max: number; count: number } | null;
+  medianExcessPerLegMs: { c2s: number | null; s2c: number | null };
+  proxy: Record<string, unknown> | null;
+  validity: ReturnType<typeof networkValidity>;
+}
+
+const pcts = (values: readonly number[]): LegRecord['percentiles'] =>
+  values.length === 0 ? null : {
+    p50: nearestRank(values, 0.5),
+    p95: nearestRank(values, 0.95),
+    p99: nearestRank(values, 0.99),
+    max: Math.max(...values),
+    count: values.length,
+  };
+
+const medianExcess = (pairs: readonly { requestedMs: number; achievedMs: number }[]): number | null => {
+  if (pairs.length === 0) return null;
+  const excess = pairs.map((pair) => pair.achievedMs - pair.requestedMs).sort((a, b) => a - b);
+  return excess[Math.floor(excess.length / 2)] ?? null;
+};
+
+// eslint-disable-next-line no-empty-pattern -- Playwright requires the destructured args object even when the cell uses only testInfo.
+test('spike cell: ab-controls — same-motion/same-render RTT attribution legs (direct, zero-delay proxy, elevated, nodelay-off; DIAGNOSTIC, NOT Gate A)', async ({}, testInfo) => {
+  test.skip(process.env['UDG_SPIKE_CELL'] !== 'ab-controls', 'dispatched only by `pnpm test:spike -- --id UDG-SPIKE-001 --cell ab-controls` (slice 6e latency attribution)');
+  test.setTimeout(900_000);
+  expect(fixture, 'the room fixture booted').toBeDefined();
+  const seed = Number(process.env['UDG_SPIKE_SEED'] ?? '1001');
+  const roomPort = Number(new URL(fixture?.endpoint ?? 'http://127.0.0.1:0').port);
+  const planElev = planSpikeRun({ profile: 'elevated', seed, diagnostic: { reason: 'ab-controls-elevated-leg' } });
+  const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
+  const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim().length > 0;
+
+  const cellChecks: { name: string; ok: boolean; detail: unknown }[] = [];
+  const cellCheck = (name: string, ok: boolean, detail: unknown): void => {
+    cellChecks.push({ name, ok, detail });
+    check(name, ok, detail);
+  };
+
+  const legs: LegRecord[] = [];
+  const host = await startProxyHost();
+  let hostShutdown: Awaited<ReturnType<typeof host.shutdown>> | null = null;
+  const runLeg = async (leg: 'D' | 'Z' | 'E' | 'N'): Promise<void> => {
+    let handle = -1;
+    const pageM = await openSeatPage(`ab-${leg}-M`, { bare: true });
+    const pageO = await openSeatPage(`ab-${leg}-O`, { bare: true });
+    try {
+      let endpoint = fixture?.endpoint ?? '';
+      let proxyStatsHandle: number | null = null;
+      let noDelay: boolean | null = null;
+      if (leg !== 'D') {
+        const profile = leg === 'E'
+          ? planElev.impairment
+          : { name: `zero-${leg}`, oneWayMs: 0, jitterBudgetMs: 0, seed };
+        noDelay = leg !== 'N';
+        const started = await host.request({
+          op: 'start',
+          profile,
+          targetHost: '127.0.0.1',
+          targetPort: roomPort,
+          ...(noDelay === false ? { tcpNoDelay: false } : {}),
+        });
+        handle = started['handle'] as number;
+        proxyStatsHandle = handle;
+        endpoint = `http://127.0.0.1:${String(started['port'] as number)}`;
+      }
+      const joinM = await joinImpSeat(pageM, endpoint, { mode: 'create', roomName: ROOM_NAME });
+      const joinO = await joinSeat(pageO, { mode: 'byId', roomId: joinM.roomId ?? '' }, endpoint);
+      expect(joinM.ok === true && joinO.ok === true, `${leg}: both seats joined (${endpoint})`).toBe(true);
+      const pump = pageM.evaluate(async (args) => {
+        const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+        if (holder === undefined) throw new Error('leg mover not joined');
+        const mod = (await import(/* @vite-ignore */ args.moduleUrl)) as { canonicalRoute: { legDirectionAt(elapsedMs: number): string } };
+        (globalThis as unknown as { __udgCellStop?: boolean }).__udgCellStop = false;
+        const stopped = (): boolean => (globalThis as unknown as { __udgCellStop?: boolean }).__udgCellStop === true;
+        const startedAt = performance.now();
+        while (performance.now() - startedAt < args.pumpMs && !stopped()) {
+          const dir = mod.canonicalRoute.legDirectionAt(performance.now() - startedAt);
+          holder.generation += 1;
+          try {
+            holder.predictor.send({ generation: holder.generation, moveX: dir === '+x' ? 1 : dir === '-x' ? -1 : 0, moveZ: dir === '+z' ? 1 : dir === '-z' ? -1 : 0 }, true);
+          } catch (error) {
+            return { sendError: String(error instanceof Error ? error.message : error) };
+          }
+          await new Promise((resolve) => setTimeout(resolve, 60));
+        }
+        return { sendError: null as string | null };
+      }, { pumpMs: LEG_WARMUP_MS + LEG_MEASURE_MS + 15_000, moduleUrl: ACK_LEDGER_MODULE_URL });
+      await new Promise((resolve) => setTimeout(resolve, LEG_WARMUP_MS));
+      const probe = await runImpRttProbe(pageM, { pings: LEG_PINGS, cadenceMs: LEG_CADENCE_MS, deadlineMs: 1_500, confirmCapMs: 5_000 });
+      await pageM.evaluate(() => { (globalThis as unknown as { __udgCellStop?: boolean }).__udgCellStop = true; });
+      await pump;
+      let stats: Record<string, unknown> | null = null;
+      if (proxyStatsHandle !== null) {
+        const settledLeg = await settleProxy(host, proxyStatsHandle);
+        handle = -1;
+        await closeProxyBounded(host, proxyStatsHandle);
+        stats = settledLeg.stats as unknown as Record<string, unknown>;
+      }
+      const samples = probe.samples.map((sample) => sample.rttMs);
+      const dStat = (stats?.['c2s'] ?? null) as { delayPairs: { requestedMs: number; achievedMs: number }[] } | null;
+      const sStat = (stats?.['s2c'] ?? null) as { delayPairs: { requestedMs: number; achievedMs: number }[] } | null;
+      legs.push({
+        leg,
+        via: leg === 'D' ? 'direct' : 'proxy',
+        tcpNoDelay: noDelay,
+        probe,
+        percentiles: pcts(samples),
+        medianExcessPerLegMs: { c2s: dStat === null ? null : medianExcess(dStat.delayPairs), s2c: sStat === null ? null : medianExcess(sStat.delayPairs) },
+        proxy: stats === null ? null : {
+          tcpNoDelay: stats['tcpNoDelay'],
+          c2sReadBuckets: (dStat as unknown as { readSizeBuckets?: unknown } | null)?.readSizeBuckets ?? null,
+          s2cReadBuckets: (sStat as unknown as { readSizeBuckets?: unknown } | null)?.readSizeBuckets ?? null,
+          c2sMaxStreamWaitMs: (dStat as unknown as { maxStreamWaitMs?: number } | null)?.maxStreamWaitMs ?? null,
+          s2cMaxStreamWaitMs: (sStat as unknown as { maxStreamWaitMs?: number } | null)?.maxStreamWaitMs ?? null,
+          connections: stats['connections'],
+        },
+        validity: networkValidity({
+          requestedRttMs: leg === 'E' ? planElev.profile.rttMs : 0,
+          declaredJitterBudgetMs: leg === 'E' ? planElev.profile.jitterBudgetMs : 10,
+          achievedRttSamples: samples,
+        }),
+      });
+    } finally {
+      if (handle >= 0) {
+        try { await closeProxyBounded(host, handle); } catch { /* the shutdown guard below reports the host state */ }
+      }
+      await pageM.close();
+      await pageO.close();
+    }
+  };
+
+  try {
+    for (const leg of ['D', 'Z', 'E', 'N'] as const) await runLeg(leg);
+    const by = Object.fromEntries(legs.map((entry) => [entry.leg, entry]));
+    cellCheck('ab: every leg ran the same canonical motion + rendering with the slot-reservation contract intact (no poison/death/epoch/notSent) and answered all predeclared pings',
+      legs.length === 4 && legs.every((entry) => entry.probe.abortedReason === null && entry.probe.notSent === 0 && entry.probe.samples.length === LEG_PINGS),
+      legs.map((entry) => ({ leg: entry.leg, answered: entry.probe.samples.length, aborted: entry.probe.abortedReason })));
+    const dLeg = by['D'] as LegRecord;
+    const zLeg = by['Z'] as LegRecord;
+    const eLeg = by['E'] as LegRecord;
+    const nLeg = by['N'] as LegRecord;
+    cellCheck('ab: the DIRECT leg stays a LAN floor (median <= 15 ms with 0 ms requested) — the attribution baseline itself is valid',
+      dLeg.percentiles !== null && dLeg.percentiles.p50 <= 15,
+      { d: dLeg.percentiles, reasons: dLeg.validity.reasons });
+    cellCheck('ab: the ELEVATED leg\'s §2.2 validity is RECORDED as measured (this cell exists because it currently misses; the check states the actual verdict, honestly)',
+      eLeg.validity.valid,
+      { e: eLeg.percentiles, reasons: eLeg.validity.reasons });
+    const record = {
+      schemaVersion: 1,
+      kind: 'DIAGNOSTIC — latency attribution legs; NOT Gate A, NOT a matrix cell; symmetric half-RTT policy unchanged; NOTHING subtracted from the accepted metric (leg differences are the attribution, recorded beside it)',
+      identity: { commit: sha, dirty, seed, generatedAt: new Date().toISOString() },
+      legs,
+      attribution: {
+        proxyOverheadMs: zLeg.percentiles !== null && dLeg.percentiles !== null ? zLeg.percentiles.p50 - dLeg.percentiles.p50 : null,
+        stallPathMs: eLeg.percentiles !== null && zLeg.percentiles !== null ? eLeg.percentiles.p50 - zLeg.percentiles.p50 : null,
+        nodelayOffEffectMs: nLeg.percentiles !== null && zLeg.percentiles !== null ? nLeg.percentiles.p50 - zLeg.percentiles.p50 : null,
+        requestedOneWayMs: planElev.impairment.oneWayMs,
+        note: 'stallPathMs ≈ 2×requestedOneWayMs means the stalls contribute exactly their declared delay and the excess lives elsewhere; excess ABOVE that localises inside the stall path (tube/queue/backpressure — see per-leg medianExcessPerLegMs and stream-wait)',
+      },
+      checks: cellChecks,
+    };
+    mkdirSync(OUT_DIR, { recursive: true });
+    writeFileSync(join(OUT_DIR, 'spike-cell-ab-controls.json'), JSON.stringify(record, null, 2));
+    await testInfo.attach('spike-cell-ab-controls.json', { path: join(OUT_DIR, 'spike-cell-ab-controls.json'), contentType: 'application/json' });
+  } finally {
+    if (hostShutdown === null) {
+      try { hostShutdown = await host.shutdown(); } catch { /* asserted below */ }
     }
   }
   expect(hostShutdown !== null && hostShutdown.receipt !== null && hostShutdown.exitCode === 0, 'the proxy host exited FINITELY with a receipt (guard)').toBe(true);

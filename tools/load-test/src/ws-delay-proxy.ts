@@ -153,6 +153,12 @@ export interface DirectionStats {
   /** Bytes currently buffered inside the proxy (queue depth, this direction). */
   readonly bufferedBytes: number;
   /**
+   * READ-SIDE COALESCING EVIDENCE (slice 6e): histogram of read-chunk sizes on this leg. A 1-byte
+   * SDK ping that shares a read chunk with room inputs is coalesced somewhere in the stack —
+   * `le2` (chunks of 1-2 bytes) vs the larger buckets is what that looks like at the proxy.
+   */
+  readonly readSizeBuckets: { readonly le2: number; readonly le64: number; readonly le512: number; readonly gt512: number };
+  /**
    * CONTAMINATION DIAGNOSTICS — instrumented ALONGSIDE the accepted metric, never subtracted
    * from it (§2.2 says measure what the bytes experienced; these say WHAT caused it):
    * `maxTimerLagMs` is the scheduler overshoot (clock/loop contention — the proxy's own fault);
@@ -184,6 +190,8 @@ export interface ProxyStats {
   readonly connections: { readonly opened: number; readonly closed: number; readonly active: number; readonly errors: number };
   readonly c2s: DirectionStats;
   readonly s2c: DirectionStats;
+  /** The proxy sockets' TCP_NODELAY setting at run time (harness-only A/B knob; default true). */
+  readonly tcpNoDelay: boolean;
   /** Paired achieved round-trip stall samples per the documented pairing rule. */
   /**
    * DIAGNOSTIC PROXY-LEG SUM — demoted at review of 74e84179, and the demotion is part of the
@@ -209,6 +217,13 @@ export interface WsDelayProxyOptions {
   readonly maxBufferedBytesPerDirection?: number;
   /** Hard-close timer after close() begins (driver time). Pending stalls drain first. */
   readonly closeGraceMs?: number;
+  /**
+   * Harness-only documented experiment knob (A/B latency diagnostics, slice 6e): when FALSE both
+   * proxy sockets run with TCP_NODELAY off. Default TRUE — Node's default, what every accepted
+   * run used. The coalescing hypothesis is only testable if the setting is toggled WITH a control
+   * leg and recorded in the stats; no kernel or SDK setting outside the proxy is touched.
+   */
+  readonly tcpNoDelay?: boolean;
 }
 
 export interface WsDelayProxy {
@@ -248,6 +263,7 @@ interface DirectionState {
   /** Departure time pinned for the most recently admitted chunk (delay-tube floor input). */
   lastScheduledDepartureMs: number;
   bytesReceived: number;
+  readSizeBuckets: { le2: number; le64: number; le512: number; gt512: number };
   bytesDelivered: number;
   chunksReceived: number;
   chunksDelivered: number;
@@ -273,6 +289,7 @@ const newDirection = (label: 'c2s' | 's2c', seed: number): DirectionState => ({
   lastDeliveredSeq: 0,
   lastScheduledDepartureMs: 0,
   bytesReceived: 0,
+  readSizeBuckets: { le2: 0, le64: 0, le512: 0, gt512: 0 },
   bytesDelivered: 0,
   chunksReceived: 0,
   chunksDelivered: 0,
@@ -296,6 +313,7 @@ interface ConnectionEnv {
   readonly maxBufferedBytesPerDirection: number;
   readonly onClosed: (conn: ProxyConnection, error: boolean) => void;
   readonly onLegSumSample: (sampleMs: number) => void;
+  readonly tcpNoDelay: boolean;
 }
 
 class ProxyConnection {
@@ -332,6 +350,8 @@ class ProxyConnection {
     });
 
     this.upstream = connect({ host: env.targetHost, port: env.targetPort, allowHalfOpen: true });
+    this.upstream.setNoDelay(env.tcpNoDelay);
+    client.setNoDelay(env.tcpNoDelay);
     this.upstream.setTimeout(0);
     this.upstream.on('connect', () => {
       this.upstreamReady = true;
@@ -374,6 +394,10 @@ class ProxyConnection {
     dir.nextSeq += 1;
     dir.bytesReceived += data.length;
     dir.chunksReceived += 1;
+    if (data.length <= 2) dir.readSizeBuckets.le2 += 1;
+    else if (data.length <= 64) dir.readSizeBuckets.le64 += 1;
+    else if (data.length <= 512) dir.readSizeBuckets.le512 += 1;
+    else dir.readSizeBuckets.gt512 += 1;
     const buffered = dir.queue.reduce((sum, c) => sum + c.data.length, 0);
     if (buffered > this.env.maxBufferedBytesPerDirection) {
       this.abort(); // bounded buffers: a harness that cannot keep up fails loudly, never silently
@@ -535,6 +559,7 @@ class ProxyConnection {
 }
 
 const directionStats = (d: DirectionState): DirectionStats => ({
+  readSizeBuckets: { ...d.readSizeBuckets },
   bytesReceived: d.bytesReceived,
   bytesDelivered: d.bytesDelivered,
   chunksReceived: d.chunksReceived,
@@ -568,6 +593,12 @@ const mergeStats = (a: DirectionStats, b: DirectionStats): DirectionStats => ({
   chunksBackpressured: a.chunksBackpressured + b.chunksBackpressured,
   totalStreamWaitMs: a.totalStreamWaitMs + b.totalStreamWaitMs,
   maxStreamWaitMs: Math.max(a.maxStreamWaitMs, b.maxStreamWaitMs),
+  readSizeBuckets: {
+    le2: a.readSizeBuckets.le2 + b.readSizeBuckets.le2,
+    le64: a.readSizeBuckets.le64 + b.readSizeBuckets.le64,
+    le512: a.readSizeBuckets.le512 + b.readSizeBuckets.le512,
+    gt512: a.readSizeBuckets.gt512 + b.readSizeBuckets.gt512,
+  },
 });
 
 // --------------------------------------------------------------------------- public API
@@ -600,6 +631,7 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
     const conn = new ProxyConnection(client, {
       targetHost: options.targetHost,
       targetPort: options.targetPort,
+      tcpNoDelay: options.tcpNoDelay ?? true,
       profile: options.profile,
       timer,
       maxBufferedBytesPerDirection,
@@ -655,6 +687,7 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
         proxyLegSumSamples: [...legSumSamples],
         requestedOneWayBaseMs: options.profile.oneWayMs,
         requestedJitterBudgetMs: options.profile.jitterBudgetMs,
+        tcpNoDelay: options.tcpNoDelay ?? true,
       };
     },
     async close(): Promise<void> {

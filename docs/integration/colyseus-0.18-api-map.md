@@ -1193,3 +1193,58 @@ whether the +12.5 ms median offset is the candidate's real network behaviour (th
 profile or the §2.2 tolerance is a design conversation, not this slice's to have) or an artefact
 of continuous authored motion under stall — which the existing quiet-window probe cells and the
 tick gate can now separate at full window size on a hosted runner.
+
+## 14.4. Where the +12.5 ms actually lived: phase windows, a route that cannot be clamped, and four attribution legs (slice 6e, 2026-11-20)
+
+The review of `f87f8cf` refused the "browser pacing" label and demanded measurement. The
+measurement now says what it was, and the label was wrong in kind: the excess was a HARNESS
+DEFECT with a specific mechanism, not a property of the browser or the proxy.
+
+**Phase and accounting corrections (cell rewrite).** Phase boundaries are stamped on the browser
+monotonic clock — the same clock the adapter stamps matched rows with — pairing
+`performance.now()` with the acknowledged-input counter in one page evaluation, so boundaries
+and opportunities cannot disagree. The ledger is analysed IN THE PAGE by
+`tools/load-test/src/ack-ledger.ts` (11 new deterministic unit tests, the control surface the
+review demanded): every measurement-phase eligible ack counted EXACTLY ONCE with zeros retained,
+warm-up rows EXCLUDED AND COUNTED (`excludedBeforeWindow`), duplicates and gaps computed over the
+covered seq range, truncation checked against the ledger cap, and the whole reconciled against
+the acknowledged opportunities (|delta| ≤ 3 to be complete). The p95 < 0.15 m target is
+`CLAIMED ONLY WHEN THE NETWORK CELL IS VALID` — §2.2 INVALID makes the claim NOT-CLAIMED, never
+an untested green. The 100 pings run at a predeclared 1180 ms cadence whose DERIVED span
+(cadence + median RTT) × 99 matches the sampling clock within 8 s — the ping window spans the
+whole measure window, not a subwindow.
+
+**The route.** Continuous +X across a 100 m region CANNOT be unobstructed: ~17 s at the 4 m/s
+ceiling reaches a bound, and from spawn (0, 0) the old cell spent most of every window clamped.
+The cell now runs a predeclared canonical route — 12 s legs on a 48 m square (+x → +z → −x → −z),
+driven by the same module the unit tests pin — PRE-VALIDATED from the observed spawn to stay
+≥ 1.5 m inside the bounds, so a clamp is structurally impossible, and audited per run:
+stationary intervals 0, boundary plateaus 0, out-of-bounds 0 (the detectors are shown FIRING on
+synthetic defects in the unit tests and on a live held-motion control in the cell — a detector
+that never fires is not evidence). Controls that catch warm-up leakage (widening the window adds
+acks — the exclusion does real work), ledger gaps, and stationary motion all run per cell.
+
+**Corrected full-window diagnostic (n=100, §2.2 VALID)**: median **106.1** (was 112.5), jitter
+p95−p50 **12.9**, p95 120.3, max 128.3; ledger eligible 2076 counted once, complete, zeros
+retained, claim MET; observer path audited clean; render-lag lower bound recorded (0 ticks at
+read time). The clamped straight route had inflated the achieved median by ~+3–6 ms ON TOP OF
+the structural cost — the old cell's own motion was contaminating its latency.
+
+**Attribution legs (equal 20 s + 60 s windows, identical canonical motion and rendering, one
+fresh context pair per leg, raw samples in `dpa2e/spike-cell-ab-controls.json`):**
+
+| leg | path | p50 | p95 | what it isolates |
+| --- | --- | --- | --- | --- |
+| D | direct, no proxy | **0.6 ms** | 1.3 | browser + SDK + loopback floor |
+| Z | proxy, 0 ms stalls (FIFO machinery intact, noDelay on) | **3.6 ms** | 4.9 | the proxy path's own cost: +3.0 (tube-recorded excess 1.4 + 1.4 per leg — consistent) |
+| E | elevated 50+50, jitter 20 | **109.4 ms** | 121.9 | stall path +105.8 over Z ≈ the DECLARED 100 + tube excess (recorded 2.4 + 1.5) + dispatch |
+| N | Z with TCP_NODELAY OFF (documented harness-only knob, Z as control) | 3.6 ms | **29.6** | Nagle/coalescing shifts NO median — it fattens the TAIL; the default-on proxy never suffered it |
+
+The accepted metric stays symmetric half-RTT with NOTHING subtracted; these legs are recorded
+beside it. The +12.5 dissolves into: ~3 ms proxy path + ~4 ms tube queueing under background
+traffic + ~2 ms browser dispatch + ~3–6 ms of the OLD CELL'S OWN CLAMPED MOTION, against a
+requested 100. With the defect removed the candidate sits inside the pre-registered §2.2
+tolerances on the runner — measured, not argued; every attempt (including the straight-route
+INVALID records) is retained. Gate A remains Not Run; GA-5/6/7/11/12 and CF-1/CF-3/CF-4 stay
+owed there (GA-10a/GA-10b are deferred to UDG-007 and are NOT Gate A blockers); no thresholds
+moved; the camera freshness and `recovery resumes…` items remain reported, untouched.

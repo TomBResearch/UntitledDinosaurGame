@@ -39,6 +39,8 @@ interface StartCmd {
   readonly profile: { readonly name: string; readonly oneWayMs: number; readonly jitterBudgetMs: number; readonly seed: number };
   readonly targetHost: string;
   readonly targetPort: number;
+  /** Harness-only A/B knob forwarded to the proxy (see ws-delay-proxy.ts); default true. */
+  readonly tcpNoDelay?: boolean;
 }
 
 interface HandleCmd {
@@ -133,6 +135,7 @@ const handle = (cmd: Cmd): void => {
   }
   if (cmd.op === 'start') {
     void createWsDelayProxy({
+      tcpNoDelay: cmd.tcpNoDelay ?? true,
       listenPort: 0,
       targetHost: cmd.targetHost,
       targetPort: cmd.targetPort,
