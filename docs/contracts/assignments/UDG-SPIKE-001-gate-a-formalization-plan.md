@@ -140,3 +140,44 @@ No workflow file created or edited; no dispatch; no full-matrix run; no rerun of
 - Remaining GA-13 boundary UNCHANGED: a replay leg per formal scenario under the T-5 plan (the
   ga-scenarios rooms yield ledger extracts only — the cell's `journalCoverage` inventory names it).
   Next is still T5–T8 on this reviewed exact candidate.
+
+## 9. Slice 10 update — T-5 wired, one complete short dry-run, pinned toolchain restored (candidate `dba824c` + `artifacts/.local/spike-001/dpa7v/`, DIAGNOSTIC)
+
+- **The pinned toolchain was restored, not re-pinned.** Node v24.22.2 was reinstated from the prior
+  verified local install, re-verified by archive sha against the retained official `SHASUMS256.txt` and a
+  fresh-extraction byte-compare of `bin/` (only corepack's own cache differs); pnpm 12.18.0. Every slice-10
+  run — cells, dry-run, suites — is on the pinned pair; no 24.22.3 result is used anywhere, and no toolchain
+  or dependency pin moved.
+- **T-5 exists as an append**: `CAPTURE_PLANS` gained **only** the key `UDG-SPIKE-001` (phase `gate-a`,
+  scope `gate-a`, `ga-rows.json`/`ga-replays.json` as identity artefacts); the five accepted plans are
+  byte-identical under recorded digests in a unit test, the report schema and the verifier's status logic
+  are untouched. The plan carries the candidate sha, the clean tree, the toolchain checks, all 12 cells,
+  `UDG_GATE_A_FORMAL=1` on formal legs, **no retry machinery at all**, and `gate-a-check` as its own final
+  command — a capture that cannot report success over a register it failed.
+- **The register refuses to write what its own bytes disprove**: a PASS citing a non-`GATE-A` artefact is
+  demoted at the builder (the real dpa7v diagnostics produced two demotions and a NOT-PASS), the verdict is
+  a **function of the rows**, GA-10a/b may stand OUTSTANDING only with owner UDG-007 named, a PASS beside
+  non-PASS rows is refused, an implementer-signed decision is refused, replay legs must be exact with the
+  normalized original and replayed bytes present and equal, and a machine path or token fails the scan.
+  Offline negatives cover each rule (seven unit tests), with the honest NOT-PASS bundle proven to produce
+  zero issues — the teeth are demonstrably real.
+- **The dry-run ran the whole pipeline and was rated diagnostic by it**: `evidence.js verify` **REFUSED**
+  the bundle (`EVIDENCE-GATE-NOT-PASS` + 19 formal commands never run + 11 thresholds unmeasured — zero
+  identity/hash/pairing issues: the wiring verifies, only the absent formal work keeps it out);
+  `gate-a-check` accepted the honest bundle while **printing the NOT-PASS it does not hide**, and the
+  forged-verdict, wrong-candidate, implementer-decision and non-exact-replay variants each exited 1 with
+  its named code (kept under `gate-a-dryrun/variants/`). The cell persists a structured journal **per clean
+  leg** (dir cleared at start, sanitisation scanned before the write) and replays every leg EXACT through
+  the producing shared-kernel stepper, candidate-bound on a clean tree (9/9, `ga-replays.json` carrying
+  original and replayed bytes).
+- **Retries are out of formal cells by construction**: `UDG_GATE_A_FORMAL=1` runs the pre-registered
+  schedule (150/140/400/300 ms, step wall ≈290 ms) with **maxAttempts = 1**; both formal attempts on this
+  machine went **RED by the held-room transport rotation — recorded, not rerolled**; non-formal retries are
+  recorded and the artefact kind stays `DIAGNOSTIC-NOT-GATE-A`, so a retry-selected green cannot present as
+  Gate A. Formal GA-9/GA-13 eligibility awaits a quiet-runner receipt or a tightened pre-registered schedule.
+- Focused suites: full `pnpm test` 863/864 — the sole failure is the camera suite's staleness gate, failing
+  identically at the clean HEAD before this slice's diff (stash-and-run proof), named and not recaptured;
+  the two pre-existing contract reds were slices 7/8 moving tracked files without regenerating
+  `checksums.json` — fixed **by the command** (M-4, two entries). `evidence.js plans` now lists
+  `UDG-SPIKE-001`; routine CI gains no capture (C-07 intact). Next: T-6/T-7/T-8 in the workflow lane, then
+  the first formal Grid on a hosted quiet runner.
