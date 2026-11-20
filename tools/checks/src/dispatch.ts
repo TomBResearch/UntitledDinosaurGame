@@ -167,8 +167,8 @@ export const spikeDispatch = (flags: Record<string, string | boolean>): number =
   const cell = stringFlag(flags, 'cell') ?? 'self-check';
   const profile = stringFlag(flags, 'profile') ?? 'elevated';
   const seed = stringFlag(flags, 'seed') ?? '1001';
-  if (cell !== 'self-check' && cell !== 'elevated-full' && cell !== 'ab-controls') {
-    process.stderr.write(`test:spike --id ${SPIKE_DISPATCH_ID}: unknown cell "${cell}". Cells: self-check | elevated-full | ab-controls\n`);
+  if (cell !== 'self-check' && cell !== 'elevated-full' && cell !== 'ab-controls' && cell !== 'ga-scenarios') {
+    process.stderr.write(`test:spike --id ${SPIKE_DISPATCH_ID}: unknown cell "${cell}". Cells: self-check | elevated-full | ab-controls | ga-scenarios\n`);
     return 2;
   }
   if (!/^\d+$/.test(seed)) {
@@ -189,7 +189,7 @@ export const spikeDispatch = (flags: Record<string, string | boolean>): number =
     if (result.timedOut) process.stderr.write('test:spike self-check timed out after 10 minutes\n');
     return result.timedOut ? 124 : result.exitCode;
   }
-  const grep = cell === 'ab-controls' ? 'spike cell: ab-controls' : 'spike cell: elevated-full';
+  const grep = cell === 'ab-controls' ? 'spike cell: ab-controls' : cell === 'ga-scenarios' ? 'spike cell: ga-scenarios' : 'spike cell: elevated-full';
   const result = runCommand(
     ['pnpm', 'exec', 'playwright', 'test', 'tests/e2e/netcode.spec.ts', '--project=chromium', '-g', grep],
     { cwd: root, timeoutMs: 30 * 60 * 1000, env: { UDG_SPIKE_CELL: cell, UDG_SPIKE_SEED: seed } },

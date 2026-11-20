@@ -192,6 +192,8 @@ export interface ProxyStats {
   readonly s2c: DirectionStats;
   /** The proxy sockets' TCP_NODELAY setting at run time (harness-only A/B knob; default true). */
   readonly tcpNoDelay: boolean;
+  /** Window-stall override in effect at snapshot time (GA-6a injection; null = profile). */
+  readonly stallOverride: { readonly c2s: number | null; readonly s2c: number | null };
   /** Paired achieved round-trip stall samples per the documented pairing rule. */
   /**
    * DIAGNOSTIC PROXY-LEG SUM — demoted at review of 74e84179, and the demotion is part of the
@@ -229,6 +231,13 @@ export interface WsDelayProxyOptions {
 export interface WsDelayProxy {
   readonly port: number;
   readonly profile: ImpairmentProfile;
+  /**
+   * GA-6a window stall (slice 6f): override ONE direction's base stall at runtime — a genuine
+   * "no state delivery, socket OPEN" window (bytes queue FIFO; order preserved; nothing drops).
+   * Null restores the profile. This is the honest withholding injection: a UNIFORM stall only
+   * shifts deliveries and can never produce a no-delivery window.
+   */
+  setStall(direction: 'c2s' | 's2c' | 'both', oneWayMs: number | null): void;
   stats(): ProxyStats;
   /** Explicit close: stop accepting, drain each direction's pending stalls IN ORDER, then FIN. */
   close(): Promise<void>;
@@ -314,6 +323,7 @@ interface ConnectionEnv {
   readonly onClosed: (conn: ProxyConnection, error: boolean) => void;
   readonly onLegSumSample: (sampleMs: number) => void;
   readonly tcpNoDelay: boolean;
+  readonly stallOverride: { c2s: number | null; s2c: number | null };
 }
 
 class ProxyConnection {
@@ -387,7 +397,12 @@ class ProxyConnection {
     if (this.finished) return;
     const now = this.env.timer.nowMs();
     const centredBaseMs = this.env.profile.oneWayMs - this.env.profile.jitterBudgetMs / 2;
-    const requested = boundedUniformStall(centredBaseMs, this.env.profile.jitterBudgetMs, dir.rng());
+    const overrideMs = this.env.stallOverride[dir.label];
+    const centred = overrideMs === null ? centredBaseMs : Math.max(0, overrideMs - this.env.profile.jitterBudgetMs / 2);
+    const requested = overrideMs === null
+      ? boundedUniformStall(centredBaseMs, this.env.profile.jitterBudgetMs, dir.rng())
+      : overrideMs;
+    void centred;
     const departureAtMs = Math.max(now + requested, dir.lastScheduledDepartureMs - this.env.profile.jitterBudgetMs / 2);
     dir.lastScheduledDepartureMs = departureAtMs;
     dir.queue.push({ seq: dir.nextSeq, data, arrivedAtMs: now, requestedStallMs: requested, departureAtMs });
@@ -607,6 +622,8 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
   const timer = options.timer ?? realTimerDriver;
   const maxBufferedBytesPerDirection = options.maxBufferedBytesPerDirection ?? 8 * 1024 * 1024;
   const closeGraceMs = options.closeGraceMs ?? 5_000;
+  /** Shared, mutable window-stall override (GA-6a injection; read at admission time). */
+  const stallOverride: { c2s: number | null; s2c: number | null } = { c2s: null, s2c: null };
   if (!isIPv4(options.targetHost)) throw new Error(`targetHost must be an IPv4 literal, got ${options.targetHost}`);
   if (!(options.profile.oneWayMs >= 0) || !(options.profile.jitterBudgetMs >= 0)) {
     throw new Error('profile stalls must be non-negative');
@@ -632,6 +649,7 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
       targetHost: options.targetHost,
       targetPort: options.targetPort,
       tcpNoDelay: options.tcpNoDelay ?? true,
+      stallOverride,
       profile: options.profile,
       timer,
       maxBufferedBytesPerDirection,
@@ -670,6 +688,10 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
   return {
     port: address.port,
     profile: options.profile,
+    setStall(direction, oneWayMs) {
+      if (direction === 'c2s' || direction === 'both') stallOverride.c2s = oneWayMs;
+      if (direction === 's2c' || direction === 'both') stallOverride.s2c = oneWayMs;
+    },
     stats(): ProxyStats {
       let c2s = c2sDone;
       let s2c = s2cDone;
@@ -680,6 +702,7 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
       }
       return {
         listening,
+        stallOverride: { ...stallOverride },
         connLog: [...connLogDone, ...[...live].map((conn) => conn.lifecycle())],
         connections: { opened, closed: closedCount, active: live.size, errors },
         c2s,

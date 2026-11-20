@@ -56,7 +56,16 @@ interface ShutdownCmd {
   readonly op: 'shutdown';
 }
 
-type Cmd = StartCmd | HandleCmd | ShutdownCmd;
+interface StallCmd {
+  readonly ch: 'cmd';
+  readonly id: number;
+  readonly op: 'stall';
+  readonly handle: number;
+  readonly direction: 'c2s' | 's2c' | 'both';
+  readonly ms: number | null;
+}
+
+type Cmd = StartCmd | HandleCmd | StallCmd | ShutdownCmd;
 
 const write = (line: Record<string, unknown>): void => {
   process.stdout.write(`${JSON.stringify(line)}\n`);
@@ -131,6 +140,16 @@ const handle = (cmd: Cmd): void => {
   if (cmd.op === 'shutdown') {
     write({ ch: 'reply', id: cmd.id, ok: true, acknowledged: 'shutdown' });
     void shutdownAndExit('shutdown');
+    return;
+  }
+  if (cmd.op === 'stall') {
+    const stallEntry = proxies.get(cmd.handle);
+    if (stallEntry === undefined) {
+      write({ ch: 'reply', id: cmd.id, ok: false, error: `no proxy handle ${String(cmd.handle)}` });
+      return;
+    }
+    stallEntry.proxy.setStall(cmd.direction, cmd.ms);
+    write({ ch: 'reply', id: cmd.id, ok: true, stalled: cmd.direction, ms: cmd.ms });
     return;
   }
   if (cmd.op === 'start') {

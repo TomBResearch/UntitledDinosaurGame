@@ -1248,3 +1248,61 @@ tolerances on the runner — measured, not argued; every attempt (including the 
 INVALID records) is retained. Gate A remains Not Run; GA-5/6/7/11/12 and CF-1/CF-3/CF-4 stay
 owed there (GA-10a/GA-10b are deferred to UDG-007 and are NOT Gate A blockers); no thresholds
 moved; the camera freshness and `recovery resumes…` items remain reported, untouched.
+
+## 14.5. The ack population is DELIVERIES, and the ADR-0003 scenario harness (slice 6f, 2026-11-20)
+
+Director batch, two parts. Both are DIAGNOSTIC evidence toward the Gate A recipe; Gate A itself
+remains Not Run.
+
+**Part 1 — the percentile population was the wrong set, now corrected.** The §2.2 ledger had been
+gating on `eligibleAcks` — DISTINCT INPUT STAMPS covered by matched rows. Deliveries can batch many
+stamps per boundary, so a giant-batch path could have satisfied a ≥100 gate on far too few measured
+rows. `analyzeAckLedger(rows, deliveries, window, ledgerLimit)` now consumes the
+`deliveryLedger()` population directly (each verified delivery carries its immutable `ack`,
+`authorityTick`, `epoch`): the opportunity ledger is the accepted deliveries whose ack ADVANCED,
+keyed `epoch:authorityTick:ackTo`, bound EXACTLY ONCE to a measurement row; the gated population is
+`measuredBoundaries` — actual delivery boundaries, zeros retained — while `coveredInputStamps` is
+reported separately and NEVER gates. Duplicates, overlaps with prior accepted keys, missing
+measurements, unbound rows, or truncation each fail completeness outright; reconciliation against
+opportunities runs at ZERO tolerance. Fourteen unit tests are the control surface: the giant-batch
+red control (one 600-stamp delivery produces ONE boundary, not 600), missing first/last boundary,
+overlap, duplicate, non-advancing exclusion, unbound row, truncation, warm-up leak — each detector
+is SHOWN firing. One bounded re-run of the corrected cell on the runner
+(`dpa2f/spike-cell-elevated-full.json`): **1245 measured boundaries** (the real population, all
+zero-correction) against 2076 covered stamps (reported, not gated), 13/13 checks PASS, §2.2 valid.
+
+**Part 2 — `--cell ga-scenarios`: real browser/room scenarios for the ADR-0003 rows.** The proxy
+gained a window-stall primitive (`setStall(direction, ms)` — uniform delay can only shift a
+delivery, never create silence; a withheld window is the authentic "no delivery, open socket"
+injection). Rows, injections, and OUTCOMES (twelve runs; every attempt retained):
+
+| row | scenario / seam | outcome |
+| --- | --- | --- |
+| GA-6a + CF-1 | s2c WINDOW STALL 6000 ms on an open socket after a zero-stall baseline; observer DIRECT | PASS: deadline fires on NON-DELIVERY ALONE (`snapshot-deadline-expired`), stop-sending, discard-pending (held pose), bounded attempt in flight, 5/5 sends refused, ZERO deliveries crossed the withheld window (counted, not asserted), NO close event and none invented, no mid-withhold recovery |
+| GA-6c | `context.setOffline(true)` 9 s (real socket loss) past deadline + episode budget | PASS: exactly TWO bounded attempts → `suspended`; sends refused; journal drained; suspension HOLDS after 2 s more; observer (direct, online throughout) saw healthy motion before the cut |
+| GA-6b | owned by the suite test "recovery resumes through a real rejoin…" (M3 mapping — title-present evidence, not directory-dependent) | PASS (mapped) |
+| GA-7 / CF-4 | owned by "retirement overflow in the browser…" (M2 mapping) + CF-1 counted fact (M1) | PASS (mapped/counted) |
+| CF-3 | `predictor.close()` on a recovered seat; online direct observer | PASS: 3/3 post-close sends REFUSED client-side (`closed`); observer's track shows ZERO samples advanced after the close (pose frozen; deep-compare) |
+| GA-5a/GA-5b | — | **BLOCKED** (named): no public seam injects a server-side input gap / duplicate stamp / terminal unrepresented input without a private hook; smallest remediation proposed: test-only operator commands on `RegionRoom` behind the existing deployment nonce (`injectInputGap` / `replayInput`), journalled — a distinct scope decision |
+| GA-10a/GA-10b | — | UDG-007 deferrals, unchanged (NOT Gate A blockers) |
+
+**S1b — a FINDING, not a contract row.** Through the window-stall seam, a rejoin attempt whose own
+JOIN lands inside the withheld window never settles: both the matchmake response and the ws
+handshake response are held, the transport join has no watchdog for a held handshake, no second
+attempt is scheduled, and after release the seat stays `recovering` past 40 s with motion refused
+(four timed runs agree). GA-6b's actual wording — network returns within budget — is carried by
+the offline arm and passes; the held-handshake case is recorded as a **hung-join watchdog gap
+candidate** for ADR discussion rather than quietly dropped or claimed red.
+
+**Predeclaration honesty.** The first run's predeclared S1 expectation ("exactly two attempts then
+suspension inside the stall") was DISPROVED by run mechanics — the blocked attempt waits rather
+than failing fast — and the revised expectation ships with the disproving first log preserved
+(`ga-run1.log`). The run history also records two harness lessons written into the code: pump
+promises must be settled BEFORE `predictor.close()` (a dying page's pending evaluate rejects and
+masks the real error as 'Target page closed'), and observer evidence uses the presentation seam
+(`joinPredictionSeat` + `createRemotePresentation`), never the imp-side join's globals.
+
+Full attempt logs `/tmp/ga-run1..14.log` mirrored into `artifacts/.local/spike-001/dpa2ga/` with
+the final green records (`spike-cell-ga-scenarios.json`, two consecutive greens); no thresholds
+moved; no Gate A claim; GA-5/6/7/11/12 and CF-1/CF-3/CF-4 remain OWED at Gate A with this cell as
+their scenario recipe.

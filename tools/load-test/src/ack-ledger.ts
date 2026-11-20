@@ -31,6 +31,14 @@ export interface LedgerRowLike {
   readonly seqs: readonly number[];
   readonly status: string;
   readonly magnitude: number;
+  readonly epoch: number;
+  readonly authorityTick: number;
+}
+
+/** The immutable per-delivery record the predictor keeps about every patch (VerifiedDelivery). */
+export interface DeliveryLike {
+  readonly accepted: boolean;
+  readonly delivery: { readonly atMs: number; readonly epoch: number; readonly authorityTick: number; readonly ack: number };
 }
 
 export interface PhaseWindow {
@@ -38,67 +46,132 @@ export interface PhaseWindow {
   readonly endMs: number;
 }
 
+/**
+ * A matched measurement is ONE row per matched acknowledgement DELIVERY — the actual
+ * population. The covered input-stamp count is a different quantity and can never substitute
+ * for it: a single giant batch delivery would inflate stamps while contributing one boundary.
+ * Review of 7c1ec03: bind eligible measurement to an immutable same-delivery key
+ * (`epoch:authorityTick:ackTo`) inside the exact phase, exactly once, reconciled against the
+ * opportunity ledger (accepted deliveries whose immutable ack field ADVANCED, derived from the
+ * delivery rows alone) with NO unexplained tolerance: a missing or duplicate eligible
+ * measurement, an overlapping measured/invalidated claim, or an unbound row FAILS — never a
+ * counted zero, never a quietly shortened population. Exclusions are tracked only when
+ * independently labelled (row timestamps vs the window; anchored rows whose delivery carried a
+ * NON-advancing ack).
+ */
 export interface AckLedgerReport {
   readonly rowsTotal: number;
   readonly rowsInWindow: number;
   readonly excludedBeforeWindow: number;
   readonly excludedAfterWindow: number;
-  readonly measuredInWindow: number;
-  readonly zeroRetainedInWindow: number;
-  readonly anchoredInWindow: number;
-  readonly invalidatedInWindow: number;
-  /** Unique seqs covered by in-window MEASURED rows — every eligible ack counted once. */
-  readonly eligibleAcks: number;
-  readonly invalidatedAcks: number;
-  readonly duplicateAcks: number;
-  /** Seqs inside the observed ack range covered by no measured and no invalidated row. */
-  readonly gapAcks: number;
+  readonly opportunityDeliveries: number;
+  readonly matchedBoundariesInWindow: number;
+  readonly measuredBoundaries: number;
+  readonly zeroMeasured: number;
+  readonly nonzeroMeasured: number;
+  readonly anchoredBoundaries: number;
+  readonly invalidatedBoundaries: number;
+  /** Distinct INPUT STAMPS covered by measured rows — reported, never used as the N. */
+  readonly coveredInputStamps: number;
+  readonly duplicateKeys: number;
+  /** Keys claimed by BOTH a measured/anchored and an invalidated row. */
+  readonly overlapKeys: number;
+  /** Opportunity deliveries with no matched row at all in the phase. */
+  readonly missingMeasurements: number;
+  /** Rows whose key matches no accepted delivery (independently-labelled cases excluded). */
+  readonly unboundRows: number;
+  /** Anchored rows on independently-labelled non-advancing-ack deliveries (tracked, not eligible). */
+  readonly excludedNonAdvancing: number;
   readonly truncated: boolean;
-  /** opportunities − (eligible + invalidated + anchored rows' acks). Anchored rows consume an
-   * ack with no pending frames, so they belong to the reconciliation, not to eligibility. */
-  readonly completenessDelta: number;
   readonly complete: boolean;
   readonly correctionPercentiles: { readonly p50: number; readonly p95: number; readonly p99: number; readonly max: number; readonly count: number } | null;
 }
 
+const keyOf = (epoch: number, authorityTick: number, ackTo: number): string => `${epoch}:${authorityTick}:${ackTo}`;
+
 export const analyzeAckLedger = (
   rows: readonly LedgerRowLike[],
+  deliveries: readonly DeliveryLike[],
   window: PhaseWindow,
-  opportunities: number,
   ledgerLimit: number,
-  completenessTolerance: number = 2,
 ): AckLedgerReport => {
   const inWindow = rows.filter((row) => row.atMs >= window.startMs && row.atMs < window.endMs);
   const excludedBefore = rows.filter((row) => row.atMs < window.startMs).length;
   const excludedAfter = rows.filter((row) => row.atMs >= window.endMs).length;
 
-  const measured = inWindow.filter((row) => row.status === 'measured');
-  const anchored = inWindow.filter((row) => row.status === 'anchored');
-  const invalidated = inWindow.filter((row) => row.status === 'invalidated-missing-frames');
-
-  const seqOwner = new Map<number, number>();
-  let duplicates = 0;
-  for (const row of measured) {
-    for (const seq of row.seqs) {
-      if (seqOwner.has(seq)) duplicates += 1;
-      else seqOwner.set(seq, 1);
+  // Opportunity ledger: accepted deliveries whose immutable ack field ADVANCED relative to
+  // every earlier accepted delivery (computed across the full history, so the window's first
+  // delivery is judged against pre-window state). Keys are first-seen delivery identity —
+  // epoch:authorityTick:ackTo — the same immutable triple the matched rows carry.
+  const accepted = deliveries.filter((d) => d.accepted).sort((a, b) => a.delivery.atMs - b.delivery.atMs);
+  let maxAckSoFar = -1;
+  const keyAdvanced = new Map<string, boolean>();
+  const keyInWindow = new Map<string, boolean>();
+  for (const d of accepted) {
+    const advanced = d.delivery.ack > maxAckSoFar;
+    maxAckSoFar = Math.max(maxAckSoFar, d.delivery.ack);
+    const key = keyOf(d.delivery.epoch, d.delivery.authorityTick, d.delivery.ack);
+    if (!keyAdvanced.has(key)) {
+      keyAdvanced.set(key, advanced);
+      keyInWindow.set(key, d.delivery.atMs >= window.startMs && d.delivery.atMs < window.endMs);
+    } else if (d.delivery.atMs >= window.startMs && d.delivery.atMs < window.endMs) {
+      keyInWindow.set(key, true);
     }
   }
-  const invalidatedSeqs = new Set<number>(invalidated.flatMap((row) => [...row.seqs]));
-  const covered = new Set<number>([...seqOwner.keys(), ...invalidatedSeqs]);
-  const seqList = [...covered];
-  let gaps = 0;
-  if (seqList.length > 0) {
-    const lo = Math.min(...seqList);
-    const hi = Math.max(...seqList);
-    for (let seq = lo; seq <= hi; seq += 1) if (!covered.has(seq)) gaps += 1;
+  const opportunitiesInWindow = [...keyAdvanced.keys()].filter((k) => keyAdvanced.get(k) === true && keyInWindow.get(k) === true).length;
+
+  const rowKeys = new Map<string, { measured: number; anchored: number; invalidated: number }>();
+  for (const row of inWindow) {
+    const key = keyOf(row.epoch, row.authorityTick, row.ackTo);
+    const entry = rowKeys.get(key) ?? { measured: 0, anchored: 0, invalidated: 0 };
+    if (row.status === 'measured') entry.measured += 1;
+    else if (row.status === 'anchored') entry.anchored += 1;
+    else if (row.status === 'invalidated-missing-frames') entry.invalidated += 1;
+    rowKeys.set(key, entry);
+  }
+
+  let duplicates = 0;
+  let overlaps = 0;
+  let unbound = 0;
+  let excludedNonAdvancing = 0;
+  let measuredBoundaries = 0;
+  let anchoredBoundaries = 0;
+  let invalidatedBoundaries = 0;
+  const measuredMagnitudes: number[] = [];
+  const coveredSeqs = new Set<number>();
+  const measuredByRank: { key: string; magnitude: number; seqs: readonly number[] }[] = [];
+  for (const [key, entry] of rowKeys) {
+    const claims = entry.measured + entry.anchored + entry.invalidated;
+    if (entry.measured > 1) duplicates += entry.measured - 1;
+    if (claims > 1) overlaps += 1; // multiple rows claiming ONE eligible boundary
+    const advanced = keyAdvanced.get(key);
+    if (advanced === undefined) {
+      unbound += claims; // row whose key matches no accepted delivery at all
+      continue;
+    }
+    if (advanced === false) {
+      excludedNonAdvancing += claims; // independently labelled: the delivery's ack did not advance
+      continue;
+    }
+    if (entry.measured > 0) {
+      measuredBoundaries += 1;
+      const row = inWindow.find((r) => keyOf(r.epoch, r.authorityTick, r.ackTo) === key && r.status === 'measured');
+      if (row !== undefined) measuredByRank.push({ key, magnitude: row.magnitude, seqs: row.seqs });
+    } else if (entry.anchored > 0) anchoredBoundaries += 1;
+    else if (entry.invalidated > 0) invalidatedBoundaries += 1;
+  }
+  for (const m of measuredByRank) {
+    measuredMagnitudes.push(m.magnitude);
+    for (const seq of m.seqs) coveredSeqs.add(seq);
+  }
+  let missing = 0;
+  for (const [key, advanced] of keyAdvanced) {
+    if (advanced !== true || keyInWindow.get(key) !== true) continue;
+    if (!rowKeys.has(key)) missing += 1;
   }
 
   const truncated = rows.length >= ledgerLimit;
-  const anchoredAcks = anchored.length;
-  const delta = opportunities - (seqOwner.size + invalidatedSeqs.size + anchoredAcks);
-
-  const magnitudes = measured.map((row) => row.magnitude); // zeros RETAINED
+  const magnitudes = measuredMagnitudes; // zeros RETAINED
   const percentiles = magnitudes.length > 0
     ? {
       p50: nearestRank(magnitudes, 0.5),
@@ -114,17 +187,21 @@ export const analyzeAckLedger = (
     rowsInWindow: inWindow.length,
     excludedBeforeWindow: excludedBefore,
     excludedAfterWindow: excludedAfter,
-    measuredInWindow: measured.length,
-    zeroRetainedInWindow: magnitudes.filter((m) => m === 0).length,
-    anchoredInWindow: anchored.length,
-    invalidatedInWindow: invalidated.length,
-    eligibleAcks: seqOwner.size,
-    invalidatedAcks: invalidatedSeqs.size,
-    duplicateAcks: duplicates,
-    gapAcks: gaps,
+    opportunityDeliveries: opportunitiesInWindow,
+    matchedBoundariesInWindow: rowKeys.size,
+    measuredBoundaries,
+    zeroMeasured: magnitudes.filter((m) => m === 0).length,
+    nonzeroMeasured: magnitudes.filter((m) => m !== 0).length,
+    anchoredBoundaries,
+    invalidatedBoundaries,
+    coveredInputStamps: coveredSeqs.size,
+    duplicateKeys: duplicates,
+    overlapKeys: overlaps,
+    missingMeasurements: missing,
+    unboundRows: unbound,
+    excludedNonAdvancing,
     truncated,
-    completenessDelta: delta,
-    complete: !truncated && duplicates === 0 && gaps === 0 && Math.abs(delta) <= completenessTolerance,
+    complete: !truncated && duplicates === 0 && overlaps === 0 && missing === 0 && unbound === 0,
     correctionPercentiles: percentiles,
   };
 };
