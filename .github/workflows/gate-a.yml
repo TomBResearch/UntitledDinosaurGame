@@ -44,10 +44,6 @@ on:
         description: 'Optional printable run label for artefact names (validated before any upload). The immutable dispatch identity is always the workflow run id.'
         required: false
         default: 'manual-1'
-      definition_drift_ack:
-        description: 'Conductor guard, normally EMPTY. If non-empty it must be EXACTLY the 40-hex blob SHA of main''s copy of this file, which alone NAMES and separately TIES a definition drift; empty with unequal blobs fails closed. A drift is execution bookkeeping, never evidence.'
-        required: false
-        default: ''
 
 permissions:
   contents: read
@@ -91,6 +87,7 @@ jobs:
           INPUT_RUN_ID: ${{ inputs.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           DISPATCH_REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # First-attempt guard (formal): a runner REUSE keeps the same run_id with run_attempt > 1.
@@ -110,6 +107,7 @@ jobs:
           # at any other ref that carries this file would run THAT revision — refused here, before
           # checkout or install, with nothing uploaded and nothing written.
           if [ "$DISPATCH_REF" != "refs/heads/main" ]; then echo "::error::conductor guard: dispatched on $DISPATCH_REF — only refs/heads/main may run this definition"; exit 1; fi
+          if [ "$EVENT_NAME" != "workflow_dispatch" ]; then echo "::error::conductor guard: event $EVENT_NAME — this definition runs ONLY on manual dispatch"; exit 1; fi
 
       - name: Check out the exact candidate (read-only, no credentials)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -132,48 +130,37 @@ jobs:
             exit 1
           fi
 
-      - name: Conductor guard — bind the RUNNING definition to the candidate's definition byte-for-byte (independent git plumbing, default fail closed)
+      - name: Conductor guard — bind the LOADED definition revision to the candidate definition byte-for-byte (no bypass; fail closed)
         id: defbind
         env:
-          DRIFT_ACK: ${{ inputs.definition_drift_ack }}
-          SOURCE_COMMIT: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
           WORKFLOW_PATH: .github/workflows/gate-a.yml
         run: |
           set -euo pipefail
-          # Independent attestation, not a re-read of the runner's memory: when the ref guard
-          # above has proven the dispatch ref is main, the definition the runner LOADED is this
-          # repository's file at $SOURCE_COMMIT (the commit main pointed at when the run was
-          # created). The blob hash is derived locally from that commit's object (a full clone
-          # carries it; otherwise an ANONYMOUS, credential-free fetch of exactly that commit —
-          # persist-credentials is false everywhere), and compared against the SAME path inside
-          # the checked-out candidate. Equal blobs with an unequal framework are impossible
-          # without an equal file; unequal blobs fail closed unless the ack input names the
-          # SOURCE blob exactly (a separate, deliberate tie) — and even then the divergence is
-          # recorded to the step summary as execution bookkeeping, never as evidence.
-          if ! git cat-file -e "${SOURCE_COMMIT}^{commit}" 2>/dev/null; then
-            git fetch --no-tags --depth 1 "https://github.com/${GITHUB_REPOSITORY}" "${SOURCE_COMMIT}"
+          # github.workflow_sha names the commit the runner ACTUALLY loaded this definition from.
+          # An unavailable value is refused, not skipped: without an attested loaded revision the
+          # binding is unverifiable, and unverifiable must mean not-run (fail closed).
+          if [ -z "${WORKFLOW_SHA}" ]; then
+            echo "::error::github.workflow_sha is unavailable — cannot attest the loaded definition revision; refusing"; exit 1
           fi
-          source_blob="$(git show "${SOURCE_COMMIT}:${WORKFLOW_PATH}" | git hash-object --stdin)"
+          case "$WORKFLOW_SHA" in
+            *[!0-9a-f]*) echo "::error::github.workflow_sha is not 40-hex"; exit 1 ;;
+          esac
+          if [ "${#WORKFLOW_SHA}" -ne 40 ]; then echo "::error::github.workflow_sha must be exactly 40 hex characters"; exit 1; fi
+          # The source object must be verifiable LOCALLY inside the verified full-history
+          # candidate repository (the checkout above uses fetch-depth: 0 and its HEAD was bound
+          # to the candidate BEFORE any install; read-only plumbing only — no fetch, no
+          # credentials, nothing written). A loaded revision the candidate repository cannot
+          # account for is refused.
+          if ! git cat-file -e "${WORKFLOW_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::loaded-definition commit ${WORKFLOW_SHA} is not an object in the verified full-history candidate repository — refusing"; exit 1
+          fi
+          loaded_blob="$(git show "${WORKFLOW_SHA}:${WORKFLOW_PATH}" | git hash-object --stdin)"
           candidate_blob="$(git show "${CANDIDATE}:${WORKFLOW_PATH}" | git hash-object --stdin)"
-          {
-            echo "conductor definition-bind:"
-            echo "- source commit: ${SOURCE_COMMIT}"
-            echo "- source blob:   ${source_blob}"
-            echo "- candidate blob: ${candidate_blob}"
-            echo "- equal: $([ "$source_blob" = "$candidate_blob" ] && echo yes || echo no)"
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$source_blob" != "$candidate_blob" ]; then
-            if [ -z "$DRIFT_ACK" ]; then
-              echo "::error::definition drift with no named tie: main's copy (${source_blob}) differs from the candidate's (${candidate_blob}) — fail closed"; exit 1
-            fi
-            case "$DRIFT_ACK" in
-              *[!0-9a-f]*) echo "::error::definition_drift_ack must be empty or 40-hex"; exit 1 ;;
-            esac
-            if [ "${#DRIFT_ACK}" -ne 40 ] || [ "$DRIFT_ACK" != "$source_blob" ]; then
-              echo "::error::named drift must tie the SOURCE blob exactly: ack=${DRIFT_ACK} is not main's actual blob ${source_blob}"; exit 1
-            fi
-            echo "::warning::NAMED definition drift (bookkeeping only, never evidence): running main's ${source_blob} against candidate ${candidate_blob}"
+          if [ "$loaded_blob" != "$candidate_blob" ]; then
+            echo "::error::loaded definition blob ${loaded_blob} (at ${WORKFLOW_SHA}) differs from the candidate's ${candidate_blob} — refusing; no bypass exists"; exit 1
           fi
+          echo "definition bind OK: loaded blob ${loaded_blob} == candidate blob ${candidate_blob}"
 
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -230,6 +217,7 @@ jobs:
           INPUT_RUN_ID: ${{ inputs.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           DISPATCH_REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # First-attempt guard (formal): a runner REUSE keeps the same run_id with run_attempt > 1.
@@ -249,6 +237,7 @@ jobs:
           # at any other ref that carries this file would run THAT revision — refused here, before
           # checkout or install, with nothing uploaded and nothing written.
           if [ "$DISPATCH_REF" != "refs/heads/main" ]; then echo "::error::conductor guard: dispatched on $DISPATCH_REF — only refs/heads/main may run this definition"; exit 1; fi
+          if [ "$EVENT_NAME" != "workflow_dispatch" ]; then echo "::error::conductor guard: event $EVENT_NAME — this definition runs ONLY on manual dispatch"; exit 1; fi
       - name: Check out the exact candidate (read-only, no credentials)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -262,48 +251,37 @@ jobs:
           head_sha="$(git rev-parse HEAD)"
           if [ "$head_sha" != "$CANDIDATE" ]; then echo "::error::HEAD $head_sha is not the dispatched candidate"; exit 1; fi
           if [ -n "$(git status --porcelain)" ]; then echo "::error::dirty tree"; exit 1; fi
-      - name: Conductor guard — bind the RUNNING definition to the candidate's definition byte-for-byte (independent git plumbing, default fail closed)
+      - name: Conductor guard — bind the LOADED definition revision to the candidate definition byte-for-byte (no bypass; fail closed)
         id: defbind
         env:
-          DRIFT_ACK: ${{ inputs.definition_drift_ack }}
-          SOURCE_COMMIT: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
           WORKFLOW_PATH: .github/workflows/gate-a.yml
         run: |
           set -euo pipefail
-          # Independent attestation, not a re-read of the runner's memory: when the ref guard
-          # above has proven the dispatch ref is main, the definition the runner LOADED is this
-          # repository's file at $SOURCE_COMMIT (the commit main pointed at when the run was
-          # created). The blob hash is derived locally from that commit's object (a full clone
-          # carries it; otherwise an ANONYMOUS, credential-free fetch of exactly that commit —
-          # persist-credentials is false everywhere), and compared against the SAME path inside
-          # the checked-out candidate. Equal blobs with an unequal framework are impossible
-          # without an equal file; unequal blobs fail closed unless the ack input names the
-          # SOURCE blob exactly (a separate, deliberate tie) — and even then the divergence is
-          # recorded to the step summary as execution bookkeeping, never as evidence.
-          if ! git cat-file -e "${SOURCE_COMMIT}^{commit}" 2>/dev/null; then
-            git fetch --no-tags --depth 1 "https://github.com/${GITHUB_REPOSITORY}" "${SOURCE_COMMIT}"
+          # github.workflow_sha names the commit the runner ACTUALLY loaded this definition from.
+          # An unavailable value is refused, not skipped: without an attested loaded revision the
+          # binding is unverifiable, and unverifiable must mean not-run (fail closed).
+          if [ -z "${WORKFLOW_SHA}" ]; then
+            echo "::error::github.workflow_sha is unavailable — cannot attest the loaded definition revision; refusing"; exit 1
           fi
-          source_blob="$(git show "${SOURCE_COMMIT}:${WORKFLOW_PATH}" | git hash-object --stdin)"
+          case "$WORKFLOW_SHA" in
+            *[!0-9a-f]*) echo "::error::github.workflow_sha is not 40-hex"; exit 1 ;;
+          esac
+          if [ "${#WORKFLOW_SHA}" -ne 40 ]; then echo "::error::github.workflow_sha must be exactly 40 hex characters"; exit 1; fi
+          # The source object must be verifiable LOCALLY inside the verified full-history
+          # candidate repository (the checkout above uses fetch-depth: 0 and its HEAD was bound
+          # to the candidate BEFORE any install; read-only plumbing only — no fetch, no
+          # credentials, nothing written). A loaded revision the candidate repository cannot
+          # account for is refused.
+          if ! git cat-file -e "${WORKFLOW_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::loaded-definition commit ${WORKFLOW_SHA} is not an object in the verified full-history candidate repository — refusing"; exit 1
+          fi
+          loaded_blob="$(git show "${WORKFLOW_SHA}:${WORKFLOW_PATH}" | git hash-object --stdin)"
           candidate_blob="$(git show "${CANDIDATE}:${WORKFLOW_PATH}" | git hash-object --stdin)"
-          {
-            echo "conductor definition-bind:"
-            echo "- source commit: ${SOURCE_COMMIT}"
-            echo "- source blob:   ${source_blob}"
-            echo "- candidate blob: ${candidate_blob}"
-            echo "- equal: $([ "$source_blob" = "$candidate_blob" ] && echo yes || echo no)"
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$source_blob" != "$candidate_blob" ]; then
-            if [ -z "$DRIFT_ACK" ]; then
-              echo "::error::definition drift with no named tie: main's copy (${source_blob}) differs from the candidate's (${candidate_blob}) — fail closed"; exit 1
-            fi
-            case "$DRIFT_ACK" in
-              *[!0-9a-f]*) echo "::error::definition_drift_ack must be empty or 40-hex"; exit 1 ;;
-            esac
-            if [ "${#DRIFT_ACK}" -ne 40 ] || [ "$DRIFT_ACK" != "$source_blob" ]; then
-              echo "::error::named drift must tie the SOURCE blob exactly: ack=${DRIFT_ACK} is not main's actual blob ${source_blob}"; exit 1
-            fi
-            echo "::warning::NAMED definition drift (bookkeeping only, never evidence): running main's ${source_blob} against candidate ${candidate_blob}"
+          if [ "$loaded_blob" != "$candidate_blob" ]; then
+            echo "::error::loaded definition blob ${loaded_blob} (at ${WORKFLOW_SHA}) differs from the candidate's ${candidate_blob} — refusing; no bypass exists"; exit 1
           fi
+          echo "definition bind OK: loaded blob ${loaded_blob} == candidate blob ${candidate_blob}"
 
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -406,6 +384,7 @@ jobs:
           INPUT_RUN_ID: ${{ inputs.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           DISPATCH_REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # First-attempt guard (formal): a runner REUSE keeps the same run_id with run_attempt > 1.
@@ -425,6 +404,7 @@ jobs:
           # at any other ref that carries this file would run THAT revision — refused here, before
           # checkout or install, with nothing uploaded and nothing written.
           if [ "$DISPATCH_REF" != "refs/heads/main" ]; then echo "::error::conductor guard: dispatched on $DISPATCH_REF — only refs/heads/main may run this definition"; exit 1; fi
+          if [ "$EVENT_NAME" != "workflow_dispatch" ]; then echo "::error::conductor guard: event $EVENT_NAME — this definition runs ONLY on manual dispatch"; exit 1; fi
       - name: Check out the exact candidate (read-only, no credentials)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -437,48 +417,37 @@ jobs:
           set -euo pipefail
           head_sha="$(git rev-parse HEAD)"
           if [ "$head_sha" != "$CANDIDATE" ]; then echo "::error::HEAD $head_sha is not the dispatched candidate"; exit 1; fi
-      - name: Conductor guard — bind the RUNNING definition to the candidate's definition byte-for-byte (independent git plumbing, default fail closed)
+      - name: Conductor guard — bind the LOADED definition revision to the candidate definition byte-for-byte (no bypass; fail closed)
         id: defbind
         env:
-          DRIFT_ACK: ${{ inputs.definition_drift_ack }}
-          SOURCE_COMMIT: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
           WORKFLOW_PATH: .github/workflows/gate-a.yml
         run: |
           set -euo pipefail
-          # Independent attestation, not a re-read of the runner's memory: when the ref guard
-          # above has proven the dispatch ref is main, the definition the runner LOADED is this
-          # repository's file at $SOURCE_COMMIT (the commit main pointed at when the run was
-          # created). The blob hash is derived locally from that commit's object (a full clone
-          # carries it; otherwise an ANONYMOUS, credential-free fetch of exactly that commit —
-          # persist-credentials is false everywhere), and compared against the SAME path inside
-          # the checked-out candidate. Equal blobs with an unequal framework are impossible
-          # without an equal file; unequal blobs fail closed unless the ack input names the
-          # SOURCE blob exactly (a separate, deliberate tie) — and even then the divergence is
-          # recorded to the step summary as execution bookkeeping, never as evidence.
-          if ! git cat-file -e "${SOURCE_COMMIT}^{commit}" 2>/dev/null; then
-            git fetch --no-tags --depth 1 "https://github.com/${GITHUB_REPOSITORY}" "${SOURCE_COMMIT}"
+          # github.workflow_sha names the commit the runner ACTUALLY loaded this definition from.
+          # An unavailable value is refused, not skipped: without an attested loaded revision the
+          # binding is unverifiable, and unverifiable must mean not-run (fail closed).
+          if [ -z "${WORKFLOW_SHA}" ]; then
+            echo "::error::github.workflow_sha is unavailable — cannot attest the loaded definition revision; refusing"; exit 1
           fi
-          source_blob="$(git show "${SOURCE_COMMIT}:${WORKFLOW_PATH}" | git hash-object --stdin)"
+          case "$WORKFLOW_SHA" in
+            *[!0-9a-f]*) echo "::error::github.workflow_sha is not 40-hex"; exit 1 ;;
+          esac
+          if [ "${#WORKFLOW_SHA}" -ne 40 ]; then echo "::error::github.workflow_sha must be exactly 40 hex characters"; exit 1; fi
+          # The source object must be verifiable LOCALLY inside the verified full-history
+          # candidate repository (the checkout above uses fetch-depth: 0 and its HEAD was bound
+          # to the candidate BEFORE any install; read-only plumbing only — no fetch, no
+          # credentials, nothing written). A loaded revision the candidate repository cannot
+          # account for is refused.
+          if ! git cat-file -e "${WORKFLOW_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::loaded-definition commit ${WORKFLOW_SHA} is not an object in the verified full-history candidate repository — refusing"; exit 1
+          fi
+          loaded_blob="$(git show "${WORKFLOW_SHA}:${WORKFLOW_PATH}" | git hash-object --stdin)"
           candidate_blob="$(git show "${CANDIDATE}:${WORKFLOW_PATH}" | git hash-object --stdin)"
-          {
-            echo "conductor definition-bind:"
-            echo "- source commit: ${SOURCE_COMMIT}"
-            echo "- source blob:   ${source_blob}"
-            echo "- candidate blob: ${candidate_blob}"
-            echo "- equal: $([ "$source_blob" = "$candidate_blob" ] && echo yes || echo no)"
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$source_blob" != "$candidate_blob" ]; then
-            if [ -z "$DRIFT_ACK" ]; then
-              echo "::error::definition drift with no named tie: main's copy (${source_blob}) differs from the candidate's (${candidate_blob}) — fail closed"; exit 1
-            fi
-            case "$DRIFT_ACK" in
-              *[!0-9a-f]*) echo "::error::definition_drift_ack must be empty or 40-hex"; exit 1 ;;
-            esac
-            if [ "${#DRIFT_ACK}" -ne 40 ] || [ "$DRIFT_ACK" != "$source_blob" ]; then
-              echo "::error::named drift must tie the SOURCE blob exactly: ack=${DRIFT_ACK} is not main's actual blob ${source_blob}"; exit 1
-            fi
-            echo "::warning::NAMED definition drift (bookkeeping only, never evidence): running main's ${source_blob} against candidate ${candidate_blob}"
+          if [ "$loaded_blob" != "$candidate_blob" ]; then
+            echo "::error::loaded definition blob ${loaded_blob} (at ${WORKFLOW_SHA}) differs from the candidate's ${candidate_blob} — refusing; no bypass exists"; exit 1
           fi
+          echo "definition bind OK: loaded blob ${loaded_blob} == candidate blob ${candidate_blob}"
 
       - name: Set up Node 24.22.2
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
