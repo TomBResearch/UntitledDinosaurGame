@@ -181,3 +181,43 @@ No workflow file created or edited; no dispatch; no full-matrix run; no rerun of
   `checksums.json` — fixed **by the command** (M-4, two entries). `evidence.js plans` now lists
   `UDG-SPIKE-001`; routine CI gains no capture (C-07 intact). Next: T-6/T-7/T-8 in the workflow lane, then
   the first formal Grid on a hosted quiet runner.
+
+## 10. Slice 11 update — profile and evidence integrity made executable (candidate `8fc0596` + `artifacts/.local/spike-001/dpa7w/`, DIAGNOSTIC)
+
+- **One real matrix runner.** The first T-5 table called `elevated-full` for eleven rows and
+  `ga9-ga13` for a LAN coordinate — eleven silently-elevated runs and a scenario cell posing as a
+  matrix leg. Now the twelve rows all dispatch `--cell full-window` with an **explicit**
+  `--profile` and `--seed`: the runner has no defaults in any mode, formal mode additionally pins
+  the seed to the official set and refuses `self-check` and the legacy `elevated-full` alias, and
+  a unit test proves the table against the adopted `SPIKE_PROFILES` regimes — 12 distinct pairs,
+  each row equal to its label, each regime the one its coordinate names. Scenario cells keep
+  separate rows; they can no more substitute for a matrix leg than for a Gate A row. Each
+  coordinate writes its OWN artefact directory with a timestamped isolated first attempt and
+  `attempt: 1, automaticRetries: 0` in the bytes. One wiring proof, not twelve: lan/1001 ran the
+  full 20 s + 120 s twice — the first attempt's reds (one stale pre-parameterization assertion,
+  fixed; a consistent ~1.3 s mover-page monotonic window shortfall, **preserved, not rerolled**)
+  are the record, and a hosted runner decides whether the coordinate stands.
+- **Rows are worth their bytes.** `gate-a-check` no longer takes a citation on faith: the artefact
+  must be a regular file **confined to the bundle** (no absolute path, traversal or symlink), must
+  re-hash to the registered SHA-256, and its OWN bytes must carry the kind, the candidate sha and
+  an attestation; PASS rows additionally refuse red internal checks and any recorded
+  rotation/multi-attempt leg, and the register now binds its rows manifest by digest with a
+  sanitised copy travelling in the bundle (`ga-rows-source.json`). A `kind: "GATE-A"` JSON string
+  alone decides nothing — byte-level downgrades, appended bytes, fabricated paths and
+  cross-candidate citations each refuse, offline-tested, and the formal first-attempt artefact
+  earned its GA-9/GA-13 PASS rows on bytes while the verdict stayed NOT-PASS and `gate-a-check`
+  exited 0 printing exactly that. Schema and verifier generation untouched; the five accepted
+  plans stay byte-identical.
+- **The held-room guess lost its clock.** The gated legs no longer pace on wall-clock guesses: a
+  PRE-DECLARED tick plan (declared ingest allowance, one gated tick per step, causal completion at
+  the room's own per-seat `resolvedThrough` watermark, consecutive consumed ticks, deadlines as
+  failure conditions rather than retries, in-flight tick drained before baselining). Two witness
+  designs were tried and REFUTED on this machine and their refutations preserved rather than
+  iterated away: the `consumed` ledger never lists direct-intent frames, and a fully causal ingest
+  wait holds the seat past its retirement deadline. With the plan in place the formal first
+  attempt, retries OFF, came back 10/10 with **zero rotations and every leg at one attempt** — the
+  rotation was the heuristic cadence, and pacing removed the cause instead of rerolling it.
+- Focused suites: full `pnpm test` 874/875 (the lone red is the camera suite's staleness, named
+  and untouched); spike unit suites 150/150; typecheck and lint clean; lockfile byte-identical.
+  Next: T-6/T-7/T-8 in the workflow lane, then the hosted Grid over the twelve `full-window` rows
+  and the three scenario rows exactly as the plan now states them.
