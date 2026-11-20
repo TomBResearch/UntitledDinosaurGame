@@ -174,6 +174,14 @@ export interface DirectionStats {
   readonly chunksBackpressured: number;
   readonly totalStreamWaitMs: number;
   readonly maxStreamWaitMs: number;
+  /**
+   * RAW ARRIVAL-STALL EVIDENCE (GA-11): the raw host-monotonic inter-arrival series of read
+   * chunks on this leg (bounded), with its max kept beside it. Nothing is smoothed or averaged
+   * away: an arrival stall is exactly a stretch of this series, and the stall term of the
+   * envelope inequality is derived from it in the scenario, not here.
+   */
+  readonly interArrivalGapsMs: readonly number[];
+  readonly maxInterArrivalMs: number;
 }
 
 /** Which endpoint ended a proxied connection, and how. The proxy is the LAST place both sides
@@ -305,6 +313,9 @@ interface DirectionState {
   chunksBackpressured: number;
   totalStreamWaitMs: number;
   maxStreamWaitMs: number;
+  lastAdmissionMs: number | null;
+  interArrivalGapsMs: number[];
+  maxInterArrivalMs: number;
 }
 
 const newDirection = (label: 'c2s' | 's2c', seed: number): DirectionState => ({
@@ -323,6 +334,9 @@ const newDirection = (label: 'c2s' | 's2c', seed: number): DirectionState => ({
   orderViolations: 0,
   backpressurePauses: 0,
   earlyFireReschedules: 0,
+  lastAdmissionMs: null,
+  interArrivalGapsMs: [],
+  maxInterArrivalMs: 0,
   pumping: false,
   wake: null,
   flushedChunks: 0,
@@ -459,6 +473,12 @@ class ProxyConnection {
     dir.nextSeq += 1;
     dir.bytesReceived += data.length;
     dir.chunksReceived += 1;
+    if (dir.lastAdmissionMs !== null) {
+      const gapMs = Math.max(0, now - dir.lastAdmissionMs);
+      if (dir.interArrivalGapsMs.length < 4_000) dir.interArrivalGapsMs.push(Number(Math.trunc(gapMs * 100) / 100));
+      if (gapMs > dir.maxInterArrivalMs) dir.maxInterArrivalMs = gapMs;
+    }
+    dir.lastAdmissionMs = now;
     if (data.length <= 2) dir.readSizeBuckets.le2 += 1;
     else if (data.length <= 64) dir.readSizeBuckets.le64 += 1;
     else if (data.length <= 512) dir.readSizeBuckets.le512 += 1;
@@ -649,6 +669,8 @@ const directionStats = (d: DirectionState): DirectionStats => ({
   chunksBackpressured: d.chunksBackpressured,
   totalStreamWaitMs: d.totalStreamWaitMs,
   maxStreamWaitMs: d.maxStreamWaitMs,
+  interArrivalGapsMs: [...d.interArrivalGapsMs],
+  maxInterArrivalMs: d.maxInterArrivalMs,
 });
 
 const blankDirection = (): DirectionStats => directionStats(newDirection('c2s', 0));
@@ -675,6 +697,8 @@ const mergeStats = (a: DirectionStats, b: DirectionStats): DirectionStats => ({
     le512: a.readSizeBuckets.le512 + b.readSizeBuckets.le512,
     gt512: a.readSizeBuckets.gt512 + b.readSizeBuckets.gt512,
   },
+  interArrivalGapsMs: [...a.interArrivalGapsMs, ...b.interArrivalGapsMs].slice(0, 4_000),
+  maxInterArrivalMs: Math.max(a.maxInterArrivalMs, b.maxInterArrivalMs),
 });
 
 // --------------------------------------------------------------------------- public API

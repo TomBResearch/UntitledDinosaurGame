@@ -1436,3 +1436,54 @@ eviction chain (C2) and not on terminal dedupe, as the ADR anticipates; PE-4 map
 alternative to an existing scenario; PE-5 rides the accepted Phase 1 journal replay. No closure
 adoption; no policy change; GA-11 outstanding; Gate A remains Not Run. Two consecutive 15/15
 greens (`dpa4h`, `dpa4i`); every first-run refutation (`dpa4a–dpa4g`) preserved in the bundle.
+
+## 14.8. GA-5b's counter identity under the microscope, and GA-11's two inequalities actually evaluated (slice 6i, 2026-11-23)
+
+Two bounded deliverables, both DIAGNOSTIC, neither a Gate A verdict.
+
+**(i) The GA-5b identity, instrumented — and a decision proposal, not an ADR edit.**
+`deliveryLedger()` rows now carry the FULL disposition record (`resolvedThrough`, `gapStart`,
+`gapEnd`, `retiredUnrepresented`, `sentCount` beside `ack`), and `gaRecovery` exposes the pending
+journal's ENTRIES, so the same-delivery correlation is traceable per sample. The GA-5b scenario now
+samples the client's disposition view ACROSS the prune: `pending [K]` on one sample, and the next
+delivery row `{ack: K, resolvedThrough: K, gap: [0,0], pending: []}` — the eaten frame's own ack slot
+covered on the delivery that prunes it, no gap named, while the domain's consumed set is exactly the
+twin. A FIRST-RUN ASSERTION THAT THE STAMP EQUALITIES WERE SHARED WITH THE TWIN WAS REFUTED BY THIS
+TRACE (`dpa5f`, preserved) and the expectation revised to the measured watermark-pushed form: three
+counters (producer domain-local stamp, raw handle send/ack slot, server `_lastSeq`) with distinct
+owners, and the pre-buffer decline arising because the RAW BYPASS pushed `_lastSeq` past the producer
+frontier. The new `GA-5b invariant control` row is the ANTI-ALIAS control: in the healthy window the
+consumed stamps are contiguous from 1, `resolvedThrough` tracks sends, no gap is named, and dedupe
+NEVER fires — under (pinned accept rule + stamp = sentCount + 1 strictly increasing) a pre-buffer
+discard is unreachable, terminal form included; the alias exists ONLY via the fixture's labelled raw
+re-stamp. Twin coverage reconciles with "resolvedThrough never advances past a genuine hole" because
+the eaten stamp HAS a disposition (declined at the boundary) and a hole has none — GA-5a's named-gap
+blocking, measured in the same run, is the contrast case. The ADR question is answered by
+`docs/adr/proposals/PROPOSED-0003a-dedupe-observability-and-terminal-dedup-decision.md` (PROPOSAL, ADR-0003
+untouched): options A (keep the letter, keep blocked rows), B (refine to observable safety + causal
+correlation + invariant control + unidentified-loss-stays-unidentified; recommended), C (upstream
+disposition hook ask), each with cost/risk; PE-1 failing alone continues to DENY production dedupe
+closure regardless of option; no production edits, no monkeypatches, closure policy unchanged.
+
+**(ii) GA-11: the two inequalities, EVALUATED — with sources named and production staying Not-Run.**
+New cell `--cell ga11-calibration` (small targeted batch, not the full grid): three legs
+(direct / proxy-zero / proxy 100±20 seeded), fixed seed 1001, 90 pings per leg on the ACCEPTED seam
+(`transport.pingLatency` → `Room.ping` on the playing socket) at a declared 100 ms cadence, every raw
+sample retained; patch intervals measured from `deliveryLedger` arrivals beside the adopted 100 ms
+configuration; server tick population read IN PROCESS (raw inter-tick overrun, step duration, queue
+residence p99 + high-water); arrival stall from the NEW proxy inter-arrival instrumentation
+(`interArrivalGapsMs`/`maxInterArrivalMs`, raw host-monotonic per direction, unit-tested on the
+synthetic clock) with the direct leg declaring its different stall source. Declared formulas, not
+fitted: `J = ceil((p99−p50)/tickMs)`, `stallFrames = max(0, ceil((stallMax−tickMs)/tickMs))`,
+`B + J·λ + stall ≤ bufferMaxSize` (provisional B/λ/bufferMaxSize READ from `INPUT_ENVELOPE_DEFAULTS`),
+`clientSnapshotDeadlineMs ≥ 4×100 + 2×p99(RTT)`. Results (`dpa5d`, `dpa5h`, consecutive greens):
+inequality 1 holds on every leg (LHS 11/21/23 ≤ 32); inequality 2 HOLDS on the direct floor
+(p99 ≈ 2–3 ms) and FAILS on the 200 ms-class profile (p99 ≈ 228 ms ⇒ RHS ≈ 856 > 500) EXACTLY AS
+PREDECLARED — the provisional 500 ms deadline tolerates p99 RTT ≤ 50 ms at the adopted patch
+interval, and that tolerance bound IS the production-tuning question. Every leg's impairment source
+is named; NO leg is production or production-directed (all loopback), so the PRODUCTION-DIRECTED
+evaluation of both inequalities stays Not-Run, with the exact missing representative conditions
+recorded (WAN RTT/jitter against deployed topology; production-host tick overrun under production
+load; production client cadence patch intervals). No production values adopted; nothing shifted.
+16/16 ga-scenarios and 5/5 ga11 rows, two consecutive greens each; unit suite green including the
+new inter-arrival proxy test. Gate A remains Not Run.

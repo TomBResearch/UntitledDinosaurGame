@@ -800,7 +800,7 @@ interface PredPredictorSurface {
   presentation(): { x: number; z: number } | null;
   heldSnapshot(): { x: number; z: number } | null;
   pendingJournal(): readonly { seq: number; epoch: number }[];
-  deliveryLedger(): readonly { accepted: boolean; reason: string; delivery: { revision: number; epoch: number; authorityTick: number; atMs: number; ack: number } }[];
+  deliveryLedger(): readonly { accepted: boolean; reason: string; delivery: { revision: number; epoch: number; authorityTick: number; atMs: number; ack: number; resolvedThrough: number; gapStart: number; gapEnd: number; retiredUnrepresented: number; sentCount: number } }[];
   tickLedger(): readonly { action: string; reason: string; reconcileSeq: number }[];
   /** END-POSE DIAGNOSTIC (renamed): pre-smoothing end-pose delta, pending window included. */
   endPoseDiagnostics(): readonly PredEndPoseRow[];
@@ -3949,7 +3949,8 @@ interface GaSnapshot {
   sentGensLen: number;
   sentMonotonic: boolean;
   deliveryTally: { accepted: number; rejected: number; oldEpochAccepted: number; oldEpochRejected: number; rejectReasons: string[] };
-  lastDelivery: { epoch: number; authorityTick: number; ack: number; revision: number; accepted: boolean; reason: string; atMs: number } | null;
+  lastDelivery: { epoch: number; authorityTick: number; ack: number; revision: number; accepted: boolean; reason: string; atMs: number; resolvedThrough: number; gapStart: number; gapEnd: number; retiredUnrepresented: number; sentCount: number } | null;
+  pendingEntries: { seq: number; epoch: number }[];
   /** authorityTick of every ACCEPTED delivery — lets a scenario ask whether ANY publication at or
    *  after a server decision tick ever reached this client (GA-7 withheld-vs-delivered contrast). */
   acceptedTicks: number[];
@@ -4009,8 +4010,14 @@ const gaRecovery = (page: Page, opts: { sinceIndex?: number; oldEpoch?: number }
           accepted: last.accepted,
           reason: last.reason,
           atMs: last.delivery.atMs,
+          resolvedThrough: last.delivery.resolvedThrough,
+          gapStart: last.delivery.gapStart,
+          gapEnd: last.delivery.gapEnd,
+          retiredUnrepresented: last.delivery.retiredUnrepresented,
+          sentCount: last.delivery.sentCount,
         };
       })(),
+      pendingEntries: p.pendingJournal().map((entry) => ({ seq: entry.seq, epoch: entry.epoch })),
       acceptedTicks: rows.filter((row) => row.accepted).map((row) => row.delivery.authorityTick),
       acceptedDeliveries: rows.filter((row) => row.accepted).map((row) => ({ tick: row.delivery.authorityTick, epoch: row.delivery.epoch })),
     };
@@ -4614,6 +4621,22 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence
       s5['deliveriesAt900'] = (await gaRecovery(ctx.pageM)).deliveries; // deliveries MUST be flowing
       await wait(900);
       s5['deliveriesAt1800'] = (await gaRecovery(ctx.pageM)).deliveries;
+      // ── Invariant control (measured on the HEALTHY window, before any fixture interference):
+      // a producer obeying the admissible invariant — same domain, stamp = sentCount + 1, strictly
+      // increasing — makes pre-buffer dedupe UNREACHABLE, because every stamp exceeds every stamp
+      // yet accepted (accept() can only decline <= _lastSeq). The consumed list is the witness:
+      // contiguous from 1 means accept() declined NOTHING in this window.
+      const invConsumed = consumedSince(ctx.roomId, 0, ctx.sessionId);
+      const invSnap = await gaRecovery(ctx.pageM);
+      s5['invariantControl'] = {
+        consumed: invConsumed.length,
+        contiguousFromOne: invConsumed.length > 10 && invConsumed.every((seq, i) => seq === i + 1),
+        resolvedThrough: invSnap.lastDelivery?.resolvedThrough ?? -1,
+        sentCount: invSnap.lastDelivery?.sentCount ?? -1,
+        gapStart: invSnap.lastDelivery?.gapStart ?? -1,
+        gapEnd: invSnap.lastDelivery?.gapEnd ?? -1,
+        episodes: invSnap.events.length,
+      };
       const tickIndex0 = gatedRoom(ctx.roomId).tickRecords.length;
       const seen0 = await reportGaTracks(ctx.pageO);
       const track0 = seen0.tracks.find((t) => t.sessionId === ctx.sessionId);
@@ -4693,14 +4716,51 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence
         // is exactly jumpSeq. The pinned core eats it before the buffer; its journal entry waits.
         holder.predictor.send({ generation: 2, moveX: -1, moveZ: 0 }, true);
         journal.push({ seq: jumpSeq, role: 'eaten-by-dedupe', generation: 2, atMs: performance.now() });
-        return { jumpSeq, jumpAck, pending: holder.predictor.pendingJournal().length };
+        const audit = holder.predictor.sentAudit();
+        const stampedTwice = audit.filter((row) => row.seq === jumpSeq).length;
+        return {
+          jumpSeq,
+          jumpAck,
+          pending: holder.predictor.pendingJournal().length,
+          pendingEntries: holder.predictor.pendingJournal().map((entry) => entry.seq),
+          sentAuditRowsForStamp: stampedTwice,
+        };
       });
       s5['eatenSetup'] = eaten;
       // MEASURE what the terminal dedupe does to the client's expectation, whichever way it goes:
       // either a §3.2 episode fires, or the ack twin (the accepted frame with the SAME stamp)
       // prunes the eaten one and the well-formed client correctly stays idle. Both outcomes are
       // recorded; neither is fitted.
-      await wait(1_500);
+      // SAME-DELIVERY TRACE: sample the client's disposition view across the twin's consumption —
+      // the sample whose delivery carries ack == resolvedThrough == jumpSeq (gap 0, no hole: the
+      // stamp HAS a disposition, the twin's own) is the same delivery that prunes the pending
+      // entry [jumpSeq]. This is the measured correlation the decision record cites; it is also
+      // the reconciliation with 'resolvedThrough cannot advance past a genuine hole' — the stamp
+      // advanced because K is genuinely resolved (dequeued once), not because an ack was taken
+      // on faith. A GENUINE hole behaves the other way, as GA-5a's named-gap trace showed.
+      const deliveriesBeforeTrace = (await gaRecovery(ctx.pageM)).deliveries;
+      const traceB: Record<string, unknown>[] = [];
+      let tracePruned = false;
+      for (let i = 0; i < 30; i += 1) {
+        const snapT = await gaRecovery(ctx.pageM);
+        const d = snapT.lastDelivery;
+        traceB.push({
+          deliveries: snapT.deliveries,
+          ack: d?.ack ?? -1,
+          resolved: d?.resolvedThrough ?? -1,
+          gap: [d?.gapStart ?? -1, d?.gapEnd ?? -1],
+          sentCount: d?.sentCount ?? -1,
+          authorityTick: d?.authorityTick ?? -1,
+          pending: snapT.pendingEntries.map((entry) => entry.seq),
+          state: snapT.state,
+        });
+        if (snapT.deliveries > deliveriesBeforeTrace && snapT.pendingEntries.length === 0) { tracePruned = true; break; }
+        if (snapT.deliveries > deliveriesBeforeTrace + 6) break; // bounded: the twin's delivery already landed
+        await wait(100);
+      }
+      s5['deliveryTraceB'] = traceB;
+      s5['pruneObservedOnDelivery'] = tracePruned;
+      await wait(1_200);
       const afterSettle = await gaRecovery(ctx.pageM);
       s5['pendingAfterAckSettle'] = afterSettle.pending;
       s5['stateAfterEaten'] = afterSettle.state;
@@ -4758,6 +4818,8 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence
       s5['moverSignalsB'] = signalsB;
       const journalRows = await ctx.pageM.evaluate(() => (globalThis as unknown as { __udgGa5Journal?: unknown[] }).__udgGa5Journal ?? []);
       s5['clientJournal'] = journalRows;
+      const inv5b = (s5['invariantControl'] ?? {}) as Record<string, unknown>;
+      const pruneRow = ((s5['deliveryTraceB'] as Record<string, unknown>[] | undefined)?.at(-1)) ?? {};
       cellCheck('GA-5a (REAL pre-buffer dedupe FOLLOWED BY A LATER STAMP, same domain, journaled; expectations REVISED with the disproved first-run records preserved): with the wire quieted first, a replayed stamp is discarded by the PINNED core pre-buffer while its bytes demonstrably arrived (c2s receipts counted around the sends); consumed stamps stay UNIQUE; the room NAMES the resulting range in its disposition record (the replay consumed a send-counter slot, so the next contiguous stamp jumped — sent <= stamped, PR-15 limit) and the client\'s guard DETECTS the named range (gap-named refusal) and RESYNCHRONISES through a complete §3.2 episode WITHIN BUDGET; the retirement subtraction stays ZERO for that frame (no RETIRED_UNREPRESENTED anywhere, retired=0 at the close), the SERVER makes NO closure, and the deduped frame has ZERO discrete effect (observer z-axis unmoved; the discrete-effect ledger untouched)',
         (s5['consumedOnceA'] as boolean) === true && (s5['dupWireChunksDelta'] as number) >= 1
           && (s5['namedGapServerRecord'] as { start?: number } | null) !== null
@@ -4768,13 +4830,27 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence
           && (closuresA as unknown[]).length === 0
           && (s5['zDisplacement'] as number) < 0.05,
         s5);
-      cellCheck('GA-5b (REAL pre-buffer dedupe — TERMINAL, no later stamp, journaled) — SERVER-SIDE EVIDENCE COMPLETE; CLIENT RECOVERY SUB-LEG BLOCKED WITH PROOF, NOT PASSED SILENTLY: a forward send consumes the counter slot and the client\'s OWN next predictor-stamped input RE-STAMPS the accepted value; the pinned core eats it BEFORE the buffer while its bytes arrive; the eaten frame is applied ZERO times while its stamped predecessor exactly once (consumed records each stamp once, refusals zero, the discrete-effect ledger — which direct frames never advance — untouched, and the observer shows none of the eaten frame\'s distinctive reversal); the SERVER records the loss as UNIDENTIFIABLE: plain leave, retired=0, queue=0, no gap invented, no strand, NO closure — it asserts neither a cause nor a missing range; the journaled client transcript shows the eaten frame as SENT (the asymmetry is the finding, not a fudge). BLOCKED sub-leg with the measured reason: the ADR\'s client episode (deadline -> stop -> rejoin -> snapshot) cannot arise from a TERMINAL dedupe on this substrate — the accepted twin carries the SAME stamp, the ack watermark/resolvedThrough covers it, the pending entry prunes legitimately (measured: pending after settle), and the armed snapshot deadline bounds only OUTSTANDING inputs (armDeadlineIfNeeded, measured) — so no well-formed client expectation exists to time out; recovery from unidentifiable loss is evidenced INSTEAD by the GA-5a gap-named resync and the GA-6a/6b deadline recoveries, all in budget',
+      cellCheck('GA-5b (REAL pre-buffer dedupe — TERMINAL, no later stamp, journaled; expectations REVISED with the first-run disproof preserved) — SERVER-SIDE EVIDENCE COMPLETE; CLIENT RECOVERY SUB-LEG BLOCKED WITH PROOF, NOT PASSED SILENTLY: a forward send consumes the counter slot and the client\'s OWN next predictor-stamped input RE-STAMPS the accepted value; the pinned core eats it BEFORE the buffer while its bytes arrive; the eaten frame is applied ZERO times while its stamped predecessor exactly once (consumed records each stamp once, refusals zero, the discrete-effect ledger — which direct frames never advance — untouched, and the observer shows none of the eaten frame\'s distinctive reversal); the SERVER records the loss as UNIDENTIFIABLE: plain leave, retired=0, queue=0, no gap invented, no strand, NO closure — it asserts neither a cause nor a missing range; the journaled client transcript shows the eaten frame as SENT (the asymmetry is the finding, not a fudge). THE COUNTER-IDENTITY, MEASURED (a FIRST-RUN DISPROOF PRESERVED: this slice\'s first run asserted equality between the eaten stamp and the twin stamp and named the same-delivery prune row that way — the delivery trace REFUTED the equality, and the expectation is REVISED to what the substrate actually does): THREE counters exist — the predictor\'s DOMAIN-LOCAL stamp (producer: sentCount + 1), the raw handle send/ack SLOT the fixture bypasses, and the server watermark (_lastSeq). The bypass pushes the watermark to the twin stamp ' + String(eaten.jumpSeq) + ' (accepted); the producer\'s OWN next stamp — the domain-local ' + String((eaten.pendingEntries as number[])[0]) + ', never sent before in this domain — is declined by accept() because it is <= that pushed watermark: pre-buffer discard, TERMINAL, the eaten frame never consumed (consumed in the domain: exactly the twin, consumedB=' + String((s5['consumedB'] as number | undefined) ?? -1) + '). The eaten frame\'s OWN ack slot is then covered by the SAME delivery that prunes its pending entry (entry [' + String((eaten.pendingEntries as number[]).join()) + ']; prune row: ack ' + String(pruneRow["ack"]) + ', resolvedThrough ' + String(pruneRow["resolved"]) + ', gap ' + String(JSON.stringify(pruneRow["gap"])) + ', pending ' + String(JSON.stringify(pruneRow["pending"])) + ') — the disposition IS safely and CAUSALLY correlated on that delivery by ack plus resolvedThrough (the slot\'s input WAS disposed: declined at the boundary, not lost silently), and resolvedThrough ' + String(pruneRow["resolved"]) + ' pretends nothing beyond it; a genuine HOLE still blocks resolvedThrough and names a gap, as GA-5a measured. The EQUALITY-with-a-consumed-stamp alias of the original statement is genuinely realized in GA-5a (a replayed stamp equals an accepted one and is eaten there); GA-5b\'s terminal shape is the watermark-pushed variant — same accept() rule, same pre-buffer boundary, same BLOCKED consequence. With pending at zero the §3.2 deadline never arms (measured arming condition: pending non-empty), so THIS episode cannot recover — the sub-assertion stays BLOCKED with proof; recovery is evidenced by GA-5a\'s named-gap resync and GA-6a/6b/6c/7T. SCOPE of unsatisfiability: the PINNED accept rule (value <= _lastSeq declines) + the admissible healthy-producer invariant (same domain, stamp = sentCount + 1, strictly increasing, every accepted stamp raising _lastSeq CONTIGUOUSLY) — under it the producer\'s next stamp is always _lastSeq + 1 and accept() can NEVER decline; the watermark here was pushed PAST the producer frontier ONLY by the fixture\'s deliberate raw re-stamp — see the invariant-control row; the two together are the anti-alias proof',
         s5['consumedOnceB'] === true && s5['eatenAddedNothing'] === true && (refusedB as number) === 0
           && (s5['closeObservationsB'] as unknown[]).length >= 1 && s5['serverAssertedNothingB'] === true
           && (closuresB as unknown[]).length === 0
           && (stateB === 'tracking' || stateB === 'closed' || s5['budgetUsedMsB'] !== undefined)
-          && !(signalsB as string[]).includes('RETIRED_UNREPRESENTED') && !(signalsB as string[]).includes('STRAND_SUSPECTED'),
-        { ...s5, blockedSubleg: 'client episode cannot arise from terminal dedupe on the pinned stack (ack-twin + measured arm condition); evidenced recoveries: GA-5a gap-named resync, GA-6a/6b deadline recoveries' });
+          && !(signalsB as string[]).includes('RETIRED_UNREPRESENTED') && !(signalsB as string[]).includes('STRAND_SUSPECTED')
+          && (eaten.pendingEntries as number[]).length === 1
+          && eaten.jumpSeq > Number((eaten.pendingEntries as number[])[0] ?? -1)
+          && s5['pruneObservedOnDelivery'] === true
+          && pruneRow["ack"] === Number((eaten.pendingEntries as number[])[0] ?? -1)
+          && pruneRow["resolved"] === Number((eaten.pendingEntries as number[])[0] ?? -1)
+          && JSON.stringify(pruneRow['gap']) === '[0,0]'
+          && JSON.stringify(pruneRow['pending']) === '[]',
+        { ...s5, blockedSubleg: 'client episode cannot arise from terminal dedupe on the pinned stack (ack-twin + measured arm condition); evidenced recoveries: GA-5a gap-named resync, GA-6a/6b deadline recoveries', deliveryTraceB: s5['deliveryTraceB'], pruneRow });
+      cellCheck("GA-5b invariant control — under the admissible healthy-producer invariant (same domain, stamp = sentCount + 1, strictly increasing) pre-buffer dedupe is UNREACHABLE — measured on the healthy window: the healthy pump window BEFORE any fixture interference: consumed stamps are CONTIGUOUS FROM 1 (" + String(inv5b["consumed"]) + " consumed, contiguous " + String(inv5b["contiguousFromOne"]) + "), resolvedThrough " + String(inv5b["resolvedThrough"]) + " tracks sends " + String(inv5b["sentCount"]) + " (in-flight tolerance <= 6, recorded), no gap was ever named (gap " + String(inv5b["gapStart"]) + ".." + String(inv5b["gapEnd"]) + "), zero recovery events (" + String(inv5b["episodes"]) + "). accept() declines only values <= the last accepted stamp, so an invariant-obeying producer is NEVER declined: the ONLY route to the GA-5b alias is the fixture raw re-stamp (a bypass of the producer), and the consumed-slot jump is the bypass own fingerprint — the ANTI-ALIAS CONTROL: the healthy population shows the dedupe NEVER fires without the bypass",
+        inv5b["contiguousFromOne"] === true &&
+        inv5b["episodes"] === 0 &&
+        Number(inv5b["gapStart"]) === 0 &&
+        Number(inv5b["gapEnd"]) === 0 &&
+        Math.abs(Number(inv5b["sentCount"]) - Number(inv5b["resolvedThrough"])) <= 6,
+        inv5b);
       await gaStopPump(ctx.pageM);
     }, s5);
 
@@ -5017,4 +5093,291 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence
   void testInfo;
   const anyFailure = checks.filter((record2) => !record2.ok);
   expect(anyFailure.map((record2) => record2.name), `failed ga-scenario rows: ${JSON.stringify(anyFailure.map((r2) => r2.name))}`).toEqual([]);
+});
+
+// ───────────────────────────────────────────────────────────────────────────── GA-11 calibration
+/**
+ * UDG-SPIKE-001 slice 6i — GA-11 CALIBRATION BATCH (DIAGNOSTIC, NOT Gate A, NOT the full profile
+ * grid). The two ADR-0003 §GA-11 inequalities:
+ *
+ *   (1) B + J·λ + stall ≤ bufferMaxSize
+ *   (2) clientSnapshotDeadlineMs ≥ 4 × patch interval + 2 × measured p99 RTT
+ *
+ * are EVALUATED here on measured, SOURCE-LABELLED populations — small targeted batch, three legs,
+ * declared formulas, replayable seed/cadence, raw series retained. Every impairment source is
+ * named per the ADR rule ("the impairment source of each population is named, and the two
+ * inequalities are evaluated only on values whose source is declared production or measured
+ * toward production"): every leg in THIS batch is loopback — direct or harness-proxy — so none
+ * is production or production-directed; the production-directed evaluation stays Not-Run, and
+ * the exact missing representative conditions are recorded rather than glossed. Nothing here
+ * adopts a production value; the provisional numbers stay provisional test settings.
+ *
+ * Declared derivations (stated, not fitted per run):
+ *   tickMs   = 1000 / tickRate (50 ms at the fixture's 20 Hz)
+ *   λ        = inputRatePerTick (1 — the pump is one frame per tick, the §2 one-input commitment)
+ *   J_meas   = ceil((p99(RTT) − p50(RTT)) / tickMs)          — the RTT jitter population's tail
+ *   stallMs  = per-leg arrival stall: proxy c2s max inter-arrival (proxy legs, host monotonic at
+ *              the proxy hop) or the client delivery-gap max (direct leg, page clock) — SOURCE
+ *              labelled per leg; stallFrames = max(0, ceil((stallMs − tickMs) / tickMs))
+ *   inequality 1 verdict: 8 + J_meas·1 + stallFrames ≤ 32
+ *   inequality 2 verdict: 500 ≥ 4×100 + 2×p99(RTT)      (patch interval: the ADOPTED 100 ms
+ *                                                        configuration; measured delivery
+ *                                                        intervals are recorded beside it)
+ * RTT is the ACCEPTED measure — the SDK protocol ping on the seat's own playing socket, via the
+ * transport's public pingLatency pass-through (the same accepted seam as the elevated cell).
+ */
+const pctOf = (xs: readonly number[], p: number): number | null => {
+  if (xs.length === 0) return null;
+  const sorted = [...xs].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1))] ?? null;
+};
+
+// eslint-disable-next-line no-empty-pattern -- Playwright requires the destructured args object even when the cell uses only testInfo.
+test('spike cell: ga11-calibration — the two §GA-11 inequalities evaluated on measured, source-labelled loopback populations (DIAGNOSTIC calibration batch, NOT the full grid, NOT Gate A)', async ({}, testInfo) => {
+  test.skip(process.env['UDG_SPIKE_CELL'] !== 'ga11-calibration', 'dispatched only by `pnpm test:spike -- --id UDG-SPIKE-001 --cell ga11-calibration` (slice 6i calibration batch)');
+  test.setTimeout(600_000);
+  expect(fixture, 'the room fixture booted').toBeDefined();
+  const seed = Number(process.env['UDG_SPIKE_SEED'] ?? '1001');
+  const roomPort = Number(new URL(fixture?.endpoint ?? 'http://127.0.0.1:0').port);
+  const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
+  const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim().length > 0;
+  const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  const checks: { name: string; ok: boolean; detail: unknown }[] = [];
+  const cellCheck = (name: string, ok: boolean, detail: unknown): void => {
+    checks.push({ name, ok, detail });
+    check(name, ok, detail);
+  };
+
+  // The PROVISIONAL settings under evaluation — read from the hashed envelope block itself
+  // (packages/config/src/input.ts INPUT_ENVELOPE_DEFAULTS), never restated from memory.
+  const envelope = (await import('../../packages/config/dist/index.js')) as { INPUT_ENVELOPE_DEFAULTS: { bufferPressureMargin: number; inputRatePerTick: number; jitterAllowanceFrames: number; bufferMaxSize: number; clientSnapshotDeadlineMs: number } };
+  const B = envelope.INPUT_ENVELOPE_DEFAULTS.bufferPressureMargin;
+  const LAMBDA = envelope.INPUT_ENVELOPE_DEFAULTS.inputRatePerTick;
+  const BUFFER_MAX = envelope.INPUT_ENVELOPE_DEFAULTS.bufferMaxSize;
+  const DEADLINE = envelope.INPUT_ENVELOPE_DEFAULTS.clientSnapshotDeadlineMs;
+  const J_PROVISIONAL = envelope.INPUT_ENVELOPE_DEFAULTS.jitterAllowanceFrames;
+  const TICK_MS = Math.round(1000 / (fixture?.tickRate ?? 20));
+  const PATCH_INTERVAL_MS = 100; // the ADOPTED patch interval the inequality names; measured intervals recorded beside it
+  const RTT_SAMPLES_PER_LEG = 90;
+  const RTT_CADENCE_MS = 100;
+
+  interface LegResult {
+    readonly name: string;
+    readonly source: string;
+    readonly productionDirected: boolean;
+    readonly rttRawMs: readonly number[];
+    readonly rtt: { readonly p50: number | null; readonly p95: number | null; readonly p99: number | null };
+    readonly patchIntervalMeasuredMs: { readonly p50: number | null; readonly p95: number | null; readonly max: number | null; readonly deliveries: number; readonly accepted: number };
+    readonly arrivalStall: { readonly source: string; readonly maxMs: number | null };
+    readonly proxyContamination: { readonly maxTimerLagMs: number | null; readonly maxStreamWaitMs: number | null; readonly chunksDropped: number | null; readonly orderViolations: number | null } | null;
+    readonly tickMetrics: { readonly samples: number; readonly overrunRawMs: { readonly p95: number | null; readonly max: number | null }; readonly stepMs: { readonly p95: number | null; readonly max: number | null }; readonly queueDepth: { readonly p99: number | null; readonly maxEver: number } };
+    readonly derived: { readonly jitterP99Ms: number | null; readonly Jmeasured: number | null; readonly stallFrames: number | null; readonly lhs1: number | null; readonly verdict1: boolean | null; readonly rhs2: number | null; readonly verdict2: boolean | null };
+  }
+  const legs: LegResult[] = [];
+  const legsPushRawGaps: { leg: string; c2sInterArrivalRaw: number[]; s2cInterArrivalRaw: number[] }[] = [];
+
+  const plans = [
+    { name: 'L0-direct', oneWayMs: null as number | null, jitter: 0, source: 'NO impairment source: loopback DIRECT connect (calibration floor; loopback, not a production network)' },
+    { name: 'L1-proxy-zero', oneWayMs: 0, jitter: 0, source: 'HARNESS PROXY with ZERO stall, loopback (route-through cost only; harness hop, not a production network)' },
+    { name: 'L2-proxy-100-20', oneWayMs: 100, jitter: 20, source: 'HARNESS PROXY 100±20 ms one-way (seeded), LOOPBACK — a harness-DECLARED profile, explicitly NOT a production loss/RTT measurement (ADR: harness-modelled populations may never be presented as production)' },
+  ] as const;
+
+  const host = await startProxyHost();
+  let hostShutdown: Awaited<ReturnType<ProxyHostClient['shutdown']>> | null;
+  try {
+    for (const plan of plans) {
+      const tag = `ga11-${plan.name}`;
+      const pageM = await openSeatPage(`${tag}-M`, { bare: true });
+      const pageO = await openSeatPage(`${tag}-O`, { bare: true });
+      let handle = -1;
+      try {
+        let endpoint = fixture?.endpoint ?? '';
+        if (plan.oneWayMs !== null) {
+          const started = await host.request({ op: 'start', profile: { name: plan.name, oneWayMs: plan.oneWayMs, jitterBudgetMs: plan.jitter, seed }, targetHost: '127.0.0.1', targetPort: roomPort });
+          handle = started['handle'] as number;
+          endpoint = `http://127.0.0.1:${String(started['port'] as number)}`;
+        }
+        const joinM = await joinGaSeat(pageM, endpoint, { mode: 'create', roomName: ROOM_NAME });
+        expect(joinM.ok === true, `${tag}: mover joined`);
+        const roomId = joinM.roomId ?? '';
+        const joinO = await joinGaObserver(pageO, fixture?.endpoint ?? '', roomId);
+        expect(joinO.ok === true, `${tag}: observer joined direct`);
+        await wait(400);
+        const pump = gaPump(pageM, 120_000);
+        void pump;
+        await wait(600); // settle: deliveries must be flowing before the probe window
+        const flowing = await gaRecovery(pageM);
+        expect(flowing.deliveries, `${tag}: patches were flowing before the probe window`).toBeGreaterThan(2);
+
+        // RTT window: the ACCEPTED seam (pingLatency → Room.ping on the playing socket), fixed
+        // cadence, EVERY sample retained (a timeout sample is +Infinity and stays in the raw).
+        const rttRawMs = await pageM.evaluate(async (args) => {
+          const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+          if (holder === undefined || typeof holder.transport.pingLatency !== 'function') throw new Error('no pingLatency pass-through on the seat transport');
+          const samples: number[] = [];
+          for (let i = 0; i < args.count; i += 1) {
+            const ms = await new Promise<number>((resolve) => {
+              const timer = setTimeout(() => resolve(Number.POSITIVE_INFINITY), 4_000);
+              holder.transport.pingLatency!((echo) => {
+                clearTimeout(timer);
+                resolve(echo);
+              });
+            });
+            samples.push(ms);
+            await new Promise((r) => setTimeout(r, args.cadenceMs));
+          }
+          return samples;
+        }, { count: RTT_SAMPLES_PER_LEG, cadenceMs: RTT_CADENCE_MS });
+
+        // Delivery (patch) intervals as OBSERVED by the client adapter — the population the
+        // inequality's 'patch interval' is configured against (adopted 100 ms; measured beside).
+        const ledgerRows = await pageM.evaluate(async () => {
+          const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+          if (holder === undefined) throw new Error('no imp seat on this page');
+          return holder.predictor.deliveryLedger().map((row) => ({ atMs: row.delivery.atMs, accepted: row.accepted }));
+        });
+        const patchGaps: number[] = [];
+        for (let i = 1; i < ledgerRows.length; i += 1) patchGaps.push(Math.trunc((ledgerRows[i]!.atMs - ledgerRows[i - 1]!.atMs) * 100) / 100);
+        const acceptedDeliveries = ledgerRows.filter((row) => row.accepted).length;
+
+        // Server-side tick population, read IN PROCESS from the same room the seat plays on:
+        // raw tick-overrun (inter-tick interval minus the tick period), step duration, queue
+        // residence (per-tick max continuous-queue depth across seats, plus the high-water mark).
+        const rm = gatedRoom(roomId) as unknown as { metrics: { samples(): { atMs: number; stepDurationMs: number; maxDepth: number }[]; maxDepthEver: number }; tickRecords: readonly { consumed: readonly string[] }[] };
+        const tickSamples = rm.metrics.samples();
+        const tickOverruns: number[] = [];
+        for (let i = 1; i < tickSamples.length; i += 1) tickOverruns.push(Math.trunc((tickSamples[i]!.atMs - tickSamples[i - 1]!.atMs - TICK_MS) * 100) / 100);
+        const depths = tickSamples.map((s) => s.maxDepth);
+        const steps = tickSamples.map((s) => s.stepDurationMs);
+
+        // Arrival stall: proxy-side c2s inter-arrival (host monotonic at the hop) when a proxy
+        // is in the route; the client delivery-gap max otherwise — SOURCE labelled per leg.
+        let stallSource = 'client delivery-gap max (page clock; no proxy hop in this leg)';
+        let stallMaxMs: number | null = patchGaps.length > 0 ? Math.max(...patchGaps) : null;
+        let proxyContamination: LegResult['proxyContamination'] = null;
+        if (handle >= 0) {
+          const st = await host.request({ op: 'stats', handle });
+          const stats = (st['stats'] ?? st) as Record<string, unknown>;
+          const c2s = stats['c2s'] as Record<string, unknown> | undefined;
+          const s2c = stats['s2c'] as Record<string, unknown> | undefined;
+          stallSource = 'proxy c2s inter-arrival max (host monotonic at the proxy hop) — plus s2c recorded';
+          stallMaxMs = (c2s?.['maxInterArrivalMs'] as number | undefined) ?? null;
+          proxyContamination = {
+            maxTimerLagMs: (c2s?.['maxTimerLagMs'] as number | undefined) ?? null,
+            maxStreamWaitMs: (c2s?.['maxStreamWaitMs'] as number | undefined) ?? null,
+            chunksDropped: ((c2s?.['chunksDropped'] as number | undefined) ?? 0) + ((s2c?.['chunksDropped'] as number | undefined) ?? 0),
+            orderViolations: ((c2s?.['orderViolations'] as number | undefined) ?? 0) + ((s2c?.['orderViolations'] as number | undefined) ?? 0),
+          };
+          legsPushRawGaps.push({
+            leg: plan.name,
+            c2sInterArrivalRaw: ((c2s?.['interArrivalGapsMs'] as number[] | undefined) ?? []).slice(0, 1_000),
+            s2cInterArrivalRaw: ((s2c?.['interArrivalGapsMs'] as number[] | undefined) ?? []).slice(0, 1_000),
+          });
+        }
+
+        const rttFinite = rttRawMs.filter((ms) => Number.isFinite(ms));
+        const rtt = { p50: pctOf(rttFinite, 50), p95: pctOf(rttFinite, 95), p99: pctOf(rttFinite, 99) };
+        const jitterP99 = rtt.p99 !== null && rtt.p50 !== null ? rtt.p99 - rtt.p50 : null;
+        const Jmeasured = jitterP99 !== null ? Math.max(0, Math.ceil(jitterP99 / TICK_MS)) : null;
+        const stallFrames = stallMaxMs !== null ? Math.max(0, Math.ceil((stallMaxMs - TICK_MS) / TICK_MS)) : null;
+        const lhs1 = Jmeasured !== null && stallFrames !== null ? B + Jmeasured * LAMBDA + stallFrames : null;
+        const rhs2 = rtt.p99 !== null ? 4 * PATCH_INTERVAL_MS + 2 * rtt.p99 : null;
+        legs.push({
+          name: plan.name,
+          source: plan.source,
+          productionDirected: false,
+          rttRawMs: rttRawMs.map((ms) => (Number.isFinite(ms) ? Math.trunc(ms * 100) / 100 : -1)),
+          rtt,
+          patchIntervalMeasuredMs: {
+            p50: pctOf(patchGaps, 50),
+            p95: pctOf(patchGaps, 95),
+            max: patchGaps.length > 0 ? Math.max(...patchGaps) : null,
+            deliveries: ledgerRows.length,
+            accepted: acceptedDeliveries,
+          },
+          arrivalStall: { source: stallSource, maxMs: stallMaxMs },
+          proxyContamination,
+          tickMetrics: {
+            samples: tickSamples.length,
+            overrunRawMs: { p95: pctOf(tickOverruns, 95), max: tickOverruns.length > 0 ? Math.max(...tickOverruns) : null },
+            stepMs: { p95: pctOf(steps, 95), max: steps.length > 0 ? Math.max(...steps) : null },
+            queueDepth: { p99: pctOf(depths, 99), maxEver: rm.metrics.maxDepthEver },
+          },
+          derived: {
+            jitterP99Ms: jitterP99 !== null ? Math.trunc(jitterP99 * 100) / 100 : null,
+            Jmeasured,
+            stallFrames,
+            lhs1,
+            verdict1: lhs1 !== null ? lhs1 <= BUFFER_MAX : null,
+            rhs2: rhs2 !== null ? Math.trunc(rhs2 * 100) / 100 : null,
+            verdict2: rhs2 !== null ? DEADLINE >= rhs2 : null,
+          },
+        });
+
+        await gaStopPump(pageM);
+      } finally {
+        await gaStopPump(pageM).catch(() => undefined);
+        await wait(200);
+        if (handle >= 0) await host.request({ op: 'close', handle }).catch(() => undefined);
+        await pageM.close().catch(() => undefined);
+        await pageO.close().catch(() => undefined);
+      }
+    }
+  } finally {
+    hostShutdown = await host.shutdown();
+  }
+
+  const byName = (n: string): LegResult | undefined => legs.find((leg) => leg.name === n);
+  const allLegs = (pick: (leg: LegResult) => unknown): unknown[] => legs.map(pick);
+
+  cellCheck('inequality 1 (B + J·λ + stall ≤ bufferMaxSize) is EVALUATED on measured values for every leg — numbers recorded, nothing asserted about adopting them: provisional B=' + String(B) + ', λ=' + String(LAMBDA) + ', bufferMaxSize=' + String(BUFFER_MAX) + ' (the hashed envelope block), J PROVISIONAL=' + String(J_PROVISIONAL) + ' frames versus J measured per leg',
+    legs.length === plans.length && allLegs((leg) => leg.derived.lhs1 !== null && Number.isFinite(leg.derived.lhs1)).every((v) => v === true),
+    { legs: legs.map((leg) => ({ name: leg.name, jitterP99Ms: leg.derived.jitterP99Ms, Jmeasured: leg.derived.Jmeasured, stallFrames: leg.derived.stallFrames, lhs1: leg.derived.lhs1, verdict1: leg.derived.verdict1, stallSource: leg.arrivalStall.source })) });
+
+  cellCheck('inequality 2 (clientSnapshotDeadlineMs ≥ 4 × patch interval + 2 × measured p99 RTT) is EVALUATED for every leg with the PREDECLARED expectation stated up-front and the honest outcome kept: it HOLDS on the direct floor leg and is EXPECTED TO FAIL (recorded, not hidden) on the 200 ms-class profile — the provisional 500 ms deadline tolerates p99 RTT ≤ ' + String(Math.trunc((DEADLINE - 4 * PATCH_INTERVAL_MS) / 2)) + ' ms at the adopted ' + String(PATCH_INTERVAL_MS) + ' ms patch interval, and that bound IS the production-tuning question GA-11 exists to answer',
+    legs.length === plans.length && allLegs((leg) => leg.derived.verdict2 !== null).every((v) => v === true) &&
+    (byName('L0-direct')?.derived.verdict2 ?? false) === true &&
+    (byName('L2-proxy-100-20')?.derived.verdict2 ?? true) === false,
+    { deadline: DEADLINE, patchIntervalConfigMs: PATCH_INTERVAL_MS, toleranceForDeadlineMs: (DEADLINE - 4 * PATCH_INTERVAL_MS) / 2, legs: legs.map((leg) => ({ name: leg.name, p99: leg.rtt.p99, rhs2: leg.derived.rhs2, verdict2: leg.derived.verdict2 })) });
+
+  cellCheck('every population names its impairment source and NO leg claims production or production-directed — this batch is loopback (direct or harness-proxy), so the PRODUCTION-DIRECTED evaluation stays NOT-RUN with the exact missing representative conditions recorded (see notRun record): real WAN/carrier RTT+jitter populations against the deployed region topology, tick overrun and queue residence on production hosts under production concurrent load, and patch intervals measured with production client cadences — a harness-modelled profile is never presented as a network measurement',
+    legs.length === plans.length && allLegs((leg) => leg.productionDirected === false).every((v) => v === true) && allLegs((leg) => typeof leg.source === 'string' && leg.source.length > 10).every((v) => v === true),
+    { sources: legs.map((leg) => ({ leg: leg.name, source: leg.source })), notRun: 'production-directed populations: WAN RTT/jitter against deployed topology; production-host tick overrun under production load; production client cadence patch intervals' });
+
+  cellCheck('the batch is replayable and uncontaminated where it claims to be: fixed seed + declared profiles + declared cadence recorded; RAW series retained (RTT per leg, proxy inter-arrival, tick overruns summarized with raw max); zero proxy drops and zero order violations; pings were accepted (no +Infinity timeout samples) on the direct and zero-stall legs',
+    legs.length === plans.length &&
+    legs.every((leg) => leg.rttRawMs.length === RTT_SAMPLES_PER_LEG) &&
+    legs.every((leg) => leg.patchIntervalMeasuredMs.deliveries > 30) &&
+    legs.filter((leg) => leg.proxyContamination !== null).every((leg) => (leg.proxyContamination?.chunksDropped ?? -1) === 0 && (leg.proxyContamination?.orderViolations ?? -1) === 0) &&
+    (byName('L0-direct')?.rttRawMs.every((ms) => Number.isFinite(ms)) ?? false) &&
+    (byName('L1-proxy-zero')?.rttRawMs.every((ms) => Number.isFinite(ms)) ?? false),
+    { seed, cadenceMs: RTT_CADENCE_MS, samplesPerLeg: RTT_SAMPLES_PER_LEG, profiles: plans.map((plan) => ({ name: plan.name, oneWayMs: plan.oneWayMs, jitterBudgetMs: plan.jitter })), rawGaps: legsPushRawGaps });
+
+  cellCheck('measurement population health: every leg delivered patch flow during its window (>30 deliveries), sampled the room tick population in-process (tick-overrun, step duration, queue residence recorded raw), and the proxy host exited FINITELY with a receipt',
+    legs.every((leg) => leg.patchIntervalMeasuredMs.deliveries > 30 && leg.tickMetrics.samples > 50) &&
+    hostShutdown !== null && hostShutdown.exitCode === 0 && hostShutdown.receipt !== null,
+    { legs: legs.map((leg) => ({ name: leg.name, deliveries: leg.patchIntervalMeasuredMs.deliveries, patchP50: leg.patchIntervalMeasuredMs.p50, patchP95: leg.patchIntervalMeasuredMs.p95, tickSamples: leg.tickMetrics.samples, overrunP95: leg.tickMetrics.overrunRawMs.p95, overrunMax: leg.tickMetrics.overrunRawMs.max, stepMax: leg.tickMetrics.stepMs.max, queueP99: leg.tickMetrics.queueDepth.p99, queueMaxEver: leg.tickMetrics.queueDepth.maxEver })), teardown: hostShutdown?.receipt ?? null });
+
+  mkdirSync(OUT_DIR, { recursive: true }); // the cell owns its OUT_DIR: dispatched cells may run before any results-file write
+  writeFileSync(join(OUT_DIR, 'spike-cell-ga11-calibration.json'), `${JSON.stringify({
+    schemaVersion: 1,
+    kind: 'DIAGNOSTIC-NOT-GATE-A',
+    identity: { sha, dirty, seed, dispatchedBy: 'pnpm test:spike --id UDG-SPIKE-001 --cell ga11-calibration' },
+    provisional: { B, lambda: LAMBDA, jitterProvisional: J_PROVISIONAL, bufferMaxSize: BUFFER_MAX, clientSnapshotDeadlineMs: DEADLINE, patchIntervalConfigMs: PATCH_INTERVAL_MS, tickMs: TICK_MS },
+    formulas: {
+      J: 'J_meas = ceil((p99(RTT) - p50(RTT)) / tickMs) on the RTT population (the accepted seam: pingLatency → Room.ping on the playing socket)',
+      stall: 'stallFrames = max(0, ceil((arrivalStallMaxMs - tickMs) / tickMs)); arrival stall SOURCE labelled per leg (proxy c2s inter-arrival at the hop, or client delivery-gap max on the direct leg)',
+      inequality1: 'B + J·λ + stallFrames ≤ bufferMaxSize',
+      inequality2: 'clientSnapshotDeadlineMs ≥ 4 × patchIntervalConfigMs + 2 × p99(RTT)',
+    },
+    productionDirected: 'NOT-RUN for every inequality: every population in this batch is loopback (direct or harness-declared proxy profile). The ADR rule — evaluate only on values whose source is production or measured toward production — leaves both PRODUCTION evaluations Not-Run; this batch is calibration of the MEASUREMENT PATHS and the shape of the answer, never the production justification itself.',
+    legs,
+    teardown: hostShutdown,
+    checks,
+  }, null, 2)}\n`);
+  await testInfo.attach('spike-cell-ga11-calibration.json', { path: join(OUT_DIR, 'spike-cell-ga11-calibration.json'), contentType: 'application/json' });
+
+  console.log(`GA11 CELL SUMMARY ${JSON.stringify(legs.map((leg) => ({ leg: leg.name, p99: leg.rtt.p99, J: leg.derived.Jmeasured, stall: leg.derived.stallFrames, ineql1: leg.derived.verdict1, ineql2: leg.derived.verdict2 })))}`);
+  const anyFailure = checks.filter((record) => !record.ok);
+  expect(anyFailure.map((record) => record.name), `failed ga11 rows: ${JSON.stringify(anyFailure.map((r) => r.name))}`).toEqual([]);
 });

@@ -420,4 +420,50 @@ describe('UDG-SPIKE-001 ws-delay-proxy — withheld-window flush and labelled dr
     await proxy.close();
     echo.close();
   });
+
+  it('inter-arrival instrumentation records the RAW arrival-stall series on the synthetic clock (GA-11)', async () => {
+    const clock = new FakeClock();
+    const received: Buffer[] = [];
+    const echo = createServer((socket) => {
+      socket.on('data', (data) => { received.push(Buffer.from(data)); });
+    });
+    const echoPort = await listen(echo);
+    const profile = { name: 'unit', oneWayMs: 0, jitterBudgetMs: 0, seed: 1001 };
+    const proxy = await createWsDelayProxy({ listenPort: 0, targetHost: '127.0.0.1', targetPort: echoPort, profile, timer: clock });
+    const client = connect({ host: '127.0.0.1', port: proxy.port });
+    client.on('error', () => { /* teardown RST */ });
+    await new Promise<void>((resolve) => client.once('connect', resolve));
+
+    // The synthetic clock advances only HERE, so admission timestamps fall exactly on the
+    // declared stalls (± the one release-step taken to fire each zero-delay departure).
+    // Order per chunk: WRITE (admission stamps the FROZEN clock) -> let the event loop deliver ->
+    // advance to release. The declared stall is set BEFORE the next write, so admissions land
+    // exactly on it (plus the 1 ms release step).
+    client.write(Buffer.from('AAA'));
+    await realSleep(10);
+    clock.advance(1);
+    await until(() => received.length === 1, 'first chunk upstream');
+    clock.advance(35);
+    client.write(Buffer.from('BBB'));
+    await realSleep(10);
+    clock.advance(1);
+    await until(() => received.length === 2, 'second chunk upstream');
+    clock.advance(90);
+    client.write(Buffer.from('CCC'));
+    await realSleep(10);
+    clock.advance(1);
+    await until(() => received.length === 3, 'third chunk upstream');
+
+    const c2s = proxy.stats().c2s;
+    const gaps = [...c2s.interArrivalGapsMs];
+    expect(gaps.length, 'the raw series records BOTH stalls, unsmoothed').toBe(2);
+    expect(gaps[0], 'first declared stall (35 ms + the release step)').toBeGreaterThanOrEqual(35);
+    expect(gaps[0]!, 'no phantom gap').toBeLessThanOrEqual(36);
+    expect(gaps[1], 'second declared stall (90 ms + the release step)').toBeGreaterThanOrEqual(90);
+    expect(gaps[1]!, 'no phantom gap').toBeLessThanOrEqual(91);
+    expect(c2s.maxInterArrivalMs, 'the max is kept beside the raw series').toBe(gaps[1]);
+    client.destroy();
+    await proxy.close();
+    echo.close();
+  });
 });
