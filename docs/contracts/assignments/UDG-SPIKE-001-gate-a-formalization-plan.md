@@ -863,3 +863,73 @@ prototype stays opt-in until then, and the recovery-budget finding argues for pa
 with a budget conversation, not shipping the wait alone.
 Gate A verdict unchanged (NOT-PASS); no hosted matrix; dpa8e/dpa8g/dpa8h bundles untouched;
 no workflow/main/P06/GA-11 adoption; accepted ADR unchanged.
+
+## 20A. Slice 25–26 close-out — the F4 startup-timeout history and the rejoin attribution, LOCAL-ONLY evidence, NO recovered test verdict
+STARTUP-TIMEOUT HISTORY (no verdict recovered). The slice-24 F4 cell hung ~700 s after the room
+banner with no stage output. Twelve BOUNDED component diagnostics (node/Chromium/room server/real
+join/Vite/browser+Vite/full composition, one sample each, private ports) each came back healthy; the
+STALL MECHANISM was named: a `page.goto` with no `navigationTimeout` against a silent listener waits
+indefinitely (the same call with a 3 s deadline names itself in 3 s), and `runCommand` buffers child
+stdio through `spawnSync`, so a run killed from OUTSIDE yields ZERO Playwright stage output. One
+authorized dispatcher re-run (dpa8j) with an untracked bounded overlay (navigation 60 s / action 30 s)
+exited 124 at the outer cap WITHOUT reaching F4 and WITHOUT attribution — exactly the observability
+gap named above. NOTHING HERE RECOVERED A TEST VERDICT: the F4 cell's verdict remains NOT RUN, and no
+green was manufactured.
+LIGHT DIRECT REPRODUCTION + STALE FIELD CORRECTED (dpa8l). A direct (no-E2E-harness) composition of
+room + hop + Vite + pinned Chromium + the real adapter reproduced the §3.2 chain and, under LIGHT load,
+RECOVERED at +1 003 ms (`snapshot-recovered revision 12 epoch 2`, state `tracking`). The JSON's
+`recovery.recovered:false` is a STALE FIELD of that instrument — it read the epoch from the ORIGINAL
+transport handle instead of the newest delivery-ledger row, and its 12 s pump was never awaited (2
+sends, not ~240). The raw JSON is retained byte-wise; the correction lives in that bundle's README, not
+in a rewrite.
+ONE HEAVIER RUN, PRECONDITION-GATED BEFORE ARMING (dpa8m; single execution, 45.9 s, exit 0). Gate
+PASSED before the drop: **232 sends / 121 deliveries / room `resolvedThrough` == client `ack` 232 /
+one single monotone epoch (room = transport = ledger)**. Exactly ONE input terminally withheld (hop
+dropped 1 once, received 241 / delivered 240; room stayed 232 while the client sent 233). Trigger
+detail: **input age 519 ms** against the 400 ms opportunity wait, after two correctly HELD streaks.
+Chain: stop-sending → discard-pending → domain quarantine (socket close 4000) → backoff 250 ms; the
+rejoin attempt **ENTERED at +251 ms and NEVER SETTLED** (no exit, no error even past the 15 s epoch
+timeout it was given; NO second WebSocket ever constructed; the room never admitted and never refused a
+second seat — `joinRefusals 0`, ticks 258 → 784). The **INDEPENDENT 4 000 ms episode deadline produced
+the only terminal outcome**: `suspended`, `suspensionReason episode-deadline`, connection error
+`recovery-episode-expired`, pending empty, sent audit frozen at 233 = **no reissue**. MATCHED CONTROLS
+in the same room at the same moment: same poor profile on a clean handle, the identical `byId` the
+rejoin performs — **772 ms → epoch 2**; direct endpoint, no proxy — **67 ms → epoch 2**.
+KNOWN vs CAUSE-STILL-UNKNOWN. KNOWN (proven in that composition): the opportunity floor holds then
+fires as specified; §3.2 executes in order; the rejoin ladder wakes on time; the attempt never settles;
+only the independent deadline resolves the episode; the room, matchmaker and hop demonstrably serve
+that identical join in <1 s while the attempt sits in flight; the client re-issues nothing. STILL
+UNKNOWN (THE CAUSE): WHICH step inside `createSdkSeatTransport → client.joinById` produced neither seat,
+refusal nor error. There is **NO SAME-LOSS-HANDLE REQUEST TRACE**: the heavier run observed only
+prototype-level WebSocket lifecycle plus the hop's chunk counters, and because a browser keep-alive
+pool can carry the matchmake POST on an existing pair, "no new TCP pair at the hop" cannot prove "no
+request left the page"; the earlier light run's fetch trace (`POST /matchmake/joinById → 200 in 349 ms`)
+belongs to a DIFFERENT handle under light load. Closing this needs an SDK-/matchmaker-side observation
+seam (new harness surface) — deliberately NOT built here. Parity limits named in the artifact: one
+mover seat (no quiet/probe/observer), 20 s drain and 20 s watch vs the tracked 30 s / 8 s, pinned-Vite
+binary with a private cacheDir instead of Playwright-managed `pnpm dev`, no tick gate / page-error net /
+results writer, healthy-join controls rather than a second loss, n = 1 each side.
+LOCAL-ONLY EVIDENCE, AND WHAT WAS NOT PUSHED. `dpa8j` (dispatcher timeout run record), `dpa8k` (first
+direct reproduction, control confounded by reuse of the already-dropped handle), `dpa8l` (light
+reproduction + the correction above) and `dpa8m` (the heavier run) live under `artifacts/.local/…`,
+which is NOT tracked: those receipts, the diagnostic scripts and the overlay config are NOT pushed —
+only this document is. `dpa8m` now carries a SHA-256 manifest of its four receipts (manifest file added
+after the run; the originals byte-unchanged). The slice-25/26 harness instrumentation stays UNCOMMITTED
+in the worktree and is not part of this commit.
+SIDE EFFECT KNOWINGLY UNKNOWN (recorded honestly, without host-specific detail). Early in the
+startup-diagnostic session a BROAD process-stop command was issued to clear a wedged child; every later
+run used exact owned-PID cleanup with `/proc/<pid>/cmdline` + `cwd` verification and per-listener
+`/proc/net/tcp` checks. Whether that earlier broad stop disturbed any unrelated user-local process
+(e.g. a locally running dev preview or a session timeline/preview side effect) CANNOT BE RECONSTRUCTED
+from the retained evidence; later observations found the pre-existing private listener still serving,
+but that is not attribution. No user-/host-specific identifiers, ports or personal paths are recorded
+here, deliberately: this is a public document.
+STATUS. Gate A remains NOT-PASS overall and **NOT RUN for acceptance** (no hosted matrix dispatched; the
+F4 cell verdict unrecovered; §20's eligible failure stands published). GA-11 still needs the STAGING
+NOMINATION of §19's exact open need — a nominated production-like deployment per region with real client
+paths and the owner-executed matrix — before ANY provisional value can be DECIDED: G, snapshot 500 ms,
+episode 4 000 ms, the backoff ladder, the 400 ms wait candidate, and now explicitly the RECOVERY BUDGET
+FOR RTT-BEARING HOPS (this close-out's finding is that a rejoin can be admitted by nothing and refused
+by nothing while the budget alone terminates the episode). The wait-first wording remains a PROPOSAL
+DRAFT for ADR review. NOTHING IN §20A ADOPTS IT, CHANGES A DEFAULT OR BUDGET, CLOSES A GA ROW, ROLLS AN
+ATTEMPT, OR TOUCHES MAIN / THE ACCEPTED ADR / P06 / WORKFLOWS.
