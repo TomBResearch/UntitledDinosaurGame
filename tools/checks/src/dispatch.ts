@@ -159,22 +159,107 @@ export const SPIKE_DISPATCH_ID = 'UDG-SPIKE-001';
 const stringFlag = (flags: Record<string, string | boolean>, key: string): string | null =>
   typeof flags[key] === 'string' ? String(flags[key]) : null;
 
+/**
+ * The spike cell and coordinate contract (slice 11). ONE real full-profile matrix runner —
+ * `full-window` — is parameterized by an EXPLICIT --profile and --seed: it takes no defaults at
+ * all, formal or otherwise, because a matrix coordinate that silently inherits a profile is not
+ * the coordinate it labels. Under `UDG_GATE_A_FORMAL=1` NOTHING is defaulted: every cell names
+ * its profile and seed, matrix seeds are the official set, `self-check` (a pure-Node smoke) and
+ * the legacy `elevated-full` alias (baked-in elevated profile) are refused as formal cells. The
+ * scenario cells (ga9-ga13, ga-scenarios, ga11-calibration, ab-controls) stay SEPARATE coverage
+ * and never substitute for a matrix coordinate.
+ */
+export const SPIKE_CELLS = ['self-check', 'full-window', 'elevated-full', 'ab-controls', 'ga-scenarios', 'ga11-calibration', 'ga9-ga13'] as const;
+export const SPIKE_MATRIX_CELLS = ['full-window'] as const;
+export const SPIKE_SCENARIO_CELLS = ['ab-controls', 'ga-scenarios', 'ga11-calibration', 'ga9-ga13'] as const;
+/** Mirrors tools/load-test/src/run-spike.ts SPIKE_PROFILES; a unit test pins the two lists equal. */
+export const SPIKE_PROFILE_NAMES = ['lan', 'moderate', 'elevated', 'poor'] as const;
+export const SPIKE_OFFICIAL_SEEDS = [1001, 1002, 1003] as const;
+
+export interface SpikeRequest {
+  readonly cell: string;
+  /** The runner cell the browser spec greps on (elevated-full maps onto the full-window runner). */
+  readonly runnerCell: string;
+  readonly profile: string;
+  readonly seed: number;
+  readonly env: Readonly<Record<string, string>>;
+}
+
+export type SpikeValidation =
+  | { readonly ok: true; readonly request: SpikeRequest }
+  | { readonly ok: false; readonly reason: string };
+
+export const validateSpikeRequest = (
+  flags: Record<string, string | boolean>,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): SpikeValidation => {
+  const formal = env['UDG_GATE_A_FORMAL'] === '1';
+  const cell = stringFlag(flags, 'cell') ?? 'self-check';
+  if (!(SPIKE_CELLS as readonly string[]).includes(cell)) {
+    return { ok: false, reason: `unknown cell "${cell}". Cells: ${SPIKE_CELLS.join(' | ')}` };
+  }
+  const profileRaw = stringFlag(flags, 'profile');
+  const seedRaw = stringFlag(flags, 'seed');
+  if (profileRaw !== null && !(SPIKE_PROFILE_NAMES as readonly string[]).includes(profileRaw)) {
+    return { ok: false, reason: `unknown profile "${profileRaw}"; the adopted set is ${SPIKE_PROFILE_NAMES.join('|')}` };
+  }
+  if (seedRaw !== null && !/^\d+$/.test(seedRaw)) {
+    return { ok: false, reason: `--seed must be an integer, got "${seedRaw}"` };
+  }
+  if (cell === 'elevated-full') {
+    if (formal) {
+      return { ok: false, reason: 'elevated-full is the legacy alias with a BAKED-IN elevated profile and is not a formal matrix runner; formal matrix legs run --cell full-window with an explicit --profile and --seed' };
+    }
+    if (profileRaw !== null && profileRaw !== 'elevated') {
+      return { ok: false, reason: `elevated-full takes no --profile other than elevated (got "${profileRaw}"); it is the legacy elevated runner — use --cell full-window for a parameterized coordinate` };
+    }
+    const seed = seedRaw === null ? 1001 : Number(seedRaw);
+    return {
+      ok: true,
+      request: {
+        cell, runnerCell: 'full-window', profile: 'elevated', seed,
+        env: { UDG_SPIKE_CELL: 'full-window', UDG_SPIKE_PROFILE: 'elevated', UDG_SPIKE_PROFILE_SOURCE: 'legacy-elevated-full', UDG_SPIKE_SEED: String(seed) },
+      },
+    };
+  }
+  if (cell === 'self-check') {
+    if (formal) return { ok: false, reason: 'self-check is the pure-Node proxy smoke, not a formal cell' };
+    const profile = profileRaw ?? 'lan';
+    const seed = seedRaw === null ? 1001 : Number(seedRaw);
+    return { ok: true, request: { cell, runnerCell: cell, profile, seed, env: {} } };
+  }
+  // From here: the matrix runner and the scenario cells. NO silent defaults for these — explicit
+  // profile and seed always; formal additionally pins the matrix seed to the official set.
+  if (profileRaw === null) {
+    return { ok: false, reason: `cell ${cell} requires an explicit --profile (${SPIKE_PROFILE_NAMES.join('|')}) — no silent defaults: a run whose regime was not named cannot report under it` };
+  }
+  if (seedRaw === null) {
+    return { ok: false, reason: `cell ${cell} requires an explicit --seed — no silent defaults` };
+  }
+  const seed = Number(seedRaw);
+  if ((SPIKE_MATRIX_CELLS as readonly string[]).includes(cell) && formal && !(SPIKE_OFFICIAL_SEEDS as readonly number[]).includes(seed)) {
+    return { ok: false, reason: `formal matrix seed ${String(seed)} is not in the adopted official set (${SPIKE_OFFICIAL_SEEDS.join(', ')})` };
+  }
+  return {
+    ok: true,
+    request: {
+      cell, runnerCell: cell, profile: profileRaw, seed,
+      env: { UDG_SPIKE_CELL: cell, UDG_SPIKE_PROFILE: profileRaw, UDG_SPIKE_PROFILE_SOURCE: 'explicit', UDG_SPIKE_SEED: String(seed) },
+    },
+  };
+};
+
 export const spikeHandled = (flags: Record<string, string | boolean>): boolean =>
   stringFlag(flags, 'id') === SPIKE_DISPATCH_ID;
 
 export const spikeDispatch = (flags: Record<string, string | boolean>): number => {
   const root = process.cwd();
-  const cell = stringFlag(flags, 'cell') ?? 'self-check';
-  const profile = stringFlag(flags, 'profile') ?? 'elevated';
-  const seed = stringFlag(flags, 'seed') ?? '1001';
-  if (cell !== 'self-check' && cell !== 'elevated-full' && cell !== 'ab-controls' && cell !== 'ga-scenarios' && cell !== 'ga11-calibration' && cell !== 'ga9-ga13') {
-    process.stderr.write(`test:spike --id ${SPIKE_DISPATCH_ID}: unknown cell "${cell}". Cells: self-check | elevated-full | ab-controls | ga-scenarios | ga11-calibration | ga9-ga13\n`);
+  const validated = validateSpikeRequest(flags);
+  if (validated.ok !== true) {
+    process.stderr.write(`test:spike --id ${SPIKE_DISPATCH_ID}: ${validated.reason}\n`);
     return 2;
   }
-  if (!/^\d+$/.test(seed)) {
-    process.stderr.write(`test:spike --id ${SPIKE_DISPATCH_ID}: --seed must be an integer, got "${seed}"\n`);
-    return 2;
-  }
+  const request = validated.request;
   const build = runCommand(['node', join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(root, 'tools', 'load-test', 'tsconfig.json')], { cwd: root, timeoutMs: 180_000 });
   if (build.exitCode !== 0) {
     process.stderr.write('test:spike: the load-test harness failed to build:\n');
@@ -182,21 +267,20 @@ export const spikeDispatch = (flags: Record<string, string | boolean>): number =
     process.stderr.write(build.stderr);
     return build.exitCode;
   }
-  if (cell === 'self-check') {
-    const result = runCommand(['node', join(root, 'tools', 'load-test', 'dist', 'run-spike.js'), '--self-check', '--profile', profile, '--seed', seed], { cwd: root, timeoutMs: 10 * 60 * 1000 });
+  if (request.cell === 'self-check') {
+    const result = runCommand(['node', join(root, 'tools', 'load-test', 'dist', 'run-spike.js'), '--self-check', '--profile', request.profile, '--seed', String(request.seed)], { cwd: root, timeoutMs: 10 * 60 * 1000 });
     process.stdout.write(result.stdout);
     process.stderr.write(result.stderr);
     if (result.timedOut) process.stderr.write('test:spike self-check timed out after 10 minutes\n');
     return result.timedOut ? 124 : result.exitCode;
   }
-  const grep = cell === 'ab-controls' ? 'spike cell: ab-controls' : cell === 'ga-scenarios' ? 'spike cell: ga-scenarios' : cell === 'ga11-calibration' ? 'spike cell: ga11-calibration' : cell === 'ga9-ga13' ? 'spike cell: ga9-ga13' : 'spike cell: elevated-full';
   const result = runCommand(
-    ['pnpm', 'exec', 'playwright', 'test', 'tests/e2e/netcode.spec.ts', '--project=chromium', '-g', grep],
-    { cwd: root, timeoutMs: 30 * 60 * 1000, env: { UDG_SPIKE_CELL: cell, UDG_SPIKE_SEED: seed } },
+    ['pnpm', 'exec', 'playwright', 'test', 'tests/e2e/netcode.spec.ts', '--project=chromium', '-g', `spike cell: ${request.runnerCell}`],
+    { cwd: root, timeoutMs: 30 * 60 * 1000, env: { ...request.env } },
   );
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
-  if (result.timedOut) process.stderr.write('test:spike elevated-full cell timed out after 30 minutes\n');
+  if (result.timedOut) process.stderr.write(`test:spike ${request.cell} cell timed out after 30 minutes\n`);
   return result.timedOut ? 124 : result.exitCode;
 };
 

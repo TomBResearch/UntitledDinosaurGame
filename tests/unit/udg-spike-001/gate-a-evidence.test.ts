@@ -16,7 +16,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -34,6 +34,7 @@ type EvidenceModule = {
     readonly candidateSha: string;
     readonly runId?: string;
     readonly rowsFile: string;
+    readonly bundleDir?: string;
   }) => { register: Record<string, unknown>; demotions: readonly string[] };
   gateACandidateIssues: (
     absoluteRunDir: string,
@@ -289,3 +290,160 @@ function buildHonestBundle(directory: string): string {
   });
   return directory;
 }
+
+/* ------------------------------------------------------------------ slice 11: artefact BYTE binding
+ *
+ * The register's row entries cite files; the checker must RE-DERIVE the claim from the bytes:
+ * confined bundle-relative path (no escape, no absolute, no symlink), file present, SHA-256
+ * re-computed, and the artefact's OWN bytes carrying kind + candidate sha + attestation + zero
+ * retries for PASS. A `kind: "GATE-A"` string — in the register or even in the artefact — is not
+ * evidence by itself. And the rows manifest binding (register.source ↔ ga-rows-source.json) must
+ * re-hash and its path bindings must match the register.
+ */
+describe('UDG-SPIKE-001 Gate A artefact byte binding (slice 11, offline negatives)', () => {
+  const gateArtefact = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    schemaVersion: 1,
+    kind: 'GATE-A',
+    taskId: 'UDG-SPIKE-001',
+    implementationSha: CANDIDATE,
+    checks: [{ name: 'the leg was exact', ok: true }],
+    rotations: [],
+    ...over,
+  });
+
+  /** A bundle whose GA-9 row is PASS citing a REAL in-bundle artefact, built with bundleDir so the
+   * source manifest binding travels too. Everything else stays the honest NOT_RUN shape. */
+  function buildBoundBundle(directory: string): string {
+    mkdirSync(directory, { recursive: true });
+    writeJson(join(directory, 'report.json'), {
+      schemaVersion: evidence.EVIDENCE_SCHEMA_VERSION,
+      runId: 'unit-bound-dryrun',
+      taskId: 'UDG-SPIKE-001',
+      phase: 'gate-a',
+      implementationSha: CANDIDATE,
+      workingTreeDirty: false,
+      status: 'FAIL',
+    });
+    writeJson(join(directory, 'environment.json'), { nodeVersion: 'v24.22.2', pnpmVersion: '12.18.0' });
+    mkdirSync(join(directory, 'spike'), { recursive: true });
+    writeJson(join(directory, 'spike', 'ga9.json'), gateArtefact());
+    const rows = honestRows();
+    const ga9 = (rows['rows'] as Record<string, unknown>[]).find((r) => r['id'] === 'GA-9')!;
+    ga9['status'] = 'PASS';
+    ga9['artefactPath'] = join(directory, 'spike', 'ga9.json');
+    const rowsFile = join(directory, 'rows-input.json');
+    writeJson(rowsFile, rows);
+    const built = evidence.buildGateARegister({ candidateSha: CANDIDATE, rowsFile, bundleDir: directory });
+    writeJson(join(directory, 'ga-rows.json'), built.register);
+    writeJson(join(directory, 'ga-replays.json'), {
+      schemaVersion: evidence.EVIDENCE_SCHEMA_VERSION,
+      kind: 'DIAGNOSTIC-NOT-GATE-A',
+      taskId: 'UDG-SPIKE-001',
+      implementationSha: CANDIDATE,
+      legs: [{ tag: 'solo', ok: true, exactEqual: true, tipEqual: true, originalBytes: ['x'], replayedBytes: ['x'] }],
+    });
+    return directory;
+  }
+
+  const codesOf = (dir: string): string[] => evidence.gateACandidateIssues(dir, { candidateSha: CANDIDATE }).map((i) => i.code);
+  const resha = (bundle: string, relPath: string): void => {
+    const register = JSON.parse(readJson(join(bundle, 'ga-rows.json'))) as Record<string, unknown>;
+    const ga9 = (register['rows'] as Record<string, unknown>[]).find((r) => r['id'] === 'GA-9')!;
+    (ga9['artefact'] as Record<string, unknown>)['sha256'] = sha256(readFileSync(join(bundle, relPath), 'utf8'));
+    writeJson(join(bundle, 'ga-rows.json'), register);
+  };
+  const setRegisterPath = (bundle: string, rel: string): void => {
+    const register = JSON.parse(readJson(join(bundle, 'ga-rows.json'))) as Record<string, unknown>;
+    const ga9 = (register['rows'] as Record<string, unknown>[]).find((r) => r['id'] === 'GA-9')!;
+    (ga9['artefact'] as Record<string, unknown>)['path'] = rel;
+    writeJson(join(bundle, 'ga-rows.json'), register);
+  };
+
+  it('a bound PASS row whose bytes carry everything produces ZERO issues (the negatives below are teeth)', () => {
+    expect(evidence.gateACandidateIssues(buildBoundBundle(join(workspace, 'bound')), { candidateSha: CANDIDATE })).toEqual([]);
+  });
+
+  it('altered bytes, wrong candidate, kind downgrade, missing file, escape paths and symlinks are each refused', () => {
+    const altered = buildBoundBundle(join(workspace, 'bound-altered'));
+    writeJson(join(altered, 'spike', 'ga9.json'), gateArtefact({ note: 'edited after the register digested it' }));
+    expect(codesOf(altered)).toContain('GATEA-ARTEFACT-DIGEST');
+
+    const wrongCandidate = buildBoundBundle(join(workspace, 'bound-candidate'));
+    writeJson(join(wrongCandidate, 'spike', 'ga9.json'), gateArtefact({ implementationSha: OTHER }));
+    resha(wrongCandidate, 'spike/ga9.json');
+    const candidateCodes = codesOf(wrongCandidate);
+    expect(candidateCodes).toContain('GATEA-ARTEFACT-BYTES'); // cross-candidate evidence refuses
+
+    const downgraded = buildBoundBundle(join(workspace, 'bound-downgrade'));
+    writeJson(join(downgraded, 'spike', 'ga9.json'), gateArtefact({ kind: 'DIAGNOSTIC-NOT-GATE-A' }));
+    resha(downgraded, 'spike/ga9.json');
+    expect(codesOf(downgraded)).toContain('GATEA-ARTEFACT-BYTES'); // a hand-edited register cannot outvote the bytes
+
+    const missing = buildBoundBundle(join(workspace, 'bound-missing'));
+    rmSync(join(missing, 'spike', 'ga9.json'));
+    expect(codesOf(missing)).toContain('GATEA-ARTEFACT-PATH');
+
+    const escaping = buildBoundBundle(join(workspace, 'bound-escape'));
+    setRegisterPath(escaping, '../outside.json');
+    expect(codesOf(escaping)).toContain('GATEA-ARTEFACT-PATH');
+    setRegisterPath(escaping, '/etc/hosts');
+    expect(codesOf(escaping)).toContain('GATEA-ARTEFACT-PATH');
+
+    const symlink = buildBoundBundle(join(workspace, 'bound-symlink'));
+    const target = join(workspace, 'symlink-target.json');
+    writeJson(target, gateArtefact());
+    symlinkSync(target, join(symlink, 'spike', 'link.json'));
+    setRegisterPath(symlink, 'spike/link.json');
+    (function reshaLink(): void {
+      const register = JSON.parse(readJson(join(symlink, 'ga-rows.json'))) as Record<string, unknown>;
+      const ga9 = (register['rows'] as Record<string, unknown>[]).find((r) => r['id'] === 'GA-9')!;
+      (ga9['artefact'] as Record<string, unknown>)['sha256'] = sha256(readFileSync(target, 'utf8'));
+      writeJson(join(symlink, 'ga-rows.json'), register);
+    })();
+    expect(codesOf(symlink)).toContain('GATEA-ARTEFACT-PATH');
+  });
+
+  it('PASS needs bytes that ATTEST: a red check inside the artefact, recorded retries, or a path-less citation all refuse', () => {
+    const redInside = buildBoundBundle(join(workspace, 'bound-red'));
+    writeJson(join(redInside, 'spike', 'ga9.json'), gateArtefact({ checks: [{ name: 'the leg was exact', ok: true }, { name: 'p95 correction', ok: false }] }));
+    resha(redInside, 'spike/ga9.json');
+    expect(codesOf(redInside)).toContain('GATEA-ARTEFACT-BYTES');
+
+    const retried = buildBoundBundle(join(workspace, 'bound-retry'));
+    writeJson(join(retried, 'spike', 'ga9.json'), gateArtefact({ rotations: [{ tag: 'solo-retry1', contamination: 'rotation' }] }));
+    resha(retried, 'spike/ga9.json');
+    expect(codesOf(retried)).toContain('GATEA-ARTEFACT-BYTES'); // a retry-selected green cannot carry PASS
+
+    const noPath = buildBoundBundle(join(workspace, 'bound-nopath'));
+    const register = JSON.parse(readJson(join(noPath, 'ga-rows.json'))) as Record<string, unknown>;
+    const ga9 = (register['rows'] as Record<string, unknown>[]).find((r) => r['id'] === 'GA-9')!;
+    delete (ga9['artefact'] as Record<string, unknown>)['path'];
+    writeJson(join(noPath, 'ga-rows.json'), register);
+    expect(codesOf(noPath)).toContain('GATEA-ARTEFACT-PATH');
+  });
+
+  it('the source-manifest binding re-hashes: an altered ga-rows-source.json is named, and the builder refuses artefacts outside the bundle', () => {
+    const bundle = buildBoundBundle(join(workspace, 'bound-source'));
+    const register = JSON.parse(readJson(join(bundle, 'ga-rows.json'))) as Record<string, unknown>;
+    expect((register['source'] as Record<string, unknown>)['sha256'], 'the register carries the manifest digest').toMatch(/^[0-9a-f]{64}$/);
+    writeJson(join(bundle, 'ga-rows-source.json'), { schemaVersion: 1, taskId: 'UDG-SPIKE-001', candidateSha: CANDIDATE, rows: [{ id: 'GA-9', status: 'PASS', artefactPath: 'spike/other.json' }] });
+    expect(codesOf(bundle)).toContain('GATEA-SOURCE-MANIFEST');
+
+    // Builder side: a PASS citing a file OUTSIDE the bundle dir is demoted, not laundered.
+    const outsideDir = join(workspace, 'outside-target');
+    mkdirSync(outsideDir, { recursive: true });
+    const bundleDir = join(workspace, 'bound-outside');
+    mkdirSync(bundleDir, { recursive: true });
+    writeJson(join(outsideDir, 'ga9.json'), gateArtefact());
+    const rows = honestRows();
+    const ga9 = (rows['rows'] as Record<string, unknown>[]).find((r) => r['id'] === 'GA-9')!;
+    ga9['status'] = 'PASS';
+    ga9['artefactPath'] = join(outsideDir, 'ga9.json');
+    const rowsFile = join(workspace, 'rows-outside.json');
+    writeJson(rowsFile, rows);
+    const built = evidence.buildGateARegister({ candidateSha: CANDIDATE, rowsFile, bundleDir: bundleDir });
+    const row = (built.register['rows'] as Record<string, unknown>[]).find((r) => r['id'] === 'GA-9')!;
+    expect(row['status'], 'evidence that lives outside the bundle is not that bundle\'s evidence').toBe('NOT_RUN');
+    expect(built.demotions.join(' ')).toContain('confined to the bundle');
+  });
+});

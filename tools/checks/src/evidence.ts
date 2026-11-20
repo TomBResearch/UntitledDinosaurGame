@@ -20,9 +20,9 @@
  * directory is the alias REPO_ROOT, and the host name is replaced by a per-run alias.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, rmSync, writeFileSync } from 'node:fs';
 import { cpus, release, arch, platform, machine, totalmem, homedir, tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import {
   CONTRACT_TASK_IDS,
@@ -1602,7 +1602,7 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       'toolchain.pnpmCli': '=== "12.18.0" (owner clarification C-01)',
       'candidate.sha': '=== the full-40-hex dispatch candidate_sha, equal to report.implementationSha and to the checkout (evidence.js gate-a-check re-asserts; refused before install otherwise)',
       'candidate.workingTree': 'workingTreeDirty === false (a dirty tree captures nothing)',
-      'matrix.cells': '=== 12 runs (lan|moderate|elevated|poor x seeds 1001,1002,1003), each 20 s warm-up + 120 s measurement, each with achieved networkValidity under its OWN declared profile; an INVALID run stays INVALID',
+      'matrix.cells': '=== 12 runs (lan|moderate|elevated|poor x seeds 1001,1002,1003) of THE ONE parameterized full-window runner (`--cell full-window` with an EXPLICIT --profile and --seed per row; the CLI refuses unknown or silently defaulted coordinates under formal mode, and the unit suite proves all 12 plan rows are distinct pairs matching the adopted profile regimes), each 20 s warm-up + 120 s measurement in its OWN artefact directory with a timestamped isolated first attempt and zero automatic retries, each with achieved networkValidity under its OWN declared profile; an INVALID run stays INVALID. Scenario cells are separate coverage and never substitute for a matrix coordinate',
       'corrections.p95': '< 0.15 m raw horizontal on the elevated profile, unobstructed (acceptance-gates.md §7.3 as adopted)',
       'retries.forbidden': '=== 0 automatic retries in every eligible formal cell; rotation-retried harness attempts are DIAGNOSTIC-only and cannot produce a Gate A row PASS',
       'gateA.rows': `=== every id in GA_ROW_REGISTER present exactly once with a status in {${GATE_A_ROW_STATUSES.join(', ')}}; PASS ONLY with a kind-GATE-A artefact digest; GA-10a/GA-10b OUTSTANDING with reason + owner (UDG-007)`,
@@ -1621,18 +1621,28 @@ export const CAPTURE_PLANS: Readonly<Record<string, CapturePlan>> = {
       // The 12 matrix cells, sequential seeds inside each profile (assignment §4). UDG_GATE_A_FORMAL=1
       // switches the spike harness to the FORMAL schedule policy: the pre-registered gated cadence with
       // NO automatic retry — a rotation-contaminated leg makes that cell red, it is not retried away.
-      { label: 'spike-lan-1001', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'ga9-ga13', '--profile', 'lan', '--seed', '1001'], env: { UDG_GATE_A_FORMAL: '1', UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-SPIKE-001.json', UDG_GATE_A_ROWS_OUT: 'BUNDLE/ga-rows.json', UDG_GATE_A_REPLAYS_OUT: 'BUNDLE/ga-replays.json' }, measurements: true },
-      { label: 'spike-lan-1002', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'lan', '--seed', '1002'] },
-      { label: 'spike-lan-1003', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'lan', '--seed', '1003'] },
-      { label: 'spike-moderate-1001', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'moderate', '--seed', '1001'] },
-      { label: 'spike-moderate-1002', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'moderate', '--seed', '1002'] },
-      { label: 'spike-moderate-1003', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'moderate', '--seed', '1003'] },
-      { label: 'spike-elevated-1001', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'elevated', '--seed', '1001'] },
-      { label: 'spike-elevated-1002', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'elevated', '--seed', '1002'] },
-      { label: 'spike-elevated-1003', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'elevated', '--seed', '1003'] },
-      { label: 'spike-poor-1001', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'poor', '--seed', '1001'] },
-      { label: 'spike-poor-1002', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'poor', '--seed', '1002'] },
-      { label: 'spike-poor-1003', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'elevated-full', '--profile', 'poor', '--seed', '1003'] },
+      // The 12 matrix cells (assignment §4): ONE real full-profile runner (`--cell full-window`)
+      // parameterized by an EXPLICIT --profile and --seed per row — no unknown coordinates and no
+      // silent defaults are accepted under formal mode (validateSpikeRequest, unit-tested against
+      // this exact table: 12 distinct pairs, each matching the adopted regime of its coordinate).
+      // Each row writes to its OWN artefact directory under spike/<label>/; the window is the full
+      // 20 s + 120 s on the first isolated attempt with ZERO automatic retries — a red stays red.
+      ...(['lan', 'moderate', 'elevated', 'poor'] as const).flatMap((profile) => (['1001', '1002', '1003'] as const).map((seed) => ({
+        label: `spike-${profile}-${seed}`,
+        argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'full-window', '--profile', profile, '--seed', seed],
+        env: {
+          UDG_GATE_A_FORMAL: '1',
+          UDG_SPIKE_OUT: `BUNDLE/spike/spike-${profile}-${seed}`,
+          ...(profile === 'lan' && seed === '1001' ? { UDG_EVIDENCE_MEASUREMENTS: 'MEAS/UDG-SPIKE-001.json' } : {}),
+        },
+        ...(profile === 'lan' && seed === '1001' ? { measurements: true } : {}),
+      }))),
+      // Scenario coverage — GA-row cells kept SEPARATE from the matrix, never substituted for a
+      // network coordinate (review of the first T-5 table): the determinism/replay cell runs the
+      // gated schedule with zero retries under the formal env.
+      { label: 'scenario-ga9-ga13', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'ga9-ga13', '--profile', 'elevated', '--seed', '1001'], env: { UDG_GATE_A_FORMAL: '1', UDG_SPIKE_OUT: 'BUNDLE/spike/scenario-ga9-ga13', UDG_GATE_A_ROWS_OUT: 'BUNDLE/ga-rows.json', UDG_GATE_A_REPLAYS_OUT: 'BUNDLE/ga-replays.json' } },
+      { label: 'scenario-ga-scenarios', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'ga-scenarios', '--profile', 'elevated', '--seed', '1001'], env: { UDG_GATE_A_FORMAL: '1', UDG_SPIKE_OUT: 'BUNDLE/spike/scenario-ga-scenarios' } },
+      { label: 'scenario-ga11-calibration', argv: ['pnpm', 'test:spike', '--', '--id', 'UDG-SPIKE-001', '--cell', 'ga11-calibration', '--profile', 'elevated', '--seed', '1001'], env: { UDG_GATE_A_FORMAL: '1', UDG_SPIKE_OUT: 'BUNDLE/spike/scenario-ga11-calibration' } },
       // The register gate: refuses a register that hides a non-PASS row behind a PASS verdict,
       // that cites a diagnostic artefact as PASS, or that lost the candidate binding. Runs BEFORE
       // the bundle is published; a refusal exits 1 and captures nothing as a pass.
@@ -1667,6 +1677,9 @@ export interface GateARegisterFile {
   readonly taskId: string;
   readonly implementationSha: string;
   readonly runId?: string;
+  /** Digest binding of the rows manifest this register was built from (its sanitised copy travels
+   * in the bundle as ga-rows-source.json when built with --bundle). */
+  readonly source?: { readonly name: string; readonly sha256: string };
   readonly rows: readonly GateARowRecord[];
   readonly cfRows?: readonly GateARowRecord[];
   readonly networkValidity?: string;
@@ -1687,6 +1700,10 @@ export type GateAIssueCode =
   | 'GATEA-ROW-PASS-UNPROVEN'
   | 'GATEA-OUTSTANDING-INCOMPLETE'
   | 'GATEA-VERDICT-MASQUERADE'
+  | 'GATEA-ARTEFACT-PATH'
+  | 'GATEA-ARTEFACT-DIGEST'
+  | 'GATEA-ARTEFACT-BYTES'
+  | 'GATEA-SOURCE-MANIFEST'
   | 'GATEA-ROLE'
   | 'GATEA-DECISION-MASQUERADE'
   | 'GATEA-REPLAYS'
@@ -1718,6 +1735,14 @@ export const buildGateARegister = (options: {
   readonly candidateSha: string;
   readonly runId?: string;
   readonly rowsFile: string;
+  /**
+   * When given, every cited artefact must live INSIDE this bundle directory: the register stores
+   * the confined RELATIVE path (no escape, no symlink), and a sanitised copy of the rows manifest
+   * is written beside the register as `ga-rows-source.json` so the binding (row → path → bytes)
+   * travels with the bundle and `gate-a-check` can re-derive it (slice 11 — a digest string alone
+   * proves nothing; the bytes do).
+   */
+  readonly bundleDir?: string;
 }): { readonly register: GateARegisterFile; readonly demotions: readonly string[] } => {
   const supplied = readJsonOptional(options.rowsFile);
   if (supplied === null) throw new Error(`rows manifest unreadable: ${options.rowsFile}`);
@@ -1731,14 +1756,34 @@ export const buildGateARegister = (options: {
     let reason = typeof entry['reason'] === 'string' ? entry['reason'] : undefined;
     const artefactPath = typeof entry['artefactPath'] === 'string' ? entry['artefactPath'] : undefined;
     let artefact: GateARowRecord['artefact'];
+    let artefactPathRefused = false;
     if (artefactPath !== undefined && existsSync(artefactPath)) {
       const artefactDoc = readJsonOptional(artefactPath);
       const kind = typeof artefactDoc?.['kind'] === 'string' ? String(artefactDoc['kind']) : 'UNKNOWN';
-      artefact = { kind, sha256: sha256File(artefactPath), path: artefactPath.replace(/^.*artifacts\//, 'artifacts/') };
-      if (status === 'PASS' && kind !== 'GATE-A') {
-        demotions.push(`${id}: PASS refused — cited artefact declares kind "${kind}" (only GATE-A can support PASS); row recorded as DIAGNOSTIC`);
-        status = 'DIAGNOSTIC';
-        reason = `${reason ?? ''} [register] ${demotions[demotions.length - 1]}`.trim();
+      let storedPath = artefactPath.replace(/^.*artifacts\//, 'artifacts/');
+      if (options.bundleDir !== undefined) {
+        // Confine to the bundle: relative, no traversal, no symlink — a Gate A artefact that
+        // lives outside the bundle it is cited in is not that bundle's evidence.
+        const rel = relative(options.bundleDir, resolve(artefactPath));
+        const stat = lstatSync(resolve(artefactPath));
+        if (rel === '' || rel.startsWith('..') || isAbsolute(rel) || stat.isSymbolicLink() || !stat.isFile()) {
+          demotions.push(`${id}: PASS refused — cited artefact is not a regular file confined to the bundle (${artefactPath.replace(/\/home\/[^/]+\//, '<home>/')})`);
+          if (status === 'PASS') {
+            status = 'NOT_RUN';
+            reason = `${reason ?? ''} [register] ${demotions[demotions.length - 1]}`.trim();
+          }
+          artefactPathRefused = true;
+        } else {
+          storedPath = rel.split(sep).join('/');
+        }
+      }
+      if (artefactPathRefused !== true) {
+        artefact = { kind, sha256: sha256File(artefactPath), path: storedPath };
+        if (status === 'PASS' && kind !== 'GATE-A') {
+          demotions.push(`${id}: PASS refused — cited artefact declares kind "${kind}" (only GATE-A can support PASS); row recorded as DIAGNOSTIC`);
+          status = 'DIAGNOSTIC';
+          reason = `${reason ?? ''} [register] ${demotions[demotions.length - 1]}`.trim();
+        }
       }
     } else if (status === 'PASS') {
       demotions.push(`${id}: PASS refused — cited artefact is absent (${String(artefactPath ?? 'none given')})`);
@@ -1762,11 +1807,36 @@ export const buildGateARegister = (options: {
     return toRow(match ?? { id: spec.id, reason: 'no entry in the rows manifest' }, 'NOT_RUN');
   });
   const networkValidity = typeof supplied['networkValidity'] === 'string' ? supplied['networkValidity'] : undefined;
+  // The manifest binding (slice 11): the register records the digest of the SANITISED manifest
+  // copy that travels in the bundle (ga-rows-source.json — relative in-bundle paths, no machine
+  // paths), and `gate-a-check` re-hashes that copy and re-derives the row → path bindings from it.
+  // A hand-edited copy after the build moves the digest and is refused.
+  const sanitisedSourceRows = (source: readonly Record<string, unknown>[]) => source.map((entry) => {
+    const out: Record<string, unknown> = { id: entry['id'], status: entry['status'] };
+    if (typeof entry['reason'] === 'string') out['reason'] = entry['reason'];
+    if (typeof entry['owner'] === 'string') out['owner'] = entry['owner'];
+    if (typeof entry['artefactPath'] === 'string' && options.bundleDir !== undefined) {
+      out['artefactPath'] = relative(options.bundleDir, resolve(entry['artefactPath'])).split(sep).join('/');
+    }
+    return out;
+  });
+  if (options.bundleDir !== undefined) {
+    writeFileSync(join(options.bundleDir, 'ga-rows-source.json'), `${JSON.stringify({
+      schemaVersion: EVIDENCE_SCHEMA_VERSION,
+      taskId: 'UDG-SPIKE-001',
+      candidateSha: options.candidateSha,
+      rows: sanitisedSourceRows(suppliedRows),
+      cfRows: sanitisedSourceRows(suppliedCf),
+      ...(networkValidity === undefined ? {} : { networkValidity }),
+    }, null, 2)}\n`);
+  }
+  const sourceDigest = options.bundleDir === undefined ? undefined : sha256File(join(options.bundleDir, 'ga-rows-source.json'));
   const register: GateARegisterFile = {
     schemaVersion: EVIDENCE_SCHEMA_VERSION,
     taskId: 'UDG-SPIKE-001',
     implementationSha: options.candidateSha,
     ...(options.runId === undefined ? {} : { runId: options.runId }),
+    ...(options.bundleDir === undefined || sourceDigest === undefined ? {} : { source: { name: 'ga-rows-source.json', sha256: sourceDigest } }),
     rows,
     cfRows,
     ...(networkValidity === undefined ? {} : { networkValidity }),
@@ -1853,6 +1923,116 @@ export const gateACandidateIssues = (
     const honestVerdict = expectedVerdict === 'PASS' && (networkValidity === undefined || networkValidity === 'VALID') ? 'PASS' : 'NOT-PASS';
     if (register['verdict'] !== honestVerdict) {
       push('GATEA-VERDICT-MASQUERADE', `register verdict is ${String(register['verdict'])} but the rows compute ${honestVerdict} — verdict is a function of the rows, never a decision made beside them`);
+    }
+    // ---- artefact byte binding (slice 11). A row is worth exactly the bytes it cites: the path
+    // must be confined to this bundle (relative, no traversal, no symlink), the file must exist,
+    // re-hash to the registered digest, and its OWN bytes must carry the identity (kind, candidate
+    // sha, attestation, zero retries when applicable). A `kind: "GATE-A"` string in the register —
+    // or even in the artefact — proves nothing on its own; the same bytes must attest all of it.
+    const bundleRoot = resolve(absoluteRunDir);
+    const identityOfArtefact = (doc: Record<string, unknown>): string => {
+      if (typeof doc['implementationSha'] === 'string') return doc['implementationSha'];
+      const ident = asRecord(doc['identity']);
+      return typeof ident['commit'] === 'string' ? ident['commit'] : typeof ident['sha'] === 'string' ? ident['sha'] : '';
+    };
+    for (const row of allRows) {
+      const id = String(row['id']);
+      const status = String(row['status']);
+      const artefact = asRecord(row['artefact']);
+      if (Object.keys(artefact).length === 0) {
+        if (status === 'PASS') push('GATEA-ROW-PASS-UNPROVEN', `${id}: PASS cites no artefact file at all — there are no bytes to re-check`);
+        continue;
+      }
+      const rel = artefact['path'];
+      if (typeof rel !== 'string' || rel === '') {
+        push('GATEA-ARTEFACT-PATH', `${id}: cites an artefact with no path — a digest string without a bundle-relative file behind it cannot be re-checked${status === 'PASS' ? ' and cannot carry PASS' : ''}`);
+        continue;
+      }
+      if (isAbsolute(rel) || /^[A-Za-z]:[\\/]/.test(rel) || rel.includes('\\') || rel.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) {
+        push('GATEA-ARTEFACT-PATH', `${id}: cited path "${rel}" is not a clean bundle-relative path — absolute, traversing or malformed paths are refused`);
+        continue;
+      }
+      const absolute = resolve(join(bundleRoot, rel));
+      if (!absolute.startsWith(bundleRoot + sep)) {
+        push('GATEA-ARTEFACT-PATH', `${id}: cited path "${rel}" resolves outside the bundle — evidence must live inside the candidate bundle that cites it`);
+        continue;
+      }
+      if (!existsSync(absolute)) {
+        push('GATEA-ARTEFACT-PATH', `${id}: cited artefact ${rel} is not in the bundle — a digest with no bytes behind it proves nothing (fabricated or missing evidence)`);
+        continue;
+      }
+      const listing = lstatSync(absolute);
+      if (listing.isSymbolicLink() || !listing.isFile()) {
+        push('GATEA-ARTEFACT-PATH', `${id}: cited artefact ${rel} is not a regular file (symlink or directory) — symlink escapes are refused`);
+        continue;
+      }
+      const actualDigest = sha256File(absolute);
+      if (actualDigest !== String(artefact['sha256'] ?? '')) {
+        push('GATEA-ARTEFACT-DIGEST', `${id}: ${rel} hashes to ${actualDigest}, not the registered ${String(artefact['sha256'])} — the bytes are not the bytes the register digested`);
+      }
+      const doc = readJsonOptional(absolute);
+      if (doc === null) {
+        push('GATEA-ARTEFACT-BYTES', `${id}: ${rel} is not parseable JSON — a row cannot rest on unreadable bytes`);
+        continue;
+      }
+      if (String(doc['kind']) !== String(artefact['kind'])) {
+        push('GATEA-ARTEFACT-BYTES', `${id}: the register declares kind "${String(artefact['kind'])}" but ${rel} declares kind "${String(doc['kind'])}" — a downgrade or fabrication; kind must travel in the cited bytes themselves`);
+      }
+      const boundTo = identityOfArtefact(doc);
+      if (boundTo !== options.candidateSha) {
+        push('GATEA-ARTEFACT-BYTES', `${id}: ${rel} is bound to "${boundTo === '' ? 'no candidate' : boundTo}", not the declared candidate — cross-candidate evidence cannot stand in${status === 'PASS' ? ' for this candidate' : ''}`);
+      }
+      if (status === 'PASS') {
+        const checksList = Array.isArray(doc['checks']) ? (doc['checks'] as unknown[]).map((entry) => asRecord(entry)) : undefined;
+        if (checksList !== undefined) {
+          const red = checksList.filter((entry) => entry['ok'] !== true);
+          if (red.length > 0) {
+            push('GATEA-ARTEFACT-BYTES', `${id}: PASS over ${rel} whose OWN checks are not all green (${String(red.length)} red, e.g. ${String(red[0]?.['name'] ?? 'unnamed')}) — a PASS cannot outrun the artefact's own verdict`);
+          }
+        } else if (typeof doc['status'] === 'string' ? doc['status'] !== 'PASS' : true) {
+          push('GATEA-ARTEFACT-BYTES', `${id}: ${rel} attests no PASS of its own (no all-green checks and no status "PASS") — PASS needs bytes that say so`);
+        }
+        if (Array.isArray(doc['rotations']) && (doc['rotations'] as unknown[]).length > 0) {
+          push('GATEA-ARTEFACT-BYTES', `${id}: ${rel} records ${String((doc['rotations'] as unknown[]).length)} rotation re-run(s) — a retry-selected green is DIAGNOSTIC by policy and cannot cite PASS`);
+        }
+        const attempts = asRecord(doc['legAttempts']);
+        if (Object.values(attempts).some((value) => Array.isArray(value) && value.length > 1)) {
+          push('GATEA-ARTEFACT-BYTES', `${id}: ${rel} records multi-attempt legs (legAttempts) — zero automatic retries is the formal rule; this artefact cannot carry PASS`);
+        }
+        if (doc['automaticRetries'] !== undefined && doc['automaticRetries'] !== 0) {
+          push('GATEA-ARTEFACT-BYTES', `${id}: ${rel} declares automaticRetries=${String(doc['automaticRetries'])} — formal evidence carries zero`);
+        }
+      }
+    }
+    // ---- source-manifest binding: the register records the digest of the rows manifest it was
+    // built from; the bundle must carry that manifest and its path bindings must match the register.
+    const sourceBinding = asRecord(register['source']);
+    if (Object.keys(sourceBinding).length > 0) {
+      const sourceAbsolute = join(bundleRoot, 'ga-rows-source.json');
+      if (!existsSync(sourceAbsolute)) {
+        push('GATEA-SOURCE-MANIFEST', 'the register binds a rows manifest (source.sha256) but ga-rows-source.json is absent — the binding cannot be re-derived');
+      } else {
+        if (sha256File(sourceAbsolute) !== String(sourceBinding['sha256'])) {
+          push('GATEA-SOURCE-MANIFEST', 'ga-rows-source.json does not hash to the digest the register carries — the manifest was altered after the register was built');
+        }
+        const sourceDoc = readJsonOptional(sourceAbsolute);
+        if (sourceDoc === null) {
+          push('GATEA-SOURCE-MANIFEST', 'ga-rows-source.json is not parseable — the binding is unreadable, which is a refusal not a shrug');
+        } else {
+          if (sourceDoc['candidateSha'] !== options.candidateSha) {
+            push('GATEA-SOURCE-MANIFEST', `ga-rows-source.json is bound to ${String(sourceDoc['candidateSha'])}, not the declared candidate`);
+          }
+          const sourceRows = [...(Array.isArray(sourceDoc['rows']) ? sourceDoc['rows'] as unknown[] : []), ...(Array.isArray(sourceDoc['cfRows']) ? sourceDoc['cfRows'] as unknown[] : [])].map((entry) => asRecord(entry));
+          for (const entry of sourceRows) {
+            if (typeof entry['artefactPath'] !== 'string' || entry['artefactPath'] === '') continue;
+            const row = allRows.find((candidate) => String(candidate['id']) === String(entry['id']));
+            const registerPath = String(asRecord(row?.['artefact'])['path'] ?? '');
+            if (registerPath !== entry['artefactPath']) {
+              push('GATEA-SOURCE-MANIFEST', `${String(entry['id'])}: the rows manifest binds artefactPath "${entry['artefactPath']}" but the register cites "${registerPath}" — the row/manifest/path binding is broken`);
+            }
+          }
+        }
+      }
     }
   }
   const decision = readJsonOptional(join(absoluteRunDir, 'decisions', 'gate-a.json'));
@@ -3939,16 +4119,19 @@ const main = (): number => {
     // T-5: assemble ga-rows.json from an operator rows manifest. A row citing a non-GATE-A artefact
     // is DEMOTED here and the demotion is printed — the builder refuses to write a PASS its own
     // bytes disprove, so no later step can launder it.
-    const usage = 'usage: evidence.js gate-a-register --candidate <40-hex> --rows <rows.json> --out <ga-rows.json> [--run-id <id>]';
+    const usage = 'usage: evidence.js gate-a-register --candidate <40-hex> --rows <rows.json> --out <ga-rows.json> [--bundle <bundleDir>] [--run-id <id>]';
     const candidate = requireFlag(flags, 'candidate', usage);
     const rowsFile = resolve(process.cwd(), requireFlag(flags, 'rows', usage));
     const outFile = resolve(process.cwd(), requireFlag(flags, 'out', usage));
+    const bundleFlag = flagString(flags, 'bundle');
     let built: { register: GateARegisterFile; demotions: readonly string[] };
     try {
-      const runIdFlag = flagString(flags, 'run-id');
-      built = buildGateARegister(runIdFlag === undefined
-        ? { candidateSha: candidate, rowsFile }
-        : { candidateSha: candidate, rowsFile, runId: runIdFlag });
+      built = buildGateARegister({
+        candidateSha: candidate,
+        rowsFile,
+        ...(flagString(flags, 'run-id') === undefined ? {} : { runId: flagString(flags, 'run-id') as string }),
+        ...(bundleFlag === undefined ? {} : { bundleDir: resolve(process.cwd(), bundleFlag) }),
+      });
     } catch (error) {
       process.stderr.write(`::error::${error instanceof Error ? error.message : String(error)}\n`);
       return 1;

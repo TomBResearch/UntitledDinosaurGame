@@ -3301,13 +3301,23 @@ const readCpuThrottle = (): { throttledUsec: number; throttledEvents: number } |
 };
 
 // eslint-disable-next-line no-empty-pattern -- Playwright requires the destructured args object even when the cell uses only testInfo.
-test('spike cell: elevated-full — candidate-bound Gate A local diagnostic cell (full 20s warmup + 120s measure on the browser monotonic clock; canonical unobstructed route; NOT Gate A, NOT a matrix cell)', async ({}, testInfo) => {
-  test.skip(process.env['UDG_SPIKE_CELL'] !== 'elevated-full', 'dispatched only by `pnpm test:spike -- --id UDG-SPIKE-001 --cell elevated-full` (grant T-3); the ordinary netcode suite never runs the full-window cell');
+test('spike cell: full-window — the parameterized full-profile matrix runner (explicit profile+seed, full 20s warmup + 120s measure on the browser monotonic clock; canonical unobstructed route; isolated first attempt, ZERO automatic retries; NOT Gate A unless dispatched formal)', async ({}, testInfo) => {
+  test.skip(process.env['UDG_SPIKE_CELL'] !== 'full-window', 'dispatched only by `pnpm test:spike -- --id UDG-SPIKE-001 --cell full-window --profile <lan|moderate|elevated|poor> --seed <n>` (grant T-3, parameterized slice 11; the legacy `--cell elevated-full` maps onto THIS runner with the elevated profile named explicitly by the dispatcher); the ordinary netcode suite never runs the full-window cell');
   test.setTimeout(420_000);
   expect(fixture, 'the room fixture booted').toBeDefined();
-  const seed = Number(process.env['UDG_SPIKE_SEED'] ?? '1001');
+  // NO silent defaults on this runner: the regime must be NAMED by the dispatch, never inherited.
+  const profile = process.env['UDG_SPIKE_PROFILE'] ?? '';
+  expect(['lan', 'moderate', 'elevated', 'poor'], `full-window cell was dispatched with profile "${profile}" — the runner takes no default profile`).toContain(profile);
+  const seed = Number(process.env['UDG_SPIKE_SEED'] ?? 'not-a-number');
+  expect(Number.isInteger(seed) && seed > 0, 'full-window cell was dispatched without an explicit integer --seed').toBe(true);
+  const profileSource = process.env['UDG_SPIKE_PROFILE_SOURCE'] ?? 'unknown';
+  const formalMode = process.env['UDG_GATE_A_FORMAL'] === '1';
+  const firstAttemptAt = new Date().toISOString();
   const roomPort = Number(new URL(fixture?.endpoint ?? 'http://127.0.0.1:0').port);
-  const plan = planSpikeRun({ profile: 'elevated', seed, diagnostic: { reason: 'gate-a-local-cell-elevated-full' } });
+  const officialSeed = [1001, 1002, 1003].includes(seed);
+  const plan = officialSeed
+    ? planSpikeRun({ profile, seed })
+    : planSpikeRun({ profile, seed, diagnostic: { reason: 'full-window-non-official-seed' } });
   const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
   const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim().length > 0;
 
@@ -3399,9 +3409,9 @@ test('spike cell: elevated-full — candidate-bound Gate A local diagnostic cell
     const joinO = await joinSeat(pageO, { mode: 'byId', roomId }, proxyUrl);
     const clockBridge = await pageM.evaluate(() => ({ perf: performance.now(), wall: Date.now() }));
 
-    cellCheck('cell: DIAGNOSTIC label + candidate binding (exact sha, dirty flag, seed; NOT an official matrix cell)',
-      plan.official === false && /^[0-9a-f]{40}$/.test(sha) && Number.isInteger(seed),
-      { commit: sha, dirty, seed, label: plan.label });
+    cellCheck('cell: KIND DERIVATION + candidate binding (exact sha, dirty flag, seed) — a local run of an OFFICIAL coordinate is still kind DIAGNOSTIC-NOT-GATE-A (only the formal dispatch over a clean tree produces a kind-GATE-A ROW artefact, and even that is never a Gate A verdict); the identity fields are checked, not assumed',
+      /^[0-9a-f]{40}$/.test(sha) && Number.isInteger(seed) && dirty === (spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim().length > 0),
+      { commit: sha, dirty, seed, label: plan.label, formalMode, kind: formalMode && plan.official && !dirty ? 'GATE-A' : 'DIAGNOSTIC-NOT-GATE-A', kindRule: 'kind is DERIVED from the dispatch mode, coordinate officiality and tree state — the bytes above carry the result' });
     cellCheck('cell: TWO TRUE browser contexts, both seats reaching the room ONLY through the proxy port, loopback-only traffic',
       pageM.context() !== pageO.context() && joinM.ok === true && joinO.ok === true && Number(new URL(proxyUrl).port) !== roomPort && nonLoopback.length === 0,
       { proxyPort: start['port'], roomPort, nonLoopback: nonLoopback.slice(0, 3), csp: 'none-on-dev-server' });
@@ -3596,9 +3606,21 @@ test('spike cell: elevated-full — candidate-bound Gate A local diagnostic cell
       { activeResourcesAfterClose: hostShutdown.receipt?.activeResourcesAfterClose ?? null, exitCode: hostShutdown.exitCode, signal: hostShutdown.signal, pumpFinished });
 
     const record = {
-      schemaVersion: 2,
-      kind: 'DIAGNOSTIC — Gate A local cell, candidate-bound; NOT Gate A, NOT a matrix cell, NOT a merge, NOT a verdict',
+      schemaVersion: 3,
+      // A local run of a matrix coordinate is DIAGNOSTIC by construction; only the formal dispatch
+      // (UDG_GATE_A_FORMAL=1, hosted per §4 once T-7 exists) on an official coordinate over a
+      // clean tree may produce a kind-GATE-A artefact — and even that is a row artefact, not a
+      // Gate A verdict (the register and the delegated approver decide that).
+      kind: formalMode && plan.official && !dirty ? 'GATE-A' : 'DIAGNOSTIC-NOT-GATE-A',
+      kindNote: formalMode && plan.official && !dirty
+        ? 'formal dispatch, official coordinate, clean tree — a Gate A ROW artefact, not a Gate A verdict'
+        : 'local or non-official dispatch: a matrix-coordinate run that can never be read as a Gate A row artefact',
+      implementationSha: sha,
       identity: { commit: sha, dirty, node: process.version, pnpm: spawnSync('pnpm', ['--version'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim(), playwright: (JSON.parse(readFileSync(join(ROOT, 'node_modules', '@playwright', 'test', 'package.json'), 'utf8')) as { version: string }).version, seed, generatedAt: new Date().toISOString() },
+      coordinate: { cell: 'full-window', profile, seed, profileSource },
+      regime: { requestedRttMs: plan.profile.rttMs, declaredJitterBudgetMs: plan.profile.jitterBudgetMs, carriesCorrectionGate: plan.profile.carriesCorrectionGate, requestedOneWayMs: plan.impairment.oneWayMs, official: plan.official },
+      attempts: { firstAttemptAt, finishedAt: new Date().toISOString(), attempt: 1, automaticRetries: 0, note: 'isolated first attempt over the full window; a red stays red — this cell contains NO retry machinery' },
+      environment: { ...captureEnvironmentRecord(), browser: 'chromium (playwright, headless on the pinned runner)', profileSource },
       plan: { label: plan.label, profile: plan.profile, impairment: plan.impairment },
       windows: { warmupMs: 20_000, measureMsBrowser, phaseMarks: { measureStart, measureEnd } },
       route: { kind: 'canonical 12s/48m square (+x,+z,-x,-z), spawn-verified unobstructed', spawn, motion, holdControl: holdAudit },
@@ -3611,9 +3633,30 @@ test('spike cell: elevated-full — candidate-bound Gate A local diagnostic cell
       teardown: { hostExit: { exitCode: hostShutdown.exitCode, signal: hostShutdown.signal, activeResourcesAfterClose: hostShutdown.receipt?.activeResourcesAfterClose ?? null } },
       checks: cellChecks,
     };
-    mkdirSync(OUT_DIR, { recursive: true });
-    writeFileSync(join(OUT_DIR, 'spike-cell-elevated-full.json'), JSON.stringify(record, null, 2));
-    await testInfo.attach('spike-cell-elevated-full.json', { path: join(OUT_DIR, 'spike-cell-elevated-full.json'), contentType: 'application/json' });
+    // Distinct artefact directory PER COORDINATE: twelve matrix legs cannot collide, and an
+    // evidence pointer names exactly the profile+seed it points at.
+    const cellDir = join(OUT_DIR, `cell-full-window-${profile}-${String(seed)}`);
+    mkdirSync(cellDir, { recursive: true });
+    const artefactPath = join(cellDir, 'spike-cell.json');
+    writeFileSync(artefactPath, JSON.stringify(record, null, 2));
+    await testInfo.attach(`spike-cell-full-window-${profile}-${String(seed)}.json`, { path: artefactPath, contentType: 'application/json' });
+    // When the capture plan routes measurements here, merge the coordinate's achieved summary —
+    // per-coordinate facts, not a substituted profile.
+    const measurementsOut = process.env['UDG_EVIDENCE_MEASUREMENTS'];
+    if (measurementsOut !== undefined) {
+      let merged: Record<string, unknown> = {};
+      try { merged = JSON.parse(readFileSync(measurementsOut, 'utf8')) as Record<string, unknown>; } catch { /* first writer */ }
+      const spikeMatrix = (merged['spikeMatrix'] ?? {}) as Record<string, unknown>;
+      spikeMatrix[`${profile}-${String(seed)}`] = {
+        coordinate: { profile, seed, official: plan.official },
+        achieved: { rttProbeValidity: probeValidity.valid, correctionClaim: probeValidity.valid ? (targetClaim ? 'MET' : 'MISSED') : 'NOT-CLAIMED (network invalid)' },
+        artefact: `cell-full-window-${profile}-${String(seed)}/spike-cell.json`,
+        attempts: { attempt: 1, automaticRetries: 0 },
+      };
+      merged['spikeMatrix'] = spikeMatrix;
+      mkdirSync(dirname(measurementsOut), { recursive: true });
+      writeFileSync(measurementsOut, JSON.stringify(merged, null, 2));
+    }
   } finally {
     if (handle >= 0) {
       try { await closeProxyBounded(host, handle); } catch { /* reported by the shutdown receipt below */ }
@@ -5828,6 +5871,11 @@ interface Ga9Leg {
   journal: { rows: Record<string, unknown>[]; chain: { tick: number; atMs: number }[]; dropped: number };
   prologue: Record<string, unknown> | null;
   liveConfig: unknown;
+  /** PRE-DECLARED TICK PACING (slice 11): one row per gated step — the causal ingest witness, the
+   * single gated tick passed, and the room's own consumption-ledger confirmation. */
+  pacing?: { step: number; moverSeq: number; ingestMs: number; tickMs: number; consumedTick: number | null; consumed: boolean; ticksElapsed: number; arrivalsIngested?: number }[];
+  /** A violated tick-plan deadline: named as the cause, NEVER retried (deadlines are failures). */
+  pacingViolation?: string;
   /** Harness-envelope contamination (slice 9): the held-room seat-transport ROTATION recorded by
    * dpa7k — under a gated room a seat's transport may REPLACE its entity mid-leg (~every 2 s of
    * held time at looser cadences; hit once in six greens at the 150 ms cadence). The gated window
@@ -5919,13 +5967,14 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
   const SystemScheduler = adapterMod['SystemScheduler'] as new () => unknown;
 
   const N_STEPS = 12;
-  // FORMAL vs DIAGNOSTIC (slice 10, T-5 wiring): UDG_GATE_A_FORMAL=1 is the plan's declared formal
-  // schedule policy — the pre-registered gated cadence below with NO automatic retry: a rotation-
-  // contaminated leg goes red there, it is never retried away. Without the flag the cell is
-  // DIAGNOSTIC and rotation retries (recorded, capped) are allowed — but a green selected from
-  // retries can only ever be a diagnostic green, which is what the artifact's kind field says.
+  // FORMAL vs DIAGNOSTIC (slice 10, T-5 wiring; pacing re-registered slice 11): UDG_GATE_A_FORMAL=1
+  // is the plan's declared formal schedule policy — the PRE-DECLARED TICK PLAN below with NO
+  // automatic retry: a contaminated or pacing-violating leg goes red there, it is never retried
+  // away. Without the flag the cell is DIAGNOSTIC and CONTAMINATION retries (recorded, capped) are
+  // allowed — but a green selected from retries can only ever be a diagnostic green, which is what
+  // the artifact's kind field says.
   const formalMode = process.env['UDG_GATE_A_FORMAL'] === '1';
-  const HARNESS_SCHEDULE = { ingestMs: 150, publishMs: 140, joinSettleMs: 400, tailSettleMs: 300, stepWallMsApprox: 290 };
+  const HARNESS_SCHEDULE = { pacing: 'pre-declared tick plan (slice 11): declared 150 ms ingest allowance, ONE gated tick per step, causal completion at the room-own resolvedThrough watermark (no publish sleep); causal-ingest and consumed-ledger variants tried and REFUTED on this host (dpa7w) — the deadline-bound refutation is named, not hidden', joinSettleMs: 400, tailSettleMs: 300, ingestDeadlineMs: 2_000, tickDeadlineMs: 2_000 };
   const ARTEFACT_KIND = formalMode ? 'GATE-A' : 'DIAGNOSTIC-NOT-GATE-A';
   const SCRIPT: readonly { mx: number; mz: number }[] = [
     { mx: 1, mz: 0 }, { mx: 1, mz: 0 }, { mx: 0, mz: 1 }, { mx: -1, mz: 0 },
@@ -5968,30 +6017,96 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
       const gated = mode !== 'ungated';
       if (gated) {
         gate = installTickGate(leg.roomId);
-        gate.hold(); // held from THIS instant: only passOne() advances the authority
+        gate.hold();
+        // DRAIN the in-flight scheduled tick BEFORE baselining: hold() stops FUTURE ticks, a tick
+        // already dispatched by the 20 Hz timer still lands. Baselining mid-flight would count
+        // that straggler as a scripted tick.
+        for (let drained = 0; drained < 1_000; drained += 125) {
+          const before = gatedRoom(leg.roomId).tickRecords.length;
+          await wait(125);
+          if (gatedRoom(leg.roomId).tickRecords.length === before) break;
+        }
         leg.baselineTick = gatedRoom(leg.roomId).tickRecords.at(-1)?.tick ?? -1;
       }
-      // CADENCE (measured constraint, not decoration): the seats' §3.2 snapshot deadline is
-      // 500 ms and it restarts on every accepted delivery — under the gate a delivery only moves
-      // with a tick, so one scripted step (send → ingest → passOne → publish) stays WELL inside
-      // 500 ms. An earlier draft held the room through join sagas and a 500 ms pre-loop pause:
-      // the seats' own deadlines expired, rejoins churned the entity ids, and the first attempt
-      // at this cell records exactly that (dpa7f/dpa7g preserved).
+      // PACING (slice 11 — the heuristic cadence is replaced by a PRE-DECLARED tick plan): each
+      // step declares its ingest allowance (a constant OF THE PLAN, not a per-run guess), passes
+      // EXACTLY ONE gated tick, then completes CAUSALLY — the old fixed 140 ms publish sleep is
+      // GONE — when a new tick has run AND the seat's resolvedThrough watermark in the room's OWN
+      // evidence has passed this step's seq (direct-intent frames are ingested AT ARRIVAL and
+      // resolved by the tick; the tickRecords.consumed ledger belongs to the posture/accessor
+      // dequeue path and never lists them — the first tick-locked attempt recorded exactly that,
+      // preserved in dpa7w). A fully causal INGEST wait was also tried and REFUTED on this
+      // machine: holding the step until the authority observed the arrival pushed the seat past
+      // its input-retirement deadline (resolvedThrough 0, retiredUnrepresented 1, closing true at
+      // step 0 — that refutation is the dpa7w pacing row too), so the ingest phase stays a
+      // DECLARED allowance while completion is causal. Deadlines are pre-declared FAILURE
+      // conditions, never retries: exceeding one names the cause and the leg goes red.
+      const INGEST_ALLOWANCE_MS = 150; // declared by the plan — the measured envelope of the send path, stated, not guessed
+      const TICK_DEADLINE_MS = 2_000;
+      const observedArrivals = (): number => Number((((gatedRoom(leg.roomId).evidence() as { stats?: { observed?: number } }).stats ?? {}) as { observed?: number }).observed ?? 0);
+      const observedBase = observedArrivals();
+      const pacing: NonNullable<Ga9Leg['pacing']> = [];
       for (let n = 0; n < N_STEPS; n += 1) {
         const planned = SCRIPT[n]!;
         const use = mode === 'redmove' && n === 3 ? { mx: planned.mz, mz: planned.mx } : planned; // the flip ONLY in the red leg — step 3 ({-1,0}→{0,-1}); an earlier draft flipped step 5 ({0.7071,0.7071}) — a SYMMETRIC swap that changes nothing, and the dpa7j detector row caught that vacuous control for us
+        let moverSeq = -1;
         if (mode === 'peerb') {
-          await gaOneShot(pageA, 0, 0); // idle-compliant seat A; the MOVER is seat B (a different peer)
-          await gaOneShot(pageB as Page, use.mx, use.mz);
+          const sendB = await gaOneShot(pageB as Page, use.mx, use.mz); // MOVER FIRST so the ledger check above is attributable; seat A idles compliantly
+          moverSeq = sendB.seq;
+          await gaOneShot(pageA, 0, 0);
         } else {
-          await gaOneShot(pageA, use.mx, use.mz);
+          const sendA = await gaOneShot(pageA, use.mx, use.mz);
+          moverSeq = sendA.seq;
           if (mode === 'shared') await gaOneShot(pageB as Page, 0, 1); // second ACTIVE seat, own content, every step
         }
-        if (mode === 'repeat') await wait(Math.floor(Math.random() * 25)); // harness-side jitter INSIDE the proven step envelope (dpa7k: steps past ~400 ms under a held room start replacing the seat transport — recorded, not smoothed): varies harness timing, never the gated schedule or the content
-        await wait(gated ? 150 : 70); // ingest; no gated tick runs meanwhile (ungated: free 20 Hz ticks keep running). NOTE (first-attempt evidence dpa7k preserved): a 230 ms ingest pause made this cadence ~430 ms/step and the seat transports began REPLACING their entities mid-leg (~every 2 s of held time) — the 150 ms cadence (dpa7h: five clean single-entity legs) is used; the rotation itself is recorded as an observation of this harness's held-room envelope, not smoothed over.
-        if (gate !== null) gate.passOne();
-        await wait(gated ? 140 : 90); // the tick publishes; deliveries land; deadlines restart
+        if (mode === 'repeat') await wait(Math.floor(Math.random() * 25)); // harness-side jitter INSIDE the proven step envelope (dpa7k: steps past ~400 ms under a held room start replacing the seat transport — recorded, not smoothed): varies harness timing, never the tick plan or the content
+        if (gate !== null) {
+          if (moverSeq < 0) {
+            leg.pacingViolation = `step ${String(n)}: the mover send itself failed — nothing to pace`;
+            break;
+          }
+          await wait(INGEST_ALLOWANCE_MS); // the DECLARED ingest allowance (see the pacing note above)
+          const ingestMs = INGEST_ALLOWANCE_MS;
+          const recordsBefore = gatedRoom(leg.roomId).tickRecords.length;
+          gate.passOne(); // EXACTLY one authority step for this step
+          const tickStart = Date.now();
+          let consumedTick: number | null = null;
+          // CONSUMPTION witness for the DIRECT-INTENT path: a direct move is ingested AT ARRIVAL
+          // (RegionRoom.ingestCommand → core.ingest — the tickRecords.consumed ledger belongs to
+          // the POSTURE/accessor dequeue path and never lists these frames, which is why the first
+          // tick-locked attempt recorded consumed=[] for a tick that HAD resolved the frame). The
+          // room's own evidence carries the authoritative per-seat watermark: the step is done
+          // when a NEW gated tick has run AND that seat's resolvedThrough has passed this seq.
+          while (Date.now() - tickStart <= TICK_DEADLINE_MS) {
+            const recs = gatedRoom(leg.roomId).tickRecords;
+            const seats = (((gatedRoom(leg.roomId).evidence() as { seats?: { entityId?: string; resolvedThrough?: number }[] }).seats) ?? []);
+            const moverSeat = seats.find((seat) => seat.entityId === leg.moverId);
+            if (recs.length > recordsBefore && (moverSeat?.resolvedThrough ?? -1) >= moverSeq) {
+              consumedTick = recs[recs.length - 1]?.tick ?? null;
+              break;
+            }
+            await wait(2);
+          }
+          pacing.push({ step: n, moverSeq, ingestMs, tickMs: Date.now() - tickStart, consumedTick, consumed: consumedTick !== null, ticksElapsed: consumedTick === null ? 0 : gatedRoom(leg.roomId).tickRecords.length - recordsBefore, arrivalsIngested: observedArrivals() - observedBase });
+          if (consumedTick === null) {
+            leg.pacingViolation = `step ${String(n)}: no gated tick within the pre-declared ${String(TICK_DEADLINE_MS)} ms resolved mover seq ${String(moverSeq)} (seat watermark: ${JSON.stringify((((gatedRoom(leg.roomId).evidence() as { seats?: { entityId?: string; resolvedThrough?: number }[] }).seats) ?? []).find((seat) => seat.entityId === leg.moverId))}) — one step, one tick, in the room's OWN record`;
+            break;
+          }
+        } else {
+          await wait(70); // the UNGATED control leg keeps free-running 20 Hz ticks — pacing it would stop it being the control
+        }
       }
+      if (gate !== null && leg.pacingViolation === undefined) {
+        const consumedTicks = pacing.map((p) => p.consumedTick);
+        if (pacing.length !== N_STEPS || !pacing.every((p) => p.consumed)) {
+          leg.pacingViolation = `tick plan violated: ${String(pacing.filter((p) => p.consumed).length)} of ${String(N_STEPS)} steps consumed their gated tick`;
+        } else if (consumedTicks.some((t, i) => i > 0 && t !== (consumedTicks[i - 1] as number) + 1)) {
+          leg.pacingViolation = `tick plan violated: consumed ticks are not consecutive: ${JSON.stringify(consumedTicks)}`;
+        } else if (pacing.some((p) => (p.ticksElapsed ?? 1) !== 1)) {
+          leg.pacingViolation = `tick plan violated: a step elapsed ${String(Math.max(...pacing.map((p) => p.ticksElapsed ?? 1)))} room ticks instead of exactly one: ${JSON.stringify(pacing.map((p) => p.ticksElapsed))}`;
+        }
+      }
+      leg.pacing = pacing;
       await wait(300);
       const room = gatedRoom(leg.roomId);
       const raw = room.journal();
@@ -6381,7 +6496,23 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
     digestRecomputedOk && tipConsistent && coverageHonest,
     { digestRecomputedOk, tipConsistent, coverageHonest, journalCoverage });
 
-  const artifactText = JSON.stringify({ sha, dirty, seed, formalMode, legs, replay: { liveTip: comparison.liveTip, replayedTip: comparison.replayedTip } });
+  // PACING receipt (slice 11): the gated legs ran the PRE-DECLARED tick plan — no wall-clock
+  // ingest cadence anywhere on the gated path. Every step: causal ingest witness (the authority's
+  // own observed-arrival counter), ONE gated tick, and the room's own per-tick consumption ledger
+  // confirming that tick consumed that step's mover seq; consumed ticks consecutive.
+  const pacingFacts = legs.filter((leg) => leg.mode !== 'ungated').map((leg) => ({
+    tag: leg.tag,
+    violation: leg.pacingViolation ?? null,
+    steps: leg.pacing?.length ?? 0,
+    consumed: leg.pacing?.filter((p) => p.consumed).length ?? 0,
+    worstIngestMs: Math.max(0, ...(leg.pacing ?? []).map((p) => p.ingestMs)),
+    worstTickMs: Math.max(0, ...(leg.pacing ?? []).map((p) => p.tickMs)),
+  }));
+  cellCheck('GA-9 PACING (slice 11): every gated step ran the PRE-DECLARED tick plan — a declared 150 ms ingest allowance (a constant of the plan, stated), EXACTLY ONE gated tick passed, then CAUSAL completion at the room\'s OWN per-seat resolvedThrough watermark with NO fixed publish sleep (the heuristic 140 ms publish cadence is gone); consumed ticks are consecutive (one step, one tick). The fully causal INGEST wait and the consumed-ledger witness were both tried and REFUTED on this machine — the refutations are preserved in dpa7w and named in the pacing note, not hidden. Pre-declared deadlines are FAILURE conditions, never retries; the ungated control leg keeps free-running ticks by design. Rotation, if any, is still reported by the contamination row — pacing replaces the guess, not the detector',
+    pacingFacts.length === 5 && pacingFacts.every((p) => p.violation === null && p.steps === N_STEPS && p.consumed === N_STEPS),
+    pacingFacts);
+
+  const artifactText = JSON.stringify({ sha, dirty, seed, formalMode, pacingFacts, legs: legs.map((leg) => ({ tag: leg.tag, pacing: leg.pacing ?? [], pacingViolation: leg.pacingViolation ?? null })) });
   const roots = checksSupport.machineRoots(ROOT, join(ROOT, 'artifacts'), undefined);
   const cleanPass = checksSupport.sanitiseMachineText(artifactText, roots) === artifactText;
   const injectedSample = `read config from ${join(ROOT, 'packages/config/secrets.env')} token=abc123 /home/someone/.aws/credentials`;
@@ -6398,11 +6529,12 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
   writeFileSync(join(OUT_DIR, 'spike-cell-ga9-ga13.json'), `${JSON.stringify({
     schemaVersion: 1,
     kind: ARTEFACT_KIND,
+    implementationSha: sha,
     identity: { sha, dirty, seed, formalMode, dispatchedBy: 'pnpm test:spike --id UDG-SPIKE-001 --cell ga9-ga13' },
-    harnessPolicy: { schedule: HARNESS_SCHEDULE, retries: formalMode ? 'none (formal)' : 'recorded <=3, DIAGNOSTIC-only' },
+    harnessPolicy: { pacing: 'pre-declared tick plan (slice 11): causal ingest witness, one gated tick per step, room-own ledger confirmation; deadlines are failures, not retries', schedule: HARNESS_SCHEDULE, retries: formalMode ? 'none (formal)' : 'recorded <=3 on CONTAMINATION only, DIAGNOSTIC-only; pacing violations never retried' },
     script: SCRIPT,
     steps: N_STEPS,
-    legs: legs.map((leg) => ({ tag: leg.tag, mode: leg.mode, roomId: leg.roomId, baselineTick: leg.baselineTick, steps: leg.steps, contentDigest: leg.contentDigest, fullDigest: leg.fullDigest, globalRows: leg.globalRows, journalRows: leg.journal.rows, contamination: leg.contamination ?? null, error: leg.error ?? null })),
+    legs: legs.map((leg) => ({ tag: leg.tag, mode: leg.mode, roomId: leg.roomId, baselineTick: leg.baselineTick, steps: leg.steps, contentDigest: leg.contentDigest, fullDigest: leg.fullDigest, globalRows: leg.globalRows, journalRows: leg.journal.rows, contamination: leg.contamination ?? null, pacing: leg.pacing ?? [], pacingViolation: leg.pacingViolation ?? null, error: leg.error ?? null })),
     legAttempts,
     rotations,
     peerIndependence: {
