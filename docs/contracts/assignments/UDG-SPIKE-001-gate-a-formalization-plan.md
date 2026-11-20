@@ -377,7 +377,16 @@ three jobs, all 23 script bodies pass `bash -n`; T-7 syntax and the first-attemp
 ACCEPTED. This record prepares three decisions; nothing here edits an accepted ADR, adopts policy,
 merges, or dispatches.
 
-### A. Proposed narrow amendments — GA-5b and GA-12 (DRAFT decision record)
+### A. Proposed narrow amendments — GA-5b and GA-12 (DRAFT decision record) — **WORDING SUPERSEDED 2026-11-20**
+
+> **Superseded:** the reviewer found this section's framing of GA-5b's original criterion
+> inaccurate (GA-5b never promised a known native cause — it requires recovery WHILE UNABLE to
+> identify the cause). The precise replacement draft lives at
+> [`docs/adr/proposals/UDG-SPIKE-001-ga5b-ga12-precision-amendment-proposal.md`](../../adr/proposals/UDG-SPIKE-001-ga5b-ga12-precision-amendment-proposal.md)
+> (PROPOSED, not accepted; accepted ADR-0003 unchanged). This section stays as written on its own
+> date — history is superseded, never deleted — including its malformed-stamp-control requirement,
+> which the replacement RETAINS in harness-control form while explicitly refusing any new
+> requirement that a conforming producer generate forbidden duplicates.
 
 **Why narrow amendments exist (history preserved exactly).** GA-5b's original criterion reads
 "a client expectation for the lost input … triggers recovery"; the spike's honest-core finding is
