@@ -592,3 +592,58 @@ Raw evidence: `dpa8c/` (every attempt's log + `spike-cell-ga-scenarios.json` + `
 - Boundary kept: DIAGNOSTIC kind throughout (`DIAGNOSTIC-NOT-GATE-A`); the binder ceiling and the
   gate-a workflow are untouched; no gate language changed; the malformed-stamp legs are evidence
   for the DRAFT refinement, not a closure of anything.
+
+## 17. First hosted diagnostic (2026-11-20): run 44771876137 — real reds, real numbers, nothing laundered
+Release: PR #8 squash-merged with expected-head guard → main 4f96bf0c…; workflow-only (1 commit,
+1 file, blob 93ecb03c…606f); candidate 8338e46… carried the identical blob. Dispatch
+--ref main, run_id diagnostic-onward, event workflow_dispatch, attempt 1; defbind passed in every
+lane ("loaded blob == candidate blob"); binder published NO report (ceiling NOT-PASS honored —
+12/12 rows bound, 5 violations: ROW-RED lan-1002 + poor-1002, LANE ×2, SCENARIO-STATUS ×1).
+Evidence dir dpa8e (140 files sha256-manifested, downloaded once, local-only).
+
+Per-coordinate first-attempt outcomes (RTT p50 / p95 / jitter p95−p50 ms over the 100 accepted
+slot-reservation pings; correction p95 m; eligible matched deliveries; browser-measured warmup /
+measure ms; §2.2 achieved-RTT validity):
+| coordinate | p50 | p95 | jitter | corrP95 | elig | warm/ms | meas/ms | §2.2 | outcome (elapsed) |
+|---|---|---|---|---|---|---|---|---|---|
+| lan 1001 | 5.00 | 6.70 | 4.60 | 0.0000 | 1197 | 20001 | 120039 | OK | green (2.8m) |
+| lan 1002 | 4.80 | 6.91 | 5.00 | 0.0000 | 1197 | 20023 | 120017 | OK | RED 1 check (2m45s) |
+| lan 1003 | 4.90 | 6.41 | 5.50 | 0.0000 | 1196 | 20012 | 120034 | OK | green (2.7m) |
+| moderate 1001 | 51.75 | 58.70 | 16.80 | 0.0000 | 1227 | 20022 | 123208 | OK | green |
+| moderate 1002 | 51.60 | 57.80 | 17.80 | 0.0000 | 1228 | 20002 | 123198 | OK | green |
+| moderate 1003 | 51.80 | 58.20 | 17.20 | 0.0000 | 1228 | 20002 | 123215 | OK | green |
+| elevated 1001 | 102.90 | 115.91 | 38.80 | 0.0000 | 1279 | 20012 | 128305 | OK | green |
+| elevated 1002 | 101.85 | 115.23 | 35.50 | 0.0000 | 1279 | 20021 | 128141 | OK | green |
+| elevated 1003 | 100.95 | 114.60 | 32.20 | 0.0000 | 1275 | 20022 | 128116 | OK | green |
+| poor 1001 | 205.15 | 226.21 | 71.70 | 0.0000 | 1381 | 20008 | 138516 | OK | green (3.1m) |
+| poor 1002 | n/a | n/a | n/a | n/a | 0 | 20024 | 120023 | FAIL(no-achieved-samples) | RED 9 checks (2m47s) |
+| poor 1003 | 201.90 | 229.22 | 68.70 | 0.0000 | 1378 | 20001 | 138316 | OK | green (2.9m) |
+Scenario lane: ga9-ga13 green (28.5s), ga11-calibration green (1.1m), ga-scenarios RED 1 row
+(3m08s): GA-5l soundness — c2sQuietDelta was 1 where 0 was required (one extra c2s chunk crossed
+the hop inside the 400 ms pre-arm quiet window); suppression itself held intact (wireReceipt 1,
+chunksHeld 1, consumed 0) and the room side read pending 0 with ack/resolvedThrough 30 while
+CLIENT-side deliveries stood at 26 — the pre-arm quiet read did not wait for client-side
+confirmation drain, so a durable re-issue crossed the hop. Harness pre-arm race, kept red.
+poor-1002 (2m47s, kept red): an ADR-0003 recovery episode fired on the mover ~3.7 s after connect
+(during WARM-UP): proxy connLog shows exactly one close — firstFin client, lifetime 3730 ms, no
+error — i.e. the client-side quarantine close; no rejoin connection appears afterwards; the send
+gate then held for the rest of the window ("sending is stopped: ADR-0003 recovery is in effect"),
+motion froze at x=0.8 (63/64 intervals stationary), the probe refused its first ping
+(abortedReason socket-closed, notSent 99 — a dead socket was never posed as a slow reply), and the
+cell reported itself INVALID (no-achieved-samples) rather than being re-hashed. CAUSALITY, stated
+to evidence not names: the stop IS a client trigger — the two client-local candidates are the
+GA-11-configured snapshot watchdog (clientSnapshotDeadlineMs = 500, the production value) and the
+delivery-counted input-ack-stalled rule; the episode REASON STRING is not persisted in the
+full-window artefact, so this cell cannot name which fired (named evidence gap, not a mystery to
+guess at). The same profile/settings passed seeds 1001 and 1003 on the same runner class, so this
+is a timing-sensitive cold-start stop (hosted runner, dev-server + browser cold start), not a
+uniform GA-11 timeout failure; ga11-calibration ran green alongside. Smallest corrective actions,
+in order: (1) harness-only — persist the mover's recovery event log (trigger, timestamps, episode
+id) into the full-window cell artefact, and make the render-lag observation compare each seat's
+LATEST monotonic tick at a shared boundary (lan-1002's lagTicks −2 at window end is the
+point-sample protocol racing monotonic counters, not an observer ahead of its own authority), and
+drain client-side confirmations before the GA-5l pre-arm quiet window; (2) nothing production —
+GA-11 production-directed populations stay Not-Run/blocked, the proposed GA-5b/GA-12 precision
+stays DRAFT (PE-1 unmet), no thresholds changed, no rerun, verdict ceiling unchanged.
+GA-3/GA-13 legs ran green hosted (inside ga9-ga13 + ga-scenarios' other 30 checks). Nothing here
+closes, narrows or rehashes anything; all three reds stay red with first attempts retained.
