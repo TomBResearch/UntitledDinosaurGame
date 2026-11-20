@@ -1487,3 +1487,51 @@ recorded (WAN RTT/jitter against deployed topology; production-host tick overrun
 load; production client cadence patch intervals). No production values adopted; nothing shifted.
 16/16 ga-scenarios and 5/5 ga11 rows, two consecutive greens each; unit suite green including the
 new inter-arrival proxy test. Gate A remains Not Run.
+
+## 14.9. The GA-5b claim retracted, rebuilt as a transcript that can only say what the room knows; and the GA-11 record named honestly (slice 7, 2026-11-23)
+
+**(i) Retraction and rebuild (review-driven).** Review of `129961b` was correct on both counts: the
+room's `resolvedThrough` advances ONLY over real dequeues satisfying `seq === resolvedThrough + 1`
+(`apps/server/src/network/ColyseusInputAdapter.ts:190-193`), the SDK slot-ack is an INDEPENDENT
+counter, and the accepted client guard fuses them only to REFUSE on disagreement
+(`apps/client/src/network/ColyseusPredictionAdapter.ts:339-340`: accepted deliveries REQUIRE
+`ack === inputResolvedThrough`). A pre-buffer decline therefore has NO room-owned disposition — it
+is ABSENT, and the slice-6i "covered by the same delivery" row (whose cited `ack 1 / resolvedThrough
+1` row was never domain-keyed and cannot follow from a lone dequeue of stamp 40) is RETRACTED. The
+dpa5-era Case-B fixture is DELETED (its sends followed a §3.2 rejoin through a raw handle; no wire
+receipt proved they left the client), and `dpa5f/g/h` are preserved as refuted evidence — not
+patched. The replacement is scenario `ga5t`: a FRESH isolated seat, ONE `(roomId, sessionId, epoch)`
+transcript — per-send ordinal/staged-stamp-read-back/slot-before-after/ack/epoch/wire-receipt,
+per-tick real dequeues joined by tick, immutable epoch-keyed ledger rows sliced from the quiet
+baseline, pending-journal samples, and FULL send provenance including the pre-window pump frames —
+audited by `tools/load-test/src/ga5-transcript.ts` (prefix rule mirrored; forged-prefix,
+foreign-epoch, aliasing, early-prune and duplicate-consumption RED controls unit-tested, 12 tests).
+The validator caught TWO of this slice's own errors before any claim shipped: a window-scoped prefix
+rebuild (legitimately fails on pre-window history) and missing pump provenance. What GA-5t proves:
+`fixture soundness` (original consumed once; the replay send's own proxy c2s receipt — a silent
+no-op bypass is now a RED condition), `TRANSCRIPT AUDIT` (every published prefix rebuildable from
+the domain's real dequeues, ack==resolved equality on accepted rows, no foreign-epoch selection,
+forged control row rejected), and `DECLINE IS ABSENCE, NOT COVERAGE` (consumed count of the
+replayed stamp stays exactly the accepted original's; refusals 0; no gap/retired/closure; the
+replay's distinguishing z-content never reaches the observer; plain leave; no client episode — and
+NO statement that anything covered it). The narrower invariant is stated with its exclusion:
+a decline needs a stamp ≤ the watermark — the protocol-corrupted class (replay/stale domain/
+external re-stamp), which the admissible producer cannot emit (invariant-control row); within that
+class the non-terminal sibling is nameable and recoverable (GA-5a) and the terminal sibling is
+silent-absent (GA-5t) — a unique lawful terminal loss with a surviving distinct twin is NOT
+representable on the pinned single-input substrate, and is reported as excluded rather than forged.
+`PROPOSED-0003a` rev 2 records the retraction, keeps the ack/disposition separation, states that
+**PE-1…PE-5 remain the prerequisite for ever ENABLING dedupe closure** (nothing makes PE-1 optional
+for closure), and compares refining ADR-0003 to separate Gate A safety evidence from the
+unsupported closure versus the upstream/pin path to a public disposition counter. 17/17 rows twice
+(`dpa6d`, `dpa6e`).
+
+**(ii) GA-11 calibration record, named and validity-checked as measured.** The reviewed wording is
+corrected here: the leg is the DECLARED ONE-WAY profile 100 ± 20 ms (loopback harness proxy) — any
+"~200 ms" figure is a DERIVED two-way scale, never a profile name — and the cell now RECORDS each
+proxy leg's ACHIEVED validity against its OWN declared budget (both directions' delay pairs:
+achieved p50 within 100 ± 20 ms AND achieved jitter p95−p50 ≤ 20 ms, ≥ 60 pairs; asserted, not
+narrated). No inference is drawn from a leg that failed its declared profile; the direct leg is
+labelled NO-IMPAIRMENT-SOURCE. The batch remains calibration-only: every population loopback,
+production-directed evaluation Not-Run with the missing representative conditions named, nothing
+adopted.

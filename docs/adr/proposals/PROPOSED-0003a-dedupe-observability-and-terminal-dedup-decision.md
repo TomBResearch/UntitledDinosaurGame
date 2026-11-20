@@ -1,162 +1,153 @@
-# PROPOSED-0003a — Dedupe observability and the terminal-dedup sub-assertion: a decision proposal for ADR-0003 GA-5b / GA-12
+# PROPOSED-0003a (rev 2) — Dedupe observability and the terminal-dedup sub-assertion: a decision proposal for ADR-0003 GA-5b / GA-12
 
 > **Status: PROPOSAL — NOT ACCEPTED, and deliberately NOT an edit of ADR-0003.**
-> ADR-0003 (`0003-input-acknowledgement-overflow-and-resynchronisation-policy.md`) remains the accepted
-> text, unchanged by this document. This is a decision RECORD for the directors, brought by the evidence
-> of UDG-SPIKE-001 slices 6h/6i: on the PINNED substrate, two ADR sub-assertions (GA-5b's client-recovery
-> leg and GA-12's positive PE-1 proof) are unsatisfiable **by construction of the pinned implementation**,
-> not by lack of harness effort. The proposal states the measured facts, the identity analysis, the scoped
-> unreachability proof, one anti-alias control, and three decision options with cost/risk. Nothing here
-> changes production code, test policy, thresholds, or the ADR. All spike evidence cited is labelled
-> DIAGNOSTIC and is not a Gate A verdict.
+> ADR-0003 remains the accepted text, unchanged. This revision exists because **rev 1 failed review**:
+> its GA-5b narrative conflated the SDK's slot-ack layer with the room-owned resolved prefix and
+> claimed a declined input was "covered by the same delivery". It was not, and the claim is
+> RETRACTED below. The corrected evidence is the `ga5t` transcript scenario
+> (`tests/e2e/netcode.spec.ts`, cell `ga-scenarios`), audited by
+> `tools/load-test/src/ga5-transcript.ts` (unit-tested with forged red controls). Nothing here
+> changes production code, test policy, thresholds, or the ADR. All spike evidence is DIAGNOSTIC
+> and is not a Gate A verdict.
 
-## 1. The triggering facts (measured, reproducible)
+## 0. What rev 1 got wrong (retraction, kept on the record)
 
-The pinned input path is `@colyseus/core@0.18.27`, `build/input/RoomInput.mjs` `capture()` →
-`build/input/InputBuffer.accept(value)`: **`value <= this._lastSeq` returns `false` and the input is
-discarded BEFORE the buffer** — silently: no room-visible trace, no signal, no counter.
+1. **The counters are independent.** `delivery.ack` is the SDK's slot/ack layer;
+   `delivery.resolvedThrough` is the ROOM's resolved prefix, published from room state. The room
+   advances that prefix ONLY when a real dequeued frame satisfies `seq === resolvedThrough + 1`
+   (`apps/server/src/network/ColyseusInputAdapter.ts:190-193`). The accepted client guard requires
+   `ack === inputResolvedThrough` for an ACCEPTED delivery and REFUSES otherwise
+   (`apps/client/src/network/ColyseusPredictionAdapter.ts:339-340`) — the two surfaces are fused
+   only as a **detection seam**: disagreement is a refusal, never an inference that something
+   invisible was disposed.
+2. **A pre-buffer decline has NO room-owned disposition at all.** A frame declined at
+   `InputBuffer.accept` never enters the buffer, never dequeues, appears in no consumed record, no
+   gap, no signal, no closure. It is **absent**, not covered. Any statement that a delivery's ack
+   "covered" it is wrong as a matter of the accepted code.
+3. **The rev-1 row was never domain-keyed.** The delivery row the earlier report cited
+   (`ack: 1, resolvedThrough: 1`) cannot be a disposition of the fixture's twin stamp: a domain
+   whose only real dequeue is stamp 40 cannot publish prefix 1 from that fact. Reconciling the
+   archived runs (`dpa5f/dpa5g/dpa5h`, preserved), the row was either a foreign-domain/older-domain
+   row or an unrelated healthy lifecycle row — the fixture itself was suspect: its sends followed a
+   §3.2 REJOIN through a raw handle (cross-domain counter residue), and no wire receipt proved the
+   bypass frames even left the client. Rev-1's "first-run disproof" then revised the STORY while
+   keeping the same invalid join — the reviewer was right that the prose was self-contradictory.
+   The whole Case-B fixture has been DELETED, not patched, and its refuted runs preserved.
 
-Measured in `tests/e2e/netcode.spec.ts` (cell `ga-scenarios`, runs `dpa4i` → revision `dpa5g`/`dpa5h`
-on branch `codex/udg-spike-001-dpa2-impairment`, evidence under `artifacts/.local/spike-001/`):
+## 1. The corrected evidence: `ga5t` — one indexed transcript, absence proven, coverage not claimed
 
-1. **GA-5a (mid-stream dedupe) passes**: a replayed stamp equals an accepted one and is eaten
-   pre-buffer (wire receipts prove arrival); the send-counter slot consumption makes the next
-   contiguous stamp jump; the room NAMES the resulting range; the client's guard REFUSES delivery
-   (`gap-named`), runs a complete §3.2 episode and resynchronises within budget; retired 0, no closure.
-2. **GA-5b (terminal dedupe) server-side passes; its client-recovery sub-leg is BLOCKED with proof**:
-   a raw handle send (a deliberate fixture BYPASS of the producer) pushes the server watermark to the
-   twin stamp; the producer's own next stamp — its domain-local `sentCount + 1`, never sent before —
-   is `<=` that pushed watermark and is eaten pre-buffer, TERMINALLY (no later stamp exists).
-   The client records NO episode: its pending entry for the eaten stamp is pruned by the ack that
-   covers its own ack slot, and the §3.2 deadline arms only while pending is non-empty (measured
-   arming condition). There is no well-formed client expectation left to time out.
-3. **GA-12 PE-1 fails on the pinned core**: a deliberate pre-buffer discard produces NO strand
-   signature (silent by construction). "STRAND_SUSPECTED appears when and only when a replayed stamp
-   is observed" is unsatisfiable while the discard is invisible at the room boundary.
-4. **The server records the terminal loss honestly as UNIDENTIFIABLE**: plain leave, retired 0,
-   queue 0, no gap invented, no strand, no closure. It asserts neither a cause nor a missing range.
+`ga5t` runs on a FRESH isolated seat (its own room and pages; no rejoin, no cross-domain residue)
+and assembles ONE `(roomId, sessionId, epoch)` transcript joined to the room's own tick records:
 
-## 2. Counter identity: what actually correlates with what
+- **per-send**: ordinal, role (`pump`/`liveness`/`eaten`), staged stamp READ BACK from the wire
+  object, handle slot counter before/after (`-2` = adapter-managed, never invented), ack return,
+  epoch, sessionId, page-clock time, and the proxy **c2s wire receipt** observed in that send's
+  window (a silent no-op bypass fails the fixture row loudly — the dpa5-era failure mode is now a
+  RED condition, not an assumption);
+- **room-side**: per-tick real dequeues (`seq`, tick, bridged time), refusals, signals, closures,
+  leave records;
+- **client-side**: immutable ledger rows (epoch, authorityTick, ack, resolvedThrough, gap, retired,
+  accepted, reason) sliced from the quiet baseline — never a retrospective "last row"; plus
+  pending-journal samples across the whole window.
+- **full provenance**: the pre-window pump frames are transcript sends too (from the producer's own
+  audit journal); the validator rejects ANY consumed stamp no staged send accounts for — an
+  aliasing detector that fired on this slice's own drafts (a window-scoped prefix audit and missing
+  pump provenance were BOTH caught by it before any claim was made).
 
-Three counters exist, and conflating them is where "alias" arguments go wrong:
+The genuine terminal form the fixture can honestly build is the **equality replay**: a producer
+ORIGINAL accepted and CONSUMED at stamp n, then a raw REPLAY re-stamping n — declined at the
+pre-buffer boundary, TERMINAL (nothing follows). What `ga5t` then PROVES:
 
-| Counter | Owner | Semantics |
-|---|---|---|
-| producer stamp | client predictor, **domain-local** | `sentCount + 1` at send time; strictly increasing per domain |
-| send/ack slot | SDK `RoomInput` handle | slot of THIS socket's send; the raw fixture bypass consumes slots without the producer's knowledge |
-| `_lastSeq` / `resolvedThrough` | server watermark → echoed in the delivery record | the highest stamp **contiguously disposed**; the client's `resolvedThrough` never advances past a hole |
+- **GA-5t-audit**: every accepted delivery's published `resolvedThrough` equals the prefix REBUILT
+  from the room's real same-domain dequeues OVER THE WHOLE DOMAIN, and carries
+  `ack === resolvedThrough` (the guard's equality); no foreign-epoch row is selected; no pending
+  prune happens except under a prefix-advancing delivery or a labelled discard; a FORGED control
+  row (published prefix 99 with no dequeue chain) is demonstrably REJECTED by the same validator.
+- **GA-5t-absence — DECLINE IS ABSENCE, NOT COVERAGE**: the replayed stamp's consumed count stays
+  EXACTLY 1 (the original; the decline contributes ZERO consumptions), refusals 0, no gap, no
+  `RETIRED_UNREPRESENTED`, no closure, plain leave (retired 0, queue 0), the replay's distinguishing
+  z-content never reaches the observer (applied ZERO times), and the client records NO §3.2 episode.
+  The honest statements are: applied zero times, recorded nowhere, and the client is NOT misled —
+  nothing in the accepted stack lets it believe coverage.
 
-**Documented traces (same delivery, before/after; run `dpa5h/ga-scenarios`):**
+## 2. The narrower invariant, and the actual excluded case
 
-- GA-5b trace (`deliveryTraceB`): sample N shows `pending [1]` (the eaten frame's entry outstanding);
-  the next delivery row is `{ack: 1, resolvedThrough: 1, gap: [0,0], pending: []}` — the prune of the
-  eaten frame's pending entry happens **on the same delivery** whose row carries the ack covering its
-  slot and `resolvedThrough` at exactly that slot, with NO gap named. The consumed set in that domain
-  is exactly the twin (the jump stamp 40): the eaten frame was applied zero times.
-- GA-5a contrast trace: when a stamp is skipped ENTIRELY (a genuine hole — nothing was disposed at
-  that stamp), `resolvedThrough` **stalls before the hole**, the record NAMES the range
-  (`gapStart..gapEnd`), the client refuses delivery and resynchronises. That is the §3.2/§3.1 rule
-  working, measured.
+**Claim (scoped).** Under (a) the pinned accept rule (`accept(v) = v > _lastSeq`, evaluated before
+the buffer; `@colyseus/core@0.18.27` `RoomInput.capture` → `InputBuffer.accept`) and (b) the
+admissible producer invariant — *same domain; stamps strictly increasing; every send goes through
+the producer's counter, so each accepted stamp raises the watermark contiguously* — pre-buffer
+decline is UNREACHABLE: the next stamp is always `_lastSeq + 1`.
 
-**Reconciliation of "twin coverage" with "resolvedThrough never advances past a genuine hole":**
-there is no contradiction because there is no hole. In GA-5b the producer's stamp K was **disposed** —
-declined at the pre-buffer boundary, which is a disposition, not a loss-in-transit — and the client's
-ack slot for that send is legitimately covered by the watermark that the twin raised. `resolvedThrough`
-advances to the watermark's honest value (measured: to 1, i.e. the ack slot; it does NOT pretend the
-twin's 40 or anything beyond it) and, under the invariant of §3, an ack slot is covered exactly when
-the corresponding stamp has been disposed. A GENUINE hole has no disposition: the watermark stops,
-the gap is named, the deadline (which arms only with outstanding, undisposed inputs) fires. Both
-behaviours are evidenced in the same run, side by side.
+**Excluded case, stated exactly.** A decline requires a stamp `≤ _lastSeq` that was never the
+contiguous frontier — i.e. a REPLAY, stale domain state, or an external re-stamp: the
+**protocol-corrupted** classes, none of which an admissible producer can emit (measured control:
+the healthy window's consumed stamps are contiguous from 1 with zero declines). Within that excluded
+class, two observable families exist on the supported substrate:
 
-**First-run disproof preserved:** this slice's first run (`dpa5f`) asserted that the eaten stamp
-EQUALS the twin stamp and that the prune row's `ack`/`resolvedThrough` equal that shared stamp. The
-delivery trace refuted it — the predictor's stamps are domain-local and the equality holds only for
-the GA-5a replay form. The expectation was REVISED to the measured watermark-pushed form above, with
-the refuted assertion recorded in `dpa5f` and the revision reason inside the row message itself. The
-GA-5b row has passed on the revised, measured statement in `dpa5g` and again in `dpa5h`.
+- **non-terminal replay** (a later stamp arrives): the room NAMES the consumed-range jump and the
+  client refuses delivery and resynchronises within budget — `GA-5a`, measured repeatedly;
+- **terminal replay** (nothing follows): the decline is SILENT and ABSENT everywhere — `ga5t`,
+  measured above. No honest observer sees a disposition, because there is none.
 
-## 3. Unreachability under the admissible invariant — stated with its scope
+A fixture cannot manufacture a "unique lawful terminal loss" with a surviving distinct twin on the
+pinned stack: with one input object per (client, room), any same-handle send after the twin either
+shares its stamp (the equality replay, proven ABOVE to leave no disposition) or mutates what the
+buffer holds (the validator's aliasing detector exists precisely because earlier drafts tripped on
+shared-reference effects). We report this as the excluded case rather than author a fixture whose
+outcome the substrate cannot support.
 
-**Claim (scoped).** Under (a) the pinned accept rule (`accept(v) = v > _lastSeq`, evaluated before the
-buffer) and (b) the admissible healthy-producer invariant — *same domain, stamp = sentCount + 1,
-strictly increasing, and every accepted send raises `_lastSeq` contiguously* — a pre-buffer discard
-is **unreachable**, terminal form included.
+## 3. Options for ADR-0003 (no production change in any of them)
 
-**Proof.** Inductively, under (b) after send *i*: `_lastSeq = stamp_i = sentCount_i`. The next stamp
-is `sentCount_i + 1 = _lastSeq + 1 > _lastSeq`, so `accept()` returns true for every send. A decline
-requires `stamp ≤ _lastSeq`, i.e. the watermark strictly ahead of the producer frontier — which under
-(b) only arises if some send did NOT go through the producer's counter (the raw handle bypass), the
-domain was re-stamped (excluded by "same domain"), or the implementation itself misbehaves (which is
-exactly what a positive observability requirement like PE-1 is supposed to catch — see §5). ∎
+**Option A — keep the letter; keep the blocked rows.** GA-5b's client-recovery sub-leg and GA-12's
+positive PE-1 stay BLOCKED/Not-Run on the pinned stack. *Cost:* Gate A carries rows that cannot
+close on this pin. *Risk:* blocked rows age into pressure to fake closure. *Compensating controls:*
+`ga5t` (absence, applied-zero, wire receipts, whole-domain prefix audit), `GA-5a` recoverable
+sibling, `GA-6a/b/c`, `GA-7T` with C1/C2, the invariant control, and the validator's forged-row red
+controls.
 
-**Anti-alias control (one, targeted, in the same cell):** the row
-`GA-5b invariant control` measures the HEALTHY window before any fixture interference — consumed
-stamps contiguous from 1 (zero declines), `resolvedThrough` tracking sends, no gap ever named, zero
-recovery events. The dedupe **never fires** in the invariant-obeying population; the GA-5b alias was
-reached ONLY through the fixture's deliberate raw re-stamp, and the consumed-slot jump is that
-bypass's own fingerprint. An alias cannot be manufactured by an invariant-obeying producer; the
-"alias" critique of GA-5b therefore attacks the fixture's bypass, not the protocol.
+**Option B′ — refine the requirement into TWO claims, and refuse to merge them.** (i) **Gate A
+safety evidence** (what `ga5t` + friends actually prove): a declined pre-buffer frame is applied at
+most zero times, leaves the server asserting NOTHING, is detectable when non-terminal and
+recoverable under §3.2, never corrupts the resolved prefix (whole-domain rebuild audit), and cannot
+arise from an admissible producer (invariant + control). (ii) **Closure of pre-buffer dedupe**
+(a STRAND-driven closure policy) remains UNSUPPORTED and its enabling proof set — **PE-1…PE-5 —
+stays a strict prerequisite for ever enabling it** (`dedupeClosureEnabled` stays false and hashed);
+this proposal does NOT make PE-1 optional for closure, and no wording here may be read as doing
+so. *Cost:* an ADR text amendment splitting GA-12 into "safety evidence (satisfied)" vs "closure
+prerequisites (open)". *Risk:* readers may collapse the two; mitigated by keeping PE-1's failure
+verbatim in the record and the config hash pinned false.
 
-**Scope caveat.** The claim is about the PINNED implementation plus the invariant. It does not
-generalise to future cores, other transports, or to implementations where the accept boundary is
-observable — deliberately, because that is the point of contention: the same silence that makes the
-dedupe correct also makes its violations unobservable.
+**Option C — upstream ask.** Request a public pre-buffer disposition counter (one integer per
+declined stamp satisfies PE-1 and GA-5b's letter). *Cost:* upstream dependency, pin bump. *Risk:*
+schedule only. Filing the request is compatible with choosing A or B′ now.
 
-## 4. Options for ADR-0003 (no production change in any of them)
+**Recommendation:** B′ + file C. The choice belongs to the directors; this document decides nothing.
 
-**Option A — keep the letter; keep the blocked rows.** GA-5b's client sub-leg and GA-12's positive
-PE-1 stay BLOCKED/Not-Run on the pinned stack until an upstream disposition hook exists.
-*Cost:* Gate A carries permanently blocked rows on the current pin; re-derivation effort at every
-SDK bump. *Risk:* reviewers read BLOCKED-with-proof as untested; conversely, the rows can never
-close even if the substrate is provably safe. *Compensating controls already shipped:* the invariant
-control, GA-5a's genuine equality-replay with named-gap recovery, GA-6a/6b/6c deadline recoveries,
-GA-7T inside the exact §3.3 window with C1/C2 sever/no-withhold controls, the discrete-effect
-(GA-10) ledger showing zero duplicate movement, and `serverAssertedNothing` (the server never invents
-a cause or a range).
+## 4. What stays denied regardless of the option
 
-**Option B — refine the requirement to observable safety + causal correlation (recommended).**
-Restate GA-5b's client sub-leg and GA-12's PE-1 for the supported substrate as the conjunction:
-(a) **applied-at-most-once** (consumed unique, refusals zero, distinctive-content absence);
-(b) **disposition causally correlated on the delivery** by ack + `resolvedThrough`, evidenced by the
-same-delivery trace of §2 — safely, not by faith: the watermark only counts disposed stamps;
-(c) **producer invariant + invariant control** (§3) making silent loss unreachable without a bypass;
-(d) **unidentifiable loss recorded as unidentified** (no invented cause/range/closure).
-PE-1's positive direction is then re-expressed as the DENIAL that a signature can exist on the
-pinned core, with the positive proof deferred to PE-2…PE-5 and to any future observable-disposition
-hook. *Cost:* an ADR text amendment (directors' call); GA-12's closure claim narrows. *Risk:* if a
-future pinned core corrupts a stream silently at the pre-buffer boundary, (a)+(b)+(c) detect the
-consequences and the invariant break, but not the corruption itself — accepted, disclosed, and
-bounded by keeping dedupe CLOSURE (`dedupeClosureEnabled`) false, which the config hash already pins.
-
-**Option C — upstream ask.** Request a public pre-buffer disposition counter/ledger from the SDK
-maintainers (one integer per declined stamp is enough to satisfy PE-1 and GA-5b's letter).
-*Cost:* upstream dependency and a pin bump; schedule not ours. *Risk:* none technical; if granted,
-Option B collapses back to A's letter with real evidence. A request may be filed regardless of which
-option is chosen now.
-
-**Recommendation:** adopt **B** for Gate A purposes, file **C** in parallel, and keep every spike
-artefact labelled DIAGNOSTIC. This proposal does not itself adopt anything.
-
-## 5. What stays denied regardless of the option
-
-- **PE-1 failing alone denies production dedupe CLOSURE.** Today PE-1 fails on the pinned core;
-  `dedupeClosureEnabled` is false and hashed; the closure signal stays DIAGNOSTIC (W-6 unchanged).
-  Option B re-expresses the PE statement but does not close dedupe — closure needs a positive
-  signal that does not exist on any admissible pin, or a new policy decision by the directors.
-- No production operator command exists or is proposed (`injectInputGap`/`replayInput` remain
-  unapproved); all injections here are harness-side (proxy withhold/sever/flush) or raw-handle
-  fixture bypasses explicitly labelled as BYPASS evidence.
+- **PE-1 failing alone denies production dedupe CLOSURE.** It fails on the pinned core today; that
+  denial stands under every option, including B′ (whose entire point is that safety evidence and
+  closure are different claims). `dedupeClosureEnabled` false; `STRAND_SUSPECTED` diagnostic-only
+  (W-6); closure policy unchanged.
+- No slot-ack statement is ever coverage: coverage claims require a room-owned disposition, and the
+  accepted guard's `ack === inputResolvedThrough` exists to make disagreement REFusable, not
+  inferable.
+- No production operator command; no SDK monkeypatches; all injections are harness-side (proxy
+  withhold/sever/flush) or explicitly-labelled fixture bypasses with wire receipts.
 - No threshold, target, window, or budget changed; INVALID stays INVALID; all attempts retained.
 
-## 6. Evidence index
+## 5. Evidence index
 
-- `tests/e2e/netcode.spec.ts` rows `GA-5a`, `GA-5b`, `GA-5b invariant control`, `GA-6a/b/c`,
-  `GA-7T`, C1/C2, `GA-12` (cell `ga-scenarios`, seed 1001; 16/16 in `dpa5g`, `dpa5h`).
-- Refuted first-run record: `artifacts/.local/spike-001/dpa5f/spike-cell-ga-scenarios.json`
-  (preserved; the revision is annotated inside the row message, per the predeclared-expectations rule).
-- Pinned implementation: `node_modules/.pnpm/@colyseus+core@0.18.27…/build/input/{RoomInput,InputBuffer}.mjs`.
-- GA-11 calibration batch (companion slice-6i deliverable): cell `ga11-calibration`,
-  `spike-cell-ga11-calibration.json` in `dpa5d`/`dpa5h` — both inequalities EVALUATED on measured,
-  source-labelled loopback populations; production-directed evaluation explicitly Not-Run with the
-  missing representative conditions named.
-- `docs/contracts/api-map.md` §14.8 (harness seams used by this proposal's evidence).
+- `ga5t` rows `GA-5t fixture soundness`, `GA-5t TRANSCRIPT AUDIT`, `GA-5t DECLINE IS ABSENCE` +
+  `GA-5b invariant control` (cell `ga-scenarios`, seed 1001; 17/16… see receipts: `dpa6d`/`dpa6e`,
+  consecutive greens). Validator: `tools/load-test/src/ga5-transcript.ts`; forged-red unit suite
+  `tests/unit/udg-spike-001/spike-ga5-transcript.test.ts` (12 tests).
+- Retired evidence, PRESERVED (not patched): `dpa5f` (first-run refutation), `dpa5g`/`dpa5h` (the
+  rev-1 correlation row this document retracts). The retired Case-B fixture is deleted with a
+  comment at its site in `netcode.spec.ts` pointing here.
+- Rev 1 of this proposal is superseded by this rev 2; the retraction is §0, in-document.
+- Accepted-code anchors: `ColyseusInputAdapter.ts:190-193` (prefix rule),
+  `ColyseusPredictionAdapter.ts:339-340` (guard equality), `@colyseus/core@0.18.27`
+  `build/input/{RoomInput,InputBuffer}.mjs` (accept-before-buffer).
+- GA-11 calibration (companion): cell `ga11-calibration` — see api-map §14.8 for the corrected
+  leg naming and per-leg achieved validity; production-directed evaluation Not-Run.
