@@ -1176,3 +1176,20 @@ client counts, hosted first-attempt green, candidate binding to a clean commit �
 dispatch, not this cell. Also unchanged and reported: the UDG-004 camera-artefact 6-hour
 freshness expiry (a re-capture work item) and the `recovery resumes…` case's in-run flake under
 episodic runner throttling.
+
+Clean-tree re-dispatch of the same cell (candidate `344e5dc`, `dirty: false` recorded, seed 1001,
+2026-11-20): harness checks PASS again — 100/100 pings answered, `abortedReason: null`, notSent 0,
+corrections 1357 eligible ALL zero-magnitude retained, invalidations 0, p95 correction 0.0 m,
+teardown `exit 0` / `[]`, measure window again with ZERO cgroup throttle delta — and §2.2 FAILS
+honestly again: median 112.5 ms (+12.5), jitter p95−p50 31.5 ms, p95 144.0, max 180.2. Two
+consecutive full-window records therefore say the same thing: on this runner, with the full
+loaded window, the achieved elevated median sits ~12.5 ms ABOVE the 100 ms requested — roughly a
+tick-and-a-batch of browser-side pacing on top of the proxy's 100 ms of stalls — and the tail
+exceeds the declared 20 ms budget. The short-window medians of §14.2 (103–110) were the quieter,
+shorter load. No threshold was moved, nothing subtracted; both raw JSON records are retained in
+`artifacts/.local/spike-001/dpa2d/spike-cell-elevated-full.json` (latest run; the first dirty-tree
+dispatch is preserved in `cell-run-first.log`). What Gate A still needs from the recipe side:
+whether the +12.5 ms median offset is the candidate's real network behaviour (then the elevated
+profile or the §2.2 tolerance is a design conversation, not this slice's to have) or an artefact
+of continuous authored motion under stall — which the existing quiet-window probe cells and the
+tick gate can now separate at full window size on a hosted runner.
