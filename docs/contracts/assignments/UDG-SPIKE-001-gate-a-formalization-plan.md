@@ -369,3 +369,135 @@ GA-5b/GA-12 policy — with open gaps this lane publishes labelled diagnostics o
   (harness, kernel seam, evidence tooling, CI lanes), so **merging the whole PR is NOT a
   conductor-only release**; a conductor-only step would need its own scoped cherry-pick/release
   decision, which nothing in this batch performs. Nothing merged, nothing dispatched.
+
+## 15. Slice-16 decision record (2026-11-20, DRAFT — doc/evidence only, no code churn)
+
+Reviewer verification at `be613c6`: Psych parses the exact YAML, sole trigger `workflow_dispatch`,
+three jobs, all 23 script bodies pass `bash -n`; T-7 syntax and the first-attempt guard are
+ACCEPTED. This record prepares three decisions; nothing here edits an accepted ADR, adopts policy,
+merges, or dispatches.
+
+### A. Proposed narrow amendments — GA-5b and GA-12 (DRAFT decision record)
+
+**Why narrow amendments exist (history preserved exactly).** GA-5b's original criterion reads
+"a client expectation for the lost input … triggers recovery"; the spike's honest-core finding is
+that the terminal decline creates NO client expectation and NO observable signature
+(`UDG-SPIKE-001-acceptance-refinement-draft.md`, PROPOSED/DRAFT). The inadequate measurements are
+on the record and stay: the dpa5g/dpa5h stale-input-inference claims were RETRACTED
+(`PROPOSED-0003a` rev 2 §0 — the cautionary exemplar), and GA-5b's own row forbids the server
+inferring a gap from silence. No rewriting.
+
+**Proposed GA-5b amendment (narrow, behavioural, runnable).** Split the row honestly:
+*GA-5b(i) blind terminal-loss recovery* — satisfied by `ga5l` as it runs today and required to
+stay exactly as worded: the suppressed input is UNNAMEABLE by the client, recovery fires through
+the live stalled-ack rule (`ColyseusPredictionAdapter.ts` `input-ack-stalled`, ~:599/:1206), the
+transcript is replay-audited (GA-5t audit, `netcode.spec.ts:5272`, forged control row REJECTED),
+and the invariants hold — no lying on the prefix, no duplicate consumption, no accepted
+old-epoch row. Evidence: ga-scenarios cells (dpa7c/p/q lineage, `dpa7k`-series contamination
+receipts), the retained red reproduction of the generation-continuation breach, and
+`ga5l` checks at `netcode.spec.ts:5311/5401/5435`. Verification stays runnable:
+`pnpm test:spike -- --id UDG-SPIKE-001 --cell ga-scenarios --profile elevated --seed 1001`.
+*GA-5b(ii) known-what-happened recovery* — remains BLOCKED on PE-1; nothing may close it.
+**Native terminal dedupe**: within the explicitly stated domain — pinned producer
+@colyseus/core@0.18.27 (`RoomInput.mjs` `capture() → InputBuffer.accept: value <= _lastSeq ⇒
+dropped BEFORE the buffer`, asserted at `netcode.spec.ts:5700`) driven by the honest stamp rule
+(sentCount + 1, strictly increasing, `netcode.spec.ts:5311`) — the dedupe branch is recorded
+**inapplicable/unobservable**, never "verified harmless". Refinement REQUIRES negative controls
+before ANY dedupe-flavoured closure language: deliberately malformed stamps (duplicate stamp;
+decreasing stamp; foreign-domain stamp) driven at the seam, each demonstrably dropped/labelled.
+Those controls DO NOT EXIST TODAY and would block under the refined gate as named red/missing
+tests. Application suppression stays labelled exactly: `holdNext` is test-only
+APPLICATION-DELIVERY suppression, explicitly "never a drop, never native dedupe"
+(`netcode.spec.ts:5401/5700`) — **confirmed: no application suppression anywhere in this repo is
+labelled native**, and no safety is inferred from absence of telemetry (the GA-5l revalidation,
+`netcode.spec.ts:5435`, proves the decline is silent on the wire and in every room record — the
+absence is AUDITED, which is the opposite of inference).
+**Proposed GA-12 amendment (narrow).** Keep PE-1…PE-5 as the categorical precondition — quoted
+requirement unchanged: no suspected-dedupe close without PE-1…PE-5 ALL passing;
+`dedupeClosureEnabled: false` stays shipped false with NO closure branch for the signature at all
+(`vectors.test.ts:507`; config fact asserted at `input.ts:140/158`, `vectors.test.ts:545`). The
+amendment only records: until PE-1 delivers a server-observable decline signature, the ONLY valid
+GA-12 disposition is BLOCKED-WITH-PROOF, and the blocking test failure is itself the evidence:
+any future "GA-12 closed" assertion must first make a PE-1 signature test PASS — today the
+revalidation check proves byte-identity between decline and health, so the required positive test
+is guaranteed red, and that guaranteed-red state is what must be visible, not hidden.
+Draft only; owner of `docs/contracts/workflow.md` syntax decides adoption.
+
+### B. Smallest production-directed GA-11 measurement (proposal — no adoption, no invented topology)
+
+Read sources: `docs/adr/0003…` §5 GA-11 (the two inequalities: `B + J·λ + stall ≤ bufferMaxSize`;
+`clientSnapshotDeadlineMs ≥ 4 × patch interval + 2 × measured p99 RTT`), provisional settings row
+(`adoption.md:438`: B=8, bufferMaxSize 32, closure 250/1000, clientSnapshotDeadlineMs 500 ms),
+threshold-denial rule AR-3 (refinement draft), and the deployment reality: no production site
+exists in any project doc (docs/integration names only Colyseus/browser stack; runners are GitHub
+ubuntu-24.04). So the SMALLEST measurement with a named "measured toward production" source is:
+**one scripted two-browser business session (the SAME paired-context netcode harness, real
+`apps/client` pages, no proxy) between TWO distinct GitHub hosted runners** — genuinely different
+hosts on the provider's real network, no new hosting, no site invented — profile: the production
+candidate regime (moderate + poor), 3 sessions × 2 profiles, per-session artefacts in the existing
+spike-cell schema recording: named Node/browser versions, the actual TCP/WSS path (runner-to-runner
+endpoint pair, source label `measured-toward-production (two hosted runners, provider network)`),
+measured arrival scheduling (patch-interval p50/p95), arrival-stall maxima, 99-probe RTT
+population (nearest-rank percentiles per the refinement draft's stated method) and delivered patch
+sizes. Failure floors PRE-REGISTERED before running (from the AR-3 discipline): a leg is INVALID
+if RTT validity fails the declared regime, if stalls exceed the recorded p95×4, or if probe loss
+>2 %.
+**Why 500 ms is invalid across the poorer p99, from the NAMED valid sample** (`dpa7s/spike-cell-ga11-calibration.json`,
+poor leg, validity achieved = valid): measured patch interval p50 100.19 / p95 113.8 ms; RTT
+p50 203 / p95 217 / p99 218 ms; arrival-stall max 707.8 ms. Formula: 4 × 113.8 + 2 × 218 =
+**891.2 ms > 500 ms** — the provisional deadline fails the formula on the poor regime even in the
+harness. **Defensible candidate floor (proposal only): 1000 ms**, chosen over the bare 891.2
+because a nearest-rank p99 from ~100 samples carries tail uncertainty and the margin must at least
+cover one declared jitter budget (40 ms): 891.2 + 40 ≈ 931 ⇒ round to the already-adopted
+closureMaxMs 1000 for review. Inequality 1 on the same sample: 8 (B) + ceil(40 ms × 20 Hz → 1)
++ ceil(707.8 ms × 20 Hz → 15) = 24 ≤ 32 (8-tick headroom). **What this data can and cannot do**:
+it can INFORM the proposal (named, valid, declared-regime samples) and pre-register formulas; it
+CANNOT support a production claim — the impairment source is the proxy model on loopback and
+"harness-modelled loss may not be presented as network loss" (ADR-0003 GA-11 row). Only the
+two-runner measured-toward-production population (or real production data) may move contract text.
+
+### C. Conductor-only release shape (exact, verified reasoning — no PR created, main untouched)
+
+PR #7 spans the whole spike program; merging it is NOT conductor-only (corrected §14). Feasible
+shape: **one file to `main`: `.github/workflows/gate-a.yml`** (blob at `be613c6`:
+`19992d3abf22f535de250311447f51a3909aca27`). Mechanism check: dispatching a workflow always runs
+the copy on the dispatched ref (main), while every job checks out `inputs.candidate_sha` and runs
+THE CANDIDATE'S harness/binder — so a workflow-only main is functionally complete provided the
+candidate commit is reachable from a ref: it is, via branch `codex/udg-spike-001-dpa2-impairment`
+(which must therefore NOT be deleted before the dispatch). GitHub CLI dispatch (`gh workflow run
+gate-a.yml --ref main -f candidate_sha=<sha>`) resolves the definition by (repository, workflow
+path, ref=main) — staleness vector is main's copy drifting from the reviewed blob. Guards, exact:
+(1) rerun/stale protection ALREADY in-file: `run_attempt == 1` before checkout/install/upload/bind;
+(2) definition-mismatch guard to add in the same commit — one step per job, after `headbind`:
+
+    - name: The candidate must carry the SAME workflow definition the runner is executing
+      run: |
+        set -euo pipefail
+        a="$(git hash-object .github/workflows/gate-a.yml)"
+        b="$(git show "$CANDIDATE:.github/workflows/gate-a.yml" | git hash-object --stdin)"
+        if [ "$a" != "$b" ]; then echo "::error::main's gate-a.yml ($a) differs from the candidate's ($b) — refusing: the reviewed definition is the one under execution"; exit 1; fi
+
+(3) worktree-vs-candidate mismatch is structurally impossible (HEAD-equality before install); (4)
+against the open-gap revision (`be613c6`) this lane can ONLY produce diagnostics (binder ceiling
+NOT-PASS; report labelled diagnostic) — so a dispatch before the A/B decisions is useful solely
+as a diagnostic grid collection and must be recorded as such. **Recommendation / action order if
+the conductor opts in**: 1) cherry-pick exactly `.github/workflows/gate-a.yml` @ `be613c6` to main
+(review the one-file diff + the guard step above); 2) keep the candidate branch ref alive; 3)
+dispatch only with `candidate_sha=be613c6…` and an explicit diagnostic-only note; 4) do not treat
+any artefact of that run as bundle or Gate A progress (the bona fide path is capture plan +
+`evidence:verify`). Where a standalone workflow is NOT enough: none found mechanically — but the
+EVIDENCE dependency stands: no formal PASS can be collected before the A amendments are adopted
+and the B measurement exists, so the release grants collection, never closure.
+
+### Evidence-register contrast + hosted status
+
+- **Remaining formal legs (NOT blockers, just work)**: GA-3/GA-9 formal grid legs and GA-13
+  replay legs — runnable-now cells awaiting a hosted dispatch (§8: "no longer runnable-not-built";
+  owed: ga-scenarios persisted journals for every-formal-scenario replay coverage).
+- **True blockers (unchanged)**: verification (hosted formal dispatch + `evidence:verify` bundle
+  path), GA-11 production/measured-toward-production populations, GA-5b(ii)/GA-12 on PE-1…PE-5.
+  GA-10a/GA-10b remain DEFERRED by owner (not blockers).
+- **Hosted at `be613c6` (reported as measured, terminal)**: run `44748120423` — head verified =
+  `be613c66043aa92f09b5aa00c5b52545ae6cc29e`; ALL ten jobs success including `routine / full suite`
+  (success) and the aggregate gate **`routine outcome` = success**. First fully-green hosted routine
+  on this branch.
