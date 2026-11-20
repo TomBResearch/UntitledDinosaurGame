@@ -30,7 +30,7 @@
 |---|---|---|
 | **GA-1** compliant burst (B=8) then idle | Runnable — fixtures complete (pump, depth/retired/resolved records, gap ledger). Diagnostic-only today | Port the diagnostic burst shape into the T-5 plan's scenario list; assert `retired==0`, `depth<32`, resolved reaches the highest stamp at rest, zero resyncs; full windows |
 | **GA-2** pressure without closure | Runnable — withheld-window primitive produces depth + `QUEUE_PRESSURE`; closure absence asserted in ga cells | Formal leg: throttle obeyed within one RTT (measured against the leg's own validity), zero closures, zero retirements |
-| **GA-3** confirmed retirement, prevention disabled | Missing leg — needs a room fixture variant with prevention disabled (the harness `defineOperatorRegionRoom({config: overrides})` seam already exists) | Config-variant cell; assert closure within `closureMaxMs`, residue > 0 bounded/named/attributed, reported even unacknowledged |
+| **GA-3** confirmed retirement, prevention disabled | **RUN locally at slice 17** (`--cell ga-scenarios`, seed 1001, `dpa8c`): matched confirmed retirement → exactly one 4100 attributed to the offender session only, closure within `closureMaxMs` of the confirmation tick, residue > 0 named/attributed (retiredUnrepresented >= 1), reported while the offender client never acknowledged it, zero cross-seat collateral (second seat unthrottled-in-effect, no signals, no closure, kept consuming/moving, room stayed alive). Prevention-disabled is the MEASURED substrate state: the adopted INPUT_QUEUE_PRESSURE posture is throttle-only and no prevention limb exists on the wire path — no operator seam exists to disable (none is needed), and no production config/defaults were touched; an optional posture-ARMED config-variant cell (harness `defineOperatorRegionRoom({config: overrides})`, test values only) remains the named next witness if the reviewer wants prevention actively armed during closure | DONE locally for the harness limb; the formal-grid leg still awaits the hosted dispatch like every other formal leg |
 | **GA-4** refused frames represented | Runnable — refusal records (`refused` per tick) and the rate-ceiling path exist | Dedicated scenario driving refusals (rate ceiling), then assert refused-inside-dequeuedCount, not retired, advances resolved, one neutral step journaled |
 | **GA-5/6/7/11/12, CF-1/3/4** | Scenario recipes EXIST and are twice-green as DIAGNOSTIC (ga-scenarios 17 rows incl. `ga5t`; ga11 calibration) | Re-emit under the T-5 plan on full windows with no message relabelling; GA-5b's client sub-leg and GA-12 PE-1 stay BLOCKED per `PROPOSED-0003a` rev 2 — the formal matrix reports them as such, never as passes |
 | **GA-8** same-delivery comparison | Partially evidenced — the accepted guard already refuses cross-value deliveries (`ack === inputResolvedThrough` per row), and `ga5t` audits per-row equality | Formal assertion set: every trigger evaluation cites ONE delivery (guard ledger + `ga5t`-style per-row audit); zero cross-delivery comparisons |
@@ -442,6 +442,29 @@ population (nearest-rank percentiles per the refinement draft's stated method) a
 sizes. Failure floors PRE-REGISTERED before running (from the AR-3 discipline): a leg is INVALID
 if RTT validity fails the declared regime, if stalls exceed the recorded p95×4, or if probe loss
 >2 %.
+**FACT CORRECTION (slice 17 review): two standard GitHub-hosted runners do NOT by themselves
+establish a peer-reachable gameplay network.** Hosted runners are isolated CI workers; nothing in
+this repository nominates a provider, a network path, or a deployment, and inbound/inter-runner
+reachability is neither documented nor guaranteed. The two-runner shape above is therefore NOT
+schedulable as written and is NOT scheduled; what it needs is enumerated below (the exact bounded
+prerequisites), and until those exist as a nominated, owner-approved deployment the
+measured-toward-production population stays Not-Run. The 500 ms finding below stands — it is
+computed from harness data and says nothing about any network that does not exist yet.
+
+**Exact bounded prerequisites to a representative GA-11 test (all owned by the owner/delegated
+approver, none implementable from the harness):** (1) a NOMINATED deployment target (a real
+server host, named in a contract, with its Node version and network identity recorded); (2)
+client endpoints on DIFFERENT real networks from the server (at minimum two distinct egress paths,
+each with a named provider), not two CI workers; (3) demonstrated peer REACHABILITY (the business
+session completes end to end over the intended path, witnessed by the room's own ledger, before
+any number counts); (4) an impairment SOURCE that is the network itself (measured RTT against the
+declared regime, per the achieved-validity rule) or, absent that, the ADR's
+`dropModel: application-layer delivery loss` label traveling with every number; (5) an explicit
+owner grant for any service exposure/ingress (a spike never opens a port by itself); (6) the
+evidence-identity wiring already built (cell schema, validity floors, candidate binding) reused
+unchanged. Until 1–5 exist: GA-11 production populations are BLOCKED with these conditions named;
+the provisional floor PROPOSAL (1000 ms, §15B) stays a proposal informed by harness data only.
+
 **Why 500 ms is invalid across the poorer p99, from the NAMED valid sample** (`dpa7s/spike-cell-ga11-calibration.json`,
 poor leg, validity achieved = valid): measured patch interval p50 100.19 / p95 113.8 ms; RTT
 p50 203 / p95 217 / p99 218 ms; arrival-stall max 707.8 ms. Formula: 4 × 113.8 + 2 × 218 =
@@ -460,8 +483,13 @@ two-runner measured-toward-production population (or real production data) may m
 
 PR #7 spans the whole spike program; merging it is NOT conductor-only (corrected §14). Feasible
 shape: **one file to `main`: `.github/workflows/gate-a.yml`** (blob at `be613c6`:
-`19992d3abf22f535de250311447f51a3909aca27`). Mechanism check: dispatching a workflow always runs
-the copy on the dispatched ref (main), while every job checks out `inputs.candidate_sha` and runs
+`19992d3abf22f535de250311447f51a3909aca27`). Mechanism check (CORRECTED slice 17 for precision): `workflow_dispatch` executes the copy of the
+workflow FILE **on the ref being dispatched** — dispatching `--ref main` runs main's copy, but a
+dispatch at any OTHER ref that carries that file (a branch or tag) runs THAT revision's copy. The
+shape below is therefore sound only under two named conditions: the dispatch is pinned to
+`--ref main`, and the blob-equality guard (added below) proves the running copy equals the
+candidate's reviewed file at the candidate commit. Every job in either copy checks out
+`inputs.candidate_sha` and runs THE CANDIDATE'S harness/binder
 THE CANDIDATE'S harness/binder — so a workflow-only main is functionally complete provided the
 candidate commit is reachable from a ref: it is, via branch `codex/udg-spike-001-dpa2-impairment`
 (which must therefore NOT be deleted before the dispatch). GitHub CLI dispatch (`gh workflow run
@@ -501,3 +529,57 @@ and the B measurement exists, so the release grants collection, never closure.
   `be613c66043aa92f09b5aa00c5b52545ae6cc29e`; ALL ten jobs success including `routine / full suite`
   (success) and the aggregate gate **`routine outcome` = success**. First fully-green hosted routine
   on this branch.
+
+## 16. Slice 17 — malformed-stamp controls, GA-3 leg, GA-13 scenario journals (code in-harness, not docs)
+
+All of it ran in the EXISTING accepted harness (`pnpm test:spike -- --id UDG-SPIKE-001 --cell
+ga-scenarios --profile elevated --seed 1001`), one file touched (`tests/e2e/netcode.spec.ts`), no
+product/raw-payload path, no ADR edited, PE-1 unmet, GA-5b draft-only, no config/defaults touched.
+Raw evidence: `dpa8c/` (every attempt's log + `spike-cell-ga-scenarios.json` + `gate/` journals).
+
+- **GA-5b malformed-stamp negative controls (three, separately, on the accepted public-handle
+  re-stamping seam GA-5t already uses — the pinned core IS the seam; the production send route is
+  untouched).** (dup) same-domain duplicate stamp; (dec) decreasing stamp; (epoch) FOREIGN EPOCH
+  on an otherwise monotone stamp; each leg: legitimate monotone baseline through the pump first
+  (every baseline stamp consumed EXACTLY once, mover visibly moved, wire quiet 400 ms), then ONE
+  malformed frame with distinctive content (moveX −1, moveZ +1). Measured dispositions, each
+  proven by exact consumption/prefix AND wire+different movement: dup/dec are declined
+  PRE-BUFFER SILENTLY (the stamp's consumed count stays exactly 1, zero room records for the
+  decline — the PE-1 silence, now measured on the two shapes the refinement names), their z
+  content applied NOWHERE (|z| < 0.05 m on the independent observer), and because the raw send
+  still consumed a SLOT the prefix can never resolve, the client's own journal holds an
+  OUTSTANDING input and the contract's BLIND input-ack-stalled recovery fires EXACTLY once
+  (streak = G from the named config, no deadline/gap/retired route, guard equality after). The
+  earlier draft prediction "no episode for these shapes" is SUPERSEDED by the control's own
+  first-attempt evidence. The foreign-epoch frame is refused WITH NAMES and nothing else:
+  dequeued once, exactly one refusal in the room's ledger on the SAME tick record that consumed
+  the stamp (attribution by the room's own seat-entity identity — attempts 1–2 guessed the join
+  sessionId and are retained red, `dpa8c`), a journalled `refused:epoch` (EPOCH_MISMATCH)
+  NEUTRAL step, zero motion from it, the watermark advances over the refused stamp, guard
+  equality holds at every poll, NOTHING is left outstanding so NO recovery episode fires (a
+  recovery there would itself be a falsely named cause), zero accepted wrong-epoch deliveries,
+  and the next legitimate frame moves the seat again (route survives). Zero falsely named cause
+  across all three: no client event or room record ever says dedupe/duplicate/stale/decline/
+  retired. These controls are the ones §15A requires before any dedupe-flavoured closure
+  wording, and they are usable NOW for deciding the refined wording — while PE-1 stays
+  unmeeted (the dup/dec silence IS the missing signature) and GA-5b stays DRAFT.
+- **GA-3 leg (confirmed retirement, prevention disabled, two seats)** — see the corrected register
+  row above: matched confirmed retirement + bounded 4100 attributed to the offender ONLY + residue
+  ≥ 1 named + reported while unacknowledged + zero cross-seat collateral + room alive for the
+  clean seat. Prevention-disabled is the measured substrate state (throttle-only posture, no
+  prevention limb, no operator seam exists to disable and none was needed; NO production config
+  touched). First-attempt reds retained: attempts 5–6 (posture-fire over-claim and its ordering),
+  attempt 7 (a proxy-stats host hiccup rode a NaN into the UNRELATED GA-5l row — fixed at the
+  measurement: `statCountAt` retries the READ, never a verdict).
+- **GA-13 per-scenario journals for the major scenarios** — every scenario room of the cell is
+  built through the A-1 kernel-stepper envelope, so each REAL journal is now captured at its own
+  teardown, persisted scanner-clean with a sha (`gate/ga-scenarios-journal-<tag>.json`) and
+  kernel-replayed to EXACT dispositions/state bytes/tick hashes/chain tip: **16/16 exact**
+  (ga6a/b/c episode+rolling, ga5, ga5t, the ga5l family, ga7t/c1/c2, ga3, and the three GA-5b
+  controls). The "ga-scenarios yields LEDGER EXTRACTS, not journals" line in the ga9-ga13
+  coverage register is updated accordingly (that cell re-run green with the register edit). No
+  journal export in this cell needed an out-of-grant seam; the named-BLOCKED export rows for the
+  metric-trace runs (calibration/elevated-full/ab-controls) stay named, not relabelled.
+- Boundary kept: DIAGNOSTIC kind throughout (`DIAGNOSTIC-NOT-GATE-A`); the binder ceiling and the
+  gate-a workflow are untouched; no gate language changed; the malformed-stamp legs are evidence
+  for the DRAFT refinement, not a closure of anything.

@@ -4627,6 +4627,20 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
     const value = dir?.[field];
     return typeof value === 'number' ? value : Number.NaN;
   };
+  /** Bounded stats READ (slice 17): the proxy host's stats reply occasionally arrives without
+   *  the side block on a busy machine (attempt-7 receipt: a NaN rode into GA-5l's quiet-delta
+   *  claim and turned a measurement hiccup into a red row). A missing field is a HOST-IPC
+   *  hiccup, not a measurement — retry the READ (never the verdict), and fail loudly if the
+   *  counter stays unreadable. Deliberation of numbers is unchanged. */
+  const statCountAt = async (handle: number, side: 'c2s' | 's2c', field: 'chunksReceived' | 'chunksDelivered' | 'chunksFlushed'): Promise<number> => {
+    const startedAt = Date.now();
+    for (;;) {
+      const v = statCount(await host.request({ op: 'stats', handle }), side, field);
+      if (Number.isFinite(v)) return v;
+      if (Date.now() - startedAt > 2_000) throw new Error(`proxy stats ${side}.${field} unreadable for 2 s (host hiccup)`);
+      await wait(50);
+    }
+  };
   const chainAtMs = (roomId: string, tick: number): number | null =>
     gatedRoom(roomId).journal().chain.find((row) => row.tick === tick)?.atMs ?? null;
 
@@ -4656,6 +4670,7 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
     bag?: Record<string, unknown>,
   ): Promise<void> => {
     let handle = -1;
+    let joinedRoomId: string | null = null;
     const pageM = await openSeatPage(`${tag}-M`, { bare: true });
     const pageO = await openSeatPage(`${tag}-O`, { bare: true });
     try {
@@ -4665,6 +4680,7 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
       const joinM = await joinGaSeat(pageM, proxyUrl, { mode: 'create', roomName });
       expect(joinM.ok === true, `${tag}: mover joined through the proxy`).toBe(true);
       const roomId = joinM.roomId ?? '';
+      joinedRoomId = roomId;
       const joinO = await joinGaObserver(pageO, fixture?.endpoint ?? '', roomId);
       expect(joinO.ok === true, `${tag}: observer joined DIRECT (unaffected context)`).toBe(true);
       try {
@@ -4684,6 +4700,25 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
       if (handle >= 0) { try { await closeProxyBounded(host, handle); } catch { /* the host receipt below governs */ } }
       await pageM.close().catch(() => undefined);
       await pageO.close().catch(() => undefined);
+      // GA-13 (slice 17): capture THIS scenario's own room journal at teardown — the room object
+      // outlives its pages; the arrays are snapshotted so later neutral ticks cannot mutate a
+      // captured journal under the replay. A failed capture stays a named missing capture in the
+      // cell's GA-13 row (the >= 15 count), never a silent gap.
+      if (joinedRoomId !== null) {
+        try {
+          const roomG = gatedRoom(joinedRoomId) as unknown as {
+            journal(): { rows: readonly Record<string, unknown>[]; chain: readonly Record<string, unknown>[]; dropped: number };
+            journalPrologue(): Record<string, unknown> | undefined;
+            liveConfig(): unknown;
+          };
+          const jG = roomG.journal();
+          journalCaptures.push({
+            tag, roomId: joinedRoomId,
+            rows: [...jG.rows], chain: [...jG.chain] as unknown as Record<string, unknown>[], dropped: jG.dropped,
+            prologue: roomG.journalPrologue() ?? null, liveConfig: roomG.liveConfig(),
+          });
+        } catch { /* the room is gone: the coverage row counts the missing capture by name */ }
+      }
     }
   };
 
@@ -4706,6 +4741,15 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
   const sC: Record<string, unknown> = {};
   const sD: Record<string, unknown> = {};
   const cf3: Record<string, unknown> = {};
+  const sMSD: Record<string, unknown> = {};
+  const sMSDec: Record<string, unknown> = {};
+  const sMSEp: Record<string, unknown> = {};
+  const sGA13J: Record<string, unknown> = {};
+  const journalCaptures: {
+    tag: string; roomId: string;
+    rows: Record<string, unknown>[]; chain: Record<string, unknown>[]; dropped: number;
+    prologue: Record<string, unknown> | null; liveConfig: unknown;
+  }[] = [];
 
   try {
     // ═════ GA-6a — patches stop WHILE INPUTS ARE OUTSTANDING: the deadline expires, sending
@@ -5331,9 +5375,9 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
       const quiet = await readGaBoundary(ctx.pageM);
       sL['quiet'] = quiet;
       sL['tickWindowStart'] = gatedRoom(ctx.roomId).tickRecords.length;
-      const w0 = statCount(await host.request({ op: 'stats', handle: ctx.handle }), 'c2s', 'chunksReceived');
+      const w0 = await statCountAt(ctx.handle, 'c2s', 'chunksReceived');
       await wait(400);
-      const w0b = statCount(await host.request({ op: 'stats', handle: ctx.handle }), 'c2s', 'chunksReceived');
+      const w0b = await statCountAt(ctx.handle, 'c2s', 'chunksReceived');
       sL['c2sQuietDelta'] = w0b - w0;
       // Arm the TERMINAL suppression of EXACTLY ONE c2s chunk (labelled harness seam).
       await host.request({ op: 'holdNext', handle: ctx.handle, direction: 'c2s', count: 1 });
@@ -5342,7 +5386,7 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
       let wire1: number;
       const wireStarted = Date.now();
       for (;;) {
-        wire1 = statCount(await host.request({ op: 'stats', handle: ctx.handle }), 'c2s', 'chunksReceived');
+        wire1 = await statCountAt(ctx.handle, 'c2s', 'chunksReceived');
         if (wire1 > w0b || Date.now() - wireStarted > 5_000) break;
         await wait(50);
       }
@@ -5668,6 +5712,464 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
       await pumpOn;
     }, sC2);
 
+    // ═════ GA-5b MALFORMED-STAMP NEGATIVE CONTROLS (slice 17, proposed-refinement wording —
+    // DRAFT SCOPE ONLY: PE-1 stays unmet, GA-5b stays draft, no ADR edited). The refinement draft
+    // requires, before ANY dedupe-flavoured closure language, negative controls that drive
+    // DELIBERATELY MALFORMED stamps at the pinned seam and show each one's disposition. Three
+    // shapes, separately: (dup) a SAME-DOMAIN DUPLICATE stamp; (dec) a DECREASING stamp; (epoch) a
+    // FOREIGN EPOCH on an otherwise monotone stamp. The injector is the SAME public-handle
+    // re-stamping seam GA-5t already uses (the pinned core IS the seam — B1 below); NOTHING here
+    // is a raw payload path in the product: the production send route is untouched, the frames
+    // travel the real protocol over the real socket, and the harness only re-stamps a handle its
+    // own seat already owns. Each leg first runs a LEGITIMATE MONOTONE baseline through the pump
+    // (every baseline stamp consumed EXACTLY once, the observer visibly MOVED), then stages ONE
+    // malformed frame with distinctive content (moveX −1, moveZ +1 — application anywhere would
+    // show on the observer's z axis) and holds the wire so the frame's disposition is the only
+    // variable. Expected dispositions are read from the pinned sources and PRE-REGISTERED, not
+    // fitted: dup/dec hit RoomInput.capture -> InputBuffer.accept (value <= _lastSeq dropped
+    // BEFORE the buffer, silent — the very branch under refinement), so ack/prefix stay frozen and
+    // the client's bypass-slot journal entry (the slot the raw send consumed, the adapter
+    // journals every onSend) sits unresolved: the contract's BLIND input-ack-stalled recovery
+    // MUST fire exactly once; the epoch stamp dequeues (its seq is above the watermark) and is
+    // refused twice with NAMES — the room's wire validator (RegionRoom.ts:430, record.refused +1)
+    // and the core's admit (disposition refused:epoch) — a journalled NEUTRAL step: the prefix
+    // advances over the refused stamp, nothing is left outstanding, and NO recovery episode may
+    // fire (a recovery would itself be a falsely named cause here).
+    const malformedStampLeg = async (
+      tag: string,
+      kind: 'dup' | 'dec' | 'epoch',
+      bag: Record<string, unknown>,
+    ): Promise<void> => {
+      await scenario(tag, ROOM_NAME, async (ctx) => {
+        const wireChunks = async (): Promise<number> => statCountAt(ctx.handle, 'c2s', 'chunksReceived');
+        const pumpOn = gaPump(ctx.pageM); void pumpOn;
+        await wait(1_400); // LEGITIMATE MONOTONE BASELINE: producer stamps sentCount + 1
+        await gaStopPump(ctx.pageM); // from here the seam controls every send on this wire
+        await wait(700);             // drain: quiet wire, nothing outstanding
+        const quiet = await readGaBoundary(ctx.pageM);
+        const seen0 = await reportGaTracks(ctx.pageO);
+        const track0 = seen0.tracks.find((t) => t.sessionId === ctx.sessionId);
+        const baselineMoved = (track0?.delta.x ?? 0) >= 0.4;
+        const w0q = await wireChunks();
+        await wait(400);
+        const w0 = await wireChunks();
+        const staged = await ctx.pageM.evaluate(async (args: { kind: string }) => {
+          const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+          if (holder === undefined) throw new Error(`${args.kind}: malformed-stamp control needs the bare seat`);
+          const handle = holder.transport.handle();
+          const lastSeq = holder.predictor.sentAudit().map((r) => r.seq).reduce((a, b) => Math.max(a, b), 0);
+          const slotBefore = handle.sentCount;
+          const realEpoch = holder.transport.issuedEpoch();
+          handle.data.sessionEpoch = args.kind === 'epoch' ? realEpoch + 7 : realEpoch;
+          handle.data.generation = (holder.generation += 1);
+          handle.data.directIntent = true;
+          handle.data.moveX = -1;
+          handle.data.moveZ = 1; // distinctive content: applied anywhere, it shows on the z axis
+          handle.data.seq = args.kind === 'dup' ? lastSeq : args.kind === 'dec' ? lastSeq - 3 : lastSeq + 1;
+          const ackReturn = handle.send();
+          return {
+            kind: args.kind, stagedSeq: handle.data.seq as number, realEpoch,
+            epochSent: handle.data.sessionEpoch as number, lastSeq,
+            slotBefore, slotAfter: handle.sentCount, ackReturn, atMs: performance.now(),
+          };
+        }, { kind });
+        const tickAtStaging = gatedRoom(ctx.roomId).tickRecords.length;
+        let w1: number;
+        const wireStarted = Date.now();
+        for (;;) {
+          w1 = await wireChunks();
+          if (w1 > w0 || Date.now() - wireStarted > 5_000) break;
+          await wait(50);
+        }
+        const seen1 = await reportGaTracks(ctx.pageO);
+        const track1 = seen1.tracks.find((t) => t.sessionId === ctx.sessionId);
+        const domainRows = gatedRoom(ctx.roomId).tickRecords.slice(0);
+        const dequeues = domainRows.flatMap((rec) => rec.consumed.filter((c) => c.entityId === ctx.sessionId).map((c) => c.seq));
+        const baselineUnique = new Set(dequeues).size === dequeues.length;
+        // WHOLE-DOMAIN refusal accounting: every scenario room is NEW, so the domain IS the
+        // scenario — the first two attempts proved attribution must be read from the RECORD that
+        // carried the dequeue (the refusal row carries the room's own seat-entity identity), not
+        // from an index-sliced window or a sessionId guess.
+        const refusalTotals = (): { domain: number; entities: string[] } => {
+          const recs = gatedRoom(ctx.roomId).tickRecords;
+          return {
+            domain: recs.reduce((total, rec) => total + (rec.refused ?? []).reduce((t2, r) => t2 + r.count, 0), 0),
+            entities: [...new Set(recs.flatMap((rec) => (rec.refused ?? []).map((r) => r.entityId)))],
+          };
+        };
+        const signals = domainRows.flatMap((rec) => (rec.signals ?? []).filter((s) => s.entityId === ctx.sessionId).map((s) => s.signal));
+        const closures = domainRows.flatMap((rec) => (rec.closures ?? []).filter((c) => c.entityId === ctx.sessionId).map((c) => c.code));
+        bag['staged'] = staged;
+        bag['wireReceiptDelta'] = w1 - w0;
+        bag['quietBoundary'] = { ack: quiet.ack, resolvedThrough: quiet.resolvedThrough, pending: quiet.pending, epoch: quiet.epoch };
+        bag['baselineMoved'] = baselineMoved;
+        bag['baselineUnique'] = baselineUnique;
+        bag['refusedAtStaging'] = refusalTotals();
+        bag['signals'] = signals;
+        bag['closures'] = closures;
+        const noFalseNames = (events: readonly { event: string; detail: string }[]): boolean =>
+          events.every((e) => !/dedup|duplicate|stale|decline|retired|strand/i.test(`${e.event} ${e.detail}`));
+
+        if (kind === 'epoch') {
+          const polls: GaBoundary[] = [];
+          for (let i = 0; i < 40; i += 1) { polls.push(await readGaBoundary(ctx.pageM)); await wait(100); }
+          const seatSnap = trailSnapshot(ctx.roomId);
+          const seatEpochsSeen = seatSnap.seats.filter((s) => s.entityId === ctx.sessionId).map((s) => s.epoch);
+          const windowRecords = gatedRoom(ctx.roomId).tickRecords.slice(Math.max(0, tickAtStaging - 2)).map((rec) => ({
+            tick: rec.tick,
+            consumed: rec.consumed.filter((c) => c.entityId === ctx.sessionId).map((c) => c.seq),
+            refused: (rec.refused ?? []).map((r) => ({ entityId: r.entityId, count: r.count })),
+            signals: (rec.signals ?? []).map((s) => s.signal),
+          }));
+          const journalWindow = gatedRoom(ctx.roomId).journal().rows
+            .filter((r) => typeof r['disposition'] === 'string' && String(r['disposition']).includes('refused'))
+            .map((r) => ({ tick: Number(r['tick']), entityId: String(r['entityId'] ?? ''), disposition: String(r['disposition']), reason: String(r['reason'] ?? '') }));
+          const post = await gaOneShot(ctx.pageM, 1, 0); // legitimate next producer — the route must survive
+          await wait(700);
+          const endB = await readGaBoundary(ctx.pageM);
+          const snapEnd = await gaRecovery(ctx.pageM);
+          const seenEnd = await reportGaTracks(ctx.pageO);
+          const trackEnd = seenEnd.tracks.find((t) => t.sessionId === ctx.sessionId);
+          const windowConsumed = consumedSince(ctx.roomId, tickAtStaging, ctx.sessionId);
+          const recStaged = gatedRoom(ctx.roomId).tickRecords.find((rec) => rec.consumed.some((c) => c.seq === staged.stagedSeq && c.entityId === ctx.sessionId));
+          const refusedOnStagedRec = recStaged?.refused ?? [];
+          const refusedEpochRows = gatedRoom(ctx.roomId).journal().rows
+            .filter((r) => String(r['disposition'] ?? '').includes('refused:epoch'));
+          const rt = refusalTotals();
+          bag['refusedDomainFinal'] = rt;
+          const guardEq = polls.every((p) => p.ack === p.resolvedThrough) && endB.ack === endB.resolvedThrough;
+          const triggers = endB.events.filter((e) => e.event === 'trigger');
+          bag['polls'] = { count: polls.length, guardEq, finalPending: endB.pending, finalEpoch: endB.epoch, state: endB.state };
+          bag['windowConsumed'] = windowConsumed;
+          bag['refusedOnStagedRecord'] = refusedOnStagedRec;
+          bag['refusedEpochRowsTotal'] = refusedEpochRows.length;
+          bag['triggers'] = triggers;
+          bag['windowRecords'] = windowRecords;
+          bag['journalWindowRefusals'] = journalWindow;
+          bag['seatEpochsSeen'] = seatEpochsSeen;
+          bag['acceptedEpochs'] = [...new Set(snapEnd.acceptedDeliveries.map((d) => d.epoch))];
+          bag['postSend'] = post;
+          bag['motionAfterLegit'] = (trackEnd?.lastSample.x ?? 0) - (track1?.lastSample.x ?? 0);
+          bag['trackEnd'] = trackEnd?.lastSample ?? null;
+          cellCheck(`GA-5b CONTROL ${kind}: the FOREIGN-EPOCH malformed stamp (seq ${String(staged.stagedSeq)} ABOVE the watermark, sessionEpoch ${String(staged.epochSent)} never issued) earns its own WIRE RECEIPT (delta ${String(w1 - w0)}) and is then refused WITH NAMES and nothing else: dequeued exactly once, the room records EXACTLY ONE refusal — in its own refusal ledger, on the SAME tick record that consumed the staged stamp, under the room's seat-entity identity (NOT the join sessionId: attempts 1-2 guessed the wrong attribution space and are retained red beside this correction) — and the core journals a refused:epoch disposition (EPOCH_MISMATCH; every refusal in this fresh room's journal is a refused:epoch, none from any other cause) — a journalled NEUTRAL step: the observer's z stays |z| < 0.05 m (the distinctive content was applied NOWHERE) while the NEXT LEGITIMATE producer send moves the seat again (>= 0.15 m, route survives). Zero accepted old/wrong epoch: every accepted delivery keeps the real epoch, no room seat ever carries the bogus epoch, the client's epoch never moves. NOTHING IS OUTSTANDING after a refused-and-dispositioned stamp, so NO recovery episode may fire (zero triggers — a recovery here would itself be the falsely named cause) and the guard equality ack === resolvedThrough holds at EVERY poll (the watermark advances over stamps that have their own disposition, ColyseusInputAdapter.ts:190-193). Baseline soundness: monotone stamps consumed EXACTLY once each, the mover visibly moved, the wire quiet 400 ms before the staging`,
+            (w1 - w0) >= 1 &&
+            windowConsumed.filter((q) => q === staged.stagedSeq).length === 1 &&
+            rt.domain === 1 && rt.entities.length === 1 && refusedOnStagedRec.length === 1 &&
+            refusedOnStagedRec[0]?.count === 1 && refusedOnStagedRec[0]?.entityId === rt.entities[0] &&
+            refusedEpochRows.length >= 1 && journalWindow.length === refusedEpochRows.length &&
+            signals.length === 0 && closures.length === 0 &&
+            guardEq && triggers.length === 0 && endB.pending === 0 &&
+            endB.epoch === staged.realEpoch && !seatEpochsSeen.includes(staged.epochSent) &&
+            snapEnd.acceptedDeliveries.every((d) => d.epoch !== staged.epochSent) &&
+            Math.abs(trackEnd?.lastSample.z ?? Number.POSITIVE_INFINITY) < 0.05 &&
+            (bag['motionAfterLegit'] as number) >= 0.15 && post.seq > 0 && endB.state === 'tracking' &&
+            baselineMoved && baselineUnique && (w0 - w0q) === 0 && noFalseNames(endB.events),
+            bag);
+          return;
+        }
+
+        // dup/dec: the pre-buffer decline is SILENT by construction (the branch under refinement).
+        // The client's own journal holds the slot the raw send consumed and NOTHING resolves it —
+        // ack/prefix frozen — so the contract's blind input-ack-stalled recovery must fire.
+        const samplesL: { atMs: number; snap: GaBoundary }[] = [];
+        const fireStarted = Date.now();
+        let fired: GaBoundary | null = null;
+        for (;;) {
+          const snap = await readGaBoundary(ctx.pageM);
+          samplesL.push({ atMs: Date.now(), snap });
+          if (snap.events.some((e) => e.event === 'trigger' && e.detail.startsWith('input-ack-stalled'))) { fired = snap; break; }
+          if (Date.now() - fireStarted > 20_000) break;
+          await wait(100);
+        }
+        const G = GA_STALL_G ?? 3;
+        let episode: GaBoundary['events'] = [];
+        let triggerEvent: GaBoundary['events'][number] | null = null;
+        let earlierTrigger = false;
+        let discardAfter = false;
+        let recovered: GaSnapshot | null = null;
+        if (fired !== null) {
+          const triggerIdx = fired.events.findIndex((e) => e.event === 'trigger' && e.detail.startsWith('input-ack-stalled'));
+          triggerEvent = fired.events[triggerIdx]!;
+          episode = fired.events.slice(0, triggerIdx + 8);
+          earlierTrigger = fired.events.slice(0, triggerIdx).some((e) => e.event === 'trigger');
+          discardAfter = fired.events.slice(triggerIdx).some((e) => e.event === 'discard-pending' && e.detail.startsWith('1 journal'));
+          recovered = await waitLedger(ctx.pageM, (s) => s.events.some((e) => e.event === 'snapshot-recovered'), 'snapshot-recovered after the malformed-stamp decline', EPISODE_BUDGET_MS + BUDGET_TOLERANCE_MS);
+        }
+        const rtD = refusalTotals();
+        bag['refusedDomainFinal'] = rtD;
+        const endB2 = await readGaBoundary(ctx.pageM);
+        const seenEnd = await reportGaTracks(ctx.pageO);
+        const trackEnd = seenEnd.tracks.find((t) => t.sessionId === ctx.sessionId);
+        const consumedCountOfStaged = dequeues.filter((q) => q === staged.stagedSeq).length;
+        const heldPending = samplesL.length > 1 && samplesL.slice(0, -1).every((s) => s.snap.pending >= 1);
+        const frozenAllAlong = samplesL.every((s) => s.snap.ack === quiet.ack && s.snap.resolvedThrough === quiet.resolvedThrough && s.snap.epoch === quiet.epoch);
+        const gapNever = samplesL.every((s) => s.snap.gapStart === 0 && s.snap.gapEnd === 0);
+        const retiredZero = samplesL.every((s) => s.snap.retired === 0);
+        bag['fired'] = fired !== null;
+        bag['triggerEvent'] = triggerEvent;
+        bag['episode'] = episode;
+        bag['earlierTrigger'] = earlierTrigger;
+        bag['discardAfter'] = discardAfter;
+        bag['heldPending'] = heldPending;
+        bag['frozenAllAlong'] = frozenAllAlong;
+        bag['gapNever'] = gapNever;
+        bag['retiredZero'] = retiredZero;
+        bag['stallStreakAtFire'] = fired?.stallStreak ?? null;
+        bag['series'] = samplesL.map((s) => [s.snap.deliveries, s.snap.ack, s.snap.resolvedThrough, s.snap.pending, s.snap.stallStreak]);
+        bag['consumedCountOfStaged'] = consumedCountOfStaged;
+        bag['afterRecovery'] = { ack: endB2.ack, resolvedThrough: endB2.resolvedThrough, epoch: endB2.epoch, state: endB2.state, triggers: endB2.events.filter((e) => e.event === 'trigger').map((e) => e.detail) };
+        bag['trackEnd'] = trackEnd?.lastSample ?? null;
+        bag['rejoinAttempts'] = endB2.events.filter((e) => e.event === 'rejoin-attempt').length;
+        cellCheck(`GA-5b CONTROL ${kind}: the ${kind === 'dup' ? 'SAME-DOMAIN DUPLICATE' : 'DECREASING'} stamp ${String(staged.stagedSeq)} (watermark ${String(staged.lastSeq)}) earns its own WIRE RECEIPT (delta ${String(w1 - w0)}) and is declined PRE-BUFFER exactly as the pinned seam dictates (RoomInput.capture -> InputBuffer.accept, value <= _lastSeq dropped BEFORE the buffer): the stamp's consumed count stays EXACTLY 1 (${kind === 'dup' ? 'its own legitimate original dequeue' : 'the baseline frame that first carried it'}), the room names NOTHING for the decline (refusal delta ${String(rtD.domain)}, no signal, no closure — the silence IS the PE-1 limitation, now measured on the two shapes the refinement names), the distinctive z content is applied NOWHERE (|z| < 0.05 m) while the baseline mover visibly moved (${String(baselineMoved)}) and baseline stamps were consumed EXACTLY once each (unique: ${String(baselineUnique)}). Zero falsely named cause: no client event or room record ever says dedupe/duplicate/stale/decline/retired`,
+          (w1 - w0) >= 1 &&
+          consumedCountOfStaged === 1 &&
+          (w0 - w0q) === 0 &&
+          rtD.domain === 0 && rtD.entities.length === 0 && signals.length === 0 && closures.length === 0 &&
+          Math.abs(trackEnd?.lastSample.z ?? Number.POSITIVE_INFINITY) < 0.05 &&
+          baselineMoved && baselineUnique && staged.lastSeq >= 4 &&
+          noFalseNames(endB2.events),
+          bag);
+        cellCheck(`GA-5b CONTROL ${kind} BLIND RECOVERY WITH AN INPUT OUTSTANDING: the raw send's slot sits unresolved in the seat's OWN journal (the adapter journals every onSend), so ack AND prefix stay frozen at every poll (ack ${String(quiet.ack)} / resolvedThrough ${String(quiet.resolvedThrough)} unchanged) and the §3.2 rule MUST fire: exactly ONE trigger, input-ack-stalled with the streak EXACTLY at G=${String(G)} (observed ${String(fired?.stallStreak ?? -1)}), no trigger before it, no gap named (0..0), retired 0 throughout, the pending entry HELD until the trigger and discarded ONCE after it; the episode ends in snapshot-recovered within ${String(EPISODE_BUDGET_MS)}+${String(BUDGET_TOLERANCE_MS)} ms on a bounded rejoin (<= 2 attempts), the recovery is BLIND (no decline signal exists — the room named nothing above), the guard equality ack === resolvedThrough holds after it, the epoch never becomes any bogus value, and NO deadline/gap/retired route participates — an earlier draft of this control predicted 'no episode, nothing outstanding' for these shapes and is SUPERSEDED by its own evidence: a below-prefix bypass stamp still consumes a SLOT the prefix can never resolve, which is exactly the outstanding input §3.2 recovers from`,
+          fired !== null && triggerEvent !== null &&
+          triggerEvent.detail.startsWith('input-ack-stalled') &&
+          fired.stallStreak === G && !earlierTrigger &&
+          frozenAllAlong && gapNever && retiredZero && heldPending && discardAfter &&
+          recovered !== null && recovered.events.some((e) => e.event === 'snapshot-recovered') &&
+          (bag['rejoinAttempts'] as number) <= 2 &&
+          endB2.ack === endB2.resolvedThrough &&
+          !endB2.events.some((e) => e.event === 'trigger' && (e.detail.startsWith('snapshot-deadline') || e.detail.includes('gap-named') || e.detail.includes('retired'))),
+          bag);
+      }, bag);
+    };
+    await malformedStampLeg('ga5b-msdup', 'dup', sMSD);
+    await malformedStampLeg('ga5b-msdec', 'dec', sMSDec);
+    await malformedStampLeg('ga5b-msepoch', 'epoch', sMSEp);
+
+    // ═════ GA-3 (slice 17) — CONFIRMED RETIREMENT, PREVENTION DISABLED, TWO SEATS. The ADR row:
+    // "confirmed retirement, prevention disabled | closure within closureMaxMs; residue > 0,
+    // bounded, named, attributed to that session; reported even if never acknowledged" — and the
+    // failure modes it names: closure WITHOUT a confirmed count; room-wide attribution. The
+    // PREVENTION-DISABLED limb needs NO operator seam on this pinned substrate and that is a
+    // measured fact, not a shortcut: the adopted backlog posture for INPUT_QUEUE_PRESSURE is
+    // THROTTLE-ONLY (ADR-0003 §3.3; RegionRoom.ts: QUEUE_PRESSURE sets seat.throttled and the
+    // room "records and slows nothing that a depth heuristic cannot justify") — depth-based
+    // PREVENTION of consumption or closure simply DOES NOT EXIST on the wire path, so the
+    // posture never masks the consequence branch and this leg proves exactly that: pressure
+    // observed WHILE the retirement→closure chain runs at full speed beside a clean second seat.
+    // If a future build adds a real prevention limb, this row's pressure-during-closure witness
+    // is the detector that must go red, and the named operator seam (a trusted posture knob in
+    // the A-1 pattern, GRANT REQUIRED) becomes a blocker to report, not to fake.
+    {
+      const tag = 'ga3';
+      const bag: Record<string, unknown> = {};
+      const pageM1 = await openSeatPage(`${tag}-M1`, { bare: true });
+      const pageM2 = await openSeatPage(`${tag}-M2`, { bare: true });
+      const pageO = await openSeatPage(`${tag}-O`, { bare: true });
+      let handle3 = -1;
+      try {
+        const started = await host.request({ op: 'start', profile: { name: 'ga', oneWayMs: 0, jitterBudgetMs: 0, seed }, targetHost: '127.0.0.1', targetPort: roomPort });
+        handle3 = started['handle'] as number;
+        const proxyUrl3 = `http://127.0.0.1:${String(started['port'] as number)}`;
+        const join1 = await joinGaSeat(pageM1, proxyUrl3, { mode: 'create', roomName: ROOM_NAME });
+        expect(join1.ok === true, 'GA-3: offender seat joined through the proxy').toBe(true);
+        const roomId3 = join1.roomId ?? '';
+        const join2 = await joinGaSeat(pageM2, fixture?.endpoint ?? '', { mode: 'byId', roomId: roomId3 });
+        expect(join2.ok === true, 'GA-3: clean peer seat joined the SAME room DIRECT').toBe(true);
+        const joinO = await joinGaObserver(pageO, fixture?.endpoint ?? '', roomId3);
+        expect(joinO.ok === true, 'GA-3: observer joined DIRECT').toBe(true);
+        const pump1 = gaPump(pageM1);
+        const pump2 = gaPump(pageM2);
+        await wait(1_500); // both seats tracking and moving
+        const seatsHealthy = (gatedRoom(roomId3).evidence()['seats'] ?? []) as { entityId: string; resolvedThrough: number; throttled: boolean }[];
+        bag['seatsHealthy'] = seatsHealthy.map((x) => ({ resolved: x.resolvedThrough, throttled: x.throttled }));
+        const seenBefore = await reportGaTracks(pageO);
+        const track2Before = seenBefore.tracks.find((t) => t.sessionId === (join2.sessionId ?? ''));
+        bag['peerMovedBefore'] = (track2Before?.delta.x ?? 0) >= 0.4;
+        const b2Before = await readGaBoundary(pageM2);
+        const tickStart3 = gatedRoom(roomId3).tickRecords.length;
+        // ORDER MATTERS (attempt 1's retained red proved it, dpa8c ga-scenarios-attempt5/6): the
+        // confirmed-loss chain CONFIRMS within ~2 s of the withhold opening, so the backlog must
+        // be LIVE AT the opening: a labelled BURST first drives the buffer depth past the adopted
+        // pressure margin (bufferMaxSize − B), and the s2c withhold opens IMMEDIATELY behind it —
+        // the posture is then observably active WHILE the retirement→closure chain runs against
+        // the same deep buffer. Consumption never stopped for the posture (throttle-only): the
+        // consumed ledger at close counts the burst, the closure lands on time, and the clean
+        // seat never pays for any of it.
+        const genNow = await pageM1.evaluate(() => (globalThis as unknown as PredSeatWindow).__udgImpSeat?.generation ?? -1);
+        const burst = await gaBurst(pageM1, 60, genNow + 1, 1);
+        bag['burst'] = { first: burst.firstSeq, last: burst.lastSeq };
+        await host.request({ op: 'stall', handle: handle3, direction: 's2c', ms: 20_000 });
+        let pressureHit: TrailSnap | null = null;
+        for (let i = 0; i < 80 && pressureHit === null; i += 1) {
+          const seats = (gatedRoom(roomId3).evidence()['seats'] ?? []) as { entityId: string; throttled: boolean }[];
+          if (seats.some((x) => x.throttled === true)) pressureHit = trailSnapshot(roomId3);
+          await wait(50);
+        }
+        bag['pressureObserved'] = pressureHit !== null;
+        const confirmPoll = await pollTrail(roomId3, (s2) => s2.retiredTickSeen !== null, 25_000);
+        const confirmTick = confirmPoll.hit?.retiredTickSeen ?? null;
+        const closurePoll = await pollTrail(roomId3, (s2) => s2.closureTicks.some((c) => c.code === 4100), 10_000);
+        const closures3 = (closurePoll.hit?.closureTicks ?? []).filter((c) => c.code === 4100);
+        bag['confirmTick'] = confirmTick;
+        bag['closures'] = closures3;
+        bag['closureWithinWindow'] = confirmTick !== null && closures3.length === 1
+          && (() => { const a = chainAtMs(roomId3, confirmTick); const b = chainAtMs(roomId3, closures3[0]!.tick); return a !== null && b !== null && b >= a && b - a <= CLOSURE_MAX_MS; })();
+        await releaseWindow(handle3);
+        await wait(1_500);
+        const windowSignals = gatedRoom(roomId3).tickRecords.slice(tickStart3).flatMap((rec) => (rec.signals ?? []).map((sg) => ({ entityId: sg.entityId, signal: sg.signal })));
+        const windowClosures = gatedRoom(roomId3).tickRecords.slice(tickStart3).flatMap((rec) => (rec.closures ?? []).map((c2) => ({ entityId: c2.entityId, code: c2.code })));
+        const retiredOnOffender = windowSignals.filter((sg) => sg.entityId === (join1.sessionId ?? '') && sg.signal === 'RETIRED_UNREPRESENTED');
+        const closures4100 = windowClosures.filter((c2) => c2.code === 4100);
+        const pressureOnOffender = windowSignals.some((sg) => sg.entityId === (join1.sessionId ?? '') && sg.signal === 'QUEUE_PRESSURE');
+        const peerSignals = windowSignals.filter((sg) => sg.entityId === (join2.sessionId ?? ''));
+        const peerClosures = windowClosures.filter((c2) => c2.entityId === (join2.sessionId ?? ''));
+        bag['windowSignals'] = windowSignals;
+        bag['windowClosures'] = windowClosures;
+        const closeObs3 = moverCloseObservations(roomId3, join1.sessionId ?? '');
+        bag['closeObservations'] = closeObs3;
+        // "reported even if never acknowledged": during the withheld window seat 1's client
+        // NEVER saw the confirmation — the room reported it regardless.
+        const b1 = await readGaBoundary(pageM1);
+        bag['offenderClientAtReport'] = { state: b1.state, deliveries: b1.deliveries, ack: b1.ack, resolvedThrough: b1.resolvedThrough };
+        // the clean peer kept consuming and moving THROUGH the whole chain
+        const b2 = await readGaBoundary(pageM2);
+        bag['peerAfter'] = { state: b2.state, ack: b2.ack, resolvedThrough: b2.resolvedThrough };
+        const seenAfter = await reportGaTracks(pageO);
+        const track2After = seenAfter.tracks.find((t) => t.sessionId === (join2.sessionId ?? ''));
+        bag['track2Before'] = track2Before?.lastSample ?? null;
+        bag['track2After'] = track2After?.lastSample ?? null;
+        bag['peerMovedAfter'] = (track2After?.lastSample.x ?? 0) > (track2Before?.lastSample.x ?? Number.POSITIVE_INFINITY);
+        const aliveSeats = (gatedRoom(roomId3).evidence()['seats'] ?? []) as { entityId: string }[];
+        const roomAlive = aliveSeats.some((x) => x.entityId === (join2.sessionId ?? ''));
+        bag['roomAlive'] = roomAlive;
+        const maxDepthWindow = Math.max(0, ...gatedRoom(roomId3).tickRecords.slice(tickStart3).map((rec) => (rec as { maxDepth?: number }).maxDepth ?? 0));
+        bag['maxDepthWindow'] = maxDepthWindow;
+        bag['pressureMargin'] = BUFFER_MAX_SIZE - 8;
+        bag['peerAdvanced'] = b2.resolvedThrough - b2Before.resolvedThrough;
+        bag['pressureAttribution'] = { peerThrottledOrRetired: peerSignals.length, peerClosed: peerClosures.length };
+        cellCheck(`GA-3 (slice 17, prevention-disabled AS MEASURED on the pinned substrate): the confirmed-retirement chain runs to closure against a LIVE backlog (the residue retired at eviction is itself the proof inputs were queued: retiredUnrepresented >= 1), and the PREVENTION limb simply does not exist to be enabled here — the adopted backlog posture for INPUT_QUEUE_PRESSURE is throttle-only by construction (ADR-0003 §3.3; RegionRoom records seat.throttled and slows nothing), so no operator knob was touched and none was needed: the observed depth reached ${String(bag['maxDepthWindow'])} against the ${String(BUFFER_MAX_SIZE - 8)}-depth margin (posture fired this run: ${String(bag['pressureObserved'])}; offender pressure signal in the window: ${String(pressureOnOffender)}), and whichever way depth lands, THIS row is the standing witness that the posture — if a future build ever lets it fire — blocks nothing and attributes nothing, because the closure chain below completes with it armed or unarmed. A real prevention limb (a trusted posture knob in the A-1 pattern) would need its own GRANT — until then prevention-disabled is the measured state, recorded, not asserted away. Actual MATCHED confirmed retirement: exactly ONE RETIRED_UNREPRESENTED confirmation tick (${String(confirmTick)}) and EXACTLY ONE closure, code 4100, attributed to the OFFENDER session only, landing within closureMaxMs=${String(CLOSURE_MAX_MS)} of the confirmation (measured on the journal clock). Residue > 0, named, attributed to that session (close observations retiredUnrepresented >= 1), reported even though the offender client NEVER acknowledged it (publications withheld at report time). NO ROOM-WIDE ATTRIBUTION, NO CROSS-SEAT COLLATERAL: the clean second seat in the SAME room was never throttled-as-collateral, carried NO signal, NO closure, kept consuming (ack ${String(b2.ack)}) and kept MOVING through the whole chain, and the room stayed alive for it`,
+          (bag['peerMovedBefore'] as boolean) === true &&
+          confirmTick !== null && retiredOnOffender.length >= 1 &&
+          closures3.length === 1 && closures4100.length === 1 &&
+          closures4100[0]?.entityId === (join1.sessionId ?? '') &&
+          (bag['closureWithinWindow'] as boolean) === true &&
+          closeObs3.length >= 1 && closeObs3.some((o) => o.retiredUnrepresented >= 1) &&
+          peerSignals.length === 0 && peerClosures.length === 0 &&
+          b2.state === 'tracking' && (bag['peerAdvanced'] as number) >= 20 &&
+          Math.abs((track2After?.lastSample.x ?? 0) - (track2Before?.lastSample.x ?? Number.POSITIVE_INFINITY)) >= 0.4 &&
+          (track2After?.lastSample.tick ?? 0) - (track2Before?.lastSample.tick ?? Number.POSITIVE_INFINITY) >= 20 &&
+          roomAlive === true,
+          bag);
+        await gaStopPump(pageM1).catch(() => undefined);
+        await gaStopPump(pageM2).catch(() => undefined);
+        await Promise.allSettled([pump1, pump2]);
+        try {
+          const roomG3 = gatedRoom(roomId3) as unknown as {
+            journal(): { rows: readonly Record<string, unknown>[]; chain: readonly Record<string, unknown>[]; dropped: number };
+            journalPrologue(): Record<string, unknown> | undefined;
+            liveConfig(): unknown;
+          };
+          const jG3 = roomG3.journal();
+          journalCaptures.push({ tag, roomId: roomId3, rows: [...jG3.rows], chain: [...jG3.chain] as unknown as Record<string, unknown>[], dropped: jG3.dropped, prologue: roomG3.journalPrologue() ?? null, liveConfig: roomG3.liveConfig() });
+        } catch { /* named missing capture */ }
+      } finally {
+        if (handle3 >= 0) { try { await closeProxyBounded(host, handle3); } catch { /* host receipt governs */ } }
+        await pageM1.close().catch(() => undefined);
+        await pageM2.close().catch(() => undefined);
+        await pageO.close().catch(() => undefined);
+      }
+    }
+
+    // ═════ GA-13 PER-SCENARIO JOURNALS (slice 17): EVERY scenario in this cell runs in its OWN
+    // room instance (the scenario helper creates one per leg), and every one of those rooms
+    // stepped the authority through the SHARED KERNEL (the A-1 trusted stepperFactory on the
+    // deployment envelope — this very file's fixture). Each room's journal is captured in the
+    // scenario's own teardown (see the helper) and persisted + replayed HERE through the accepted
+    // Phase-1 machinery with the producing kernel stepper: exact dispositions, canonical state
+    // bytes, per-tick hashes, chain tip, PER scenario — ga6a/b/c, ga5, ga5t, the ga5l family,
+    // ga7t/c1/c2, and the three GA-5b malformed-stamp controls. Public room APIs only (journal(),
+    // journalPrologue(), liveConfig()); no operator seam, no product change. This retires the
+    // "ga-scenarios yields ledger extracts, not journals" limitation for the major scenarios with
+    // evidence; where an export WOULD need an out-of-grant seam the ga9-ga13 coverage register
+    // keeps the named BLOCKED row — this cell needs none.
+    {
+      const [journalReplayG, journalModG, replayModG, adapterModG, kernelModG] = await Promise.all([
+        import('../support/replay/journal-replay.ts'),
+        import(pathToFileURL(resolve(ROOT, 'apps/server/dist/authority/journal.js')).href) as Promise<Record<string, unknown>>,
+        import(pathToFileURL(resolve(ROOT, 'apps/server/dist/authority/replay.js')).href) as Promise<Record<string, unknown>>,
+        import(pathToFileURL(resolve(ROOT, 'apps/server/dist/movement/MovementAuthorityAdapter.js')).href) as Promise<Record<string, unknown>>,
+        import(pathToFileURL(join(ROOT, 'tests', 'support', 'step-kernel', 'kernel-stepper.mjs')).href) as Promise<{ kernelStepperFactory: (speed: number) => unknown; kernelStep: unknown }>,
+      ]);
+      const { createHash } = await import('node:crypto');
+      const toReplayInputsG = journalModG['toReplayInputs'] as (rows: unknown[], chain: unknown[]) => unknown;
+      const sanitisationIssuesG = journalModG['sanitisationIssues'] as (rows: unknown[]) => readonly string[];
+      const replayRunG = replayModG['replayRun'] as (o: Record<string, unknown>) => { ok: boolean; reason?: string };
+      const SystemSchedulerG = adapterModG['SystemScheduler'] as new () => unknown;
+      const gateDirG = join(OUT_DIR, 'gate');
+      mkdirSync(gateDirG, { recursive: true });
+      const perScenario: Record<string, unknown>[] = [];
+      for (const cap of journalCaptures) {
+        const rec: Record<string, unknown> = { tag: cap.tag, roomId: cap.roomId, rows: cap.rows.length, chain: cap.chain.length };
+        try {
+          const speedG = ((cap.liveConfig ?? {}) as { movement?: { speed?: number } }).movement?.speed ?? 0;
+          const rowsOutG: Record<string, unknown>[] = [];
+          const chainOutG: Record<string, unknown>[] = [];
+          const sentinelBeforeG = kernelStepper?.kernelStepperSentinel.calls ?? 0;
+          const replayResultG = speedG > 0 && cap.prologue !== null
+            ? replayRunG({
+                prologue: cap.prologue,
+                inputs: toReplayInputsG([...cap.rows], [...cap.chain]),
+                config: cap.liveConfig,
+                stepper: kernelModG.kernelStepperFactory(speedG),
+                scheduler: new SystemSchedulerG(),
+                sink: { recordRow: (r: Record<string, unknown>) => { rowsOutG.push(r); }, recordTickChain: (r: Record<string, unknown>) => { chainOutG.push(r); } },
+                runId: `spike-ga13-${cap.tag}`,
+              })
+            : { ok: false as const, reason: 'captured journal carried no prologue/liveConfig' };
+          const sentinelAfterG = kernelStepper?.kernelStepperSentinel.calls ?? 0;
+          const viewG = journalReplayG.journalFromPersisted({ prologue: cap.prologue, rows: cap.rows, chain: cap.chain, dropped: cap.dropped });
+          const compG = journalReplayG.compareJournal(viewG.rows, viewG.chain, rowsOutG, chainOutG);
+          const liveStatesG = viewG.rows.filter((r) => r['type'] === 'state') as Record<string, unknown>[];
+          const outStatesG = rowsOutG.filter((r) => r['type'] === 'state') as Record<string, unknown>[];
+          const stateBytesEqualG = liveStatesG.length === outStatesG.length && liveStatesG.length > 0
+            && liveStatesG.every((r, i) => JSON.stringify(r['state']) === JSON.stringify(outStatesG[i]?.['state']));
+          const dispEqualG = JSON.stringify(journalReplayG.dispositionHistogram(viewG.rows)) === JSON.stringify(journalReplayG.dispositionHistogram(rowsOutG));
+          const scanG = sanitisationIssuesG(cap.rows as never[]);
+          const journalFileG = { schemaVersion: 1, kind: 'DIAGNOSTIC-NOT-GATE-A', taskId: 'UDG-SPIKE-001', implementationSha: sha, seed, tag: cap.tag, roomId: cap.roomId, prologue: cap.prologue, rows: cap.rows, chain: cap.chain, dropped: cap.dropped };
+          const journalTextG = JSON.stringify(journalFileG);
+          let shaG: string | null = null;
+          if (scanG.length === 0) {
+            writeFileSync(join(gateDirG, `ga-scenarios-journal-${cap.tag}.json`), `${journalTextG}\n`);
+            shaG = createHash('sha256').update(journalTextG).digest('hex');
+          }
+          rec['replayOk'] = replayResultG.ok === true;
+          rec['refusal'] = replayResultG.ok === true ? null : String(replayResultG.reason ?? 'refused');
+          rec['exactEqual'] = compG.equal;
+          rec['stateBytesEqual'] = stateBytesEqualG;
+          rec['dispositionsEqual'] = dispEqualG;
+          rec['liveTip'] = compG.liveTip;
+          rec['replayedTip'] = compG.replayedTip;
+          rec['persistedSha'] = shaG;
+          rec['scanIssues'] = scanG;
+          rec['kernelSentinelGrowth'] = sentinelAfterG - sentinelBeforeG;
+          rec['dispositions'] = journalReplayG.dispositionHistogram(viewG.rows);
+          rec['firstMismatches'] = compG.mismatches.slice(0, 2);
+        } catch (error) {
+          rec['error'] = String(error instanceof Error ? error.message : error);
+        }
+        perScenario.push(rec);
+      }
+      const allExact = perScenario.length === journalCaptures.length && journalCaptures.length >= 15
+        && perScenario.every((rec) => rec['replayOk'] === true && rec['exactEqual'] === true && rec['stateBytesEqual'] === true
+          && rec['dispositionsEqual'] === true && typeof rec['liveTip'] === 'string' && rec['liveTip'] === rec['replayedTip']
+          && typeof rec['persistedSha'] === 'string' && (rec['kernelSentinelGrowth'] as number) > 0 && rec['error'] === undefined);
+      sGA13J['captured'] = journalCaptures.map((cap) => cap.tag);
+      sGA13J['perScenario'] = perScenario;
+      cellCheck('GA-13 PER-SCENARIO JOURNALS (ga-scenarios, slice 17) — every scenario room of this cell (>= 15: ga6a/b/c episode+rolling, ga5, ga5t, the ga5l family, ga7t/c1/c2, and the three GA-5b malformed-stamp controls) PERSISTED its real journal (scanner-clean before write, sha recorded, gate/ga-scenarios-journal-<tag>.json) and REPLAYED it through the accepted Phase-1 machinery (toReplayInputs -> replayRun with the room\'s own liveConfig and SystemScheduler) driven by THE kernel stepper that PRODUCED it (the wrapper\'s own sentinel advances per replay), to EXACT equality on the accepted canonical representation: same disposition histogram, same canonical state BYTES per row, same per-tick hashes, same chain tip — no tolerance, no rehash, no journal adjustment, per scenario. This retires the "ga-scenarios yields ledger extracts, not journals" limitation for the major scenarios with evidence; a red here stays red (first attempt retained) and the binder/gate ceiling is untouched',
+        allExact,
+        sGA13J);
+    }
+
     // ═════ The rows this cell will NOT fake.
     cellCheck('B1 (REVISED — the original BLOCKED claim is REFUTED by study and ships preserved beside this correction): "no public seam injects a server-side duplicate stamp" was WRONG. The PINNED core IS the seam: RegionRoom declares defineInput({ seqField: "seq" }) and RoomInput.capture -> InputBuffer.accept discards any stamp <= the newest accepted BEFORE the buffer — reached by re-stamping the PUBLIC input handle the production adapter itself writes. GA-5b therefore RAN (see its row) with no operator command, no server change, and no fabricated outcome; GA-5a ran for everything the substrate can witness, and its "gap named as a range" sub-assertion stays BLOCKED because the pinned discard is silent by construction (naming would need a core-side hook — out of grant). The operator-command proposal (injectInputGap / replayInput) is WITHDRAWN as unnecessary',
       true, {
@@ -5696,7 +6198,8 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
       kind: 'DIAGNOSTIC-NOT-GATE-A',
       identity: { sha, dirty, seed, dispatchedBy: 'pnpm test:spike --id UDG-SPIKE-001 --cell ga-scenarios' },
       budgets: { episodeBudgetMs: EPISODE_BUDGET_MS, toleranceMs: BUDGET_TOLERANCE_MS },
-      scenarios: { ga6a: sA, ga6b: sB, ga6cEpisode: sC, cf3, ga6cRolling: sD, ga7t: sG, ga5: s5, ga5t: sT, ga5l: sL, ga5lControlIdle: sLI, ga5lControlBenign: sLB, ga7ControlSeverOnly: sC1, ga7ControlNoWithhold: sC2 },
+      scenarios: { ga6a: sA, ga6b: sB, ga6cEpisode: sC, cf3, ga6cRolling: sD, ga7t: sG, ga5: s5, ga5t: sT, ga5l: sL, ga5lControlIdle: sLI, ga5lControlBenign: sLB, ga7ControlSeverOnly: sC1, ga7ControlNoWithhold: sC2, ga5bMsDuplicate: sMSD, ga5bMsDecreasing: sMSDec, ga5bMsForeignEpoch: sMSEp },
+      ga13Journal: sGA13J,
       substrate: { bufferMaxSize: BUFFER_MAX_SIZE, closureWindowMs: CLOSURE_WINDOW_MS, closureMaxMs: CLOSURE_MAX_MS, stallDetectionDeliveries: GA_STALL_G ?? 3, coreDedupeSeam: '@colyseus/core@0.18.27 build/input/RoomInput.mjs capture() -> InputBuffer.accept(value): value <= _lastSeq => dropped BEFORE the buffer', appDeliverySuppression: 'labelled proxy seam holdNext: chunks ARRIVED are counted at the hop and TERMINALLY withheld from the application (never a drop, never native dedupe)' },
       teardown: hostShutdown,
       checks,
@@ -6704,6 +7207,7 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
     replayedAndComparedExact: [
       'ga9-ga13 EVERY leg that ran (solo/repeat/shared/peerB/red/free) — persisted structured journal (gate/journal-<tag>.json) replayed EXACT: dispositions, canonical state bytes, per-tick hashes, chain tip (slice 10)',
       'ga9-ga13 SOLO leg, DIGEST-BLANKED copy — identical outputs (P03-g)',
+      'ga-scenarios FULL-ROOM journal (every scenario in the cell, malformed-stamp controls included) — persisted (gate-scenarios-journal.json) and kernel-replayed EXACT by the ga-scenarios cell itself (slice 17); see that cell\'s GA-13 FULL-CELL JOURNAL row',
     ],
     structuralOnly: [
       'contaminated leg ATTEMPTS (rotation) — recorded in rotations/legAttempts, not persisted, not replayed, not counted toward any claim',
@@ -6714,7 +7218,7 @@ test('spike cell: ga9-ga13 — per-entity projection determinism (solo vs shared
       'elevated-full / ab-controls — metric traces, no authority journal capture',
     ],
   };
-  const coverageHonest = journalCoverage.replayedAndComparedExact.length === 2
+  const coverageHonest = journalCoverage.replayedAndComparedExact.length === 3
     && journalCoverage.structuralOnly.length >= 1
     && journalCoverage.ledgerExtractsNotJournals.length >= 3;
   cellCheck('GA-13 COVERAGE & INTEGRITY — the inventory above states plainly which journals replay-COMPARED (the solo leg and its blanked copy), which are STRUCTURAL-ONLY (the other five legs), and which scenario journals are MISSING (every ga-scenarios room yields ledger extracts only; calibration/metric runs capture no journal) — checked against overclaiming (the buckets are populated as stated, and no bucket claims more than this cell did), PLUS artifact self-consistency: every leg\'s stored contentDigest re-computes from its own steps, and the chain tip compared is the journal\'s own tip (non-null, equal to chainTipOf over the persisted chain); exact equality implies tip equality — a mismatched-tip "equal" verdict is impossible by construction',
