@@ -2632,7 +2632,7 @@ const startMoverLedger = (page: Page): Promise<{ samples: Record<string, unknown
         for (const e of evs.slice(lastEventsLen)) events.push({ ...e, atClockMs: snap['atMs'], epoch: snap['epoch'], state: snap['state'] });
         lastEventsLen = evs.length;
       }
-      if (g.__udgLedgerStop === true || samples.length >= 2400 || performance.now() - started > 185_000) break;
+      if (g.__udgLedgerStop || samples.length >= 2400 || performance.now() - started > 185_000) break;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     return { samples, events };
@@ -3596,11 +3596,11 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
             }
           }
         }
-        if (g.__udgFramesStop === true || performance.now() - startedAt > args.maxMs) break;
+        if (g.__udgFramesStop || performance.now() - startedAt > args.maxMs) break;
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       return { rawCount, assessment: mod.assessObserverRenderSeries(frames), frames };
-    }, { sessionId: joinM.sessionId, moduleUrl: RENDER_LAG_MODULE_URL, maxMs: 130_000 });
+    }, { sessionId: joinM.sessionId ?? '', moduleUrl: RENDER_LAG_MODULE_URL, maxMs: 130_000 });
     // The measure window ends at the >= 120 000 ms pump-clock guard — NOT at probe completion
     // (that ordering was the LAN bug: pings are a window inside the measure window, not the
     // window itself). For profiles whose ping loop outlasts 120 s (elevated: ~127 s) the wait is
