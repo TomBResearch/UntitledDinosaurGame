@@ -1369,3 +1369,70 @@ passed in 34 s on an uncontended re-run; the receipt is kept, the metric was not
 Two consecutive full-greens: `dpa3h`, `dpa3i` (10/10 rows each). Gate A: still Not Run; GA-5/6/
 7/11/12 + CF rows remain OWED with this cell as their recipe; no thresholds moved; camera,
 workflows, main and P06 untouched.
+
+## 14.7. GA-5 gets a real seam (it was never missing), GA-7 gets timed, and the pinned core answers W-9 (slice 6h, 2026-11-22)
+
+Director batch on the review of `e8411c8`: study PR-15, the Phase-2/3 harness and the pinned core
+BEFORE proposing seams; reuse an existing technically valid pre-buffer dedupe seam if one exists;
+tighten GA-7 to the server's real decision tick and the exact §3.3 window; no operator commands.
+
+**The study found the seam, and it is public.** `RegionRoom` declares `defineInput(… , { seqField:
+'seq' })`, and the pinned `@colyseus/core@0.18.27` runs `RoomInput.capture -> InputBuffer.accept`:
+any stamp `<= _lastSeq` is dropped BEFORE the buffer — decoded (the receive counter counts it),
+never queued, invisible to `consumedCount`. Re-stamping through the same public input handle the
+production adapter writes reaches it with no new API, no server change and no operator command;
+the earlier `B1` "no public seam" BLOCKED claim is REFUTED and ships corrected beside the record
+(the `injectInputGap`/`replayInput` proposal is withdrawn as unnecessary). What the pinned discard
+does NOT do is leave a room-visible trace of the discarded frame — so GA-5a's "gap named as a
+range in the record" is nameable only through the mechanism this slice MEASURED: a replayed stamp
+consumes a slot of the SDK send counter (`sent <= stamped` — PR-15's measured limit), the next
+contiguous stamp jumps, and the room NAMES the resulting consumed-range gap. The client's delivery
+guard refuses gap-carrying deliveries (`gap-named`) and resynchronises through a complete §3.2
+episode in budget — exactly GA-5a's requirement — with zero retirement subtraction and no server
+closure, while the deduped frame's content moved nothing (observer z-axis; discrete-effect ledger
+untouched). GA-5a PASSES with the named range present in both records. GA-5b's terminal case runs
+for real too — the client's OWN next auto-stamped input re-stamps an accepted value and is eaten
+pre-buffer — and its server side is exactly the ADR's 'unidentifiable': plain leave, retired 0,
+queue 0, no gap invented, no closure, applied zero times. Its CLIENT sub-leg is BLOCKED with
+proof, not passed silently: the accepted twin carries the same stamp, the ack watermark covers it,
+the pending entry prunes legitimately, and the armed snapshot deadline bounds only OUTSTANDING
+inputs (`armDeadlineIfNeeded`, measured) — no well-formed client expectation can exist to time
+out; the recoveries that DO evidence resync-from-unidentifiable-loss are GA-5a's gap-named resync
+and GA-6a/6b's deadline recoveries.
+
+**Three substrate truths this slice measured (recorded, not fitted):** the leave-drain (`clear()`)
+advances the consumed counter WITHOUT dequeuing, and the room then charges §3.1's subtraction on
+the abandoned seat and closes it 4100 — the open W-9 question, answered live, cause-attributed,
+with the scenario quieting the wire first so GA-5a's "no closure" claim is tested against the
+dedupe evidence rather than a leave-mid-flight artefact; the deadline arms only with inputs
+outstanding; `effectCount` is the GA-10 DISCRETE ledger (direct frames advance nothing), so
+'no duplicate movement' is evidenced by consumed-once + refusals-zero + distinctive-content
+absence, not by an effects arithmetic the substrate does not offer.
+
+**GA-7T: the ordering the row always claimed, now actually timed.** The injection is still
+labelled WITHHELD APPLICATION DELIVERY (socket open), and NO harness sever participates: two
+contiguous stamp waves push the pinned buffer past `bufferMaxSize`, the room CONFIRMS THE LOSS
+ITSELF (consumed-without-dequeued at its own step — the DECISION tick, journalled with room-clock
+time and caught live in the in-process poll trail with the seat `closing: true`), the exact §3.3
+window `[decision, decision + 250 ms]` (cap 1000 ms) runs, and the client-local deadline — bridged
+from the page's monotonic clock by a loopback bridge with a stated error budget — fires INSIDE it
+(measured: ~170–180 ms after the decision in both green runs). The 4100 consequence closure runs
+at window end and its close frame is itself withheld; the withheld window is MEASURED WHILE HELD
+(s2c received-minus-delivered at the proxy); the withheld-final proof is epoch-scoped (zero
+OLD-domain acceptances at/after the decision tick — the new domain's own ticks are a different
+domain, and the first-run conflation is preserved as a red record); `(domain, seq)` consumed
+stamps are unique with zero refusals on the supported substrate; controls: C1 — a harness kill
+ALONE produces a plain leave with NO 4100 (a sever cannot stand in for the consequence branch);
+C2 — the identical confirmed-loss chain with nothing withheld: the client is still `tracking` at
+the decision moment and the closure ARRIVES, the exact delivered-vs-withheld contrast. CF-4 keeps
+its former distinctions and gains the decision tick.
+
+**GA-12 stays BLOCKED for a positive proof, closure policy untouched**, and the PE plan is now
+concrete: PE-1 is unsatisfiable for pre-buffer dedupe on the pinned core (this run MEASURED the
+absence of any signature while a replayed stamp was observed); PE-2 seeds at zero false positives
+across this cell's compliant legs and names the dedupe-replay counter-slot jump as a benign
+gap-naming false positive to include in the control population; PE-3's naming works on the
+eviction chain (C2) and not on terminal dedupe, as the ADR anticipates; PE-4 maps every benign
+alternative to an existing scenario; PE-5 rides the accepted Phase 1 journal replay. No closure
+adoption; no policy change; GA-11 outstanding; Gate A remains Not Run. Two consecutive 15/15
+greens (`dpa4h`, `dpa4i`); every first-run refutation (`dpa4a–dpa4g`) preserved in the bundle.

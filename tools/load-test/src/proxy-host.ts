@@ -152,6 +152,13 @@ const shutdownAndExit = async (trigger: string): Promise<void> => {
 };
 
 const handle = (cmd: Cmd): void => {
+  // Injection replies carry the HOST's own monotonic and wall readings: GA-7 timing evidence
+  // correlates harness actions with the room's clock through these stamps (the host-to-node
+  // offset is bounded by the request round trip and stated as a tolerance in the scenario).
+  const stamp = (): { hostPerfMs: number; hostWallMs: number } => ({
+    hostPerfMs: Math.trunc(globalThis.performance.now()),
+    hostWallMs: Date.now(),
+  });
   if (cmd.op === 'shutdown') {
     write({ ch: 'reply', id: cmd.id, ok: true, acknowledged: 'shutdown' });
     void shutdownAndExit('shutdown');
@@ -164,7 +171,7 @@ const handle = (cmd: Cmd): void => {
       return;
     }
     stallEntry.proxy.setStall(cmd.direction, cmd.ms);
-    write({ ch: 'reply', id: cmd.id, ok: true, stalled: cmd.direction, ms: cmd.ms });
+    write({ ch: 'reply', id: cmd.id, ok: true, stalled: cmd.direction, ms: cmd.ms, ...stamp() });
     return;
   }
   if (cmd.op === 'flush') {
@@ -174,7 +181,7 @@ const handle = (cmd: Cmd): void => {
       return;
     }
     flushEntry.proxy.flushStalled(cmd.direction);
-    write({ ch: 'reply', id: cmd.id, ok: true, flushed: cmd.direction });
+    write({ ch: 'reply', id: cmd.id, ok: true, flushed: cmd.direction, ...stamp() });
     return;
   }
   if (cmd.op === 'kill') {
@@ -184,7 +191,7 @@ const handle = (cmd: Cmd): void => {
       return;
     }
     killEntry.proxy.killSockets();
-    write({ ch: 'reply', id: cmd.id, ok: true, killed: true });
+    write({ ch: 'reply', id: cmd.id, ok: true, killed: true, ...stamp() });
     return;
   }
   if (cmd.op === 'start') {

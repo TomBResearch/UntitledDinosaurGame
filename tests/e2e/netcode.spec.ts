@@ -40,6 +40,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -942,8 +943,10 @@ interface GatedRoom {
     consumed: readonly { entityId: string; seq: number }[];
     refused?: readonly { entityId: string; count: number }[];
     closures?: readonly { entityId: string; code: number }[];
+    signals?: readonly { entityId: string; signal: string }[];
   }[];
   evidence(): Record<string, unknown>;
+  journal(): { rows: readonly Record<string, unknown>[]; chain: readonly { tick: number; atMs: number }[]; dropped: number };
 }
 
 const gatedRoom = (roomId: string): GatedRoom => {
@@ -3946,6 +3949,11 @@ interface GaSnapshot {
   sentGensLen: number;
   sentMonotonic: boolean;
   deliveryTally: { accepted: number; rejected: number; oldEpochAccepted: number; oldEpochRejected: number; rejectReasons: string[] };
+  lastDelivery: { epoch: number; authorityTick: number; ack: number; revision: number; accepted: boolean; reason: string; atMs: number } | null;
+  /** authorityTick of every ACCEPTED delivery — lets a scenario ask whether ANY publication at or
+   *  after a server decision tick ever reached this client (GA-7 withheld-vs-delivered contrast). */
+  acceptedTicks: number[];
+  acceptedDeliveries: { tick: number; epoch: number }[];
 }
 
 const gaRecovery = (page: Page, opts: { sinceIndex?: number; oldEpoch?: number } = {}): Promise<GaSnapshot> =>
@@ -3991,6 +3999,20 @@ const gaRecovery = (page: Page, opts: { sinceIndex?: number; oldEpoch?: number }
       sentGensLen: gens.length,
       sentMonotonic: monotonic,
       deliveryTally: tally,
+      lastDelivery: (() => {
+        const last = rows.at(-1);
+        return last === undefined ? null : {
+          epoch: last.delivery.epoch,
+          authorityTick: last.delivery.authorityTick,
+          ack: last.delivery.ack,
+          revision: last.delivery.revision,
+          accepted: last.accepted,
+          reason: last.reason,
+          atMs: last.delivery.atMs,
+        };
+      })(),
+      acceptedTicks: rows.filter((row) => row.accepted).map((row) => row.delivery.authorityTick),
+      acceptedDeliveries: rows.filter((row) => row.accepted).map((row) => ({ tick: row.delivery.authorityTick, epoch: row.delivery.epoch })),
     };
   }, opts);
 
@@ -4067,6 +4089,71 @@ const reportGaTracks = (page: Page): Promise<{ peers: readonly string[]; tracks:
     };
   });
 
+
+/**
+ * GA-5/GA-7 producer seam (slice 6h): stamp the PUBLIC input handle directly — the SAME field
+ * writes the production adapter's send path performs (`sessionEpoch/generation/directIntent/
+ * moveX/moveZ/seq`, then `send()`). Re-stamping an already-accepted sequence value is what makes
+ * the PINNED core's pre-buffer discard run: `RoomInput.capture` asks `InputBuffer.accept(value)`,
+ * which returns false for any value `<= _lastSeq` and drops the frame BEFORE the buffer
+ * (node_modules/.pnpm/@colyseus+core@0.18.27.../build/input/{RoomInput,InputBuffer}.mjs). This is
+ * not a synthetic gap and not a proxy omission: the frame travels, is decoded server-side
+ * (`_receivedInputCount` counts it), and the pinned core's own dedupe discards it. Every manual
+ * send is journalled in-page — the journaled client-side transcript GA-5/PE-3 language needs.
+ */
+const gaSendStamped = (page: Page, frame: { seq: number; generation: number; moveX: number; moveZ: number }): Promise<{ ack: number; epoch: number; journalLength: number; stamped: number }> =>
+  page.evaluate((args) => {
+    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+    if (holder === undefined) throw new Error('the ga seat is not joined');
+    const transport = holder.transport;
+    const handle = transport.handle();
+    const epoch = transport.issuedEpoch();
+    handle.data.sessionEpoch = epoch;
+    handle.data.generation = args.generation;
+    handle.data.directIntent = true;
+    handle.data.moveX = args.moveX;
+    handle.data.moveZ = args.moveZ;
+    // seq sentinels: >0 explicit; 0 = RE-STAMP the newest accepted value (drives the pinned
+    // core's pre-buffer discard); -1 = next contiguous value from the handle's own counter.
+    const seq = args.seq > 0 ? args.seq : args.seq === 0 ? handle.sentCount : handle.sentCount + 1;
+    handle.data.seq = seq;
+    const ack = handle.send();
+    const journal = ((globalThis as unknown as { __udgGa5Journal?: { seq: number; generation: number; moveX: number; moveZ: number; ack: number; epoch: number; atMs: number }[] }).__udgGa5Journal ??= []);
+    journal.push({ seq, generation: args.generation, moveX: args.moveX, moveZ: args.moveZ, ack, epoch, atMs: performance.now() });
+    return { ack, epoch, journalLength: journal.length, stamped: seq };
+  }, frame);
+
+/** A contiguous burst stamped from the handle's own send counter (the GA-7T eviction driver). */
+const gaBurst = (page: Page, count: number, generationStart: number, moveX: number): Promise<{ firstSeq: number; lastSeq: number; generations: number; journalLength: number }> =>
+  page.evaluate((args) => {
+    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+    if (holder === undefined) throw new Error('the ga seat is not joined');
+    const transport = holder.transport;
+    const handle = transport.handle();
+    const epoch = transport.issuedEpoch();
+    const journal = ((globalThis as unknown as { __udgGa5Journal?: { seq: number; generation: number; moveX: number; moveZ: number; ack: number; epoch: number; atMs: number }[] }).__udgGa5Journal ??= []);
+    let generation = args.generationStart;
+    let firstSeq = -1;
+    let lastSeq = -1;
+    for (let i = 0; i < args.count; i += 1) {
+      const seq = handle.sentCount + 1;
+      handle.data.sessionEpoch = epoch;
+      handle.data.generation = generation;
+      handle.data.directIntent = true;
+      handle.data.moveX = args.moveX;
+      handle.data.moveZ = 0;
+      handle.data.seq = seq;
+      const ack = handle.send();
+      if (firstSeq < 0) firstSeq = seq;
+      lastSeq = seq;
+      journal.push({ seq, generation, moveX: args.moveX, moveZ: 0, ack, epoch, atMs: performance.now() });
+      generation += 1;
+    }
+    holder.generation = generation - 1;
+    return { firstSeq, lastSeq, generations: generation - args.generationStart, journalLength: journal.length };
+  }, { count, generationStart, moveX });
+
+
 // eslint-disable-next-line no-empty-pattern -- Playwright requires the destructured args object even when the cell uses only testInfo.
 test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence with predeclared injections and CF-1/CF-3/CF-4 dispositions (DIAGNOSTIC, NOT Gate A)', async ({}, testInfo) => {
   test.skip(process.env['UDG_SPIKE_CELL'] !== 'ga-scenarios', 'dispatched only by `pnpm test:spike -- --id UDG-SPIKE-001 --cell ga-scenarios` (slice 6f/6g scenario evidence)');
@@ -4091,6 +4178,98 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence
   const host = await startProxyHost();
   let hostShutdown: Awaited<ReturnType<typeof host.shutdown>> | null;
 
+  // ── Clock bridge (GA-7T timing tightening) ──────────────────────────────────────────────────
+  // The room's clock (closeObservations.sampledAtMs, the journal's tick chain) is Node's OWN
+  // monotonic clock in THIS process (MovementAuthorityAdapter). The client's deadline fires on the
+  // PAGE's monotonic clock. A loopback HTTP bridge measured from the page gives the page→room-clock
+  // offset with an explicit error budget: the half-round-trip per sample, maxmed over samples.
+  // No new product API: an ephemeral test-local server answering one GET.
+  const bridge = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+    res.end(JSON.stringify({ nodePerfMs: globalThis.performance.now(), nodeWallMs: Date.now() }));
+  });
+  await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
+  const bridgePort = (bridge.address() as { port: number }).port;
+  const configModule = (await import('../../packages/config/dist/index.js')) as {
+    DEFAULT_SERVER_CONFIG: object;
+    withConfigOverrides(base: object, overrides: unknown): object;
+  };
+  const liveCfg = configModule.withConfigOverrides(configModule.DEFAULT_SERVER_CONFIG, { region: { bounds: REGION_BOUNDS } }) as unknown as {
+    input: { bufferMaxSize: number; closureWindowMs: number; closureMaxMs: number };
+  };
+  const CLOSURE_WINDOW_MS = liveCfg.input.closureWindowMs;
+  const CLOSURE_MAX_MS = liveCfg.input.closureMaxMs;
+  const BUFFER_MAX_SIZE = liveCfg.input.bufferMaxSize;
+
+  const bridgeClock = async (page: Page): Promise<{ medianOffsetMs: number; epsilonMs: number; samples: number }> =>
+    page.evaluate(async (port: number) => {
+      const offsets: number[] = [];
+      let epsilon = 0;
+      for (let i = 0; i < 12; i += 1) {
+        const p0 = performance.now();
+        const reply = await (await fetch(`http://127.0.0.1:${String(port)}/time`)).json() as { nodePerfMs: number };
+        const p1 = performance.now();
+        offsets.push(reply.nodePerfMs - (p0 + p1) / 2);
+        epsilon = Math.max(epsilon, (p1 - p0) / 2);
+      }
+      offsets.sort((a, b) => a - b);
+      return { medianOffsetMs: offsets[Math.trunc(offsets.length / 2)] ?? 0, epsilonMs: epsilon + 5, samples: offsets.length };
+    }, bridgePort);
+
+  /** Sample the LIVE room from the node side (the room runs IN this process), timestamped on the
+   *  room's own clock — the per-scenario poll trail is the live-state record. */
+  type TrailSeat = { entityId: string; epoch: number; closing: boolean; resolvedThrough: number; retired: number; gap: { start: number; end: number } | null };
+  type TrailSnap = { atMs: number; tick: number; seats: TrailSeat[]; lastTick: number; retiredTickSeen: number | null; closureTicks: { tick: number; code: number }[] };
+  const trailSnapshot = (roomId: string): TrailSnap => {
+    const room = gatedRoom(roomId);
+    const evidence = room.evidence();
+    const retiredTickSeen = room.tickRecords.find((rec) => (rec.signals ?? []).some((sig) => sig.signal === 'RETIRED_UNREPRESENTED'))?.tick ?? null;
+    const closureTicks = room.tickRecords.flatMap((rec) => (rec.closures ?? []).map((c) => ({ tick: rec.tick, code: c.code })));
+    return {
+      atMs: Math.trunc(globalThis.performance.now()),
+      tick: Number(evidence['ticks'] ?? -1),
+      seats: (evidence['seats'] ?? []) as TrailSeat[],
+      lastTick: room.tickRecords.at(-1)?.tick ?? -1,
+      retiredTickSeen,
+      closureTicks,
+    };
+  };
+  const pollTrail = async (roomId: string, done: (snap: TrailSnap) => boolean, maxMs: number, everyMs = 25): Promise<{ trail: TrailSnap[]; hit: TrailSnap | null }> => {
+    const trail: TrailSnap[] = [];
+    let hit: TrailSnap | null = null;
+    const started = Date.now();
+    for (;;) {
+      const snap = trailSnapshot(roomId);
+      trail.push(snap);
+      if (done(snap)) { hit = snap; break; }
+      if (Date.now() - started > maxMs) break;
+      await wait(everyMs);
+    }
+    return { trail, hit };
+  };
+  const trailJson = (trail: readonly TrailSnap[]): unknown[] =>
+    (trail.length <= 60 ? [...trail] : [...trail.slice(0, 24), { omitted: trail.length - 48 }, ...trail.slice(-24)]);
+  const consumedSince = (roomId: string, startIndex: number, entityId: string): number[] =>
+    gatedRoom(roomId).tickRecords.slice(startIndex).flatMap((rec) => rec.consumed.filter((c) => c.entityId === entityId).map((c) => c.seq));
+  const refusedSince = (roomId: string, startIndex: number, entityId: string): number =>
+    gatedRoom(roomId).tickRecords.slice(startIndex).reduce((total, rec) => total + (rec.refused ?? []).filter((r) => r.entityId === entityId).reduce((t2, r) => t2 + r.count, 0), 0);
+  const moverCloseObservations = (roomId: string, entityId: string): { entityId: string; retiredUnrepresented: number; serverQueuedAtClose: number; consumedCountAtClose: number; dequeuedTotal: number; sampledAtMs: number }[] =>
+    ((gatedRoom(roomId).evidence()['closeObservations'] ?? []) as { entityId: string; retiredUnrepresented: number; serverQueuedAtClose: number; consumedCountAtClose: number; dequeuedTotal: number; sampledAtMs: number }[])
+      .filter((o) => o.entityId === entityId);
+  const replicaEffects = (roomId: string, key: string): { effects: number; epoch: number; gapStart: number } | null => {
+    const row = ((gatedRoom(roomId).evidence()['replicaRows'] ?? []) as { key: string; epoch: number; effects: number; gapStart: number }[]).find((r) => r.key === key);
+    return row === undefined ? null : { effects: row.effects, epoch: row.epoch, gapStart: row.gapStart };
+  };
+  /** Host stats replies nest the ProxyStats under `stats`; one reader for every direction field. */
+  const statCount = (reply: Record<string, unknown>, side: 'c2s' | 's2c', field: 'chunksReceived' | 'chunksDelivered' | 'chunksFlushed'): number => {
+    const stats = (reply['stats'] ?? reply) as Record<string, unknown>;
+    const dir = stats[side] as Record<string, unknown> | undefined;
+    const value = dir?.[field];
+    return typeof value === 'number' ? value : Number.NaN;
+  };
+  const chainAtMs = (roomId: string, tick: number): number | null =>
+    gatedRoom(roomId).journal().chain.find((row) => row.tick === tick)?.atMs ?? null;
+
   /** Poll the seat's §3.2 surface until a condition holds or the bounded wait is spent. */
   const waitLedger = async (page: Page, pick: (snap: GaSnapshot) => boolean, what: string, maxMs: number): Promise<GaSnapshot> => {
     const startedAt = Date.now();
@@ -4114,6 +4293,7 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence
     tag: string,
     roomName: string,
     run: (ctx: { pageM: Page; pageO: Page; handle: number; roomId: string; sessionId: string; oldEpoch: number }) => Promise<void>,
+    bag?: Record<string, unknown>,
   ): Promise<void> => {
     let handle = -1;
     const pageM = await openSeatPage(`${tag}-M`, { bare: true });
@@ -4135,6 +4315,7 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence
         // the page-close cascade (a pending pump promise rejecting when the helper closes).
         cellCheck(`scenario ${tag} ERRORED (recorded honestly; later scenarios proceed)`, false, {
           error: String(error instanceof Error ? error.message : error),
+          forensicBag: bag ?? null,
         });
       }
     } finally {
@@ -4153,10 +4334,13 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence
   };
 
   const sA: Record<string, unknown> = {};
+  const s5: Record<string, unknown> = {};
+  const sG: Record<string, unknown> = {};
+  const sC1: Record<string, unknown> = {};
+  const sC2: Record<string, unknown> = {};
   const sB: Record<string, unknown> = {};
   const sC: Record<string, unknown> = {};
   const sD: Record<string, unknown> = {};
-  const sE: Record<string, unknown> = {};
   const cf3: Record<string, unknown> = {};
 
   try {
@@ -4232,7 +4416,7 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence
         { acceptedDuringWithheld: sA['acceptedDuringWithheld'], oldEpochAcceptedAfter: sA['oldEpochAcceptedAfter'], refusalReasons: sA['refusalReasons'] });
       await gaStopPump(ctx.pageM);
       await pumpOn;
-    });
+    }, sA);
 
     // ═════ GA-6b — THE SERVER NEITHER SENDS NOR CLOSES: the recovery begins on the CLIENT'S
     // OWN timer. Distinct required case: between join and trigger ZERO deliveries crossed and
@@ -4266,7 +4450,7 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence
         sB);
       await gaStopPump(ctx.pageM);
       await pumpOn;
-    });
+    }, sB);
 
     // ═════ GA-6c (EPISODE arm) — the join itself is withheld and NEVER settles: the
     // INDEPENDENT per-episode hard deadline must expire the episode on its own timer (the S1b
@@ -4359,7 +4543,7 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence
         (postClose as { refused: number }).refused === 3 && (postClose as { state: string }).state === 'closed'
           && (cf3['samplesAdvancedAfterClose'] as number) === 0,
         cf3);
-    });
+    }, sC);
 
     // ═════ GA-6c (ROLLING arm) — genuine exhaustion: context offline 9 s, BOTH bounded
     // attempts fail fast, the ROLLING allowance suspends BEFORE the episode deadline — and the
@@ -4393,112 +4577,434 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 scenario evidence
         sD);
       await gaStopPump(ctx.pageM);
       await pumpOn;
-    });
+    }, sD);
 
-    // ═════ GA-7 — FINAL PUBLICATION WITHHELD, over the real room/transport. The injection is
-    // labelled precisely: WITHHELD APPLICATION DELIVERY at the proxy hop (stall s2c; the socket
-    // stays OPEN — never TCP loss), then a proxy-side sever of the proxied pair so the SERVER
-    // really closes (its §3.1 close observations — retiredUnrepresented / serverQueuedAtClose /
-    // consumedCountAtClose / dequeuedTotal — are recorded at the real close, attributed by exact
-    // entityId; the branch is read from the room's CLOSURE LEDGER as measured — in this run the
-    // stranded final input makes it the ADR consequence branch, code 4100, attributed to the
-    // mover's identity: a CONFIRMED loss, not an assumed one). The client must NOT rely on the
-    // close: its trigger is the local deadline.
-    // Recovery completes within budget; withheld finals are refused, never adopted; nothing is
-    // reissued (generation continuity) and nothing applies twice (journal discarded at trigger).
-    await scenario('ga7', ROOM_NAME, async (ctx) => {
+    // ═════ GA-5a/GA-5b — REAL PRE-BUFFER DEDUPE, same domain, journaled (slice 6h). The seam is
+    // the PINNED core itself: `RegionRoom` declares `defineInput(DirectInputSchema, { seqField:
+    // 'seq' })`, and `RoomInput.capture` asks `InputBuffer.accept(value)`, which returns false for
+    // any stamp `<= _lastSeq` and drops the frame BEFORE the buffer (0.18.27, build/input/
+    // {RoomInput,InputBuffer}.mjs). Re-stamping through the PUBLIC input handle — the very handle
+    // the production adapter writes — therefore produces a genuine pre-buffer discard: the frame
+    // travels (proxy c2s receipts count the bytes), is decoded server-side, and the pinned core's
+    // own dedupe drops it. No operator command, no synthetic gap, no proxy omission. The client's
+    // journaled transcript (`__udgGa5Journal`) and the room's consumed-stamp record are the two
+    // bookends; the observer's z-axis is the no-duplicate-movement witness (every deduped frame
+    // carries moveZ = 1: if a deduped frame ever MOVED anything, z would prove it).
+    // ── GA-5a/GA-5b (REAL pre-buffer dedupe), restructured after TWO first-run disproofs (runs
+    // dpa4b/c/d preserved in the evidence bundle, nothing silently patched):
+    //  (i) the client does NOT stay quiet through a named range — the delivery guard refuses any
+    //     delivery carrying a named gap (`gap-named`) and opens a §3.2 episode: exactly what ADR
+    //     GA-5a demands ("the client detects the named range and resynchronises");
+    //  (ii) a §3.2 resync LEAVES a still-buffered input behind, and the pinned core's leave-drain
+    //     advances the consumed counter WITHOUT dequeuing (the W-9 question, answered live): the
+    //     room then charges §3.1's subtraction on the abandoned seat and closes it 4100. Case A
+    //     therefore QUIETS THE WIRE FIRST (buffer drained before the resync-leave) so "the
+    //     server does not close" is tested against the dedupe evidence, not against an artefact
+    //     of leaving mid-flight — and the leave-drain closure, when it occurs, is recorded as
+    //     the cause-attributed finding it is (W-9), never blamed on the gap.
+    // The shapes: a replayed stamp consumes a slot of the SDK send counter (`sent <= stamped`,
+    // PR-15's measured limit), so the NEXT contiguous stamp jumps — the server sees a stamp gap
+    // that never existed on the wire and NAMES it. Case B terminates with the client's own
+    // predictor-stamped frame re-stamped by that consumed slot: it is eaten pre-buffer, stays in
+    // the client's pending journal unacked, and the deadline does the rest — §3.2 despite a loss
+    // the server cannot identify.
+    await scenario('ga5', ROOM_NAME, async (ctx) => {
       const pumpOn = gaPump(ctx.pageM);
-      await wait(2_500); // healthy: inputs journalled by the server, publications flowing
+      await wait(900);
+      s5['deliveriesAt900'] = (await gaRecovery(ctx.pageM)).deliveries; // deliveries MUST be flowing
+      await wait(900);
+      s5['deliveriesAt1800'] = (await gaRecovery(ctx.pageM)).deliveries;
+      const tickIndex0 = gatedRoom(ctx.roomId).tickRecords.length;
       const seen0 = await reportGaTracks(ctx.pageO);
-      sE['movedBefore'] = (seen0.tracks.find((t) => t.sessionId === ctx.sessionId)?.delta.x ?? 0) > 2;
-      const before = await gaRecovery(ctx.pageM);
-      await host.request({ op: 'stall', handle: ctx.handle, direction: 's2c', ms: 20_000 }); // withheld application delivery — socket OPEN
-      await wait(1_000); // inputs keep leaving while the server consumes them; their publications queue at the proxy
-      const mid = await gaRecovery(ctx.pageM);
-      sE['inputsSentWhileWithheld'] = mid.sentLen - before.sentLen;
-      await host.request({ op: 'kill', handle: ctx.handle }); // the drop: the SERVER closes and records
-      const trig = await waitLedger(ctx.pageM, (s) => s.events.some((e) => e.event === 'trigger' && e.detail.includes('snapshot-deadline-expired')), 'the client-local deadline (no reliance on the close)', 4_000);
-      const triggerAt = trig.events.find((e) => e.event === 'trigger' && e.detail.includes('snapshot-deadline-expired'))?.atMs ?? Number.NaN;
-      sE['stateAtTrigger'] = trig.state;
-      const att = await waitLedger(ctx.pageM, (s) => s.events.some((e) => e.event === 'rejoin-attempt'), 'the first bounded attempt', 4_000);
-      sE['attemptsAtRelease'] = att.events.filter((e) => e.event === 'rejoin-attempt').length;
-      await releaseWindow(ctx.handle); // withheld finals depart (old domain → refused); fresh joins pass
-      const done = await waitLedger(ctx.pageM, (s) => s.state === 'tracking', 'GA-7 recovery COMPLETE within budget', 10_000);
-      const recoveredAt = done.events.find((e) => e.event === 'snapshot-recovered')?.atMs ?? Number.POSITIVE_INFINITY;
-      sE['budgetUsedMs'] = recoveredAt - triggerAt;
-      sE['joins'] = done.joins;
-      sE['newEpochFromJoins'] = done.joins.at(-1) ?? -1;
-      sE['sentMonotonic'] = done.sentMonotonic;
-      await wait(1_000);
-      const tally = await gaRecovery(ctx.pageM, { sinceIndex: before.deliveries, oldEpoch: ctx.oldEpoch });
-      sE['oldEpochAccepted'] = tally.deliveryTally.oldEpochAccepted; // withheld finals: ZERO accepted
-      sE['oldEpochRefusals'] = tally.deliveryTally.oldEpochRejected; // info: the old transport is CLOSED at the trigger, so refusals need not be observable
-      sE['refusalReasons'] = tally.deliveryTally.rejectReasons;
-      const newSession = done.rejoins.at(-1)?.sessionId ?? ctx.sessionId;
-      sE['newSession'] = newSession;
-      let resumeBase = await reportGaTracks(ctx.pageO);
-      for (let round = 0; round < 10 && !resumeBase.tracks.some((t) => t.sessionId === newSession); round += 1) {
-        await wait(500);
-        resumeBase = await reportGaTracks(ctx.pageO);
-      }
-      await wait(2_500);
-      const seen1 = await reportGaTracks(ctx.pageO);
-      const t0 = resumeBase.tracks.find((t) => t.sessionId === newSession);
-      const t1 = seen1.tracks.find((t) => t.sessionId === newSession);
-      sE['observerSawResume'] = t0 !== undefined && t1 !== undefined
-        && t1.lastSample.tick - t0.lastSample.tick > 20
-        && Math.abs(t1.lastSample.x - t0.lastSample.x) > 0.5;
-      // The SERVER's own record of the close, read from the live room.
-      const room = gatedRoom(ctx.roomId);
-      const evidence = room.evidence();
-      const observations = ((evidence['closeObservations'] ?? []) as { entityId: string; retiredUnrepresented: number; serverQueuedAtClose: number; consumedCountAtClose: number; dequeuedTotal: number }[])
-        .filter((o) => o.entityId === ctx.sessionId);
-      const closures4100 = room.tickRecords
-        .flatMap((record) => (record.closures ?? []).map((c) => ({ tick: record.tick, entityId: c.entityId, code: c.code })))
-        .filter((c) => c.entityId === ctx.sessionId && c.code === 4100);
-      const replica = ((evidence['replicaRows'] ?? []) as { key: string; epoch: number; effects: number }[])
-        .find((r) => r.key === newSession);
-      sE['replicaKeys'] = ((evidence['replicaRows'] ?? []) as { key: string }[]).map((r) => r.key);
-      sE['serverCloseObservation'] = observations.at(-1) ?? null;
-      sE['serverObservationCount'] = observations.length;
-      sE['moverClosures4100'] = closures4100.length;
-      sE['replicaRow'] = replica ?? null;
-      cellCheck('GA-7 (real room/transport; injection labelled as WITHHELD APPLICATION DELIVERY, never TCP loss): the final publication is withheld at the proxy hop while inputs are outstanding; the seat is then DROPPED and the SERVER records the close — §3.1 observations for the mover\'s exact entityId (retiredUnrepresented / serverQueuedAtClose / consumedCountAtClose / dequeuedTotal recorded as measured); the CLIENT never relies on the close (its trigger is the local snapshot-deadline-expired with state never \'closed\'), recovers through rejoin + fresh-domain snapshot WITHIN BUDGET (page clock, <= 4300 ms), the withheld finals are known missing at the client (ZERO old-epoch acceptances — the quarantined old transport is CLOSED at the trigger, so the withheld publications simply never arrive), NOTHING is reissued (accepted-send generations strictly increasing across the whole scenario) and nothing applies twice (the journal was discarded at the trigger; the fresh domain publishes the NEW identity\'s row at the new epoch on the server replica); motion resumes on the unaffected observer under the new identity',
-        (sE['movedBefore'] as boolean) === true && (sE['inputsSentWhileWithheld'] as number) >= 5
-          && (sE['serverObservationCount'] as number) >= 1 && sE['serverCloseObservation'] !== null
-          && String(sE['triggerDetail'] ?? trig.events.find((e) => e.event === 'trigger')?.detail ?? '').includes('snapshot-deadline-expired')
-          && sE['stateAtTrigger'] !== 'closed'
-          && (sE['budgetUsedMs'] as number) <= EPISODE_BUDGET_MS + BUDGET_TOLERANCE_MS
-          && done.state === 'tracking' && (done.joins as number[]).length >= 2 && sE['newEpochFromJoins'] !== ctx.oldEpoch
-          && (sE['oldEpochAccepted'] as number) === 0
-          && sE['sentMonotonic'] === true && (replica?.epoch ?? -1) === (sE['newEpochFromJoins'] as number)
-          && sE['observerSawResume'] === true,
-        sE);
-      cellCheck('CF-4 DISPOSITION (named evidence from THIS run\'s ledgers, not a title check): branch attribution is read from the room\'s closure ledger — the mover\'s close is attributed to the ADR consequence branch by EXACT identity (a code-4100 closure carrying the mover\'s entityId), and its §3.1 close observation records the CONFIRMED LOSS alongside the counters (retiredUnrepresented >= 1, serverQueuedAtClose/consumedCountAtClose/dequeuedTotal as measured, recorded separately and never summed). The leave-branch wording stays owned by the retirement suite for the branches THAT test exercises; this row names only what this run measured',
-        (sE['serverObservationCount'] as number) >= 1 && (sE['moverClosures4100'] as number) === 1
-          && ((sE['serverCloseObservation'] as { retiredUnrepresented?: number } | null)?.retiredUnrepresented ?? 0) >= 1,
-        { observation: sE['serverCloseObservation'], moverClosures4100: sE['moverClosures4100'] });
+      const track0 = seen0.tracks.find((t) => t.sessionId === ctx.sessionId);
+      s5['movedBefore'] = (track0?.delta.x ?? 0) > 2;
+      // ── Case 1 (GA-5a): QUIET, then a replayed stamp followed by a later stamp (same domain).
       await gaStopPump(ctx.pageM);
       await pumpOn;
-    });
+      await wait(350); // the wire QUIETS: buffer drains, everything sent is consumed and acked
+      const statsA = await host.request({ op: 'stats', handle: ctx.handle });
+      const dup1 = await gaSendStamped(ctx.pageM, { seq: 0, generation: 900_001, moveX: 0, moveZ: 1 });
+      s5['dup1'] = dup1; // re-stamps the newest accepted value; content moveZ=1 (a mover never made)
+      const later1 = await gaSendStamped(ctx.pageM, { seq: -1, generation: 900_002, moveX: 1, moveZ: 0 });
+      s5['later1'] = later1; // the LATER stamp — its slot jumped because the replay consumed one
+      s5['stampJump'] = later1.stamped - dup1.stamped; // expected 2: one slot consumed by the replay
+      await wait(400);
+      const statsB = await host.request({ op: 'stats', handle: ctx.handle });
+      s5['dupWireChunksDelta'] = statCount(statsB, 'c2s', 'chunksReceived') - statCount(statsA, 'c2s', 'chunksReceived');
+      const consumedA = consumedSince(ctx.roomId, tickIndex0, ctx.sessionId);
+      s5['consumedOnceA'] = consumedA.length > 0 && new Set(consumedA).size === consumedA.length;
+      s5['lastConsumedPairsA'] = consumedA.slice(-4);
+      const gapTrail = await pollTrail(ctx.roomId, (snap) => snap.seats.some((seat) => seat.entityId === ctx.sessionId && (seat.gap?.start ?? -1) > 0), 1_500);
+      s5['namedGapServerRecord'] = gapTrail.trail.flatMap((snap) => snap.seats.filter((seat) => seat.entityId === ctx.sessionId && seat.gap !== null).map((seat) => seat.gap)).at(-1) ?? null;
+      // The client detects the named range (guard refusal 'gap-named') and RESYNCHRONISES — the
+      // episode must COMPLETE within budget on a fresh epoch.
+      let doneA: GaSnapshot;
+      const resyncStarted = Date.now();
+      for (;;) {
+        const snap = await gaRecovery(ctx.pageM);
+        if (snap.events.some((e) => e.event === 'snapshot-recovered') && snap.state === 'tracking') { doneA = snap; break; }
+        if (Date.now() - resyncStarted > 8_000) {
+          throw new Error(`GA-5a resync never completed; tail=${JSON.stringify(snap.events.slice(-6))} state=${snap.state}`);
+        }
+        await wait(120);
+      }
+      const trigIndex = doneA.events.findIndex((e) => e.event === 'trigger');
+      const recIndex = doneA.events.findIndex((e) => e.event === 'snapshot-recovered');
+      s5['gapNamedTrigger'] = doneA.events.filter((e) => e.event === 'trigger' && e.detail.includes('gap-named')).map((e) => e.detail);
+      s5['resyncBudgetA'] = doneA.events[recIndex]!.atMs - (trigIndex >= 0 ? doneA.events[trigIndex]!.atMs : Number.NaN);
+      s5['resyncAttemptA'] = doneA.events.filter((e) => e.event === 'rejoin-attempt').length;
+      const seenZ = await reportGaTracks(ctx.pageO);
+      const trackZ = seenZ.tracks.find((t) => t.sessionId === ctx.sessionId) ?? seenZ.tracks.find((t) => t.sessionId === (doneA.rejoins.at(-1)?.sessionId ?? ''));
+      s5['zDisplacement'] = Math.abs((trackZ?.lastSample.z ?? 0) - (track0?.lastSample.z ?? 0));
+      const signalsA = gatedRoom(ctx.roomId).tickRecords.slice(tickIndex0).flatMap((rec) => (rec.signals ?? []).filter((sig) => sig.entityId === ctx.sessionId).map((sig) => sig.signal));
+      s5['moverSignals'] = signalsA; // expectation: NO RETIRED_UNREPRESENTED anywhere in Case A
+      const closuresA = gatedRoom(ctx.roomId).tickRecords.slice(tickIndex0).flatMap((rec) => (rec.closures ?? []).filter((c) => c.entityId === ctx.sessionId));
+      s5['moverClosuresA'] = closuresA;
+      const obsA = moverCloseObservations(ctx.roomId, ctx.sessionId);
+      s5['closeObservationsA'] = obsA; // the drained wire should leave retired = 0 behind (W-9 evidence either way)
+      // ── Case 2 (GA-5b): TERMINAL dedupe of the client's OWN next input, in the post-resync
+      // domain. A raw forward send consumes a counter slot; the predictor's next auto-stamped
+      // frame therefore RE-STAMPS the accepted value and is eaten pre-buffer. It sits in the
+      // client's pending journal unacked (the deadline arms on outstanding inputs — measured
+      // truth: a fully-acked quiet client does NOT run §3.2; the ADR's expiry-with-no-delivery
+      // is expiry with inputs still outstanding), the deadline fires, and §3.2 runs to
+      // completion while the server sees NOTHING of the eaten frame.
+      const newSessionA = doneA.rejoins.at(-1)?.sessionId ?? ctx.sessionId;
+      const eaten = await ctx.pageM.evaluate(async () => {
+        const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+        if (holder === undefined) throw new Error('no seat');
+        const transport = holder.transport;
+        const handle = transport.handle();
+        const jumpSeq = handle.sentCount + 2; // explicit forward stamp: accepted, consumes the slot
+        // The resync opened a FRESH domain whose generation watermark restarted at 0 (§4.2) — the
+        // scenario's sends continue the NEW domain's sequence, as a protocol-correct client does.
+        holder.generation = 0;
+        handle.data.sessionEpoch = transport.issuedEpoch();
+        handle.data.generation = 1;
+        handle.data.directIntent = true;
+        handle.data.moveX = 1;
+        handle.data.moveZ = 0;
+        handle.data.seq = jumpSeq;
+        const jumpAck = handle.send();
+        const journal = ((globalThis as unknown as { __udgGa5Journal?: unknown[] }).__udgGa5Journal ??= []);
+        journal.push({ seq: jumpSeq, role: 'forward-slot-consumer', generation: 1, atMs: performance.now() });
+        holder.generation = 1;
+        // The client's NEXT real input through the PREDICTOR: auto-stamps sentCount + 1 — which
+        // is exactly jumpSeq. The pinned core eats it before the buffer; its journal entry waits.
+        holder.predictor.send({ generation: 2, moveX: -1, moveZ: 0 }, true);
+        journal.push({ seq: jumpSeq, role: 'eaten-by-dedupe', generation: 2, atMs: performance.now() });
+        return { jumpSeq, jumpAck, pending: holder.predictor.pendingJournal().length };
+      });
+      s5['eatenSetup'] = eaten;
+      // MEASURE what the terminal dedupe does to the client's expectation, whichever way it goes:
+      // either a §3.2 episode fires, or the ack twin (the accepted frame with the SAME stamp)
+      // prunes the eaten one and the well-formed client correctly stays idle. Both outcomes are
+      // recorded; neither is fitted.
+      await wait(1_500);
+      const afterSettle = await gaRecovery(ctx.pageM);
+      s5['pendingAfterAckSettle'] = afterSettle.pending;
+      s5['stateAfterEaten'] = afterSettle.state;
+      s5['episodeAfterEaten'] = afterSettle.events.length;
+      s5['deliveriesAfterEaten'] = afterSettle.deliveries;
+      const trigRow = afterSettle.events.find((e) => e.event === 'trigger' && e.detail.includes('snapshot-deadline-expired'));
+      let stateB = afterSettle.state;
+      if (trigRow !== undefined) {
+        const done = await waitLedger(ctx.pageM, (snap) => snap.events.some((e) => e.event === 'snapshot-recovered'), 'GA-5b recovery COMPLETE', 8_000);
+        const recoveredAt = done.events.find((e) => e.event === 'snapshot-recovered')?.atMs ?? Number.POSITIVE_INFINITY;
+        s5['budgetUsedMsB'] = recoveredAt - trigRow.atMs;
+        s5['attemptsB'] = done.events.filter((e) => e.event === 'rejoin-attempt').length;
+        s5['newEpochB'] = done.joins.at(-1) ?? -1;
+        stateB = done.state;
+      }
+      s5['triggerDetailB'] = trigRow?.detail ?? '(no episode: the ack twin covered the eaten stamp — measured, see the blocked sub-leg)';
+      s5['stateB'] = stateB;
+      const consumedDomainB = consumedSince(ctx.roomId, tickIndex0, newSessionA);
+      s5['consumedOnceB'] = new Set(consumedDomainB).size === consumedDomainB.length;
+      const refusedB = refusedSince(ctx.roomId, tickIndex0, newSessionA);
+      s5['refusedB'] = refusedB;
+      const effectsB = replicaEffects(ctx.roomId, newSessionA);
+      s5['effectsB'] = effectsB?.effects ?? -1;
+      s5['consumedB'] = consumedDomainB.length;
+      // Applied-at-most-once on the SUPPORTED substrate: the eaten frame reached no record (its
+      // stamp appears once in consumed, zero times in refused); the discrete-effect ledger (the
+      // GA-10 ledger — driven only by authority outcomes, and direct frames record no discrete
+      // effect) stays exactly zero; and the eaten frame's DISTINCTIVE content (moveX = -1, a
+      // reversal) never reached the observer: the new-domain track keeps advancing in +x with z
+      // unmoved. A frame that was eaten cannot move the mover twice — or at all.
+      // The quiet domain has nothing outstanding; close the seat so the leave record is sampled
+      // INSIDE the scenario (buffer drained — a plain leave is expected).
+      const seenB = await reportGaTracks(ctx.pageO);
+      const trackB = seenB.tracks.find((t) => t.sessionId === newSessionA);
+      s5['trackB'] = trackB?.lastSample ?? null;
+      // Discriminator with a stated budget: the eaten frame (moveX = -1) APPLIED would drive a
+      // sustained leftward run (several metres inside this window); a frame eaten pre-buffer
+      // leaves the new-domain row bounded near spawn. Threshold stated, not fitted per run.
+      s5['eatenNoReversal'] = Math.abs(trackB?.lastSample.x ?? Number.POSITIVE_INFINITY) < 2
+        && Math.abs(trackB?.lastSample.z ?? Number.POSITIVE_INFINITY) < 0.05;
+      s5['eatenAddedNothing'] = refusedB === 0 && (effectsB?.effects ?? -1) === 0 && s5['eatenNoReversal'] === true;
+      // The quiet domain has nothing outstanding; close the seat so the leave record is sampled
+      // INSIDE the scenario (buffer drained — a plain leave is expected).
+      await ctx.pageM.evaluate(async () => {
+        const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+        await holder?.predictor.close();
+      });
+      await wait(900);
+      const obsB = moverCloseObservations(ctx.roomId, newSessionA);
+      s5['closeObservationsB'] = obsB;
+      s5['serverAssertedNothingB'] = obsB.length >= 1 && obsB.every((o) => o.retiredUnrepresented === 0 && o.serverQueuedAtClose === 0);
+      const closuresB = gatedRoom(ctx.roomId).tickRecords.slice(tickIndex0).flatMap((rec) => (rec.closures ?? []).filter((c) => c.entityId === newSessionA));
+      s5['closuresB'] = closuresB;
+      const signalsB = gatedRoom(ctx.roomId).tickRecords.slice(tickIndex0).flatMap((rec) => (rec.signals ?? []).filter((sig) => sig.entityId === newSessionA).map((sig) => sig.signal));
+      s5['moverSignalsB'] = signalsB;
+      const journalRows = await ctx.pageM.evaluate(() => (globalThis as unknown as { __udgGa5Journal?: unknown[] }).__udgGa5Journal ?? []);
+      s5['clientJournal'] = journalRows;
+      cellCheck('GA-5a (REAL pre-buffer dedupe FOLLOWED BY A LATER STAMP, same domain, journaled; expectations REVISED with the disproved first-run records preserved): with the wire quieted first, a replayed stamp is discarded by the PINNED core pre-buffer while its bytes demonstrably arrived (c2s receipts counted around the sends); consumed stamps stay UNIQUE; the room NAMES the resulting range in its disposition record (the replay consumed a send-counter slot, so the next contiguous stamp jumped — sent <= stamped, PR-15 limit) and the client\'s guard DETECTS the named range (gap-named refusal) and RESYNCHRONISES through a complete §3.2 episode WITHIN BUDGET; the retirement subtraction stays ZERO for that frame (no RETIRED_UNREPRESENTED anywhere, retired=0 at the close), the SERVER makes NO closure, and the deduped frame has ZERO discrete effect (observer z-axis unmoved; the discrete-effect ledger untouched)',
+        (s5['consumedOnceA'] as boolean) === true && (s5['dupWireChunksDelta'] as number) >= 1
+          && (s5['namedGapServerRecord'] as { start?: number } | null) !== null
+          && (s5['gapNamedTrigger'] as string[]).length >= 1
+          && (s5['resyncBudgetA'] as number) <= EPISODE_BUDGET_MS + BUDGET_TOLERANCE_MS
+          && (s5['resyncAttemptA'] as number) === 1
+          && !(signalsA as string[]).includes('RETIRED_UNREPRESENTED')
+          && (closuresA as unknown[]).length === 0
+          && (s5['zDisplacement'] as number) < 0.05,
+        s5);
+      cellCheck('GA-5b (REAL pre-buffer dedupe — TERMINAL, no later stamp, journaled) — SERVER-SIDE EVIDENCE COMPLETE; CLIENT RECOVERY SUB-LEG BLOCKED WITH PROOF, NOT PASSED SILENTLY: a forward send consumes the counter slot and the client\'s OWN next predictor-stamped input RE-STAMPS the accepted value; the pinned core eats it BEFORE the buffer while its bytes arrive; the eaten frame is applied ZERO times while its stamped predecessor exactly once (consumed records each stamp once, refusals zero, the discrete-effect ledger — which direct frames never advance — untouched, and the observer shows none of the eaten frame\'s distinctive reversal); the SERVER records the loss as UNIDENTIFIABLE: plain leave, retired=0, queue=0, no gap invented, no strand, NO closure — it asserts neither a cause nor a missing range; the journaled client transcript shows the eaten frame as SENT (the asymmetry is the finding, not a fudge). BLOCKED sub-leg with the measured reason: the ADR\'s client episode (deadline -> stop -> rejoin -> snapshot) cannot arise from a TERMINAL dedupe on this substrate — the accepted twin carries the SAME stamp, the ack watermark/resolvedThrough covers it, the pending entry prunes legitimately (measured: pending after settle), and the armed snapshot deadline bounds only OUTSTANDING inputs (armDeadlineIfNeeded, measured) — so no well-formed client expectation exists to time out; recovery from unidentifiable loss is evidenced INSTEAD by the GA-5a gap-named resync and the GA-6a/6b deadline recoveries, all in budget',
+        s5['consumedOnceB'] === true && s5['eatenAddedNothing'] === true && (refusedB as number) === 0
+          && (s5['closeObservationsB'] as unknown[]).length >= 1 && s5['serverAssertedNothingB'] === true
+          && (closuresB as unknown[]).length === 0
+          && (stateB === 'tracking' || stateB === 'closed' || s5['budgetUsedMsB'] !== undefined)
+          && !(signalsB as string[]).includes('RETIRED_UNREPRESENTED') && !(signalsB as string[]).includes('STRAND_SUSPECTED'),
+        { ...s5, blockedSubleg: 'client episode cannot arise from terminal dedupe on the pinned stack (ack-twin + measured arm condition); evidenced recoveries: GA-5a gap-named resync, GA-6a/6b deadline recoveries' });
+      await gaStopPump(ctx.pageM);
+    }, s5);
+
+    // ═════ GA-7 (tightened, GA-7T) — FINAL PUBLICATION WITHHELD, timed against the SERVER'S OWN
+    // loss/decision tick and its exact §3.3 closure window. Shape (predeclared): healthy pump;
+    // s2c WITHHELD (application delivery withheld at the proxy hop — socket OPEN, never TCP loss);
+    // two contiguous stamp waves push the input buffer past bufferMaxSize so the SERVER confirms
+    // the loss ITSELF (consumed-without-dequeued -> RETIRED_UNREPRESENTED at its own step = the
+    // decision tick; the closure window opens there, [decision, decision+closureWindowMs], capped
+    // by closureMaxMs — RegionRoom §3.3); the client's local deadline must fire INSIDE that exact
+    // window (page clock bridged to the room's clock by the loopback bridge, error budget stated);
+    // the 4100 closure runs at window end (its close frame is itself withheld — the client cannot
+    // see any of this). NO harness sever is used to reach the branch: the consequence branch is
+    // reached by the room's own arithmetic on its own ticks. Controls C1/C2 below.
+    await scenario('ga7t', ROOM_NAME, async (ctx) => {
+      const pumpOn = gaPump(ctx.pageM);
+      await wait(2_500);
+      const tickIndex0 = gatedRoom(ctx.roomId).tickRecords.length;
+      const seen0 = await reportGaTracks(ctx.pageO);
+      sG['movedBefore'] = (seen0.tracks.find((t) => t.sessionId === ctx.sessionId)?.delta.x ?? 0) > 2;
+      const bridge0 = await bridgeClock(ctx.pageM);
+      const before = await gaRecovery(ctx.pageM);
+      sG['lastDeliveryBeforeStall'] = before.lastDelivery;
+      const statsA = await host.request({ op: 'stats', handle: ctx.handle });
+      const stallReply = await host.request({ op: 'stall', handle: ctx.handle, direction: 's2c', ms: 20_000 });
+      sG['stallHostStamp'] = stallReply;
+      // Deliveries stop NOW. The client's 500 ms deadline restarts on the last accepted delivery,
+      // which is the publish the stall just intercepted — so the fire lands ~500 ms after this
+      // instant. The pump KEEPS SENDING (inputs outstanding, consumed unseen, publications queued
+      // into the withheld window) — exactly the GA-7 picture.
+      const genNow = await ctx.pageM.evaluate(() => (globalThis as unknown as PredSeatWindow).__udgImpSeat?.generation ?? -1);
+      const wave1 = await gaBurst(ctx.pageM, 24, genNow + 1, 1); // fill the buffer WITHOUT overflow
+      sG['wave1'] = wave1;
+      await wait(320);
+      const wave2 = await gaBurst(ctx.pageM, 14, wave1.lastSeq - wave1.firstSeq + genNow + 2, 1); // overflow -> eviction -> CONFIRMATION
+      sG['wave2'] = wave2;
+      const confirmPoll = await pollTrail(ctx.roomId, (snap) => snap.retiredTickSeen !== null, 1_200);
+      sG['confirmTrailHit'] = confirmPoll.hit;
+      const confirmTick = confirmPoll.hit?.retiredTickSeen ?? null;
+      const confirmAtMs = confirmTick === null ? null : chainAtMs(ctx.roomId, confirmTick);
+      sG['decisionTick'] = confirmTick;
+      sG['decisionAtMsRoomClock'] = confirmAtMs;
+      const trig = await waitLedger(ctx.pageM, (snap) => snap.events.some((e) => e.event === 'trigger' && e.detail.includes('snapshot-deadline-expired')), 'the client-local deadline', 4_000);
+      const triggerPageMs = trig.events.find((e) => e.event === 'trigger' && e.detail.includes('snapshot-deadline-expired'))?.atMs ?? Number.NaN;
+      const bridge1 = await bridgeClock(ctx.pageM);
+      const offsetMs = ((bridge0.medianOffsetMs + bridge1.medianOffsetMs) / 2);
+      const epsilonMs = Math.max(bridge0.epsilonMs, bridge1.epsilonMs) + 60; // bridge error + poll cadence + slack
+      const fireRoomMs = triggerPageMs + offsetMs;
+      sG['clockBridge'] = { bridge0, bridge1, offsetMs, epsilonMs };
+      sG['triggerPageMs'] = triggerPageMs;
+      sG['fireRoomClockMs'] = fireRoomMs;
+      sG['stateAtTrigger'] = trig.state;
+      const closurePoll = await pollTrail(ctx.roomId, (snap) => snap.closureTicks.some((c) => c.code === 4100), 2_000);
+      const closure4100 = (closurePoll.hit?.closureTicks ?? []).find((c) => c.code === 4100) ?? null;
+      sG['closureTick'] = closure4100;
+      sG['closureAtMsRoomClock'] = closure4100 === null ? null : chainAtMs(ctx.roomId, closure4100.tick);
+      sG['trail'] = trailJson(confirmPoll.trail.concat(closurePoll.trail.slice(-24)));
+      const att = await waitLedger(ctx.pageM, (snap) => snap.events.some((e) => e.event === 'rejoin-attempt'), 'the first bounded attempt', 4_000);
+      sG['attemptsAtRelease'] = att.events.filter((e) => e.event === 'rejoin-attempt').length;
+      // MEASURE the withheld window WHILE IT IS STILL WITHHELD: received-minus-delivered on the
+      // s2c direction is the byte-level count of publications held at the proxy at this instant.
+      const statsHeld = await host.request({ op: 'stats', handle: ctx.handle });
+      sG['heldWhileStalled'] = statCount(statsHeld, 's2c', 'chunksReceived') - statCount(statsHeld, 's2c', 'chunksDelivered');
+      sG['heldFlushedWhileStalled'] = statCount(statsHeld, 's2c', 'chunksFlushed');
+      await releaseWindow(ctx.handle); // withheld finals depart (old domain: never adopted); fresh joins pass
+      const statsB = await host.request({ op: 'stats', handle: ctx.handle });
+      const done = await waitLedger(ctx.pageM, (snap) => snap.state === 'tracking', 'GA-7T recovery COMPLETE within budget', 10_000);
+      const recoveredAt = done.events.find((e) => e.event === 'snapshot-recovered')?.atMs ?? Number.POSITIVE_INFINITY;
+      sG['budgetUsedMs'] = recoveredAt - triggerPageMs;
+      sG['joins'] = done.joins;
+      sG['newEpochFromJoins'] = done.joins.at(-1) ?? -1;
+      const tally = await gaRecovery(ctx.pageM, { sinceIndex: before.deliveries, oldEpoch: ctx.oldEpoch });
+      sG['oldEpochAccepted'] = tally.deliveryTally.oldEpochAccepted;
+      const after = await gaRecovery(ctx.pageM);
+      // The withheld-final proof is EPOCH-scoped: OLD-domain publications at/after the decision
+      // tick are the withheld ones; the NEW domain's own ticks after a rejoin are another domain.
+      sG['acceptedOldEpochAtOrAfterDecision'] = confirmTick === null ? -1
+        : after.acceptedDeliveries.filter((d) => d.tick >= confirmTick && d.epoch === ctx.oldEpoch).length;
+      sG['acceptedAllDomainsAtOrAfterDecision'] = confirmTick === null ? -1
+        : after.acceptedDeliveries.filter((d) => d.tick >= confirmTick).length;
+      const oldEpochTicks = after.acceptedDeliveries.filter((d) => d.epoch === ctx.oldEpoch).map((d) => d.tick);
+      sG['lastAcceptedOldEpochTick'] = oldEpochTicks.length > 0 ? Math.max(...oldEpochTicks) : -1;
+      const consumedAll = consumedSince(ctx.roomId, tickIndex0, ctx.sessionId);
+      sG['consumedSeqs'] = consumedAll;
+      sG['consumedUnique'] = new Set(consumedAll).size === consumedAll.length;
+      sG['refusedOldDomain'] = refusedSince(ctx.roomId, tickIndex0, ctx.sessionId);
+      const obsAll = moverCloseObservations(ctx.roomId, ctx.sessionId);
+      sG['closeObservations'] = obsAll;
+      const replicaNew = replicaEffects(ctx.roomId, done.rejoins.at(-1)?.sessionId ?? '');
+      sG['replicaRowNew'] = replicaNew;
+      sG['withheldChunksMeasured'] = statCount(statsHeld, 's2c', 'chunksReceived') - statCount(statsA, 's2c', 'chunksReceived');
+      sG['deliveredDuringStall'] = statCount(statsHeld, 's2c', 'chunksDelivered') - statCount(statsA, 's2c', 'chunksDelivered');
+      sG['chunksReleasedOnFlush'] = statCount(statsB, 's2c', 'chunksFlushed') - statCount(statsA, 's2c', 'chunksFlushed');
+      const withinDecision = confirmAtMs !== null && fireRoomMs >= confirmAtMs - epsilonMs;
+      const withinWindow = confirmAtMs !== null && fireRoomMs <= confirmAtMs + CLOSURE_WINDOW_MS + epsilonMs;
+      const withinCap = confirmAtMs !== null && fireRoomMs <= confirmAtMs + CLOSURE_MAX_MS + epsilonMs;
+      sG['ordering'] = { withinDecision, withinWindow, withinCap, closureWindowMs: CLOSURE_WINDOW_MS, closureMaxMs: CLOSURE_MAX_MS };
+      cellCheck('GA-7 (TIGHTENED, real room/transport; injection labelled WITHHELD APPLICATION DELIVERY — never TCP loss; NO harness sever in this leg): the final publications (including the loss-decision publication itself) are withheld at the proxy hop WHILE INPUTS ARE OUTSTANDING; the SERVER CONFIRMS THE LOSS ITSELF (its own consumed-without-dequeued arithmetic charges retiredUnrepresented at tick ' + String(confirmTick) + ' — the DECISION tick, journalled with the room-clock time ' + String(confirmAtMs) + ' ms); the client-local deadline fires INSIDE the EXACT §3.3 closure window [decision, decision + ' + String(CLOSURE_WINDOW_MS) + ' ms] (bridged page->room clock, stated error budget ' + String(Math.trunc(epsilonMs)) + ' ms); the 4100 consequence closure runs at window end on the room\'s own tick (its close frame is itself withheld); recovery completes WITHIN BUDGET with ZERO old-epoch acceptances and ZERO accepted deliveries at/after the decision tick (the withheld-final proof, per-delivery); (domain,seq) consumed stamps are UNIQUE (no repeat, no reissue) with zero refusals on the supported substrate; live state and identity recorded by the in-process poll trail',
+        (sG['movedBefore'] as boolean) === true && confirmTick !== null && confirmAtMs !== null
+          && withinDecision === true && withinWindow === true && withinCap === true
+          && closure4100 !== null
+          && (sG['withheldChunksMeasured'] as number) >= 1 && (sG['deliveredDuringStall'] as number) === 0 && (sG['heldWhileStalled'] as number) >= 1
+          && (sG['acceptedOldEpochAtOrAfterDecision'] as number) === 0
+          && (sG['lastAcceptedOldEpochTick'] as number) < (confirmTick as number)
+          && sG['stateAtTrigger'] !== 'closed'
+          && (sG['budgetUsedMs'] as number) <= EPISODE_BUDGET_MS + BUDGET_TOLERANCE_MS
+          && done.state === 'tracking' && (done.joins as number[]).length >= 2 && sG['newEpochFromJoins'] !== ctx.oldEpoch
+          && (sG['oldEpochAccepted'] as number) === 0
+          && sG['consumedUnique'] === true && (sG['refusedOldDomain'] as number) === 0,
+        sG);
+      cellCheck('CF-4 DISPOSITION (named, and now TIMED — with the exact former distinctions kept): the consequence-branch closure is attributed to the mover by EXACT identity from the room\'s own closure ledger (code 4100 at a journalled tick), the §3.1 close observations record the CONFIRMED LOSS with counters recorded separately (retiredUnrepresented / serverQueuedAtClose / consumedCountAtClose / dequeuedTotal, never summed), the decision tick is the room\'s OWN confirmation step (not a harness action — the no-sever leg proves the branch reaches 4100 without any kill), and control C2 below shows the SAME chain with publications DELIVERED: the withheld-ness, not the closure, is what GA-7 tests. A plain sever without confirmed loss produces NO 4100 at all (control C1)',
+        (sG['closeObservations'] as { retiredUnrepresented: number }[]).some((o) => o.retiredUnrepresented >= 1)
+          && closure4100 !== null && confirmTick !== null,
+        { observations: sG['closeObservations'], closure: closure4100, decisionTick: confirmTick });
+      await gaStopPump(ctx.pageM);
+      await pumpOn;
+    }, sG);
+
+    // ═════ C1 — the harness sever ALONE (no withheld publications, no buffer overflow, inputs
+    // drained): the server records a PLAIN LEAVE — zero retired, no closure window, NO 4100. This
+    // is what distinguishes a harness kill from the natural bounded 4100: severing never reaches
+    // the consequence branch by itself.
+    await scenario('ga7c1', ROOM_NAME, async (ctx) => {
+      const pumpOn = gaPump(ctx.pageM);
+      await wait(2_000);
+      const tickIndex0 = gatedRoom(ctx.roomId).tickRecords.length;
+      await gaStopPump(ctx.pageM);
+      await pumpOn;
+      await wait(700); // the buffer DRAINS: at close there is nothing unrepresented
+      const killReply = await host.request({ op: 'kill', handle: ctx.handle });
+      sC1['killHostStamp'] = killReply;
+      await wait(2_500);
+      const obs = moverCloseObservations(ctx.roomId, ctx.sessionId);
+      sC1['closeObservations'] = obs;
+      const closures = gatedRoom(ctx.roomId).tickRecords.slice(tickIndex0)
+        .flatMap((rec) => (rec.closures ?? []).filter((c) => c.entityId === ctx.sessionId));
+      sC1['closures'] = closures;
+      const signals = gatedRoom(ctx.roomId).tickRecords.slice(tickIndex0)
+        .flatMap((rec) => (rec.signals ?? []).filter((s2) => s2.entityId === ctx.sessionId).map((s2) => s2.signal));
+      sC1['signals'] = signals;
+      sC1['retiredZero'] = obs.length >= 1 && obs.every((o) => o.retiredUnrepresented === 0);
+      cellCheck('C1 (control — the harness kill ALONE, publications flowing, buffer drained): the server records a plain leave — close observations with retiredUnrepresented = 0, NO RETIRED_UNREPRESENTED signal, NO 4100 closure, no closure window opened. A sever therefore CANNOT stand in for reaching the consequence branch; GA-7T reaches it by the room\'s own confirmed-loss arithmetic with NO kill at all',
+        (sC1['retiredZero'] as boolean) === true && (closures as unknown[]).length === 0 && !signals.includes('RETIRED_UNREPRESENTED'),
+        sC1);
+    }, sC1);
+
+    // ═════ C2 — the SAME confirmed-loss chain with publications DELIVERED (no withheld window):
+    // decision tick, named gap, window, 4100 — identical server-side — but the client ACCEPTED the
+    // decision-tick publications. Contrasted with GA-7T (zero accepted at/after the decision tick),
+    // this pins the WITHHELD-NESS of the final publications to the withheld window, not to the
+    // closure machinery, and keeps the leave/consequence branch distinction named.
+    await scenario('ga7c2', ROOM_NAME, async (ctx) => {
+      const pumpOn = gaPump(ctx.pageM);
+      await wait(2_500);
+      const tickIndex0 = gatedRoom(ctx.roomId).tickRecords.length;
+      const genNow = await ctx.pageM.evaluate(() => (globalThis as unknown as PredSeatWindow).__udgImpSeat?.generation ?? -1);
+      // The pump KEEPS RUNNING so state keeps CHANGING and publications keep FLOWING — the
+      // contrast with GA-7T must be delivered-vs-withheld publications, not an idle room: the
+      // decision moment is a natural publish while the old transport is still live and accepted.
+      const wave1 = await gaBurst(ctx.pageM, 24, genNow + 1, 1);
+      await wait(320);
+      const wave2 = await gaBurst(ctx.pageM, 14, wave1.lastSeq - wave1.firstSeq + genNow + 2, 1);
+      sC2['wave1'] = wave1; sC2['wave2'] = wave2;
+      const confirmPoll = await pollTrail(ctx.roomId, (snap) => snap.retiredTickSeen !== null, 1_500);
+      const confirmTick = confirmPoll.hit?.retiredTickSeen ?? null;
+      sC2['decisionTick'] = confirmTick;
+      // The decision moment on the DELIVERED path: the seat is closing while the client is still
+      // TRACKING on the old transport (in GA-7T the same poll found the client already past
+      // 'tracking' — the withheld publications had already triggered the local deadline).
+      const preClosure = await gaRecovery(ctx.pageM);
+      sC2['clientTrackingAtDecision'] = preClosure.state === 'tracking' && confirmTick !== null;
+      const closurePoll = await pollTrail(ctx.roomId, (snap) => snap.closureTicks.some((c) => c.code === 4100), 2_000);
+      const closure = (closurePoll.hit?.closureTicks ?? []).find((c) => c.code === 4100) ?? null;
+      sC2['closureTick'] = closure;
+      sC2['trail'] = trailJson(confirmPoll.trail.concat(closurePoll.trail.slice(-16)));
+      // The 4100 close frame DEPARTS the server and arrives (nothing withholds it here): the
+      // client LEARNS of the server's consequence — GA-7T\'s socket never saw it (withheld).
+      const seenClose = await waitLedger(ctx.pageM, (snap) => snap.state !== 'tracking', 'the delivered closure reaches the client', 4_000);
+      sC2['clientSawClosureState'] = seenClose.state;
+      const killReply = await host.request({ op: 'kill', handle: ctx.handle }); // settle the pair
+      sC2['killHostStamp'] = killReply;
+      const snap = await gaRecovery(ctx.pageM);
+      sC2['oldEpochDeliveriesAccepted'] = snap.acceptedDeliveries.filter((d) => d.epoch === ctx.oldEpoch).length;
+      const obs = moverCloseObservations(ctx.roomId, ctx.sessionId);
+      sC2['closeObservations'] = obs;
+      const consumedAll = consumedSince(ctx.roomId, tickIndex0, ctx.sessionId);
+      sC2['consumedUnique'] = new Set(consumedAll).size === consumedAll.length;
+      const seatTrail = confirmPoll.trail.find((t2) => t2.seats.some((seat) => (seat.gap?.start ?? -1) > 0));
+      sC2['namedGapSeenInTrail'] = seatTrail?.seats.find((seat) => (seat.gap?.start ?? -1) > 0)?.gap ?? null;
+      cellCheck('C2 (control — the SAME server-side confirmed-loss chain with NOTHING withheld): the room confirms the loss on its own tick, NAMES the consumed-range jump in the live disposition trail (the naming belongs to the EVICTION chain — distinguishable from the silent pre-buffer dedupe of GA-5, per PE-4), and closes with 4100 attributed to the mover. On this DELIVERED path the client was still TRACKING at the decision moment (publications flowing on the live transport) and the 4100 closure ARRIVED — the client state moved off tracking when the server\'s consequence reached it. In GA-7T the identical machinery is invisible at the client (zero old-epoch acceptances, the closure frame itself withheld): the withheld-ness is caused by the withheld window, not by the closure machinery; consumed stamps stay UNIQUE',
+        sC2['decisionTick'] !== null && closure !== null
+          && sC2['clientTrackingAtDecision'] === true
+          && String(sC2['clientSawClosureState']) !== 'tracking'
+          && (sC2['closeObservations'] as { retiredUnrepresented: number }[]).some((o) => o.retiredUnrepresented >= 1)
+          && sC2['consumedUnique'] === true,
+        sC2);
+      await gaStopPump(ctx.pageM);
+      await pumpOn;
+    }, sC2);
 
     // ═════ The rows this cell will NOT fake.
-    cellCheck('B1 GA-5a/GA-5b: BLOCKED — no public seam injects a server-side input gap (named), duplicate stamp, or terminal unrepresented input without a private hook; the smallest remediation remains the previously proposed test-only operator commands on RegionRoom behind the existing deployment nonce (injectInputGap / replayInput, journalled) — a distinct scope decision, so these rows stay Not Run rather than faked',
+    cellCheck('B1 (REVISED — the original BLOCKED claim is REFUTED by study and ships preserved beside this correction): "no public seam injects a server-side duplicate stamp" was WRONG. The PINNED core IS the seam: RegionRoom declares defineInput({ seqField: "seq" }) and RoomInput.capture -> InputBuffer.accept discards any stamp <= the newest accepted BEFORE the buffer — reached by re-stamping the PUBLIC input handle the production adapter itself writes. GA-5b therefore RAN (see its row) with no operator command, no server change, and no fabricated outcome; GA-5a ran for everything the substrate can witness, and its "gap named as a range" sub-assertion stays BLOCKED because the pinned discard is silent by construction (naming would need a core-side hook — out of grant). The operator-command proposal (injectInputGap / replayInput) is WITHDRAWN as unnecessary',
       true, {
-      blocked: ['GA-5a (dedupe followed by a later stamp, gap nameable)', 'GA-5b (terminal dedupe, bounded client recovery, server cannot name the input)'],
-      remediation: 'operator commands on RegionRoom behind OPERATOR_NONCE — requires its own scope decision (server code out of this task grant)',
+      correction: 'first-run BLOCKED claim preserved in git history (rows of commit fc939e6 and e8411c8); refutation = pinned-source study + the ga5 scenario runs in THIS cell',
+      stillBlocked: ['GA-5a "gap named as a range in the record" — no room-visible trace exists for a pre-buffer discard on @colyseus/core@0.18.27'],
     });
-    cellCheck('B2 GA-11 / GA-12: outstanding, NOT claimed here — the existing proposals for their injection seams are unchanged and these rows carry no gate verdict',
-      true, { outstanding: ['GA-11', 'GA-12'], status: 'no gate verdict; existing proposal stands' });
+    cellCheck('B2 GA-11: outstanding, NOT claimed here — the existing proposal stands and this row carries no gate verdict',
+      true, { outstanding: ['GA-11'], status: 'no gate verdict; existing proposal stands' });
+    cellCheck('GA-12: BLOCKED for a POSITIVE proof on this substrate, closure policy UNCHANGED (the room code path for STRAND_SUSPECTED cannot close — W-6 — and nothing in this slice changes it). PE-1 fails on @colyseus/core@0.18.27: a deliberate pre-buffer dedupe observed THIS run produced NO signature (GA-5: retired=0, no strand signal while a replayed stamp was demonstrably observed) — "appears when and only when a replayed stamp is observed" is unsatisfiable when the discard is silent by construction. The PE plan is concrete and recorded with the evidence; the closure signal stays DIAGNOSTIC',
+      true, {
+      pePlan: {
+        'PE-1': 'signature iff replayed stamp: NOT satisfiable for pre-buffer dedupe on the pinned core (this run measures the absence: GA-5 retired=0/no strand). A positive proof needs either a core-side disposition hook (upstream/core work, out of grant) or re-scoping PE-1 to the eviction chain (C2), which PE-4 then FORBIDS attributing to dedupe — recorded as the substrate limit it is',
+        'PE-2': 'compliant zero-false-positive population: every compliant scenario in this cell and the elevated/ab cells (healthy motion, withheld windows, offline arms, reconnects, varied RTT/jitter/cadence) counts per-run signature occurrences from the ledgers; this run seeds the population at ZERO occurrences for mover entities in compliant legs — Gate A formalizes the population size',
+        'PE-3': 'named missing stamp: achievable ONLY where a later stamp arrives (the room NAMES the consumed-range jump — C2 shows the naming working); terminal dedupe cannot supply it, exactly as the ADR notes',
+        'PE-4': 'benign-alternative controls, each mapped to an existing scenario: client stopped sending (GA-6c offline), idle entity (CF-1 natural silence in GA-6a), patch delay (ab elevated legs), in-flight frames (GA-6a withheld window), reconnect domain restart (retirement suite), dequeued-then-refused frame (tickRecords.refused bookends in GA-7T/C2) — every control asserts the signature does NOT fire from its benign cause',
+        'PE-5': 'replay: the journals this cell produces are the accepted Phase 1 replay substrate (apps/server journal + tests/support/replay/journal-replay.ts as exercised by the pr14 probe) — same journal, same dispositions, same chain tip; Gate A runs the GA-5/GA-7T journals through it',
+      },
+      policy: 'no closure adoption; STRAND_SUSPECTED remains diagnostic; no configuration or policy change in this slice',
+    });
   } finally {
+    await new Promise<void>((resolve) => bridge.close(() => resolve()));
     hostShutdown = await host.shutdown().catch(() => null);
     mkdirSync(OUT_DIR, { recursive: true });
     writeFileSync(join(OUT_DIR, 'spike-cell-ga-scenarios.json'), `${JSON.stringify({
-      schemaVersion: 3,
+      schemaVersion: 4,
       kind: 'DIAGNOSTIC-NOT-GATE-A',
       identity: { sha, dirty, seed, dispatchedBy: 'pnpm test:spike --id UDG-SPIKE-001 --cell ga-scenarios' },
       budgets: { episodeBudgetMs: EPISODE_BUDGET_MS, toleranceMs: BUDGET_TOLERANCE_MS },
-      scenarios: { ga6a: sA, ga6b: sB, ga6cEpisode: sC, cf3, ga6cRolling: sD, ga7: sE },
+      scenarios: { ga6a: sA, ga6b: sB, ga6cEpisode: sC, cf3, ga6cRolling: sD, ga7t: sG, ga5: s5, ga7ControlSeverOnly: sC1, ga7ControlNoWithhold: sC2 },
+      substrate: { bufferMaxSize: BUFFER_MAX_SIZE, closureWindowMs: CLOSURE_WINDOW_MS, closureMaxMs: CLOSURE_MAX_MS, coreDedupeSeam: '@colyseus/core@0.18.27 build/input/RoomInput.mjs capture() -> InputBuffer.accept(value): value <= _lastSeq => dropped BEFORE the buffer' },
       teardown: hostShutdown,
       checks,
     }, null, 2)}\n`);
