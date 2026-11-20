@@ -517,6 +517,72 @@ describe('UDG-SPIKE-001 — ADR-0003 §3.2 recovery: stop, discard, hold, bounde
     expect(predictor.rejoinTimestamps().length, 'at most one attempt before the episode bound trips').toBeLessThanOrEqual(2);
   });
 
+  it('§3.2 hard deadline: a rejoin route that NEVER settles still expires the episode on its OWN timer, surfaces the error, and refuses the late join', async () => {
+    // THE watchdog control (director: S1b is a real §3.2/GA-6c failure). The rejoin route hangs
+    // exactly like a join whose handshake is withheld: its promise never settles, no future
+    // state event arrives. The per-episode hard deadline is an INDEPENDENT timer — it must not
+    // be gated by `await rejoin()` returning or by any later event.
+    const { clock, fake, predictor, rejoin } = buildRecoverable();
+    const late = createFakeTransport(9);
+    const joinGate: { resolve: ((t: TransportArg) => void) | null } = { resolve: null };
+    rejoin.mockImplementationOnce(() => new Promise<TransportArg>((resolve) => { joinGate.resolve = resolve; }));
+
+    fake.patch({ lastAuthorityTick: 2, inputRetiredUnrepresented: 1 }); // trigger at t0
+    clock.advance(250);
+    await flush();
+    expect(rejoin.mock.calls.length, 'the first bounded attempt left').toBe(1);
+    expect(predictor.stateName()).toBe('recovering');
+
+    // Budget exactness: the episode is 4000 ms from its START — not expired one tick early.
+    clock.advance(3_999 - 250);
+    await flush();
+    expect(predictor.recoveryEpisodeExpiredFlag(), '3999 ms of a 4000 ms episode: not yet').toBe(false);
+    expect(predictor.stateName()).toBe('recovering');
+
+    clock.advance(1);
+    await flush();
+    expect(predictor.recoveryEpisodeExpiredFlag(), 'the independent timer expires the episode at the deadline even though the join never settled').toBe(true);
+    expect(predictor.stateName()).toBe('suspended');
+    expect(predictor.suspensionReason?.()).toBe('episode-deadline');
+    const surfaced = predictor.connectionError?.();
+    expect(surfaced?.code, '§3.2: expiry SURFACES a connection error, not silence').toBe('recovery-episode-expired');
+    expect(() => predictor.send({ generation: 2, moveX: 0, moveZ: 1 }, true)).toThrow(/recovery/);
+    expect(predictor.heldSnapshot(), 'expired means stopped AND holding — no resume race').toEqual({ x: 0, z: 1.5 });
+    expect(predictor.rejoinTimestamps().length, 'no further rejoin in the expired episode').toBe(1);
+
+    // The hung join settles LATE (the withheld handshake finally lands): the attempt is
+    // quarantined — its room is closed, nothing is adopted, the seat stays stopped.
+    (joinGate.resolve as (t: TransportArg) => void)(toTransport(late));
+    await flush();
+    expect(late.closed(), 'the late-returned room is closed, never adopted').toBe(true);
+    expect(predictor.stateName()).toBe('suspended');
+    expect(predictor.snapshotReadyForInput()).toBe(false);
+    expect(rejoin.mock.calls.length, 'the late settle schedules no new attempt').toBe(1);
+    const events = predictor.recoveryLedger().map((entry) => entry.event);
+    expect(events.filter((event) => event === 'episode-expired').length, 'expiry is recorded exactly once').toBe(1);
+  });
+
+  it('rolling-window suspension stays DISTINCT from episode expiry: no connection error is invented for it', async () => {
+    const { clock, fake, predictor } = buildRecoverable();
+    fake.patch({ lastAuthorityTick: 2, inputRetiredUnrepresented: 1 });
+    clock.advance(250);
+    await flush();
+    clock.advance(500 + 500);
+    await flush();
+    clock.advance(500 + 1000);
+    await flush();
+    expect(predictor.stateName()).toBe('suspended');
+    expect(predictor.suspensionReason?.(), 'the rolling allowance spent the attempts first').toBe('rolling-window');
+    expect(predictor.recoveryEpisodeExpiredFlag(), 'the rolling suspension is NOT an episode expiry').toBe(false);
+    // Cross the episode deadline while already rolling-suspended: semantics stay distinct —
+    // no second reason, no connection error, no new attempt.
+    clock.advance(2_000);
+    await flush();
+    expect(predictor.recoveryEpisodeExpiredFlag(), 'the independent timer no-ops once the rolling limit won (whichever limit first)').toBe(false);
+    expect(predictor.connectionError?.() ?? null, 'no connection error belongs to the rolling branch').toBeNull();
+    expect(predictor.suspensionReason?.()).toBe('rolling-window');
+  });
+
   it('an outstanding input with no delivery at all trips the client-local deadline', () => {
     const { clock, fake, predictor } = buildRecoverable();
     fake.patch({ lastAuthorityTick: 2 });

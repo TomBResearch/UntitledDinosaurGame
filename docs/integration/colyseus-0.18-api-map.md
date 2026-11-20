@@ -1306,3 +1306,66 @@ Full attempt logs `/tmp/ga-run1..14.log` mirrored into `artifacts/.local/spike-0
 the final green records (`spike-cell-ga-scenarios.json`, two consecutive greens); no thresholds
 moved; no Gate A claim; GA-5/6/7/11/12 and CF-1/CF-3/CF-4 remain OWED at Gate A with this cell as
 their scenario recipe.
+
+## 14.6. The episode watchdog lands, GA-7 runs for real, and the scenario rows stand on measured evidence (slice 6g, 2026-11-21)
+
+Director batch on the review of `fc939e6`: S1b was a REAL §3.2/GA-6c failure, GA-6a requires
+recovery COMPLETING in budget, and GA-6b/GA-7/CF-4 cannot pass through a test-title check. All
+three were taken literally; the results are below, with red receipts kept.
+
+**The per-episode hard deadline (client predictor, §3.2).** The starvation was structural: the
+episode deadline was re-checked only when the 500 ms snapshot timer re-fired, and a HUNG rejoin
+attempt left that timer unarmed (it re-arms through paths the hung `await` never reaches). The
+fix is an INDEPENDENT timer armed at episode start (`armEpisodeDeadline` in `enterRecovery`) and
+a single expiry funnel (`expireEpisode`): whichever limit is reached first wins — the handler
+no-ops unless the state is still `recovering`, so a rolling-window suspension is never relabelled.
+On expiry: stay stopped, prediction stays discarded, the prescribed connection error is surfaced
+(`connectionError(): {code:'recovery-episode-expired', …}` — non-null exactly on EPISODE expiry),
+and `suspensionReason(): 'episode-deadline' | 'rolling-window' | null` makes the two §3.2 limits
+DISTINCT on the public surface. No supported SDK seam aborts a join already in flight (recorded
+in this map), so the attempt is QUARANTINED at settle: the late-returned room is closed, nothing
+is adopted, no extra concurrent join exists (`rejoinInFlight`), and no send/resume race exists
+(the install path re-reads state after `await`, and expiry sets `suspended` before any settle can
+land). Budgets are preserved exactly: one timer per episode, `clientRecoveryDeadlineMs` from the
+episode START, cancelled on recovery-success and close. Controls: a fake-clock test whose rejoin
+promise NEVER settles — RED before the fix (`expected false to be true` at the 4000 ms mark,
+`/tmp/watchdog-RED.log` preserved in `dpa3j/`), GREEN after, plus late-settle refusal (transport
+closed, no adoption), budget exactness at 3999 ms, and a distinctness control proving the rolling
+suspension invents NO error. In the browser (ga-scenarios, real held handshake): expiry within
+budget, error surfaced, sent count FROZEN across the whole episode (no extra sends), exactly one
+join, and 15 s after release NO adoption/resume while the held join stays unsettled (late probes
+recorded; the settle-time quarantine itself is the unit-proven path).
+
+**`--cell ga-scenarios`, rebuilt as ten independently-judged rows** (fresh proxy + fresh room +
+fresh page pair per scenario; erroring scenarios record their own FAILED row and the cell
+continues — a mid-scenario throw can no longer poison neighbours via the page-close cascade):
+
+| row | what the run measured |
+| --- | --- |
+| GA-6a | withheld window (open socket, zero-stall baseline) → deadline on non-delivery ALONE → stop + discard → REAL rejoin → snapshot recovery **COMPLETES in 284–344 ms** (≤ 4000 + 300 slack, page clock) on epoch 3; withheld finals on the old domain: ZERO accepted; motion resumes under the NEW identity on the unaffected observer |
+| CF-1 | COUNTED: accepted deliveries across the withheld window = 0 (old-epoch acceptances after recovery = 0), from the delivery ledger — deliveries, not stamps |
+| GA-6b | distinct required case: ZERO deliveries and NO closure between join and trigger (counted); trigger is `snapshot-deadline-expired`, state never `closed`; recovery completes in budget on its OWN timer |
+| GA-6c EPISODE | the S1b finding as a first-class assertion (above) — PASS |
+| CF-3 | 3/3 post-close refusals, observer: ZERO samples advanced after close (deep-compare) — PASS |
+| GA-6c ROLLING | offline 9 s → exactly two attempts → `suspended`; DISTINCT from expiry: no flag, **no connection error**, reason `rolling-window`; suspension holds |
+| GA-7 | labelled injection (WITHHELD APPLICATION DELIVERY at the proxy hop — socket open, never TCP loss — then a proxy-side sever so the SERVER really closes): server records the §3.1 observation for the mover's exact entityId (`retiredUnrepresented 1` — a CONFIRMED loss — `serverQueuedAtClose 0`, `consumedCountAtClose`, `dequeuedTotal` recorded separately); client never relies on the close (local-deadline trigger, state never `closed`); recovery in 630–764 ms; zero old-epoch acceptances; accepted-send generations strictly increasing (nothing reissued); server replica publishes the NEW identity at the new epoch; observer sees motion resume |
+| CF-4 | branch attribution NAMED from this run's ledgers: a code-4100 closure carrying the mover's entityId (the ADR consequence branch — this run's stranded input made it so; measured, not assumed) alongside the confirmed-loss observation |
+| B1 | GA-5a/b stay BLOCKED (existing operator-command proposal, distinct scope) |
+| B2 | GA-11/GA-12 outstanding, existing proposal, no gate verdict |
+
+**Two protocol truths the first red runs re-taught (records in `dpa3a–dpa3f`):** hosts must
+CONTINUE the seat's generation watermark (`§4.2` refuses frames far ahead of a fresh epoch's
+zeroed watermark — high fixed bases silently RESYNC-refuse, so a 'moving' seat moved not at all),
+and after `resetForNewEpoch` a protocol-correct host RESTARTS its sequence — the scenario pump now
+does exactly that inside the rejoin seam, which is why the observer finally saw motion resume
+under the new identity. The proxy gained `flushStalled` (a withheld window ends AT an instant;
+flushed chunks are counted per direction, `chunksFlushed`, never silent) and `killSockets` (the
+proxied pair severs, server-side first) — both unit-controlled on the synthetic clock.
+
+Suite invocations now bind RECORDED evidence (this cell's ledgers and the room's own closure/
+observation logs), not spec-title greps. One netcode-suite smoke re-run failed under a heavy
+cgroup-throttle window (5.1 s throttle inside a 7 s measurement window — stated as measured) and
+passed in 34 s on an uncontended re-run; the receipt is kept, the metric was not adjusted.
+Two consecutive full-greens: `dpa3h`, `dpa3i` (10/10 rows each). Gate A: still Not Run; GA-5/6/
+7/11/12 + CF rows remain OWED with this cell as their recipe; no thresholds moved; camera,
+workflows, main and P06 untouched.

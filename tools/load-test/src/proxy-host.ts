@@ -65,7 +65,22 @@ interface StallCmd {
   readonly ms: number | null;
 }
 
-type Cmd = StartCmd | HandleCmd | StallCmd | ShutdownCmd;
+interface FlushCmd {
+  readonly ch: 'cmd';
+  readonly id: number;
+  readonly op: 'flush';
+  readonly handle: number;
+  readonly direction: 'c2s' | 's2c' | 'both';
+}
+
+interface KillCmd {
+  readonly ch: 'cmd';
+  readonly id: number;
+  readonly op: 'kill';
+  readonly handle: number;
+}
+
+type Cmd = StartCmd | HandleCmd | StallCmd | FlushCmd | KillCmd | ShutdownCmd;
 
 const write = (line: Record<string, unknown>): void => {
   process.stdout.write(`${JSON.stringify(line)}\n`);
@@ -150,6 +165,26 @@ const handle = (cmd: Cmd): void => {
     }
     stallEntry.proxy.setStall(cmd.direction, cmd.ms);
     write({ ch: 'reply', id: cmd.id, ok: true, stalled: cmd.direction, ms: cmd.ms });
+    return;
+  }
+  if (cmd.op === 'flush') {
+    const flushEntry = proxies.get(cmd.handle);
+    if (flushEntry === undefined) {
+      write({ ch: 'reply', id: cmd.id, ok: false, error: `no proxy handle ${String(cmd.handle)}` });
+      return;
+    }
+    flushEntry.proxy.flushStalled(cmd.direction);
+    write({ ch: 'reply', id: cmd.id, ok: true, flushed: cmd.direction });
+    return;
+  }
+  if (cmd.op === 'kill') {
+    const killEntry = proxies.get(cmd.handle);
+    if (killEntry === undefined) {
+      write({ ch: 'reply', id: cmd.id, ok: false, error: `no proxy handle ${String(cmd.handle)}` });
+      return;
+    }
+    killEntry.proxy.killSockets();
+    write({ ch: 'reply', id: cmd.id, ok: true, killed: true });
     return;
   }
   if (cmd.op === 'start') {

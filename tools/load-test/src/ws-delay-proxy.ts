@@ -141,6 +141,8 @@ export interface DirectionStats {
   readonly bytesDelivered: number;
   readonly chunksReceived: number;
   readonly chunksDelivered: number;
+  /** Chunks released ahead of their pinned departure by an explicit harness FLUSH (labelled). */
+  readonly chunksFlushed: number;
   /** Structural constant zero: this primitive has no drop path. Kept visible so zero is CHECKED. */
   readonly chunksDropped: number;
   /** Delivery-sequence audit. Structurally zero; counted anyway. */
@@ -238,6 +240,16 @@ export interface WsDelayProxy {
    * shifts deliveries and can never produce a no-delivery window.
    */
   setStall(direction: 'c2s' | 's2c' | 'both', oneWayMs: number | null): void;
+  /**
+   * End a withheld window AT THIS INSTANT: every queued chunk departs now, FIFO order intact.
+   * Flushed chunks are counted per direction in stats — a labelled harness action, never
+   * silent. Needed where a withheld window must END for NEW traffic (the rejoin's path) while
+   * a withheld FINAL PUBLICATION stays withheld in effect: flush lets it arrive ON THE OLD
+   * DOMAIN, where the client's quarantine REFUSES it — the refusal is the evidence.
+   */
+  flushStalled(direction: 'c2s' | 's2c' | 'both'): void;
+  /** Sever every currently-proxied TCP pair (server-side socket first). A drop, labelled. */
+  killSockets(): void;
   stats(): ProxyStats;
   /** Explicit close: stop accepting, drain each direction's pending stalls IN ORDER, then FIN. */
   close(): Promise<void>;
@@ -250,6 +262,8 @@ interface Chunk {
   readonly data: Buffer;
   readonly arrivedAtMs: number;
   readonly requestedStallMs: number;
+  /** Set when flushStalled released this chunk ahead of its pinned departure (labelled, counted). */
+  flushed: boolean;
   /**
    * PINNED departure time, computed once at admission — the delay-tube constraint a real
    * order-preserving link must obey: `dep(i) = max(arrival(i) + d(i), dep(i−1) − b/2)`.
@@ -259,7 +273,7 @@ interface Chunk {
    * FULL stall behind its neighbour and any timer overshoot compounded down the queue — the
    * instrument's own distortion, inflating achieved jitter past the band it claims to apply.
    */
-  readonly departureAtMs: number;
+  departureAtMs: number; // mutable ONLY via flushStalled (labelled early release of a withheld window)
 }
 
 interface DirectionState {
@@ -280,6 +294,10 @@ interface DirectionState {
   backpressurePauses: number;
   earlyFireReschedules: number;
   pumping: boolean;
+  /** Cancels the in-flight pump timer and re-enters pumpStep NOW (used by flushStalled). */
+  wake: (() => void) | null;
+  /** Chunks delivered after a harness flush released them ahead of their pinned departure. */
+  flushedChunks: number;
   sourceClosed: boolean;
   /** For c2s: achieved stall of the newest chunk already delivered upstream (leg-sum pairing). */
   lastForwardAchievedMs: number | null;
@@ -306,6 +324,8 @@ const newDirection = (label: 'c2s' | 's2c', seed: number): DirectionState => ({
   backpressurePauses: 0,
   earlyFireReschedules: 0,
   pumping: false,
+  wake: null,
+  flushedChunks: 0,
   sourceClosed: false,
   lastForwardAchievedMs: null,
   maxTimerLagMs: 0,
@@ -393,6 +413,36 @@ class ProxyConnection {
     // beginClose, where a close has actually been initiated.)
   }
 
+  /**
+   * Flush the WITHHELD window NOW: every queued chunk's departure becomes this instant and the
+   * pump re-enters immediately — FIFO preserved (queue order is arrival order). This is what
+   * lets a withheld-application-delivery window end at a measured instant instead of leaving
+   * queued bytes stranded at arr+stallMs.
+   */
+  flushStalled(labels: readonly ('c2s' | 's2c')[]): void {
+    for (const label of labels) {
+      const dir = label === 'c2s' ? this.c2s : this.s2c;
+      const now = this.env.timer.nowMs();
+      for (const chunk of dir.queue) {
+        if (chunk.departureAtMs > now) chunk.flushed = true;
+        chunk.departureAtMs = now;
+      }
+      dir.lastScheduledDepartureMs = now;
+      if (dir.wake !== null) dir.wake();
+      else this.pump(dir);
+    }
+  }
+
+  /**
+   * Sever this proxied TCP pair (server side FIRST, so the authority's close observation lands
+   * the same way a real drop lands it). The proxy NEVER invents a reason: both endpoints see an
+   * ordinary FIN/RST from their peer.
+   */
+  killSockets(): void {
+    this.upstream.destroy();
+    this.client.destroy();
+  }
+
   private enqueue(dir: DirectionState, data: Buffer): void {
     if (this.finished) return;
     const now = this.env.timer.nowMs();
@@ -405,7 +455,7 @@ class ProxyConnection {
     void centred;
     const departureAtMs = Math.max(now + requested, dir.lastScheduledDepartureMs - this.env.profile.jitterBudgetMs / 2);
     dir.lastScheduledDepartureMs = departureAtMs;
-    dir.queue.push({ seq: dir.nextSeq, data, arrivedAtMs: now, requestedStallMs: requested, departureAtMs });
+    dir.queue.push({ seq: dir.nextSeq, data, arrivedAtMs: now, requestedStallMs: requested, departureAtMs, flushed: false });
     dir.nextSeq += 1;
     dir.bytesReceived += data.length;
     dir.chunksReceived += 1;
@@ -449,10 +499,17 @@ class ProxyConnection {
       this.pump(dir); // covers data that raced the FIN decision
       return;
     }
+    dir.wake = () => {
+      dir.wake = null;
+      this.pendingCancels.delete(cancel);
+      cancel();
+      this.pumpStep(dir); // departures were rewritten (flush): re-enter NOW, still strict FIFO
+    };
     const dueAtMs = Math.max(this.env.timer.nowMs(), head.departureAtMs);
     const remaining = dueAtMs - this.env.timer.nowMs();
     const cancel = this.env.timer.schedule(remaining, () => {
       this.pendingCancels.delete(cancel);
+      dir.wake = null;
       if (this.finished) return;
       // An early fire (timer coalescing/sub-ms rounding) must NOT deliver below the pinned
       // departure: that would breach the band from the low side. Reschedule the remainder.
@@ -471,6 +528,7 @@ class ProxyConnection {
       const timerLag = firedAtMs - dueAtMs;
       if (timerLag > dir.maxTimerLagMs) dir.maxTimerLagMs = timerLag;
       const achieved = firedAtMs - chunk.arrivedAtMs;
+      if (chunk.flushed) dir.flushedChunks += 1;
       if (chunk.seq !== dir.lastDeliveredSeq + 1) dir.orderViolations += 1;
       dir.lastDeliveredSeq = chunk.seq;
       dir.bytesDelivered += chunk.data.length;
@@ -579,6 +637,8 @@ const directionStats = (d: DirectionState): DirectionStats => ({
   bytesDelivered: d.bytesDelivered,
   chunksReceived: d.chunksReceived,
   chunksDelivered: d.chunksDelivered,
+  /** Chunks released ahead of their pinned departure by an explicit harness FLUSH (labelled). */
+  chunksFlushed: d.flushedChunks,
   chunksDropped: 0,
   orderViolations: d.orderViolations,
   backpressurePauses: d.backpressurePauses,
@@ -598,6 +658,7 @@ const mergeStats = (a: DirectionStats, b: DirectionStats): DirectionStats => ({
   bytesDelivered: a.bytesDelivered + b.bytesDelivered,
   chunksReceived: a.chunksReceived + b.chunksReceived,
   chunksDelivered: a.chunksDelivered + b.chunksDelivered,
+  chunksFlushed: a.chunksFlushed + b.chunksFlushed,
   chunksDropped: 0,
   orderViolations: a.orderViolations + b.orderViolations,
   backpressurePauses: a.backpressurePauses + b.backpressurePauses,
@@ -691,6 +752,13 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
     setStall(direction, oneWayMs) {
       if (direction === 'c2s' || direction === 'both') stallOverride.c2s = oneWayMs;
       if (direction === 's2c' || direction === 'both') stallOverride.s2c = oneWayMs;
+    },
+    flushStalled(direction) {
+      const labels = direction === 'both' ? (['c2s', 's2c'] as const) : ([direction] as const);
+      for (const conn of [...live]) conn.flushStalled(labels);
+    },
+    killSockets() {
+      for (const conn of [...live]) conn.killSockets();
     },
     stats(): ProxyStats {
       let c2s = c2sDone;

@@ -344,3 +344,80 @@ describe('UDG-SPIKE-001 ws-delay-proxy on a synthetic clock', () => {
     await new Promise<void>((resolve) => echo.close(() => resolve()));
   });
 });
+
+describe('UDG-SPIKE-001 ws-delay-proxy — withheld-window flush and labelled drop (GA-7 primitives)', () => {
+  it('flushStalled releases the withheld window AT THE INSTANT: queued bytes cross FIFO, the count is labelled in stats, and nothing is lost', async () => {
+    const clock = new FakeClock();
+    const peer: { socket: Socket | null } = { socket: null };
+    let upstreamGot = 0;
+    const echo = createServer((socket) => {
+      peer.socket = socket;
+      socket.on('data', (data) => { upstreamGot += data.length; for (const b of data) socket.write(Buffer.from([b])); }); // echo byte-by-byte (s2c)
+    });
+    const echoPort = await listen(echo);
+    const profile = { name: 'unit', oneWayMs: 5, jitterBudgetMs: 0, seed: 1001 };
+    const proxy = await createWsDelayProxy({ listenPort: 0, targetHost: '127.0.0.1', targetPort: echoPort, profile, timer: clock });
+
+    const got: Buffer[] = [];
+    const client = connect({ host: '127.0.0.1', port: proxy.port });
+    client.on('error', () => { /* RST at teardown */ });
+    client.on('data', (d) => { got.push(Buffer.from(d)); });
+    await new Promise<void>((resolve) => client.once('connect', resolve));
+    await until(() => peer.socket !== null, 'upstream connection');
+
+    proxy.setStall('s2c', 30_000); // withhold application delivery on the way back (socket OPEN)
+    for (const byte of [1, 2, 3]) client.write(Buffer.from([byte]));
+    for (let round = 0; round < 100 && upstreamGot < 3; round += 1) {
+      clock.advance(50); // keep the synthetic clock moving while real bytes cross
+      await realSleep(3);
+    }
+    expect(upstreamGot, 'all three bytes reached the authority').toBe(3);
+    clock.advance(1_000);
+    await realSleep(5);
+    expect(got.length, 'withheld: NOTHING came back while the window is open').toBe(0);
+
+    const before = clock.nowMs();
+    proxy.flushStalled('s2c'); // the window ENDS now
+    for (let round = 0; round < 50 && Buffer.concat(got).length < 3; round += 1) {
+      clock.advance(2);
+      await realSleep(3);
+    }
+    expect(Buffer.concat(got).length, 'flushed bytes delivered').toBe(3);
+    expect(clock.nowMs() - before, 'delivery lands at the flush instant, not at arr+30000').toBeLessThanOrEqual(5);
+    expect([...Buffer.concat(got)], 'FIFO order through the flush is preserved').toEqual([1, 2, 3]);
+
+    const stats = proxy.stats();
+    expect(stats.s2c.chunksFlushed, 'every released-early chunk is COUNTED, never silent').toBeGreaterThanOrEqual(1);
+    expect(stats.s2c.orderViolations).toBe(0);
+    expect(stats.s2c.chunksDropped).toBe(0);
+    client.destroy();
+    await proxy.close();
+    echo.close();
+  });
+
+  it('killSockets severs the proxied pair — both endpoints observe an ordinary close, and the proxy counts the closure', async () => {
+    const clock = new FakeClock();
+    const peer: { socket: Socket | null; closed: boolean } = { socket: null, closed: false };
+    const echo = createServer((socket) => {
+      peer.socket = socket;
+      socket.on('close', () => { peer.closed = true; });
+    });
+    const echoPort = await listen(echo);
+    const profile = { name: 'unit', oneWayMs: 0, jitterBudgetMs: 0, seed: 1001 };
+    const proxy = await createWsDelayProxy({ listenPort: 0, targetHost: '127.0.0.1', targetPort: echoPort, profile, timer: clock });
+    const client = connect({ host: '127.0.0.1', port: proxy.port });
+    client.on('error', () => { /* the drop is the point */ });
+    let clientClosed = false;
+    client.on('close', () => { clientClosed = true; });
+    await new Promise<void>((resolve) => client.once('connect', resolve));
+    await until(() => peer.socket !== null, 'upstream connection');
+
+    proxy.killSockets();
+    await until(() => clientClosed && peer.closed, 'both endpoints observe the drop');
+    clock.advance(50);
+    expect(proxy.stats().connections.active, 'the proxy retired the pair').toBe(0);
+    client.destroy();
+    await proxy.close();
+    echo.close();
+  });
+});

@@ -649,6 +649,16 @@ export class DirectMotionPredictor {
   private deadlineHandle: TimerToken | null = null;
   private recoveryStartedAt: number | null = null;
   private episodeExpired = false;
+  /**
+   * INDEPENDENT per-episode hard deadline (ADR-0003 §3.2; director finding S1b): armed at
+   * episode start and NOT gated by `await rejoin()` settling or any future state event. A
+   * route that never returns — a join whose handshake is withheld — can no longer starve
+   * the deadline: the 500 ms snapshot timer's re-checks ride a timer that a hung attempt
+   * leaves unarmed, which is exactly how S1b stayed 'recovering' for 40 s.
+   */
+  private episodeTimer: TimerToken | null = null;
+  private connectionErrorInfo: { readonly code: string; readonly message: string; readonly atMs: number } | null = null;
+  private suspensionReasonInfo: 'episode-deadline' | 'rolling-window' | null = null;
   private readonly rejoinAts: number[] = [];
   private rejoinInFlight = false;
   private trimReports = 0;
@@ -1043,6 +1053,16 @@ export class DirectMotionPredictor {
 
   stateName(): PredictorState { return this.state; }
   recoveryEpisodeExpiredFlag(): boolean { return this.episodeExpired; }
+  /**
+   * The §3.2 surfaced connection error — non-null exactly when the recovery EPISODE expired
+   * (rolling-window suspensions never set it: the two limits have distinct semantics and the
+   * ADR says whichever is reached first wins). Read-only surface; nothing resets it.
+   */
+  connectionError(): { readonly code: string; readonly message: string; readonly atMs: number } | null {
+    return this.connectionErrorInfo;
+  }
+  /** Which §3.2 limit suspended the seat — 'episode-deadline' or 'rolling-window'; distinct, never conflated. */
+  suspensionReason(): 'episode-deadline' | 'rolling-window' | null { return this.suspensionReasonInfo; }
   snapshotReadyForInput(): boolean { return this.snapshotReady; }
   pendingJournal(): readonly PendingInput[] { return [...this.pending.values()]; }
   deliveryLedger(): typeof this.deliveriesLog { return [...this.deliveriesLog]; }
@@ -1063,6 +1083,7 @@ export class DirectMotionPredictor {
 
   async close(): Promise<void> {
     this.state = 'closed';
+    this.cancelEpisodeTimer();
     this.detach();
     await this.transport.close();
   }
@@ -1113,6 +1134,8 @@ export class DirectMotionPredictor {
         // journal was discarded at trigger time and is not reissued — this delivery is a fresh
         // snapshot, and only NOW may input resume.
         this.recordRecovery('snapshot-recovered', `revision ${String(delivery.revision)} epoch ${String(delivery.epoch)}`);
+        this.cancelEpisodeTimer();
+        this.suspensionReasonInfo = null;
         this.rejoinInFlight = false;
         this.recoveryStartedAt = null;
         this.recoveryEpoch = null;
@@ -1190,6 +1213,38 @@ export class DirectMotionPredictor {
     this.armDeadlineIfNeeded();
   }
 
+  /** Cancel whatever episode timer a previous episode left; arm the hard deadline for THIS one. */
+  private armEpisodeDeadline(): void {
+    this.cancelEpisodeTimer();
+    this.episodeTimer = this.options.clock.setTimer(() => {
+      this.episodeTimer = null;
+      // Whichever limit is reached first WINS: a rolling-window suspension already landed
+      // (state suspended), or the seat closed — this timer must not relabel either.
+      if (this.readState() !== 'recovering') return;
+      this.expireEpisode('independent per-episode hard deadline (clientRecoveryDeadlineMs measured from episode START) crossed while the recovery had NOT completed — the rejoin route never settled and cannot gate §3.2; the seat stays stopped, prediction stays discarded, the connection error is surfaced, and any late join result will be quarantined');
+    }, this.options.recoveryDeadlineMs);
+  }
+
+  private cancelEpisodeTimer(): void {
+    this.episodeTimer?.cancel();
+    this.episodeTimer = null;
+  }
+
+  /**
+   * §3.2 episode expiry through a single funnel: stop HOLDS, prediction stays discarded, the
+   * prescribed connection error is surfaced, no further rejoin runs in this episode. Recorded
+   * once; later sites no-op.
+   */
+  private expireEpisode(why: string): void {
+    this.cancelEpisodeTimer();
+    if (this.episodeExpired) return;
+    this.episodeExpired = true;
+    this.suspensionReasonInfo = 'episode-deadline';
+    this.connectionErrorInfo = { code: 'recovery-episode-expired', message: why, atMs: this.options.clock.nowMs() };
+    this.recordRecovery('episode-expired', why);
+    this.state = 'suspended';
+  }
+
   private armDeadlineIfNeeded(): void {
     if (this.deadlineHandle === null && (this.pending.size > 0 || this.state === 'recovering')) this.restartDeadline();
   }
@@ -1207,9 +1262,7 @@ export class DirectMotionPredictor {
         // the recovery suspends even while a join promise is still settling — the settling
         // result is then refused at install time and its transport discarded.
         if (this.recoveryStartedAt !== null && this.options.clock.nowMs() - this.recoveryStartedAt >= this.options.recoveryDeadlineMs) {
-          this.episodeExpired = true;
-          this.recordRecovery('episode-expired', 'deadline crossed while a rejoin attempt was in flight; its result will be refused');
-          this.state = 'suspended';
+          this.expireEpisode('deadline crossed while a rejoin attempt was in flight; its result will be refused');
           return;
         }
         // Waiting for a snapshot that has not arrived inside the deadline: the next bounded
@@ -1234,6 +1287,7 @@ export class DirectMotionPredictor {
     }
     this.state = 'recovering';
     this.recoveryStartedAt = this.options.clock.nowMs();
+    this.armEpisodeDeadline();
     this.reconciler = null; // discard the predicted continuation; truth stays in lastAccepted (held)
     this.snapshotReady = false;
     this.anchor = null; // the checkpoint anchor does not survive a domain change
@@ -1288,12 +1342,14 @@ export class DirectMotionPredictor {
     this.rejoinAts.length = 0;
     this.rejoinAts.push(...inWindow);
     if (this.recoveryStartedAt !== null && now - this.recoveryStartedAt >= this.options.recoveryDeadlineMs) {
-      this.episodeExpired = true;
-      this.recordRecovery('episode-expired', 'the 4000 ms episode deadline bounds the whole recovery');
-      this.state = 'suspended';
+      this.expireEpisode('the 4000 ms episode deadline bounds the whole recovery');
       return;
     }
     if (inWindow.length >= this.options.maxRejoinsPerWindow) {
+      // Whichever limit is reached first wins: THIS suspension is the rolling allowance, NOT an
+      // episode expiry — no error surface, no expiry flag; the distinctness is observable.
+      this.suspensionReasonInfo = 'rolling-window';
+      this.cancelEpisodeTimer();
       this.recordRecovery('suspended', 'rolling-window: recoverySuspended until the oldest counted rejoin leaves the window');
       this.state = 'suspended';
       return;
@@ -1310,9 +1366,7 @@ export class DirectMotionPredictor {
     if (this.rejoinInFlight || this.state !== 'recovering' || this.options.rejoin === undefined) return;
     const now = this.options.clock.nowMs();
     if (this.recoveryStartedAt !== null && now - this.recoveryStartedAt >= this.options.recoveryDeadlineMs) {
-      this.episodeExpired = true;
-      this.recordRecovery('episode-expired', 'deadline crossed before the scheduled attempt');
-      this.state = 'suspended';
+      this.expireEpisode('deadline crossed before the scheduled attempt');
       return;
     }
     this.rejoinInFlight = true;
@@ -1339,10 +1393,8 @@ export class DirectMotionPredictor {
       }
       if (episodeCrossed) {
         await this.discardAbandoned(next, 'episode deadline crossed while the rejoin was settling');
-        this.episodeExpired = true;
         this.rejoinInFlight = false;
-        this.recordRecovery('episode-expired', 'rejoin succeeded but the episode had elapsed: result refused, transport discarded');
-        this.state = 'suspended';
+        this.expireEpisode('rejoin succeeded but the episode had elapsed: result refused, transport discarded');
         return;
       }
       const previous = this.transport;
