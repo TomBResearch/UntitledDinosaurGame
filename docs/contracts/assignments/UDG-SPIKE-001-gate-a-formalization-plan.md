@@ -700,3 +700,50 @@ Also: proxy stats gained c2sPerConn (per-connection c2s receipts by open order);
 scenario errors; §17's jitter column corrected in place with the mislabel recorded. All new
 artefacts are schemaVersion 4 and kind DIAGNOSTIC-NOT-GATE-A — diagnostics, published nowhere.
 Hosted: NO dispatch. Thresholds, production config, ADR, gate state: untouched.
+
+## 18A. Diagnostic #2 (hosted run 44791166883, candidate 0a69d84, attempt 1) — the poor stop is now NAMED
+Raw evidence retained locally at artifacts/.local/spike-001/dpa8g/ (143 files, sha256 manifest;
+candidate-bound CI: PR #7 routine all-green at 0a69d84, run 44790203558; workflow blob equal on
+both sides 93ecb03c…606f; first diagnostic 44771876137 and dpa8e's 140 files byte-untouched).
+BOTH prior fixture defects cleared on hosted first-attempt bytes: every lan coordinate green
+under the SAME-OBSERVER-FRAME render gate (no cross-page race), and all 31 GA-scenario rows
+green (deterministic drain + behaviourally named mover wire). All 9 non-poor coordinates green
+with §2.2 OK, corrP95 0; p95−p50 recomputed from raw samples matches each artefact's recorded
+achievedJitterMs to rounding (lan 1.9–2.1, moderate 5.3–6.8, elevated 13.6–15.2, poor-1003
+27.1 ms); max−min kept separately (spread ≤ 78.9 ms) and never labelled jitter.
+WHAT THE MOVER LEDGER RECORDS (poor-1001 AND poor-1002; poor-1003 green): during WARMUP, ~253 ms
+(1002) / ~970 ms (1001) after the pump's first send, epoch 1, the client's OWN rule fired —
+ledger trigger detail VERBATIM: "input-ack-stalled at 4" — then stop-sending, discard-pending
+(4 journal entries), "domain 1 quarantined: subscriptions dropped, handle closing", "suspended:
+host provides no rejoin route: staying stopped on the held snapshot" (the fixture's declared
+configuration), then send-refused, and the cell early-stopped honestly (measureMs 10, window
+checks RED, probe aborted socket-closed with 0 accepted samples, §2.2 networkValid FALSE,
+correction NOT-CLAIMED — never re-hashed). At the trigger the ack/prefix watermark was 0/0 with
+4 inputs outstanding while STATE DELIVERIES flowed healthily (authority ticks 22→28 at ~47 ms
+spacing) and connectionError was null; the proxy saw exactly one client-initiated close
+(lifetime 3720.76 ms) and the mover wire carried 8 c2s chunks. So: NOT the 500 ms snapshot
+deadline (deliveries kept arriving); it is the INPUT-ACK-STALLED rule — config default
+input.stallDetectionDeliveries = 3 (PROVISIONAL under GA-11) — counting 3 accepted deliveries
+with the watermark unmoved, which at the poor profile's ~200 ms RTT is ≈ the first ack's
+round trip: the pump starts sending the instant authority is seen, so the ack round trip and
+the stall window are the same order of magnitude; whether the first ack-bearing delivery lands
+inside the window is a cold-start coin-flip. Observed across two runs: 1001 red once/green
+once, 1002 red twice, 1003 green twice — timing variance, not seed semantics. The first run's
+poor-1002 shows the same SIGNATURE (client-initiated close at 3730 ms lifetime, send gate held,
+motion frozen in warmup) but its artefact never persisted the reason string, so identity of its
+trigger is NOT asserted — only that it matches the signature this run names.
+OBSERVING ≠ TUNING: this is a diagnostic under GA-11-provisional settings. The client behaved
+per the accepted §3.2 text (inputs genuinely outstanding, watermark genuinely unmoved); the
+fixture refused to rejoin by construction. NOTHING here ratifies, changes or production-tunes
+any threshold.
+NEXT SMALLEST TARGETED INTERVENTION (contingent on exactly the above cause, harness-only, no
+third matrix until approved): align the cell's pump start to the delivery phase — after join,
+wait for ONE fresh authority delivery and start sending immediately after it, so the first ack
+has a full round trip before the stall window can count three unmoved deliveries. Client rule,
+config and fixtures' no-rejoin posture stay untouched; if a drained-phase start still stalls,
+the episode reproduces again — named, with ledger — and the conversation moves to the client
+team with evidence instead of inference.
+Aggregator (exact, from its own log line): "gate-a-aggregate: 12/12 rows bound, 6 violation(s),
+matrix INCOMPLETE-OR-RED, Gate A NOT-PASS (violations) (never PASS from this binder)" — 2 row-red
++ 2 lane-red + 2 check-red across poor-1001/poor-1002; decision remains NO PUBLISH: the verified
+report artifact is absent from the run (5 raw uploads only, exactly as the guards allow).
