@@ -177,6 +177,22 @@ export const ROUTE_RULES = Object.freeze([
       'docs/integration/dependencies.json',
     ] },
 
+  // Grant T-8: the netcode suite, the load-test tooling, the spike tests and the client probe route
+  // to EXISTING lanes only — the unit lane (their policy suites) and the runtime lane (where the
+  // fast paired-browser LAN smoke step of grant T-6 lives). The rule deliberately adds no new
+  // group: no route may reach the Gate A matrix (T-7 belongs to the DISPATCHED acceptance workflow,
+  // which is never routed) and no route may reach evidence capture (C-07). Camera and static
+  // routing are untouched: these paths still fire the pre-existing camera / source-static rules
+  // alongside this one, exactly as before the rule existed.
+  { id: 'spike-netcode-fast', reader: 'tests/e2e/netcode.spec.ts + tests/spikes/** + tests/unit/udg-spike-001/** + tools/load-test/** + apps/client/src/network/**', flags: ['unit', 'runtime'],
+    patterns: [
+      'tests/e2e/netcode.spec.ts',
+      'tests/spikes/**',
+      'tests/unit/udg-spike-001/**',
+      'tools/load-test/**',
+      'apps/client/src/network/**',
+    ] },
+
   // --- shared surfaces ---------------------------------------------------------------------------
   // Both apps depend on @udg/protocol and @udg/config (apps/client/package.json, apps/server/package.json),
   // so a change there is a client change and a server change at once. This rule is why a protocol edit

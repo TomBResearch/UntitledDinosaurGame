@@ -318,6 +318,31 @@ describe('CI workflows — one policy across both files', () => {
 });
 
 describe('CI workflows — full capture is an explicit act, and a routine run is not evidence', () => {
+  it('runs the spike fast smoke in the runtime lane only, and nowhere that captures (grants T-6/T-8)', () => {
+    const runtimeBlock = job(routine, 'runtime');
+    expect(runtimeBlock).toContain('test:spike');
+    expect(runtimeBlock).toContain('--cell lan-smoke');
+    // Exactly one lane runs the smoke: no other job may invoke the spike runner, so a netcode
+    // change cannot accidentally start browser work in four lanes.
+    for (const id of jobIds(routine)) {
+      if (id === 'runtime') continue;
+      expect(job(routine, id), `${id} must not run the spike smoke`).not.toContain('test:spike');
+    }
+    // The smoke declares its artefact home under artifacts/.local — and C-07 still holds over the
+    // whole routine file: a routine run captures nothing.
+    expect(runtimeBlock).toContain('artifacts/.local');
+    expect(routine).not.toContain('evidence:capture');
+    // The dispatched workflow is untouched by the smoke: T-7 (the full grid) belongs there and is
+    // not implemented in this slice; the ONLY spike invocation in the routine file is the smoke —
+    // a routed file must not have grown a matrix runner (comment mentions aside).
+    const spikeRuns = [...routine.matchAll(/run:.*test:spike[^\n]*/gu)].map((match) => match[0]);
+    expect(spikeRuns.length).toBe(1);
+    expect(spikeRuns[0]).toContain('--cell lan-smoke');
+    // The routine file may MENTION the formal-mode variable in a comment; what it must never do is
+    // SET it — nothing routed can execute under the formal schedule policy.
+    expect(routine).not.toMatch(/^\s*UDG_GATE_A_FORMAL:/mu);
+  });
+
   it('reaches acceptance only through workflow_dispatch', () => {
     const triggers = acceptance.slice(acceptance.indexOf('\non:\n'), acceptance.indexOf('\npermissions:\n'));
     expect(triggers).toContain('workflow_dispatch:');

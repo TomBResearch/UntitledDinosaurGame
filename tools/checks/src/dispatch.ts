@@ -169,9 +169,11 @@ const stringFlag = (flags: Record<string, string | boolean>, key: string): strin
  * scenario cells (ga9-ga13, ga-scenarios, ga11-calibration, ab-controls) stay SEPARATE coverage
  * and never substitute for a matrix coordinate.
  */
-export const SPIKE_CELLS = ['self-check', 'full-window', 'elevated-full', 'ab-controls', 'ga-scenarios', 'ga11-calibration', 'ga9-ga13'] as const;
+export const SPIKE_CELLS = ['self-check', 'full-window', 'elevated-full', 'ab-controls', 'ga-scenarios', 'ga11-calibration', 'ga9-ga13', 'lan-smoke'] as const;
 export const SPIKE_MATRIX_CELLS = ['full-window'] as const;
 export const SPIKE_SCENARIO_CELLS = ['ab-controls', 'ga-scenarios', 'ga11-calibration', 'ga9-ga13'] as const;
+/** The routine-CI fast smoke (grant T-6): never formal, never a matrix coordinate, no capture. */
+export const SPIKE_SMOKE_CELLS = ['lan-smoke'] as const;
 /** Mirrors tools/load-test/src/run-spike.ts SPIKE_PROFILES; a unit test pins the two lists equal. */
 export const SPIKE_PROFILE_NAMES = ['lan', 'moderate', 'elevated', 'poor'] as const;
 export const SPIKE_OFFICIAL_SEEDS = [1001, 1002, 1003] as const;
@@ -227,6 +229,20 @@ export const validateSpikeRequest = (
     const profile = profileRaw ?? 'lan';
     const seed = seedRaw === null ? 1001 : Number(seedRaw);
     return { ok: true, request: { cell, runnerCell: cell, profile, seed, env: {} } };
+  }
+  if ((SPIKE_SMOKE_CELLS as readonly string[]).includes(cell)) {
+    if (formal) {
+      return { ok: false, reason: `${cell} is the routine CI fast smoke (grant T-6) — it never runs under UDG_GATE_A_FORMAL=1; formal legs run --cell full-window or a scenario cell` };
+    }
+    if (profileRaw === null) return { ok: false, reason: `cell ${cell} requires an explicit --profile — no silent defaults` };
+    if (seedRaw === null) return { ok: false, reason: `cell ${cell} requires an explicit --seed — no silent defaults` };
+    return {
+      ok: true,
+      request: {
+        cell, runnerCell: cell, profile: profileRaw, seed: Number(seedRaw),
+        env: { UDG_SPIKE_CELL: cell, UDG_SPIKE_PROFILE: profileRaw, UDG_SPIKE_PROFILE_SOURCE: 'explicit', UDG_SPIKE_SEED: seedRaw },
+      },
+    };
   }
   // From here: the matrix runner and the scenario cells. NO silent defaults for these — explicit
   // profile and seed always; formal additionally pins the matrix seed to the official set.

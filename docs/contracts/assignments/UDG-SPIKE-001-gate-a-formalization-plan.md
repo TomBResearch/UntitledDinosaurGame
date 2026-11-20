@@ -221,3 +221,43 @@ No workflow file created or edited; no dispatch; no full-matrix run; no rerun of
   and untouched); spike unit suites 150/150; typecheck and lint clean; lockfile byte-identical.
   Next: T-6/T-7/T-8 in the workflow lane, then the hosted Grid over the twelve `full-window` rows
   and the three scenario rows exactly as the plan now states them.
+
+## 11. Slice-12 update (2026-11-25): the LAN window fixed at the source; T-6 and T-8 landed
+
+**(a) The LAN full-window failure was structural, and the three retained reds say exactly where.**
+Pre-fix attempts authored 117 763 ms and 118 661 ms of motion against the declared 120 000 ms
+window; the first continuation after the timebase fix authored 119 990 ms. Root cause, in order of
+discovery: the window opened on a NODE-side wall sleep and closed when the PROBE loop finished, so
+its length was 99 × (1180 ms + RTT) — on LAN's 4 ms regime that is ≈117.3 s, structurally always
+under 120 s; the residual 10 ms was the ≥ guard being read one `evaluate` before the stamp that
+closed the window. The fix (test harness only, no production path): the route pump publishes its
+`performance.now()` origin synchronously as its first act; `measureStart`/`measureEnd` are waited
+on THAT clock — the same monotonic clock the authored motion runs on — and the ≥ guard is enforced
+AT the stamp itself (25 ms stamp margin, pre-declared cap still a named trip); the first/last
+eligible deliveries are traced in their own evaluates; and the ledger and ping windows are now
+INDEPENDENT windows with their own bounds (`pingWindow` derived from cadence + median RTT,
+`ledgerWindow` from the delivery ledger) rather than renames of one another. Teardown is unchanged
+and still bounded. LAN/1001 then ran 14/14 with a measured window of 120 001 ms. Every prior red is
+retained in `dpa7w/` by filename — the fix is evidenced by the numbers, not over them.
+
+**(b) T-8 and T-6, as one routing contract.** `tools/ci/route-checks.mjs` gains rule
+`spike-netcode-fast`: the netcode suite, `tests/spikes/**`, `tests/unit/udg-spike-001/**`,
+`tools/load-test/**` and `apps/client/src/network/**` route to EXISTING lanes only — `unit` and
+`runtime` — while their pre-existing `camera`/`source-static` routing is untouched (a netcode-spec
+change still fires the camera lane exactly as before). The rule adds NO new group: the Gate A
+matrix is T-7's, living in the dispatched acceptance workflow, which is never routed; and capture
+is not a routable group at all (C-07). Two-way tested: the mandatory probe map fires the rule,
+lookalike negatives (`tools/load-test2/**`, `apps/client/src/networking/**`, `netcode.spec.tsx`)
+stay out of the spike lane, a spike route never sets `fullSuite`, and `workflow-policy.test.ts`
+asserts the smoke step exists in exactly the `runtime` job and nowhere else. T-6 is one step in
+that existing runtime job (not a new job — T-8's own words: existing lanes): `pnpm test:spike --
+--id UDG-SPIKE-001 --cell lan-smoke --profile lan --seed 1001`. `lan-smoke` is a new isolated
+cell — two true browser contexts through the accepted proxy primitive, 12 ping window, observer
+saw-the-mover check, bounded teardown — with the 240 s wall budget PRE-REGISTERED as a constant
+the cell asserts against its own clock and records in its artefact (measured 32–37 s locally). It
+is not the full-window runner, captures nothing, writes only under `artifacts/.local`, and the
+dispatcher refuses it under `UDG_GATE_A_FORMAL=1` — with the cell refusing again in its own body.
+
+Focused suites: ci-routing + spike units 197/197; the smoke cell ran green twice locally; LAN
+full-window 14/14. T-7 remains unimplemented here by grant boundary. Nothing adopted; no workflow
+dispatch; no camera recapture; no Gate A verdict.

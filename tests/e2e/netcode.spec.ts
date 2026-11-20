@@ -3328,20 +3328,10 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
   };
   const nonLoopback: string[] = [];
 
-  // ---- phase helpers on the BROWSER MONOTONIC CLOCK (the clock the ledger rows carry).
-  // `stamp` pairs performance.now() with the acknowledged-input counter IN ONE evaluate, so the
-  // opportunity count and the phase boundary cannot disagree by a tick of page scheduling.
-  interface PhaseStamp { atMs: number; lastProcessed: number }
-  const stampPhase = (page: Page, name: string): Promise<PhaseStamp> =>
-    page.evaluate((label) => {
-      const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
-      if (holder === undefined) throw new Error('the cell mover is not joined');
-      const atMs = performance.now();
-      const stamped = { atMs, lastProcessed: holder.transport.handle().lastProcessed };
-      const w = globalThis as unknown as { __udgCellMarks?: Record<string, number> };
-      w.__udgCellMarks = { ...(w.__udgCellMarks ?? {}), [label]: atMs };
-      return stamped;
-    }, name);
+  // ---- phase boundaries: waitPumpPhase (below) waits on the PUMP'S OWN monotonic clock and
+  // stamps in the same clock — start, end and the authored motion share ONE timebase (slice 12;
+  // the old stampPhase-after-a-wall-sleep construction is what made LAN structurally unable to
+  // reach 120 s).
 
   // ---- the canonical predeclared route: 12 s legs on a 48 m square (+x → +z → −x → −z),
   // driven by the SAME ack-ledger module the unit tests pin. provably inside the ±50 m region
@@ -3353,12 +3343,18 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
       if (holder === undefined) throw new Error('the cell mover is not joined');
       (globalThis as unknown as { __udgCellHold?: boolean }).__udgCellHold = false;
       (globalThis as unknown as { __udgCellStop?: boolean }).__udgCellStop = false;
+      // THE window timebase, published SYNCHRONOUSLY as the pump's first act (before the module
+      // import below) so a concurrent phase wait on this page can never race a half-started pump
+      // (slice 12 — the first LAN attempts proved the old construction could not reach 120 s: the
+      // window ended when the ping loop ended, and 99 × (1180 + LAN round trip) is structurally
+      // < 120 000 ms; phase boundaries are now waited on THIS clock).
+      const startedAt = performance.now();
+      (globalThis as unknown as { __udgCellPumpStartedAt?: number }).__udgCellPumpStartedAt = startedAt;
       const stopped = (): boolean => (globalThis as unknown as { __udgCellStop?: boolean }).__udgCellStop === true;
       const held = (): boolean => (globalThis as unknown as { __udgCellHold?: boolean }).__udgCellHold === true;
       const mod = (await import(/* @vite-ignore */ args.moduleUrl)) as {
         canonicalRoute: { legDirectionAt(elapsedMs: number): '+x' | '+z' | '-x' | '-z' };
       };
-      const startedAt = performance.now();
       while (performance.now() - startedAt < args.pumpMs && !stopped()) {
         if (held()) {
           await new Promise((resolve) => setTimeout(resolve, 50));
@@ -3384,6 +3380,32 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
       }
       return { sendError: null as string | null };
     }, { pumpMs, moduleUrl: ACK_LEDGER_MODULE_URL });
+
+  // Wait until the PUMP'S OWN monotonic clock (the mover page — the clock the authored motion
+  // runs on) reaches `targetElapsedMs` since the pump started, then stamp the phase in that same
+  // clock and return it. The ≥ guard is enforced AT THE STAMP ITSELF: the returned `elapsedMs`
+  // re-reads the clock AFTER the stamp, so the guard can never be satisfied by an observation
+  // that the stamp then overtakes (the first continuation attempt failed by exactly that much —
+  // a 10 ms difference between the last loop observation and the stamp two evaluates later).
+  // `capMs` is a safety cap so a stalled page clock ends the wait as a NAMED guard trip rather
+  // than a hang.
+  const waitPumpPhase = (page: Page, targetElapsedMs: number, capMs: number, label: string): Promise<{ atMs: number; lastProcessed: number; elapsedMs: number; capped: boolean }> =>
+    page.evaluate(async (args) => {
+      const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+      if (holder === undefined) throw new Error('the cell mover is not joined');
+      const started = (globalThis as unknown as { __udgCellPumpStartedAt?: number }).__udgCellPumpStartedAt;
+      if (typeof started !== 'number') throw new Error('the cell mover page never started a route pump — a phase boundary cannot be measured on a clock that was never running');
+      const waitStart = Date.now();
+      let elapsed = performance.now() - started;
+      while (elapsed < args.targetElapsedMs && Date.now() - waitStart < args.capMs) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        elapsed = performance.now() - started;
+      }
+      const atMs = performance.now();
+      const w = globalThis as unknown as { __udgCellMarks?: Record<string, number> };
+      w.__udgCellMarks = { ...(w.__udgCellMarks ?? {}), [args.label]: atMs };
+      return { atMs, lastProcessed: holder.transport.handle().lastProcessed, elapsedMs: performance.now() - started, capped: performance.now() - started < args.targetElapsedMs };
+    }, { targetElapsedMs, capMs, label });
 
   const host = await startProxyHost();
   let handle = -1;
@@ -3436,8 +3458,12 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
 
     const pumpMs = 20_000 + 120_000 + 30_000;
     const pump = startRoutePump(pageM, pumpMs);
-    await new Promise((resolve) => setTimeout(resolve, 20_000)); // FULL warmup window (route running the whole time)
-    const measureStart = await stampPhase(pageM, 'measureStart');
+    // Phase boundaries are pump-clock waits, not node-side wall sleeps (slice 12): the warmup ends
+    // when the MOVER PAGE's monotonic clock says 20 000 ms of authored motion ran, and the
+    // measure window ends only when that same clock says >= 120 000 ms ran — never when some
+    // other loop (the pings) happens to finish. The pings are an INDEPENDENT window inside the
+    // measure window, traced separately below.
+    const measureStart = await waitPumpPhase(pageM, 20_000, 25_000, 'measureStart');
     const cpuBefore = readCpuThrottle();
 
     // ---- measure window: 100 pings at the PREDECLARED 1180 ms cadence — span ≈ 116.9 s inside
@@ -3459,7 +3485,7 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
       };
       const samples: { atMs: number; x: number; z: number }[] = [];
       const ticks: number[] = [];
-      for (let i = 0; i < 58; i += 1) {
+      for (let i = 0; i < 64; i += 1) { // 64 × 2 s ≥ the whole (>= 120 s) measure window on the observer side
         const s = read();
         if (s !== null) { samples.push({ atMs: s.atWall - args.bridge.wall + args.bridge.perf, x: s.x, z: s.z }); ticks.push(s.tick); }
         await new Promise((resolve) => setTimeout(resolve, 2_000));
@@ -3467,7 +3493,11 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
       return { samples, lastTick: ticks.at(-1) ?? null };
     }, { sessionId: joinM.sessionId, bridge: clockBridge });
     const probe = await probePromise;
-    const measureEnd = await stampPhase(pageM, 'measureEnd');
+    // The measure window ends at the >= 120 000 ms pump-clock guard — NOT at probe completion
+    // (that ordering was the LAN bug: pings are a window inside the measure window, not the
+    // window itself). For profiles whose ping loop outlasts 120 s (elevated: ~127 s) the wait is
+    // already satisfied at probe end and the window is the probe span — recorded as such.
+    const measureEnd = await waitPumpPhase(pageM, 140_025, 150_025, 'measureEnd');
     const trackSamples = await trackSamplesPromise;
     const measureMsBrowser = measureEnd.atMs - measureStart.atMs;
     const cpuAfter = readCpuThrottle();
@@ -3495,6 +3525,21 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
     }, { moduleUrl: ACK_LEDGER_MODULE_URL, startMs: measureStart.atMs, endMs: measureEnd.atMs });
     const report = ledger.honest as unknown as AckLedgerReport;
 
+    // First/last ELIGIBLE deliveries traced SEPARATELY from the aggregate counts (slice 12): the
+    // ledger window is the measure window; these are its own two boundary facts.
+    const deliveryBounds = await pageM.evaluate((args) => {
+      const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+      if (holder === undefined) throw new Error('the cell mover is not joined');
+      const eligible = holder.predictor.deliveryLedger()
+        .map((d) => ({ accepted: d.accepted, atMs: d.delivery.atMs, ack: d.delivery.ack, authorityTick: d.delivery.authorityTick }))
+        .filter((d) => d.accepted && d.atMs >= args.startMs && d.atMs <= args.endMs);
+      return { first: eligible[0] ?? null, last: eligible.at(-1) ?? null, count: eligible.length };
+    }, { startMs: measureStart.atMs, endMs: measureEnd.atMs });
+    cellCheck('cell: ledger window boundaries traced on their own — the FIRST and LAST eligible (accepted, in-window) deliveries exist and sit inside the measure window, recorded separately from the boundary counts the ledger report aggregates (a window whose first/last delivery cannot be named is a duration claim, not a measurement)',
+      deliveryBounds.first !== null && deliveryBounds.last !== null && deliveryBounds.count >= 2
+        && deliveryBounds.first!.atMs >= measureStart.atMs && deliveryBounds.last!.atMs <= measureEnd.atMs,
+      deliveryBounds);
+
     const probeValidity = networkValidity({
       requestedRttMs: plan.profile.rttMs,
       declaredJitterBudgetMs: plan.profile.jitterBudgetMs,
@@ -3507,9 +3552,28 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
     // The state machine's PERIOD is cadence + one round trip (it sleeps between windows), so the
     // declared expectation is derived, not fitted: (1180 + median RTT) × 99, tolerance ±8 s.
     const expectedSpanMs = (1_180 + (probeValidity.achieved?.p50 ?? 110)) * 99;
-    cellCheck('cell: FULL windows verified from the SAMPLING CLOCK — warmup 20000 ms ran, then a measure window of >= 120000 ms of mover-page monotonic time; the ping window spans the WHOLE measure window at the predeclared cadence (period = cadence + round trip, derived span matches within 8 s; no shorter subwindow, no last-snapshot replay)',
-      measureMsBrowser >= 120_000 && Math.abs(probeSpanMs - expectedSpanMs) <= 8_000 && probeSpanMs >= measureMsBrowser - 15_000,
-      { measureMsBrowser: Math.round(measureMsBrowser), probeSpanMs: Math.round(probeSpanMs), expectedSpanMs: Math.round(expectedSpanMs), declaredCadenceMs: 1_180, pings: 100 });
+    // INDEPENDENT windows, same clock, each enforced on its own terms (slice 12): the MEASURE
+    // window is the ≥ 120 000 ms pump-clock guard; the PING window is a derived-length window
+    // INSIDE it (first send ≥ measureStart, last receipt ≤ measureEnd, tail ≤ 20 s); neither is
+    // a renamed copy of the other.
+    const pingFirst = probe.samples[0] ?? null;
+    const pingLast = probe.samples.at(-1) ?? null;
+    const pingWindow = pingFirst === null || pingLast === null
+      ? { traceable: false as const }
+      : {
+        traceable: true as const,
+        firstSentAtMs: Math.round(pingFirst.sentAtMs),
+        lastReceivedAtMs: Math.round(pingLast.receivedAtMs),
+        spanMs: Math.round(pingLast.receivedAtMs - pingFirst.sentAtMs),
+        insideMeasureWindow: pingFirst.sentAtMs >= measureStart.atMs - 50 && pingLast.receivedAtMs <= measureEnd.atMs + 50,
+        tailAfterPingsMs: Math.round(measureEnd.atMs - pingLast.receivedAtMs),
+      };
+    cellCheck('cell: WINDOWS enforced on the SAME monotonic clock the authored motion runs on — warmup ≥ 20000 ms of pump-clock motion (guard, never a wall sleep), measure window ≥ 120000 ms ENDED BY THE ≥ GUARD on that clock (not by any other loop finishing; the guard cap tripping would be a named red), and the PING window is traced INDEPENDENTLY inside it (derived span (cadence+median RTT)×99 within 8 s; first send ≥ measureStart; last receipt ≤ measureEnd; ping-free tail ≤ 20 s; no shorter subwindow, no last-snapshot replay)',
+      measureStart.elapsedMs >= 20_000 && measureStart.capped === false
+        && measureMsBrowser >= 120_000 && measureEnd.capped === false
+        && Math.abs(probeSpanMs - expectedSpanMs) <= 8_000
+        && pingWindow.traceable === true && pingWindow.insideMeasureWindow === true && pingWindow.tailAfterPingsMs <= 20_000,
+      { warmupMsBrowser: Math.round(measureStart.elapsedMs), warmupGuardCapped: measureStart.capped, measureMsBrowser: Math.round(measureMsBrowser), measureGuardCapped: measureEnd.capped, timebase: 'mover-page performance.now, published by the route pump; start and end waited on THAT clock', probeSpanMs: Math.round(probeSpanMs), expectedSpanMs: Math.round(expectedSpanMs), declaredCadenceMs: 1_180, pings: 100, pingWindow });
 
     // ---- observer motion audit (canonical route executed; stationary/clamp detectors; range).
     const motion = auditMotion(trackSamples.samples, { x: REGION_BOUNDS.x, z: REGION_BOUNDS.z }, 4, 4_200, 1);
@@ -3622,7 +3686,16 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
       attempts: { firstAttemptAt, finishedAt: new Date().toISOString(), attempt: 1, automaticRetries: 0, note: 'isolated first attempt over the full window; a red stays red — this cell contains NO retry machinery' },
       environment: { ...captureEnvironmentRecord(), browser: 'chromium (playwright, headless on the pinned runner)', profileSource },
       plan: { label: plan.label, profile: plan.profile, impairment: plan.impairment },
-      windows: { warmupMs: 20_000, measureMsBrowser, phaseMarks: { measureStart, measureEnd } },
+      windows: {
+        timebase: 'mover-page performance.now published by the route pump; both boundaries WAITED on that clock (>= guards, cap as named failure) — warmup and measure and the authored motion share one clock',
+        warmupMs: 20_000,
+        warmupMsBrowserMeasured: Math.round(measureStart.elapsedMs),
+        measureMsBrowser: Math.round(measureMsBrowser),
+        measureGuard: { targetMs: 120_000, capMs: 150_000, tripped: measureEnd.capped },
+        pingWindow,
+        ledgerWindow: { startMs: Math.round(measureStart.atMs), endMs: Math.round(measureEnd.atMs), firstEligibleDelivery: deliveryBounds.first, lastEligibleDelivery: deliveryBounds.last },
+        phaseMarks: { measureStart, measureEnd },
+      },
       route: { kind: 'canonical 12s/48m square (+x,+z,-x,-z), spawn-verified unobstructed', spawn, motion, holdControl: holdAudit },
       acceptedRttProbe: { rules: 'slot reservation (rtt-probe.ts, unit-tested, imported UNCHANGED by the page via the loopback pipeline); 100 pings at 1180 ms predeclared cadence spanning the measure window', outcome: probe, summary: { validity: probeValidity } },
       ackLedger: { report, warmupLeakControl: { leakedMeasuredBoundaries: ledger.leakedMeasuredBoundaries, honestMeasuredBoundaries: report.measuredBoundaries }, correctionClaim: probeValidity.valid ? (targetClaim ? 'MET' : 'MISSED') : 'NOT-CLAIMED (network invalid)' },
@@ -3666,6 +3739,158 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
     }
   }
   expect(hostShutdown !== null && hostShutdown.receipt !== null && hostShutdown.exitCode === 0, 'the proxy host exited FINITELY with a receipt (guard)').toBe(true);
+});
+
+/* ------------------------------------------------------------------ lan-smoke (slice 12, grants T-6/T-8)
+ *
+ * The FAST paired-browser LAN smoke the routine CI runtime lane may run. It is deliberately small
+ * and deliberately distinct from everything it must NOT be: NOT the full-window matrix runner
+ * (no 20 s warmup, no 120 s measure window — those belong to `--cell full-window`), never
+ * dispatchable under UDG_GATE_A_FORMAL=1 (the dispatcher refuses that, and this cell re-checks),
+ * never an evidence capture (C-07: a routine green captures nothing — the artefact lands under
+ * artifacts/.local and declares DIAGNOSTIC-NOT-GATE-A), and not another task's suite.
+ *
+ * The budget is PRE-REGISTERED as the constant below: the cell asserts its own wall clock against
+ * it and records the measured value, so "fast" is a checked claim, not an adjective. What it
+ * covers, in miniature: the accepted proxy primitive under the declared LAN regime, two TRUE
+ * browser contexts reaching the room only through the proxy, an independently derived ping
+ * window, achieved-vs-requested validity, an observer that SAW the mover, and a bounded
+ * teardown with a finite-exit receipt.
+ */
+const LAN_SMOKE_BUDGET_MS = 240_000; // PRE-REGISTERED wall budget for the whole cell (lane step keeps its own job timeout)
+const LAN_SMOKE_PINGS = 12;
+const LAN_SMOKE_PING_CADENCE_MS = 1_200;
+
+// eslint-disable-next-line no-empty-pattern -- Playwright requires the destructured args object even when the cell uses only testInfo.
+test('spike cell: lan-smoke — fast paired-browser LAN smoke for the routine CI lane (pre-registered 240 s wall budget; NOT full-window, NEVER formal, NO evidence capture)', async ({}, testInfo) => {
+  test.skip(process.env['UDG_SPIKE_CELL'] !== 'lan-smoke', 'dispatched only by `pnpm test:spike -- --id UDG-SPIKE-001 --cell lan-smoke --profile lan --seed <n>` (the routine CI runtime lane, grant T-6); the ordinary netcode suite never runs it');
+  test.setTimeout(300_000);
+  expect(fixture, 'the room fixture booted').toBeDefined();
+  expect(process.env['UDG_GATE_A_FORMAL'] === '1', 'lan-smoke is the routine fast smoke — under the formal schedule policy the dispatcher must refuse it, and the cell refuses again here (belt and braces)').toBe(false);
+  const cellStartedAtMs = Date.now();
+  const profile = process.env['UDG_SPIKE_PROFILE'] ?? '';
+  expect(['lan', 'moderate', 'elevated', 'poor'], `lan-smoke was dispatched with profile "${profile}" — no silent defaults`).toContain(profile);
+  const seed = Number(process.env['UDG_SPIKE_SEED'] ?? 'not-a-number');
+  expect(Number.isInteger(seed) && seed > 0, 'lan-smoke requires an explicit integer --seed').toBe(true);
+  const plan = planSpikeRun({ profile, seed, diagnostic: { reason: 'ci-fast-lan-smoke' } });
+  const roomPort = Number(new URL(fixture?.endpoint ?? 'http://127.0.0.1:0').port);
+  const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
+
+  const cellChecks: { name: string; ok: boolean }[] = [];
+  const cellCheck = (name: string, ok: boolean, detail: unknown): void => { cellChecks.push({ name, ok }); check(name, ok, detail); };
+  const nonLoopback: string[] = [];
+
+  const host = await startProxyHost();
+  let handle = -1;
+  let pageM: Page | undefined;
+  let pageO: Page | undefined;
+  let hostShutdown: Awaited<ReturnType<typeof host.shutdown>> | null = null;
+  let closeStats: { c2s: { bytesReceived: number } } | undefined;
+  try {
+    const start = await host.request({ op: 'start', profile: plan.impairment, targetHost: '127.0.0.1', targetPort: roomPort });
+    handle = start['handle'] as number;
+    const proxyUrl = `http://127.0.0.1:${String(start['port'] as number)}`;
+    pageM = await openSeatPage('smoke-M', { bare: true });
+    pageO = await openSeatPage('smoke-O', { bare: true });
+    for (const page of [pageM, pageO]) {
+      page.on('request', (request) => {
+        const url = new URL(request.url());
+        if ((url.protocol === 'http:' || url.protocol === 'https:') && url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') nonLoopback.push(request.url());
+      });
+    }
+    const joinM = await joinImpSeat(pageM, proxyUrl, { mode: 'create', roomName: ROOM_NAME });
+    const roomId = joinM.roomId ?? '';
+    const joinO = await joinSeat(pageO, { mode: 'byId', roomId }, proxyUrl);
+    cellCheck('smoke: two TRUE browser contexts, both seats reaching the room ONLY through the proxy port, loopback-only traffic',
+      pageM.context() !== pageO.context() && joinM.ok === true && joinO.ok === true && Number(new URL(proxyUrl).port) !== roomPort && nonLoopback.length === 0,
+      { proxyPort: start['port'], roomPort, nonLoopback: nonLoopback.slice(0, 3) });
+
+    // Authored motion: two 6 s legs (+x then +z) at a 100 ms send cadence — the same sending
+    // surface as the full-window pump, miniature. The leg clock is the PAGE monotonic clock,
+    // consistent with the ping window below (one timebase, no wall-clock rename).
+    const motion = await pageM.evaluate(async () => {
+      const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+      if (holder === undefined) throw new Error('the smoke mover is not joined');
+      let sends = 0;
+      const startedAt = performance.now();
+      for (const [mx, mz] of [[1, 0], [0, 1]] as const) {
+        const until = performance.now() + 6_000;
+        while (performance.now() < until) {
+          holder.generation += 1;
+          holder.predictor.send({ generation: holder.generation, moveX: mx, moveZ: mz }, true);
+          sends += 1;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+      return { motionMs: performance.now() - startedAt, sends };
+    });
+    cellCheck('smoke: >= 11000 ms of authored motion ran on the page clock (two 6 s legs) at the 100 ms send cadence',
+      motion.motionMs >= 11_000 && motion.sends >= 100, motion);
+
+    // The ping window is its OWN window (12 pings, pre-declared 1200 ms cadence), its span
+    // derived from (cadence + median RTT) x (n-1), never copied from another window's duration.
+    const probe = await runImpRttProbe(pageM, { pings: LAN_SMOKE_PINGS, cadenceMs: LAN_SMOKE_PING_CADENCE_MS, deadlineMs: 1_500, confirmCapMs: 5_000 });
+    const probeValidity = networkValidity({
+      requestedRttMs: plan.profile.rttMs,
+      declaredJitterBudgetMs: plan.profile.jitterBudgetMs,
+      achievedRttSamples: probe.samples.map((sample) => sample.rttMs),
+    });
+    const expectedSpanMs = (LAN_SMOKE_PING_CADENCE_MS + (probeValidity.achieved?.p50 ?? plan.profile.rttMs)) * (LAN_SMOKE_PINGS - 1);
+    cellCheck('smoke: the ping window is its own derived window (12 pings, (cadence + median RTT) x 11 within 4 s) and the ACHIEVED network is valid under the DECLARED profile (accepted networkValidity rule — the regime means what it says)',
+      probe.samples.length === LAN_SMOKE_PINGS && Math.abs(probe.clockElapsedMs - expectedSpanMs) <= 4_000 && probeValidity.valid,
+      { spanMs: Math.round(probe.clockElapsedMs), expectedSpanMs: Math.round(expectedSpanMs), achieved: probeValidity.achieved, reasons: probeValidity.reasons });
+
+    const observerReport = await reportSeat(pageO);
+    const moverTrack = observerReport.tracks.find((track) => track.sessionId === joinM.sessionId);
+    const discontinuities = (moverTrack?.tickRegressions ?? 1) + (moverTrack?.epochChanges ?? 1);
+    cellCheck('smoke: the observer path SAW the mover — a track exists with zero tick regressions and zero epoch changes over the smoke',
+      moverTrack !== undefined && discontinuities === 0,
+      { tracks: observerReport.tracks.length, discontinuities, lastTick: moverTrack?.lastSample.tick ?? null });
+
+    await pageM.close();
+    await pageO.close();
+    pageM = undefined;
+    pageO = undefined;
+    closeStats = await closeProxyBounded(host, handle);
+    handle = -1;
+    hostShutdown = await host.shutdown();
+  } finally {
+    if (handle >= 0) {
+      try { await closeProxyBounded(host, handle); } catch { /* reported by the shutdown receipt below */ }
+    }
+    await pageM?.close().catch(() => undefined);
+    await pageO?.close().catch(() => undefined);
+    if (hostShutdown === null) {
+      try { hostShutdown = await host.shutdown(); } catch { /* the assertion below reports a host that never exited finite */ }
+    }
+  }
+
+  const cellWallMs = Date.now() - cellStartedAtMs;
+  cellCheck('smoke: bounded teardown with a finite-exit receipt AND the PRE-REGISTERED wall budget held (the cell asserts its own wall clock against the constant recorded in this artifact — "fast" is a checked claim)',
+    hostShutdown !== null && hostShutdown.receipt !== null && hostShutdown.exitCode === 0
+      && closeStats !== undefined && closeStats.c2s.bytesReceived > 0
+      && cellWallMs <= LAN_SMOKE_BUDGET_MS,
+    { exitCode: hostShutdown?.exitCode ?? null, signal: hostShutdown?.signal ?? null, activeResourcesAfterClose: hostShutdown?.receipt?.activeResourcesAfterClose ?? null, c2sBytes: closeStats?.c2s.bytesReceived ?? null, cellWallMs, budgetMs: LAN_SMOKE_BUDGET_MS });
+
+  mkdirSync(join(OUT_DIR, `cell-lan-smoke-${profile}-${String(seed)}`), { recursive: true });
+  const artefactPath = join(OUT_DIR, `cell-lan-smoke-${profile}-${String(seed)}`, 'spike-cell.json');
+  writeFileSync(artefactPath, JSON.stringify({
+    schemaVersion: 1,
+    kind: 'DIAGNOSTIC-NOT-GATE-A',
+    kindNote: 'routine CI fast smoke (grant T-6): never a Gate A row artefact, never a matrix coordinate, never an evidence bundle (C-07)',
+    implementationSha: sha,
+    coordinate: { cell: 'lan-smoke', profile, seed, formal: false },
+    budget: { registeredWallMs: LAN_SMOKE_BUDGET_MS, measuredWallMs: cellWallMs, pings: LAN_SMOKE_PINGS, cadenceMs: LAN_SMOKE_PING_CADENCE_MS },
+    regime: { requestedRttMs: plan.profile.rttMs, declaredJitterBudgetMs: plan.profile.jitterBudgetMs, official: plan.official },
+    checks: cellChecks,
+  }, null, 2));
+  try {
+    await testInfo.attach('spike-cell-lan-smoke.json', { path: artefactPath, contentType: 'application/json' });
+  } catch { /* attachment is best-effort; the file is the record */ }
+
+  expect(hostShutdown !== null && hostShutdown.receipt !== null && hostShutdown.exitCode === 0, 'the proxy host exited FINITELY with a receipt (guard)').toBe(true);
+  const smokeFailures = cellChecks.filter((record) => !record.ok);
+  expect(smokeFailures.map((record) => record.name), `lan-smoke failures: ${JSON.stringify(smokeFailures.map((record) => record.name))}`).toEqual([]);
 });
 
 /* ------------------------------------------------------------------ A/B latency controls (slice 6e)

@@ -23,6 +23,8 @@ type Validation =
 
 type DispatchModule = {
   SPIKE_CELLS: readonly string[];
+  SPIKE_MATRIX_CELLS: readonly string[];
+  SPIKE_SCENARIO_CELLS: readonly string[];
   SPIKE_PROFILE_NAMES: readonly string[];
   SPIKE_OFFICIAL_SEEDS: readonly number[];
   validateSpikeRequest: (flags: Record<string, string | boolean>, env?: Record<string, string | undefined>) => Validation;
@@ -161,5 +163,21 @@ describe('UDG-SPIKE-001 spike CLI coordinate contract (slice 11)', () => {
     if (scenario.ok !== true) return;
     expect(scenario.request.env['UDG_SPIKE_PROFILE']).toBe('poor');
     expect(scenario.request.env['UDG_SPIKE_SEED']).toBe('1002');
+  });
+
+  it('the routine fast smoke cell (grant T-6) needs an explicit coordinate and is NEVER formal, never a matrix/scenario cell', () => {
+    const accepted = dispatch.validateSpikeRequest({ cell: 'lan-smoke', profile: 'lan', seed: '1001' });
+    expect(accepted.ok).toBe(true);
+    if (accepted.ok !== true) return;
+    expect(accepted.request.env['UDG_SPIKE_CELL']).toBe('lan-smoke');
+    expect(accepted.request.env['UDG_GATE_A_FORMAL']).toBeUndefined();
+    // Same no-silent-defaults discipline as every real cell.
+    expect(dispatch.validateSpikeRequest({ cell: 'lan-smoke', profile: 'lan' }).ok).toBe(false);
+    expect(dispatch.validateSpikeRequest({ cell: 'lan-smoke', seed: '1001' }).ok).toBe(false);
+    // Never formal: the formal schedule is the 12-cell matrix plus scenarios; the smoke is neither,
+    // and a formal run must never mistake 12 miniature pings for a measured window.
+    expect(dispatch.validateSpikeRequest({ cell: 'lan-smoke', profile: 'lan', seed: '1001' }, FORMAL).ok).toBe(false);
+    expect(dispatch.SPIKE_MATRIX_CELLS).not.toContain('lan-smoke');
+    expect(dispatch.SPIKE_SCENARIO_CELLS).not.toContain('lan-smoke');
   });
 });
