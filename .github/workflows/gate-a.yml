@@ -1,0 +1,340 @@
+# GATE A FORMAL MATRIX — manual dispatch only (UDG-SPIKE-001 grant T-7, preparation build).
+#
+# ## What this workflow is
+#
+# The dispatched formal grid the formalization plan §4 describes: FOUR independent profile jobs
+# (lan / moderate / elevated / poor), each running its THREE official seeds ORDERED (1001, 1002,
+# 1003) on the SAME full-window runner (`--cell full-window`: 20 s warmup + 120 s measure on the
+# mover page's monotonic clock, two true browser contexts, isolated first attempts, ZERO automatic
+# retries). Each profile job dispatches ONLY its own coordinates — nothing here runs the whole
+# capture plan, and nothing here is routed: this file triggers exclusively on workflow_dispatch.
+#
+# ## What it is not
+#
+# Not a Gate A verdict. The aggregation lane BINDS the collected artefacts (candidate, coordinate,
+# bytes, toolchain, thresholds) and can only ever write NOT-PASS while the recorded gaps stand
+# open (GA-11 production populations, GA-5b/GA-12 PE-1, GA-10a/b UDG-007). It executes nothing:
+# a hosted red or a missing artefact stays red/blocked. An unsuccessful dispatch publishes NO
+# evidence bundle — the upload is behind the binder's own exit status, not behind optimism.
+#
+# ## The binding rules, stated where they can be read
+#
+# - the dispatched `candidate` must be a full 40-hex sha BEFORE anything is installed or tested,
+#   and the checked-out HEAD must equal it (a dispatch that cannot check its candidate out dies
+#   at step one, red, with nothing installed);
+# - no workflow input is ever interpolated into a shell command line: inputs reach steps through
+#   `env:` and shell code only ever reads `"$VARIABLES"`;
+# - actions: the three already-pinned official ones (checkout, setup-node, upload-artifact), each
+#   by full commit sha, identical to the pins ci.yml/acceptance.yml use; `persist-credentials:
+#   false` on every checkout; `permissions: contents: read` throughout (the aggregation job adds
+#   `actions: read` only to collect artefacts the runner already received);
+# - diagnostics keep running across profiles (`fail-fast: false`) so one red profile cannot hide
+#   the other three's evidence, but every mandatory failure fails its job, and no step retries.
+
+name: gate-a (formal matrix — manual dispatch)
+run-name: gate-a formal matrix ${{ inputs.run_id }} @ ${{ inputs.candidate }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: 'Full 40-hex candidate SHA. Checked out exactly; refused before install/test if it is not 40-hex or does not match HEAD.'
+        required: true
+      run_id:
+        description: 'Evidence run id (names the artefacts of this dispatch).'
+        required: false
+        default: 'manual-1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-a-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '24.22.2'
+  # The official seeds, ORDERED, exactly the adopted set (tools/checks/src/dispatch.ts
+  # SPIKE_OFFICIAL_SEEDS — a unit test pins this list against it).
+  GATE_A_SEEDS: '1001 1002 1003'
+
+jobs:
+  # ------------------------------------------------------------------ the matrix: one job per profile
+  profile:
+    name: matrix / ${{ matrix.profile }} (seeds 1001→1003, ordered, first attempts only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      # Diagnostics: one red profile must not cancel the other three — their evidence is the run.
+      # This is not a retry knob: nothing reruns, and every attempted coordinate keeps its red.
+      fail-fast: false
+      matrix:
+        profile: [lan, moderate, elevated, poor]
+    env:
+      CANDIDATE: ${{ inputs.candidate }}
+      PROFILE: ${{ matrix.profile }}
+      # The formal schedule policy: the runner stamps GATE-A kinds only under this flag, on an
+      # official coordinate, over a clean tree (the cell itself enforces all three).
+      UDG_GATE_A_FORMAL: '1'
+      UDG_SPIKE_OUT: artifacts/.local/spike-001/gate-a
+    steps:
+      - name: Refuse a candidate that is not a full 40-hex sha (before checkout, install or test)
+        run: |
+          set -euo pipefail
+          case "$CANDIDATE" in
+            *[!0-9a-f]*) echo "::error::candidate contains characters outside [0-9a-f]"; exit 1 ;;
+          esac
+          if [ "${#CANDIDATE}" -ne 40 ]; then echo "::error::candidate must be exactly 40 hex characters"; exit 1; fi
+
+      - name: Check out the exact candidate (read-only, no credentials)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Bind the checkout to the dispatched candidate BEFORE any install or test
+        run: |
+          set -euo pipefail
+          head_sha="$(git rev-parse HEAD)"
+          if [ "$head_sha" != "$CANDIDATE" ]; then
+            echo "::error::checked-out HEAD $head_sha is not the dispatched candidate $CANDIDATE"
+            exit 1
+          fi
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::the checked-out tree is dirty; a formal matrix leg requires a clean tree"
+            exit 1
+          fi
+
+      - name: Set up Node 24.22.2
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Enable the pinned pnpm 12.18.0 through corepack
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@12.18.0 --activate
+          pnpm --version
+      - name: Install from the frozen lockfile
+        run: pnpm install --frozen-lockfile
+      - name: Build the workspace the browser cells execute
+        run: pnpm build
+      - name: Install the pinned Playwright chromium
+        run: pnpm exec playwright install chromium
+
+      - name: Run the three ordered seeds of THIS profile (each coordinate exactly once, no retries; a red stays red)
+        run: |
+          set -uo pipefail
+          fails=0
+          for seed in $GATE_A_SEEDS; do
+            echo "::group::full-window $PROFILE seed $seed"
+            pnpm test:spike -- --id UDG-SPIKE-001 --cell full-window --profile "$PROFILE" --seed "$seed" || fails=$((fails + 1))
+            echo "::endgroup::"
+          done
+          if [ "$fails" -ne 0 ]; then
+            echo "::error::$fails of the three $PROFILE coordinates failed — kept red, nothing reran"
+            exit 1
+          fi
+
+      - name: Upload this profile's artefacts (always — a red row's bytes are evidence too)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gate-a-rows-${{ matrix.profile }}-${{ inputs.run_id }}-${{ github.run_id }}
+          path: artifacts/.local/spike-001/gate-a/cell-full-window-${{ matrix.profile }}-*/spike-cell.json
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------ scenarios: separate, explicit status + gaps
+  scenarios:
+    name: scenarios / ga9-ga13 + ga-scenarios + ga11-calibration (separate lane; statuses and gaps stated, never inferred)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CANDIDATE: ${{ inputs.candidate }}
+      UDG_GATE_A_FORMAL: '1'
+      UDG_SPIKE_OUT: artifacts/.local/spike-001/gate-a-scenarios
+    steps:
+      - name: Refuse a candidate that is not a full 40-hex sha (before checkout, install or test)
+        run: |
+          set -euo pipefail
+          case "$CANDIDATE" in
+            *[!0-9a-f]*) echo "::error::candidate contains characters outside [0-9a-f]"; exit 1 ;;
+          esac
+          if [ "${#CANDIDATE}" -ne 40 ]; then echo "::error::candidate must be exactly 40 hex characters"; exit 1; fi
+      - name: Check out the exact candidate (read-only, no credentials)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Bind the checkout to the dispatched candidate BEFORE any install or test
+        run: |
+          set -euo pipefail
+          head_sha="$(git rev-parse HEAD)"
+          if [ "$head_sha" != "$CANDIDATE" ]; then echo "::error::HEAD $head_sha is not the dispatched candidate"; exit 1; fi
+          if [ -n "$(git status --porcelain)" ]; then echo "::error::dirty tree"; exit 1; fi
+      - name: Set up Node 24.22.2
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Enable the pinned pnpm 12.18.0 through corepack
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@12.18.0 --activate
+          pnpm --version
+      - name: Install from the frozen lockfile
+        run: pnpm install --frozen-lockfile
+      - name: Build the workspace the browser cells execute
+        run: pnpm build
+      - name: Install the pinned Playwright chromium
+        run: pnpm exec playwright install chromium
+
+      # Each scenario cell is its own coordinate (the plan's three scenario rows, elevated/1001)
+      # and its own status. A cell failing fails the lane; its artefact is still uploaded.
+      - name: Run the three controlled scenario cells (ordered, first attempts only)
+        run: |
+          set -uo pipefail
+          fails=0
+          for cell in ga9-ga13 ga-scenarios ga11-calibration; do
+            echo "::group::$cell"
+            pnpm test:spike -- --id UDG-SPIKE-001 --cell "$cell" --profile elevated --seed 1001 || fails=$((fails + 1))
+            echo "::endgroup::"
+          done
+          if [ "$fails" -ne 0 ]; then echo "::error::$fails scenario cell(s) failed — kept red"; exit 1; fi
+
+      - name: Write the lane's explicit status and gap metadata (the binder never infers this)
+        if: always()
+        env:
+          GH_AGENT_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const out = process.env["UDG_SPIKE_OUT"];
+            const statusOf = (file) => {
+              try {
+                const doc = JSON.parse(fs.readFileSync(`${out}/${file}`, "utf8"));
+                const red = (doc.checks ?? []).filter((c) => c.ok !== true);
+                const proofOnly = (doc.checks ?? []).filter((c) => c.ok !== true && /control/i.test(String(c.name)));
+                return {
+                  cell: file.replace(/^spike-cell-/, "").replace(/\.json$/, ""),
+                  status: red.length === 0 ? "run-green" : "run-red",
+                  redChecks: red.length,
+                  proofOnlyRedControls: proofOnly.length,
+                };
+              } catch { return { cell: file, status: "not-run", redChecks: 0, proofOnlyRedControls: 0 }; }
+            };
+            const cells = [
+              { ...statusOf("spike-cell-ga9-ga13.json"),
+                gaps: ["GA-5b client-recovery sub-leg narrowed, blocked on PE-1", "GA-13 formal replay legs land here once this lane runs hosted"] },
+              { ...statusOf("spike-cell-ga-scenarios.json"),
+                gaps: ["GA-12 positive proof blocked on PE-1", "GA-10a/GA-10b blocked on UDG-007"] },
+              { ...statusOf("spike-cell-ga11-calibration.json"),
+                gaps: ["GA-11 production-directed populations are Not-Run: this calibration batch does NOT substitute"] },
+            ];
+            fs.writeFileSync(`${out}/gate-a-scenario-status.json`, JSON.stringify({
+              schemaVersion: 1,
+              kind: "GATE-A-SCENARIO-STATUS",
+              laneStatus: process.env["GH_AGENT_STATUS"],
+              cells,
+              note: "statuses are read from this lane\u2019s own artefacts; gaps are the declared blockers, stated here so the binder never infers either",
+            }, null, 2));
+          '
+      - name: Upload the scenario lane (always)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gate-a-scenarios-${{ inputs.run_id }}-${{ github.run_id }}
+          path: artifacts/.local/spike-001/gate-a-scenarios/
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------ aggregation: binds, never executes
+  evidence:
+    name: evidence / aggregate + bind (re-executes nothing; publishes only on a complete green matrix)
+    needs: [profile, scenarios]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CANDIDATE: ${{ inputs.candidate }}
+      INPUT_RUN_ID: ${{ inputs.run_id }}
+      RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Refuse a candidate that is not a full 40-hex sha (before checkout, install or test)
+        run: |
+          set -euo pipefail
+          case "$CANDIDATE" in
+            *[!0-9a-f]*) echo "::error::candidate contains characters outside [0-9a-f]"; exit 1 ;;
+          esac
+          if [ "${#CANDIDATE}" -ne 40 ]; then echo "::error::candidate must be exactly 40 hex characters"; exit 1; fi
+      - name: Check out the exact candidate (read-only, no credentials)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Bind the checkout to the dispatched candidate BEFORE any install or test
+        run: |
+          set -euo pipefail
+          head_sha="$(git rev-parse HEAD)"
+          if [ "$head_sha" != "$CANDIDATE" ]; then echo "::error::HEAD $head_sha is not the dispatched candidate"; exit 1; fi
+      - name: Set up Node 24.22.2
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Enable the pinned pnpm 12.18.0 through corepack
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@12.18.0 --activate
+          pnpm --version
+      - name: Install from the frozen lockfile
+        run: pnpm install --frozen-lockfile
+      # Only the checker package is built here — the binder is tools/checks, NOT the suite graph.
+      # This lane deliberately never runs pnpm build / pnpm test / test:spike: aggregation that
+      # re-executes the matrix it is judging is exactly the laundering this grant forbids.
+      - name: Build the binder (tools/checks only)
+        run: pnpm --filter @udg/checks build
+
+      - name: Collect this dispatch's artefacts (gh run download; the token is the runner's own, never printed)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gate-a/rows /tmp/gate-a/scenarios
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --pattern "gate-a-rows-*-${RUN_ID}" -D /tmp/gate-a/rows || echo "::warning::no rows artefacts matched (the binder will name every missing coordinate)"
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --pattern "gate-a-scenarios-${INPUT_RUN_ID}-${RUN_ID}" -D /tmp/gate-a/scenarios || echo "::warning::no scenario artefacts matched"
+
+      - name: Bind every artefact to candidate / profile / seed / bytes / toolchain (executes nothing)
+        id: bind
+        run: |
+          set -euo pipefail
+          set +e
+          node tools/checks/dist/evidence.js gate-a-aggregate \
+            --dir /tmp/gate-a/rows --scenarios /tmp/gate-a/scenarios \
+            --candidate "$CANDIDATE" --out /tmp/gate-a/gate-a-report.json --run-id "$RUN_ID"
+          bind_status=$?
+          set -e
+          if [ "$bind_status" -eq 0 ]; then echo "publishable=true" >> "$GITHUB_OUTPUT"; else echo "publishable=false" >> "$GITHUB_OUTPUT"; fi
+          exit "$bind_status"
+
+      - name: Publish the evidence report ONLY for a complete green matrix (an unsuccessful dispatch publishes no bundle)
+        if: steps.bind.outputs.publishable == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gate-a-evidence-${{ inputs.run_id }}-${{ github.run_id }}
+          path: /tmp/gate-a/gate-a-report.json
+          if-no-files-found: error
+
+      - name: Say the true thing when nothing publishable exists
+        if: always() && steps.bind.outputs.publishable != 'true'
+        run: |
+          echo "::error::this dispatch produced no publishable evidence bundle: the binder refused (missing / duplicate / mismatched / red rows stay exactly that). Gate A remains NOT-PASS regardless — the report states the open gaps."
+          exit 1

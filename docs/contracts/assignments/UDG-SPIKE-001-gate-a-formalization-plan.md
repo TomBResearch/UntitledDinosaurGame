@@ -261,3 +261,53 @@ dispatcher refuses it under `UDG_GATE_A_FORMAL=1` — with the cell refusing aga
 Focused suites: ci-routing + spike units 197/197; the smoke cell ran green twice locally; LAN
 full-window 14/14. T-7 remains unimplemented here by grant boundary. Nothing adopted; no workflow
 dispatch; no camera recapture; no Gate A verdict.
+
+## 12. Slice-13 update (2026-11-20): T-7 preparation — the manual gate-a workflow, the binder, and one recorded grant
+
+**Recorded grant (reviewer, 2026-11-20).** Following the hosted full-suite red at 1b96bad (attribution in §11
+and the PR #7 body), the reviewer independently confirmed run 44741338298 green across all jobs at
+`4dc866d` and **approved and documented a narrow, self-contained, BUILD-ONLY grant** for
+`tests/system/udg-003-phase-2/runtime.test.ts`: the suite's existing one-build-before-scripts
+guarantee now also builds `@udg/client` because the shared kernel stepper imports the client-emitted
+`flatStep.js`. No system expectation changed. T-6/T-8 stand as reviewed baseline.
+
+**T-7 preparation (this slice): `.github/workflows/gate-a.yml` + `tools/checks/src/gate-a-aggregate.ts`.**
+The manual dispatched grid, per plan §4: FOUR independent profile jobs (matrix, `fail-fast: false` for
+diagnostics), each running ONLY its own three official seeds ORDERED (1001→1003, pinned against the
+dispatcher's own list by test) on the full-window runner (`--cell full-window`, 20 s + 120 s, two true
+contexts, `UDG_GATE_A_FORMAL=1`), every coordinate exactly once — no retry machinery anywhere, every
+mandatory error fails its job, and a red row's bytes are still uploaded (always()). The full capture
+plan is never invoked. `candidate` must be full 40-hex and the checked-out HEAD must equal it BEFORE
+install or test (all three jobs); no workflow expression reaches a shell body (inputs travel via
+`env:`, tested); actions are exactly the three pins the repo already carries (checkout, setup-node,
+upload-artifact, full sha), `persist-credentials: false` on every checkout, `permissions: contents:
+read` (the evidence job additionally takes `actions: read`, solely to `gh run download` artefacts the
+runner already received). The scenario lane is SEPARATE and states its own statuses and every declared
+gap (GA-5b/PE-1, GA-12/PE-1, GA-10a/b UDG-007, GA-11 production Not-Run) in `gate-a-scenario-status.json`
+— the binder never infers statuses.
+
+**The missing interface, closed with the smallest reviewed helper.** The existing capture glue binds
+artefacts INSIDE one plan-produced bundle; nothing could bind externally collected matrix artefacts or
+scenario rows. `evidence.js gate-a-aggregate --dir --scenarios --candidate --out` now does exactly
+that and NOTHING else: it executes no test, re-runs no matrix, and reports per-row candidate/coordinate/
+byte-SHA/toolchain/threshold bindings. Missing → MISSING (blocked, not passed); two artefacts →
+DUPLICATES; outside the twelve → UNEXPECTED; and the tamper surface is named case by case — wrong SHA,
+dirty identity, kind downgrade, path/bytes coordinate disagreement, red internal checks, rerolled
+attempts, window shortfall or guard trip, one browser context, off-table thresholds, mixed toolchains,
+scenario artefacts from another candidate, invented or absent scenario statuses (20 unit tests, mock
+end-to-end, plus a live CLI demo). The report binds every row to candidate/profile/seed and the ACTUAL
+toolchain and thresholds. **The binder's ceiling is deliberate: with the declared gaps standing, even a
+perfect green matrix yields `Gate A NOT-PASS (open gaps)`** — no code path in this helper can write
+PASS for Gate A. An unsuccessful dispatch publishes no evidence bundle: the upload sits behind the
+binder's own exit status, and the refusal step is a hard failure, not a warning.
+
+**Verification and limits.** ci-routing 58/58 (new `gate-a-workflow.test.ts` pins every rule above
+against the file, including the ordered-seed list against `SPIKE_OFFICIAL_SEEDS` and the three pins
+against ci.yml/acceptance.yml); spike units 171/171; typecheck 0; lint/boundaries 0 (the boundary
+scanner's regex-literal tokenisation of the cell-directory pattern is documented in-file, the
+pattern now lives in a string). LIMITS: GitHub only discovers a dispatchable workflow once the file
+reaches `main` (official behaviour), so actually DISPATCHING this grid remains a post-review step
+that this batch neither performs nor pre-empt — no merge happened here, nothing was dispatched, and
+the formal matrix remains blocked for a PASS by the GA-11 production populations and the unresolved
+GA-5b/GA-12 policy exactly as before. Full YAML acceptance is the runner's at first dispatch; local
+validation is the policy suite above plus the structural parse it performs.

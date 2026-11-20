@@ -47,6 +47,7 @@ import {
 } from './support.js';
 
 import { baseTsconfigHash, boundaryConfigHash, ruleTableHash } from './boundaries.js';
+import { aggregateGateA } from './gate-a-aggregate.js';
 
 export const EVIDENCE_SCHEMA_VERSION = 1;
 export const CONTRACT_ID = 'UDG-CONTRACTS-M0-001';
@@ -4157,6 +4158,31 @@ const main = (): number => {
     process.stdout.write(`gate-a-check PASS (binding honest): register verdict ${String(registerDoc?.['verdict'])} — a verdict of NOT-PASS is the truth being kept visible, not a failure of this check\n`);
     return 0;
   }
+  if (mode === 'gate-a-aggregate') {
+    // T-7 preparation: bind externally collected matrix/scenario artefacts (the manual gate-a
+    // workflow's jobs upload them independently). This executes NOTHING — a hosted red or a
+    // missing artefact stays red/blocked in the report — and Gate A itself can only ever be
+    // written NOT-PASS here while any recorded gap stands open. Exit 0 means only: the twelve
+    // coordinates are present exactly once each, byte-bind to the candidate, and are green.
+    const usage = 'usage: evidence.js gate-a-aggregate --dir <rowsDir> --scenarios <scenariosDir> --candidate <40-hex> --out <report.json> [--run-id <id>]';
+    const candidate = requireFlag(flags, 'candidate', usage);
+    const rowsDir = resolve(process.cwd(), requireFlag(flags, 'dir', usage));
+    const scenariosDirRaw = flagString(flags, 'scenarios');
+    const outFile = resolve(process.cwd(), requireFlag(flags, 'out', usage));
+    const report = aggregateGateA({
+      rootDir: rowsDir,
+      candidateSha: candidate,
+      ...(scenariosDirRaw === undefined ? {} : { scenariosDir: resolve(process.cwd(), scenariosDirRaw) }),
+      ...(flagString(flags, 'run-id') === undefined ? {} : { runId: flagString(flags, 'run-id') as string }),
+    });
+    writeJson(outFile, report);
+    for (const violation of report.violations) process.stderr.write(`::error::${violation.code}: ${violation.detail}\n`);
+    process.stdout.write(
+      `gate-a-aggregate: ${String(report.rows.length)}/12 rows bound, ${String(report.violations.length)} violation(s), `
+      + `matrix ${report.matrixVerdict}, Gate A ${report.gateA} (never PASS from this binder)\n`,
+    );
+    return report.violations.length === 0 ? 0 : 1;
+  }
   if (mode === 'checksums') {
     const write = flags['write'] === true;
     const result = updateContractChecksums(process.cwd(), write);
@@ -4181,6 +4207,7 @@ const main = (): number => {
       '  evidence.js gate-a-register --candidate <40-hex> --rows <rows.json> --out <ga-rows.json> [--run-id <id>]\n' +
       '                      (assemble the Gate A row register; PASS citing a non-GATE-A artefact is demoted, never written)\n' +
       '  evidence.js gate-a-check --run <bundleDir> --candidate <40-hex> [--head <40-hex>]\n' +
+      '  evidence.js gate-a-aggregate --dir <rowsDir> --scenarios <scenariosDir> --candidate <40-hex> --out <report.json> [--run-id <id>]\n' +
       '                      (re-assert the candidate binding, toolchain pins, clean tree, register honesty and replay equality from the bundle bytes)\n' +
       '  evidence.js checksums [--write]\n',
   );
