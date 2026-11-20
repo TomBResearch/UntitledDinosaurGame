@@ -89,12 +89,18 @@ class, two observable families exist on the supported substrate:
 - **terminal replay** (nothing follows): the decline is SILENT and ABSENT everywhere — `ga5t`,
   measured above. No honest observer sees a disposition, because there is none.
 
-A fixture cannot manufacture a "unique lawful terminal loss" with a surviving distinct twin on the
-pinned stack: with one input object per (client, room), any same-handle send after the twin either
-shares its stamp (the equality replay, proven ABOVE to leave no disposition) or mutates what the
-buffer holds (the validator's aliasing detector exists precisely because earlier drafts tripped on
-shared-reference effects). We report this as the excluded case rather than author a fixture whose
-outcome the substrate cannot support.
+A fixture cannot manufacture a "unique lawful terminal loss with a surviving distinct twin" on the
+pinned stack, for a structural reason: there is ONE watermark per domain. Whatever stamp the bypass
+pushes `_lastSeq` to, the producer's next lawful stamp either exceeds it (accepted — no decline) or
+is `≤` it, which is exactly the protocol-corrupted form. The only fixture-visible declined terminal
+frame is therefore the equality replay (or a stale-domain/backward stamp), and it has NO surviving
+distinct accepted twin at its own stamp — its stamp's accepted instance IS the earlier original.
+(The pinned core snapshots each accepted frame at capture — `build/input/RoomInput.mjs:184`
+`buf.push(this.options.snapshot(inst), …)` — so this is a property of the watermark order, not of
+object sharing; the validator's aliasing detector, which caught two of this slice's own join
+mistakes, additionally guarantees no consumed stamp ever enters the transcript unstaged.) We
+report the excluded case as excluded rather than author a fixture whose outcome the substrate
+cannot support.
 
 ## 3. Options for ADR-0003 (no production change in any of them)
 
@@ -139,8 +145,8 @@ schedule only. Filing the request is compatible with choosing A or B′ now.
 ## 5. Evidence index
 
 - `ga5t` rows `GA-5t fixture soundness`, `GA-5t TRANSCRIPT AUDIT`, `GA-5t DECLINE IS ABSENCE` +
-  `GA-5b invariant control` (cell `ga-scenarios`, seed 1001; 17/16… see receipts: `dpa6d`/`dpa6e`,
-  consecutive greens). Validator: `tools/load-test/src/ga5-transcript.ts`; forged-red unit suite
+  `GA-5b invariant control` (cell `ga-scenarios`, seed 1001; 17 rows, consecutive greens in
+  `dpa6d`/`dpa6e`; first-run refutations of the row's OWN drafts `dpa6a`/`dpa6c` preserved). Validator: `tools/load-test/src/ga5-transcript.ts`; forged-red unit suite
   `tests/unit/udg-spike-001/spike-ga5-transcript.test.ts` (12 tests).
 - Retired evidence, PRESERVED (not patched): `dpa5f` (first-run refutation), `dpa5g`/`dpa5h` (the
   rev-1 correlation row this document retracts). The retired Case-B fixture is deleted with a
