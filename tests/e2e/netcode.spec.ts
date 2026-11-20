@@ -4325,6 +4325,9 @@ interface GaSeatSetup {
 /** G of the §3.2 stalled-ack rule, read from the spec config by the cells that declare it
  * (packages/config input.stallDetectionDeliveries). Undefined keeps the adapter default (3). */
 let GA_STALL_G: number | undefined;
+/** PROTEST-only knob for the env-gated ack-window cell (slice 24): the stalled-ack TEST WAIT
+ * passed to the predictor's PROTOTYPE option. null (everywhere else, always) = today's rule. */
+let GA_STALL_FLOOR_MS: number | null = null;
 
 const joinGaSeat = async (
   page: Page,
@@ -4356,6 +4359,9 @@ const joinGaSeat = async (
       // read from packages/config by the cell; undefined keeps the adapter default 3 — the same
       // value the config declares).
       stallDetectionDeliveries: args.stallG,
+      // PROTOTYPE (slice 24) — default UNSET everywhere: undefined keeps the count-only rule.
+      ...(args.stallFloorMs === null || args.stallFloorMs === undefined
+        ? {} : { stallAckFloorMs: args.stallFloorMs }),
       rejoin: async () => {
         const again = await makeJoin({ mode: 'byId', roomId });
         joins.push(again.transport.issuedEpoch());
@@ -4400,6 +4406,7 @@ const joinGaSeat = async (
     adapterUrl: ADAPTER_URL,
     speed: fixture?.movementSpeed ?? 0,
     stallG: GA_STALL_G,
+    stallFloorMs: GA_STALL_FLOOR_MS,
     snapshotDeadlineMs: snapshotDeadlineMsOverride,
   });
 
@@ -6084,6 +6091,7 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
         const baselineMoved = (track0?.delta.x ?? 0) >= 0.4;
         const w0q = await wireChunks();
         const m0q = await moverWire();
+        const tickAtQuiet = gatedRoom(ctx.roomId).tickRecords.length;
         await wait(400);
         const w0 = await wireChunks();
         const m0 = await moverWire();
@@ -6110,6 +6118,13 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
           };
         }, { kind });
         const tickAtStaging = gatedRoom(ctx.roomId).tickRecords.length;
+        // A stray chunk inside the reserved window is ONLY admissible if the ROOM proves it
+        // dequeued nowhere in that window (attempt A at dpa8h/dec-leg-race recorded one such
+        // chunk; attempt B was clean). The proof is an ASSERTED conjunct, never a warmed pass.
+        const quietWindowConsumed = gatedRoom(ctx.roomId).tickRecords
+          .slice(tickAtQuiet, tickAtStaging)
+          .reduce((a, rec) => a + rec.consumed.filter((c) => c.entityId === ctx.sessionId).length, 0);
+        bag['strayChunkProof'] = { chunkDelta: m0 - m0q, roomDequeuesInWindow: quietWindowConsumed };
         let w1: number;
         let m1: number;
         const wireStarted = Date.now();
@@ -6272,7 +6287,9 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
         cellCheck(`GA-5b CONTROL ${kind}: the ${kind === 'dup' ? 'SAME-DOMAIN DUPLICATE' : 'DECREASING'} stamp ${String(staged.stagedSeq)} (watermark ${String(staged.lastSeq)}) earns its own WIRE RECEIPT on the mover connection (delta ${String(m1 - m0)}) and is declined PRE-BUFFER exactly as the pinned seam dictates (RoomInput.capture -> InputBuffer.accept, value <= _lastSeq dropped BEFORE the buffer): the stamp's consumed count stays EXACTLY 1 (${kind === 'dup' ? 'its own legitimate original dequeue' : 'the baseline frame that first carried it'}), the room names NOTHING for the decline (refusal delta ${String(rtD.domain)}, no signal, no closure — the silence IS the PE-1 limitation, now measured on the two shapes the refinement names), the distinctive z content is applied NOWHERE (|z| < 0.05 m) while the baseline mover visibly moved (${String(baselineMoved)}) and baseline stamps were consumed EXACTLY once each (unique: ${String(baselineUnique)}). Zero falsely named cause: no client event or room record ever says dedupe/duplicate/stale/decline/retired`,
           (m1 - m0) >= 1 &&
           consumedCountOfStaged === 1 &&
-          (m0 - m0q) === 0 &&
+          // Wire-quiet OR a NAMED stray chunk the room provably dequeued NOWHERE (zero room
+          // dequeues in the window, zero refusals, zero signals/closures) — never silently.
+          ((m0 - m0q) === 0 || (quietWindowConsumed === 0 && rtD.domain === 0 && signals.length === 0 && closures.length === 0)) &&
           rtD.domain === 0 && rtD.entities.length === 0 && signals.length === 0 && closures.length === 0 &&
           Math.abs(trackEnd?.lastSample.z ?? Number.POSITIVE_INFINITY) < 0.05 &&
           baselineMoved && baselineUnique && staged.lastSeq >= 4 &&
@@ -6288,7 +6305,7 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
           guardAfter: endB2.ack === endB2.resolvedThrough,
           noWrongRoute: !endB2.events.some((e) => e.event === 'trigger' && (e.detail.startsWith('snapshot-deadline') || e.detail.includes('gap-named') || e.detail.includes('retired'))),
         };
-        cellCheck(`GA-5b CONTROL ${kind} BLIND RECOVERY WITH AN INPUT OUTSTANDING: the raw send's slot sits unresolved in the seat's OWN journal (the adapter journals every onSend), so ack AND prefix stay frozen at every poll (ack ${String(quiet.ack)} / resolvedThrough ${String(quiet.resolvedThrough)} unchanged) and the §3.2 rule MUST fire: exactly ONE trigger, input-ack-stalled with the streak EXACTLY at G=${String(G)} (observed ${String(fired?.stallStreak ?? -1)}), no trigger before it, no gap named (0..0), retired 0 throughout, the pending entry HELD until the trigger and discarded ONCE after it; the episode ends in snapshot-recovered within ${String(EPISODE_BUDGET_MS)}+${String(BUDGET_TOLERANCE_MS)} ms on a bounded rejoin (<= 2 attempts), the recovery is BLIND (no decline signal exists — the room named nothing above), the guard equality ack === resolvedThrough holds after it, the epoch never becomes any bogus value, and NO deadline/gap/retired route participates — an earlier draft of this control predicted 'no episode, nothing outstanding' for these shapes and is SUPERSEDED by its own evidence: a below-prefix bypass stamp still consumes a SLOT the prefix can never resolve, which is exactly the outstanding input §3.2 recovers from`,
+        cellCheck(`GA-5b CONTROL ${kind} BLIND RECOVERY WITH AN INPUT OUTSTANDING: the raw send's slot sits unresolved in the seat's OWN journal (the adapter journals every onSend), so ack AND prefix stay frozen at every poll (ack ${String(quiet.ack)} / resolvedThrough ${String(quiet.resolvedThrough)} unchanged) and the §3.2 rule MUST fire: exactly ONE trigger, input-ack-stalled with the streak EXACTLY at G=${String(G)} (observed ${String(fired?.stallStreak ?? -1)}), no trigger before it, no gap named (0..0), retired 0 throughout, the pending entry HELD until the trigger and discarded ONCE after it; the episode ends in snapshot-recovered within ${String(EPISODE_BUDGET_MS)}+${String(BUDGET_TOLERANCE_MS)} ms on a bounded rejoin (<= 2 attempts), the recovery is BLIND (no decline signal exists — the room named nothing above), the guard equality ack === resolvedThrough holds after it, the epoch never becomes any bogus value, and NO deadline/gap/retired route participates — an earlier draft of this control predicted 'no episode, nothing outstanding' for these shapes and is SUPERSEDED by its own evidence: a below-prefix bypass stamp still consumes a SLOT the prefix can never resolve, which is exactly the outstanding input §3.2 recovers from. A legitimate BLIND §3.2 episode (asserted on THIS row, with identity: input-ack-stalled detail only, never a dedupe/stale/decline/retired name, never a wrong route) is NOT the native decline's cause and is not attributed to it: the NATIVE assertions above stand on raw non-application (|z| < 0.05 m) and dead-phase identity (consumed-exactly-once, baseline unique, refusal silence) independent of any episode`,
           fired !== null && triggerEvent !== null &&
           triggerEvent.detail.startsWith('input-ack-stalled') &&
           fired.stallStreak === G && !earlierTrigger &&
@@ -7697,13 +7714,13 @@ const pctileOf = (xs: readonly number[], p: number): number | null => {
 };
 
 test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 stalled-ack window on the poor profile (DIAGNOSTIC ONLY: isolated harness overrides, NOT Gate A, NOT a workload change)', async () => {
-  test.skip(process.env['UDG_ACK_WINDOW_DIAG'] !== '1', 'dispatched only by UDG_ACK_WINDOW_DIAG=1 (slice 23 targeted diagnostic; no formal lane touches it)');
+  test.skip(process.env['UDG_ACK_WINDOW_DIAG'] !== '1' && process.env['UDG_ACK_FLOOR'] !== '1', 'dispatched only by UDG_ACK_WINDOW_DIAG=1 (slice 23) or UDG_ACK_FLOOR=1 (slice 24 floor batch); no formal lane touches it)');
   test.setTimeout(900_000);
   expect(fixture, 'the room fixture booted').toBeDefined();
   const roomPort = Number(new URL(fixture?.endpoint ?? 'http://127.0.0.1:0').port);
   const seed = 1001;
   const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-  const outDir = process.env['UDG_ACK_WINDOW_OUT'] ?? join(ROOT, 'artifacts', '.local', 'spike-001', 'dpa8h');
+  const outDir = process.env['UDG_ACK_WINDOW_OUT'] ?? join(ROOT, 'artifacts', '.local', 'spike-001', process.env['UDG_ACK_FLOOR'] === '1' ? 'dpa8i' : 'dpa8h');
   mkdirSync(outDir, { recursive: true });
 
   // The provisional values under diagnosis — read from the SAME sources the hosted cells used,
@@ -7721,7 +7738,7 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
   const POOR = { name: 'poor-ackdiag', oneWayMs: 100, jitterBudgetMs: 40, seed };
 
   type Phase = 'immediate' | 'postDelivery' | 'midInterval';
-  interface RunCfg { id: string; g: number | null; phase: Phase; loss: boolean }
+  interface RunCfg { id: string; g: number | null; phase: Phase; loss: boolean; floorMs?: number | null }
   interface RunResult {
     cfg: RunCfg; wallMs: number;
     fired: { detail: string; atMsPage: number } | null;
@@ -7736,6 +7753,8 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
     moverConns: number[];
     safety: { sendsAfterFinal: number; sendsGrewQuiet: boolean; pendingAtEnd: number; stateAtEnd: string; droppedFrames: number };
     probe: { n: number; p50: number | null; p95: number | null; min: number | null; max: number | null; aborted: string | null };
+    floorHeldCount: number;
+    recovery: { recovered: boolean; epochBefore: number; epochAfter: number | null; tFireToTrackingMs: number | null; deliveriesAfter: number; ackAfter: number; pendingAfter: number } | null;
     notes: string[];
   }
 
@@ -7825,6 +7844,7 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
     let handleClosed = false;
     try {
       GA_STALL_G = cfg.g ?? undefined; // ISOLATED harness override inside THIS cell only
+      GA_STALL_FLOOR_MS = cfg.floorMs ?? null; // PROTOTYPE test wait; null = today's rule
       const roomName = ROOM_NAME; // the REGISTERED room type; each create() spawns a fresh instance
       const joinM = await joinGaSeat(pageM, proxyUrl, { mode: 'create', roomName });
       expect(joinM.ok === true, `${cfg.id}: mover joined through the poor proxy`).toBe(true);
@@ -7901,6 +7921,28 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
       const sends = await winSends();
       const recvs = await winRecvs();
       const finalBoundary = await readGaBoundary(pageM);
+      const floorHeldCount = finalBoundary.events.filter((e) => e.event === 'stall-floor-held').length;
+      // FLOOR BATCH ONLY: a terminal loss must STILL RECOVER — fresh matched snapshot on a new
+      // epoch, tracking again, no reissue (sends stay frozen until the new domain verifies).
+      let recovery: RunResult['recovery'] = null;
+      if (cfg.loss && (cfg.floorMs ?? null) !== null && fired !== null) {
+        const epochBefore = await pageM.evaluate(async () => {
+          const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+          return holder === undefined ? -1 : holder.transport.issuedEpoch();
+        });
+        const tFire = Date.now();
+        let rec: { recovered: boolean; epochAfter: number | null; tFireToTrackingMs: number | null; deliveriesAfter: number; ackAfter: number; pendingAfter: number } = { recovered: false, epochAfter: null, tFireToTrackingMs: null, deliveriesAfter: -1, ackAfter: -1, pendingAfter: -1 };
+        for (;;) {
+          const b = await readGaBoundary(pageM);
+          if (b.state === 'tracking' && b.epoch > epochBefore) {
+            rec = { recovered: true, epochAfter: b.epoch, tFireToTrackingMs: Date.now() - tFire, deliveriesAfter: b.deliveries, ackAfter: b.ack, pendingAfter: b.pending };
+            break;
+          }
+          if (Date.now() - tFire > 8_000) { rec = { ...rec, epochAfter: b.epoch, deliveriesAfter: b.deliveries, ackAfter: b.ack, pendingAfter: b.pending }; break; }
+          await wait(100);
+        }
+        recovery = { ...rec, epochBefore };
+      }
 
       // Snapshot stats BEFORE closing: mover connections = the ones that carried pump traffic
       // (>= 3 c2s chunks; quiet/probe seats only ever sent their join frames by now).
@@ -7955,6 +7997,7 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
         moverConns,
         safety: { sendsAfterFinal: sendsAfter - sendsBefore, sendsGrewQuiet: sendsAfter > sendsBefore, pendingAtEnd: finalBoundary.pending, stateAtEnd: finalBoundary.state, droppedFrames },
         probe: { n: rttsSorted.length, p50: pctileOf(rttsSorted, 0.5), p95: pctileOf(rttsSorted, 0.95), min: rttsSorted[0] ?? null, max: rttsSorted.length > 0 ? rttsSorted[rttsSorted.length - 1] ?? null : null, aborted: probe.abortedReason },
+        floorHeldCount, recovery,
         notes,
       };
       // Hard safety invariants — these are the ONLY hard expectations in this diagnostic:
@@ -7973,13 +8016,62 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
       expect(recvs.length, `${cfg.id}: NAMED GAP — the WS instrument captured no receives`).toBeGreaterThan(0);
       expect(res.safety.sendsGrewQuiet, `${cfg.id}: the page emitted sends while the seat should have been silent (re-issue?)`).toBe(false);
       if (cfg.loss) expect(res.safety.droppedFrames, `${cfg.id}: the wire-drop seam did not drop exactly the armed frame`).toBe(1);
-      GA_STALL_G = undefined; // the override NEVER leaks past this run
+      GA_STALL_G = undefined; // the overrides NEVER leak past this run
+      GA_STALL_FLOOR_MS = null;
       return res;
     } finally {
       if (!handleClosed) { try { await closeProxyBounded(host, handle); } catch { /* receipt governs */ } }
       for (const p of [pageM, pageQ, pageP, pageO]) await p.close().catch(() => undefined);
     }
   };
+
+  // ── SLICE 24 FLOOR BATCH (UDG_ACK_FLOOR=1) — pre-registered at dpa8i/PRE-REGISTRATION.md
+  // BEFORE any run. ONE declared TEST WAIT W = 400 ms assembled ONLY from named retained
+  // measurements: 240 ms declared poor RTT envelope (rtt 200 + round-trip jitter budget 40)
+  // + 108 ms dequeue/pair allowance (ceil of the retained broadcast-spacing p99 = 107.4 ms)
+  // + 5 ms declared service allowance = 353 ms, rounded UP to the next 50 ms authority patch
+  // cycle = 400 ms. It is a MEASURED CONSERVATIVE WAIT/ENVELOPE, explicitly NOT a mathematical
+  // lower bound for every acknowledgement; nothing live feeds it (NO active ping stream, NO
+  // jitterable CPD polling anywhere near it). All phases run — NO suppression of favourable
+  // phases; every no-fire and every held event is reported as it comes.
+  if (process.env['UDG_ACK_FLOOR'] === '1') {
+    const W = 400;
+    const floorRuns: RunResult[] = [
+      await runOnce({ id: 'F1-floor400-G3-immediate', g: null, phase: 'immediate', loss: false, floorMs: W }),
+      await runOnce({ id: 'F2-floor400-G3-postDelivery', g: null, phase: 'postDelivery', loss: false, floorMs: W }),
+      await runOnce({ id: 'F3-floor400-G3-midInterval', g: null, phase: 'midInterval', loss: false, floorMs: W }),
+      await runOnce({ id: 'F4-floor400-G3-terminalLost', g: null, phase: 'postDelivery', loss: true, floorMs: W }),
+    ];
+    const f4 = floorRuns[3];
+    check('ack-floor: every IN-ENVELOPE phase (all three, none suppressed) stayed unfired with the wait armed (held events recorded, never silent)',
+      floorRuns.slice(0, 3).every((r) => r.fired === null),
+      floorRuns.slice(0, 3).map((r) => ({ id: r.cfg.id, fired: r.fired, floorHeldEvents: r.floorHeldCount })));
+    check('ack-floor: the TERMINAL loss still fires — AFTER the declared wait — and RECOVERS on a fresh matched snapshot (new epoch, tracking again, bounded rejoin) with NO reissue; added latency measured',
+      f4 !== undefined && f4.fired !== null && f4.fired.detail.includes('PROTOTYPE stalled-ack floor')
+      && (f4.inputAgeAtTriggerMs.pageBasis ?? 0) > W
+      && f4.recovery !== null && f4.recovery.recovered === true
+      && (f4.recovery.tFireToTrackingMs ?? Number.POSITIVE_INFINITY) <= 4_000 + 300
+      && f4.safety.sendsGrewQuiet === false,
+      f4 === undefined ? null : { fired: f4.fired, inputAgeMs: f4.inputAgeAtTriggerMs, recovery: f4.recovery, addedLatencyVsCountOnlyMs: (f4.inputAgeAtTriggerMs.pageBasis ?? 0) - 259.3, countOnlyBaselineRef: 'R6 at dpa8h fired at age 259.3 ms (retained)' });
+    const floorArtifact = {
+      kind: 'DIAGNOSTIC-NOT-GATE-A', slice: 24,
+      generatedAt: new Date().toISOString(), commit: headSha(), dirty: workingTreeDirty(),
+      status: 'CANDIDATE PROTOTYPE ONLY — proposed minimum acknowledgement-opportunity WAIT; NOT adopted by the ADR; product default remains the count-only rule (option unset)',
+      testWait: {
+        W_ms: W,
+        components: { declaredRttEnvelopeMs: 240, dequeuePairAllowanceMs: 108, serviceAllowanceMs: 5, sumMs: 353, sloRoundingMs: 'up to the next 50 ms authority patch cycle' },
+        meaning: 'MEASURED CONSERVATIVE WAIT/ENVELOPE from retained named measurements — explicitly NOT a mathematical lower bound for every acknowledgement; no live pings feed it; snapshot/episode timers and the rolling cap are untouched and still own truly-missing deliveries; NO timed activity is required from the server',
+      },
+      runs: floorRuns,
+    };
+    writeFileSync(join(outDir, 'ack-floor-diagnostic.json'), JSON.stringify(floorArtifact, null, 2) + '\n');
+    check('ack-floor: all four pre-registered floor runs completed and the artefact is on disk',
+      floorRuns.length === 4 && existsSync(join(outDir, 'ack-floor-diagnostic.json')), { outDir, ids: floorRuns.map((r) => r.cfg.id) });
+    await host.shutdown();
+    const anyFloorFailure = floorRuns.length !== 4;
+    expect(anyFloorFailure, 'ack-floor batch incomplete').toBe(false);
+    return;
+  }
 
   // ── runs exactly as pre-registered ─────────────────────────────────────────────────────────
   const pre: RunCfg[] = [

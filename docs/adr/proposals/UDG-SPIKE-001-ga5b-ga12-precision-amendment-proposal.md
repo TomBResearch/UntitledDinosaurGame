@@ -102,3 +102,22 @@ the GA-12 record against ADR-0003 before any Gate A decision is unchanged.
 Adoption path: reviewer markup on this file → owner/delegated decision → (if accepted) ONE
 docs commit moving the authoritative GA rows with this proposal recorded as the basis; the
 accepted-ADR digests move only in that commit, never here.
+
+## §D (added slice 24, still PROPOSED — this file remains NOT accepted; the accepted ADR is
+## unchanged): the stalled-ack rule as WAIT-FIRST, with the wait's epistemic status stated
+Current §3.2 text admits a trigger on the delivery-count condition alone. The ack-window
+diagnostic (plan §19) evidences that at RTT-bearing envelopes the count can COMPLETE before any
+acknowledgement is causally possible. Proposed wording (for review only): a trigger may be
+CONSIDERED only when (i) the paired count/disposition condition holds AND (ii) the oldest ACTUAL
+outstanding same-epoch input has aged past the declared acknowledgement-OPPORTUNITY WAIT — the
+client's same-socket RTT estimate plus a delivery/authority service allowance. The WAIT is a
+measured CONSERVATIVE ENVELOPE (an opportunity floor from observed distributions), NOT a
+mathematical lower bound: acks may arrive earlier; true losses may exist under it; what it
+eliminates is the structural false-positive class. Progress, epoch change, or empty pending
+reset the streak; obsolete entries never hold the condition; snapshot/episode timers and the
+rolling cap remain independent and own truly-missing deliveries; no timed server activity is
+required. A candidate prototype (harness-supplied option; product default unchanged; units + a
+poor-profile live batch) stands at plan §20 — including the batch's MEASURED FAILURE (terminal
+loss under poor did not RECOVER within the provisional episode budget, floor or no floor — the
+dpa8h count-only baseline ended suspended too), which is evidence for the recovery-budget
+discussion, not for suppressing the trigger.

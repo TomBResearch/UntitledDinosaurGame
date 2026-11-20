@@ -61,6 +61,7 @@
 import { Client, Reconciler, type InputHandle } from '@colyseus/sdk';
 import { validateDirectFrame, type DirectFrame, type MovementMode, type SessionEpoch } from '@udg/protocol';
 import { flatDirectStep } from './flatStep.js';
+import { stalledAckFloorDecision } from './stallAckFloor.js';
 
 /** The join presentation the room's hash gate demands (protocol-v1 §6.3; `screenJoin` on the server). */
 export interface RegionJoinPresentation {
@@ -563,7 +564,8 @@ export interface AdoptionBoundaryRecord {
 export interface RecoveryRecord {
   readonly atMs: number;
   readonly event: 'trigger' | 'stop-sending' | 'discard-pending' | 'rejoin-scheduled' | 'rejoin-attempt'
-    | 'rejoin-complete' | 'snapshot-recovered' | 'suspended' | 'episode-expired' | 'send-refused';
+    | 'rejoin-complete' | 'snapshot-recovered' | 'suspended' | 'episode-expired' | 'send-refused'
+    | 'stall-floor-held';
   readonly detail: string;
 }
 
@@ -578,6 +580,8 @@ interface PredictorSettings {
   readonly maxRejoinsPerWindow: number;
   readonly rejoinBackoffMs: readonly number[];
   readonly stallDetectionDeliveries: number;
+  /** PROTOTYPE stalled-ack TEST WAIT (null = off = today's rule); see PredictorOptions. */
+  readonly stallAckFloorMs: number | null;
   readonly clock: PredictorClock;
   readonly ledgerLimit: number;
   readonly rejoin?: (() => Promise<PredictionTransport>) | undefined;
@@ -600,6 +604,17 @@ export interface PredictorOptions {
    * for a loss the server cannot name (ADR-0003 §3.2, GA-5b's recovery half).
    */
   readonly stallDetectionDeliveries?: number;
+  /**
+   * DIAGNOSTIC PROTOTYPE ONLY (slice 24, candidate; NOT adopted, NOT a product default): a
+   * minimum acknowledgement-OPPORTUNITY WAIT in front of `input-ack-stalled`. Undefined/null
+   * (the default EVERYWHERE today) keeps the count-only rule byte-identical. When a harness
+   * supplies a value it is the run's DECLARED TEST WAIT — a measured conservative envelope
+   * assembled from named observations (same-socket RTT + delivery/authority service allowance),
+   * explicitly NOT a mathematical lower bound for every acknowledgement. The wait never gates
+   * the snapshot deadline, the episode deadline or the rolling cap, and requires NO timed
+   * activity from the server. See apps/client/src/network/stallAckFloor.ts.
+   */
+  readonly stallAckFloorMs?: number | null;
   readonly clock?: PredictorClock;
   /** A host-performed rejoin: leave + fresh join + issued-epoch wait, returning a rearmed transport. */
   readonly rejoin?: () => Promise<PredictionTransport>;
@@ -697,6 +712,9 @@ export class DirectMotionPredictor {
       // Mirrors INPUT_ENVELOPE_DEFAULTS.stallDetectionDeliveries (packages/config) — the scenario
       // wiring passes the config value explicitly; this default keeps standalone users coherent.
       stallDetectionDeliveries: options.stallDetectionDeliveries ?? 3,
+      // PROTOTYPE default OFF: null keeps today's count-only §3.2 behaviour exactly. Only the
+      // env-gated ack-window diagnostic supplies a value, and it labels every effect it has.
+      stallAckFloorMs: options.stallAckFloorMs ?? null,
       clock: options.clock ?? wallClock,
       ledgerLimit: options.ledgerLimit ?? 512,
       ...(options.rejoin === undefined ? {} : { rejoin: options.rejoin }),
@@ -1203,10 +1221,51 @@ export class DirectMotionPredictor {
     }
     this.stallBoundary = { ack: delivery.ack, resolvedThrough: delivery.resolvedThrough, epoch: delivery.epoch };
     if (this.stallStreak >= this.options.stallDetectionDeliveries) {
-      this.enterRecovery('input-ack-stalled', this.pending.size);
-      return true;
+      const floorMs = this.options.stallAckFloorMs;
+      if (floorMs === null) {
+        this.enterRecovery('input-ack-stalled', this.pending.size);
+        return true;
+      }
+      // PROTOTYPE (diagnostic candidate): the count is necessary but the fire additionally waits
+      // until the OLDEST ACTUAL same-epoch outstanding input has aged past the declared TEST
+      // WAIT (a measured conservative envelope, never a bound). Obsolete entries — another
+      // domain's journal, retired identities — never hold the condition; the streak resets when
+      // nothing genuine is outstanding. Snapshot/episode timers are untouched and still own an
+      // actually missing delivery.
+      const oldest = this.oldestOutstandingSameEpochMs(delivery.epoch);
+      const nowMs = this.options.clock.nowMs();
+      const decision = stalledAckFloorDecision({
+        floorMs,
+        streak: this.stallStreak,
+        deliveriesRequired: this.options.stallDetectionDeliveries,
+        oldestOutstandingSameEpochSentAtMs: oldest,
+        nowMs,
+      });
+      if (decision === 'fire') {
+        const ageMs = oldest === null ? 'unknown' : String(Math.round(nowMs - oldest));
+        this.enterRecovery('input-ack-stalled', `PROTOTYPE stalled-ack floor: TEST WAIT ${String(floorMs)} ms elapsed (age ${ageMs} ms, pending ${String(this.pending.size)})`);
+        return true;
+      }
+      if (decision === 'held') {
+        this.recordRecovery('stall-floor-held', `streak ${String(this.stallStreak)} >= ${String(this.options.stallDetectionDeliveries)} but the oldest outstanding input is younger than the ${String(floorMs)} ms TEST WAIT (measured conservative envelope, not a bound)`);
+        return false;
+      }
+      // no-condition with the prototype on: nothing genuinely outstanding in this epoch holds it.
+      this.stallStreak = 0;
+      this.stallBoundary = null;
+      return false;
     }
     return false;
+  }
+
+  /** Sent instant of the OLDEST genuinely outstanding input of THIS epoch (obsolete never count). */
+  private oldestOutstandingSameEpochMs(epoch: number): number | null {
+    let oldest: number | null = null;
+    for (const entry of this.pending.values()) {
+      if (entry.epoch !== epoch) continue;
+      if (oldest === null || entry.sentAtMs < oldest) oldest = entry.sentAtMs;
+    }
+    return oldest;
   }
 
   /** Pruning authority: the server's disposition prefix ONLY. The ack watermark prunes nothing. */

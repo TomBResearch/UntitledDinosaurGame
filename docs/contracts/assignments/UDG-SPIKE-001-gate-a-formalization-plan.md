@@ -776,11 +776,23 @@ host timing decides. OBSERVING ≠ TUNING: every value involved remains PROVISIO
 nothing here ratifies, changes or production-tunes any threshold, and no client behaviour was
 altered.
 Time-based opportunity floor — necessary per the structural finding; EXACT RULE PROPOSED FOR
-ADR REVIEW, NOT ADOPTED, NOT WIRED: "INPUT_ACK_STALLED may trigger only when (a) the adopted
-delivery-count condition holds AND (b) the OLDEST pending input has been outstanding for at
-least estRoundTripMs + observedDeliverySpacingP99 + serviceAllowanceMs, where estRoundTripMs is
-the client's own measured RTT estimate (falling back to the configured RTT envelope when no
-estimate exists) and serviceAllowanceMs is a declared constant (5 ms)." If adopted, GA-5l's
+ADR REVIEW, NOT ADOPTED, NOT WIRED (wording UPDATED in slice 24 to establish the WAIT BEFORE
+any stall is considered, and to say plainly what the wait is NOT): "INPUT_ACK_STALLED may be
+CONSIDERED only after (a) the paired count/disposition condition (ack AND inputResolvedThrough
+unmoved across G consecutive same-epoch state deliveries) holds, AND (b) the OLDEST ACTUAL
+outstanding same-epoch input has been outstanding longer than the declared acknowledgement-
+OPPORTUNITY WAIT — estRoundTripMs + delivery/authority service allowance, where
+estRoundTripMs is the client's own same-socket RTT estimate (falling back to the configured RTT
+envelope when no estimate exists) and the allowance is a declared constant. The wait is a
+MEASURED CONSERVATIVE ENVELOPE — an acknowledgement OPPORTUNITY floor assembled from observed
+distributions — and explicitly NOT a mathematical lower bound for every acknowledgement: an ack
+may exist earlier, and a true loss may exist under it; what the wait eliminates is the
+structural false-positive class where a delivery-count streak completes before any ack is
+causally possible. The streak resets on progress, epoch change, or empty pending; obsolete
+entries never hold the recovery condition; the independent snapshot deadline, episode deadline
+and rolling rejoin cap are untouched and still own truly-missing deliveries; the wait requires
+NO timed activity from the server." A CANDIDATE PROTOTYPE of exactly this shape (harness-supplied
+option, product default UNCHANGED) is evidenced in §20. If adopted, GA-5l's
 truth-case and the malformed-stamp controls must gain a floor-aware leg (they stay safe today:
 their streams are 0-stall LAN-like, where floor and count agree).
 SAFE NEXT CANDIDATE POLICY (for reviewer decision, contingent): keep G=3 as the provisional
@@ -805,3 +817,49 @@ and GREEN on the next single run. Named honestly: §19's structural finding in a
 microcosm; the harness's dec quiet-window is racily strict against an ADMISSIBLE §3.2 recovery.
 Next-batch harness item (reviewer-approved, not executed here): make the dec observation
 stall-aware. Product claims and hosted greens stand; the red attempt is retained, not rerolled.
+
+## 20. Slice 24 — the wait-first CANDIDATE prototyped and measured (default unchanged); one eligible failure published, not tuned away
+PROTOTYPE SHAPE (reviewer-approved as candidate/diagnostic ONLY): a pure, clock-injected rule
+helper (apps/client/src/network/stallAckFloor.ts, unit-pinned 7/7 on SYNTHETIC clocks against the
+pre-registered adversarial set: fast healthy patches completing G while no ack is serviceable →
+HELD; advancing backlog → no-condition; true loss older than the wait → FIRE; old-epoch/idle →
+obsolete entries NEVER hold the condition; floor OFF → byte-identical count-only behaviour; the
+snapshot-deadline path is orthogonal). The predictor gains ONE optional harness-supplied setting
+(stallAckFloorMs; UNSET = today's adopted count-only rule EVERYWHERE — the product default is
+UNCHANGED and every effect of the prototype is labelled in the ledger: stall-floor-held events and
+a PROTOTYPE-tagged trigger detail). No config/schema/default/pin changed; no CPD polling; no live
+pings feed the wait; snapshot timer, episode deadlines and the rolling cap are untouched and
+require no timed server activity. The WAIT's epistemic status is stated in code, pre-registration
+and §19/proposal §D alike: a MEASURED CONSERVATIVE ENVELOPE (opportunity floor), NEVER a
+mathematical lower bound for every acknowledgement.
+ONE POOR LIVE BATCH (dpa8i; W = 400 ms fixed from retained measurements BEFORE the run; single
+attempt each; all phases; no favourable-phase suppression; stop-after-one-meaningful-result):
+in-envelope F1–F3 never fired (one visible held event); the TERMINAL loss FIRED at age 428.8 ms
+— after the wait, +169.5 ms measured over the retained count-only baseline — with zero reissues
+and REAL pending only, and then DID NOT RECOVER within the provisional budget: final state
+suspended. Cross-checked against the RETAINED slice-23 baseline: the count-only runs at the SAME
+profile ended SUSPENDED TOO (ages 259.3 and 515.1 ms) — the non-recovery is the PROVISIONAL
+recovery path (episode 4000 ms, backoff 250/500) failing to settle leave+join across a ~200 ms
+hop for this fixture, NOT the wait masking anything; the 0-stall dec leg recovers normally. The
+batch check failed on that recovery conjunct BY MEASUREMENT and the failure stands published —
+no W re-tuning, no rerun.
+DEC FIXTURE CORRECTED (assertions, not scope): the dec/dup row now admits a NAMED stray
+pre-window chunk ONLY with a room-side zero-dequeue proof (asserted conjunct, recorded, never
+silent — the retained attempt-A chunk), and the row's text separates the two identities: the
+NATIVE decline assertions stand on RAW non-application (|z| < 0.05 m) and DEAD-PHASE IDENTITY
+(consumed-exactly-once, baseline unique, refusal silence) INDEPENDENT of any episode, while a
+legitimate BLIND §3.2 episode is asserted on its own row with identity (input-ack-stalled detail
+only, never dedupe/stale/decline/retired names, no wrong route) and is NOT attributed as the
+native cause. Not a forced pass: every original conjunct stands; scope moved nowhere. ga-
+scenarios 31/31 on the corrected fixture (prior attempts retained at dpa8h/dec-leg-race).
+READINESS, DISTINGUISHED: (A) REPRESENTATIVE GA-11 EVIDENCE — an EXTERNAL HOST DECISION: the
+recovery-budget exposure above, the poor-envelope ack-opportunity margins, and every provisional
+value (G, snapshot 500, episode 4000, backoff ladder, and the 400 ms wait candidate) can only be
+DECIDED on a nominated production-like deployment (real region, real client paths, owner-executed
+matrix). This repo proposes no hosting, no exposure, no infrastructure. (B) OPTIONAL NATIVE
+CLOSURE / ADOPTION — a REVIEWER decision independent of (A): adopting the wait-first wording
+(proposal §D) and/or naming GA-5b(ii)/GA-12-A closure on the already-measured evidence; the
+prototype stays opt-in until then, and the recovery-budget finding argues for pairing adoption
+with a budget conversation, not shipping the wait alone.
+Gate A verdict unchanged (NOT-PASS); no hosted matrix; dpa8e/dpa8g/dpa8h bundles untouched;
+no workflow/main/P06/GA-11 adoption; accepted ADR unchanged.
