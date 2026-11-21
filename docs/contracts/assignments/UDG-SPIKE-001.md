@@ -75,6 +75,17 @@ Prerequisite commit (UDG-004 Verified acceptance, a "Requires Verified" prerequi
 - The delegation covers UDG-SPIKE-001 assignment, review and the Gate A decision. It does not re-open settled
   earlier acceptances, move any other task's state, or change the definition of done, evidence requirements or
   any gate text.
+- **Owner direct instruction, 2026-11-21 (recorded basis; owner of record unchanged):** *"You can make the
+  decisions, use the tunnel to just continue with the project without me."* For the reviewed design decisions
+  presented in the 2026-11-21 review — the §D qualitative wait-first adoption, the GA-5b row precision and the
+  GA-12 safety/activation split — this instruction supersedes the "does not change any gate text" limit above for
+  THAT reviewed set only. The delegated integration approver (Codex) RECORDS the owner's acceptance of exactly
+  those decisions, within exactly the scope the owner stated (no numeric, threshold change, positive activation
+  claim, GA-11 waiver, green rows, or retrospective acceptance), in
+  **[ADR-0005](../adr/0005-stalled-ack-wait-first-design-and-gate-row-precision.md)**. Attribution remains the
+  delegated approver recording the owner's acceptance — never Tom's signature. Decisions outside that reviewed
+  set (gate VERDICTS, GA-11 numerics, deployments, merges, anything for other tasks) stay with the owner under
+  the original terms.
 
 ## Owner instruction this record implements
 

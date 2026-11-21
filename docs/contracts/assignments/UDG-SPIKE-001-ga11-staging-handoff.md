@@ -16,13 +16,13 @@ sole nomination authority for every provisional value; this handoff nominates no
   all recorded per the cell schema. Topology recorded: loopback (127.0.0.1, private ephemeral
   ports). This is why `dropModel: application-layer delivery loss` labels every such number
   (ADR-0003 GA-11 row): the impairment SOURCE is the proxy model, never a network.
-- **The connect-phase seam (new, this slice)**: `tools/load-test/src/staging-probe.ts` —
-  N bounded WebSocket connect samples against an EXPLICIT endpoint; digest-only evidence; always
-  finite; zero dependencies (Node built-ins + the runtime global WebSocket, absence NAMED).
-  Independently verified WITHOUT any endpoint: `tests/unit/udg-spike-001/staging-probe.test.ts`
-  (7/7: real loopback handshakes, redaction proof — host/port/URL appear NOWHERE in the record —
-  named failures on destroy/silence, budgeted timeouts, pre-socket endpoint rejection with
-  userinfo refusal, clamped samples, self-serve listener retirement). Localhost smoke retained:
+- **The connect-phase seam (new, slice 27; privacy statements corrected slice 28)**:
+  `tools/load-test/src/staging-probe.ts` — N bounded WebSocket connect samples against an EXPLICIT
+  endpoint; the record OMITS the endpoint value (only `sha256(lowercased host:port)` — see §4: that
+  digest is REDACTION, NOT access control and NOT anonymity: a low-entropy hostname:port is
+  dictionary-guessable by anyone who can read the record); zero dependencies (Node built-ins + the
+  runtime global WebSocket, absence NAMED). Unit-verified WITHOUT any endpoint
+  (`tests/unit/udg-spike-001/staging-probe.test.ts`, 7/7). Localhost smoke retained:
   `artifacts/.local/spike-001/dpa9g-staging-smoke/` (5/5 opens, self-serve 127.0.0.1 ephemeral).
 
 ## 2. What CANNOT be measured now, and the exact technical prerequisites
@@ -62,7 +62,7 @@ Reset: the seam is STATELESS — no files, no listeners after exit (self-serve c
 127.0.0.1 port; proven by the unit test's port-change assertion). Unsetting the env var restores
 "no endpoint" exactly; there is no config to roll back and nothing to delete.
 
-## 4. Access limitation (by construction, test-pinned)
+## 4. Access limitation (by construction, test-pinned) — and what the digest does NOT do
 
 Dial-out to the single explicit endpoint ONLY; no listen socket ever binds non-loopback; the
 endpoint VALUE never enters a record, log or commit — only `sha256(lowercased host:port)`
@@ -72,31 +72,56 @@ TLS verification (recorded as `runtime-default-verification`), plain ws is label
 `plain-ws-not-private` and is acceptable ONLY for the self-serve smoke; samples ≤ 20, per-connect
 timeout ≤ 10 s, every path finite — no grid can accidentally form.
 
-## 5. Evidence capture and retirement
+**The digest is NOT an access control, and NOT anonymity (statement corrected after review on
+2026-11-21; earlier wording here implied more protection than exists).** `sha256(host:port)` is
+one-way, but hostnames and ports are LOW-ENTROPY: anyone who can read the record can dictionary-
+guess the endpoint (candidate domains, common ports) and confirm a guess in milliseconds. What the
+redaction genuinely provides: the record carries no PLAINTEXT endpoint, so casual exposure (logs
+pasted, bundles copied) does not hand the value over — but a determined reader with the candidate
+set can recover it. Consequences that BIND anyone using this seam: the endpoint value must still be
+treated as sensitive (owner-held env only); records are local-retained until the owner rules on
+publication; the probe grants NO access to anything (it only dials what it is given); and access
+limitation comes from the owner's endpoint firewall/allowlisting, never from this digest.
+
+## 5. Evidence capture and retirement (bounds stated honestly)
 
 Capture: redirect the probe's stdout to `artifacts/.local/spike-001/<bundleId>/staging-connect.json`
-plus a `run.log`; manifest with the repo's existing bundle process (`SHA256MANIFEST.txt`;
-`node tools/checks/dist/evidence.js checksums --write` is for contracts, bundle manifests follow
-the dpa8x/dpa9x convention). The record is ALREADY redaction-safe to commit (digest only) —
-still keep it local until the owner rules on publication, consistent with every prior bundle.
-Retirement: deletion of the bundle directory retires the evidence completely (nothing else
-persists); the digest is irreversible, so the endpoint value survives only in the owner's own env.
+plus a `run.log`; manifest with the repo's existing bundle process (`SHA256MANIFEST.txt`).
+**Capture and deletion bound ONLY the copies this process makes**: shell history, terminal scroll-
+buffers, CI logs if anyone pastes a run, or any copy the owner makes are OUTSIDE deletion's reach —
+deleting the bundle retires OUR copy completely (the probe writes nothing elsewhere and holds no
+state), and nothing more. Because the record itself omits the endpoint value (with the guessability
+caveat of §4), the record survives its own retention more safely than a raw log would, but the
+OWNER'S copy of the endpoint value is the real secret and only the owner holds it.
 Validity floors BEFORE any number counts (carried from §15B, not re-invented): reachability
 witnessed by the room's own ledger; achieved-regime labelling; the dropModel label unless the
 network itself is the impairment source.
 
-## 6. GA-11 remaining matrix / readiness, as actually recorded (§19/§15B/§12, checked before writing)
+## 6. GA-11 measurement vs the OFFICIAL 4×3 impairment matrix — TWO DIFFERENT EVIDENCE SETS
+(conflated by an earlier revision of this document; corrected here, per review)
 
-The matrix is the 12 OFFICIAL coordinates (full-window cell × official profile/seed coordinates,
-per plan §2 and the profile table) executed in FORMAL mode (`UDG_GATE_A_FORMAL=1`, clean tree,
-official coordinates → kind-GATE-A row artefacts) through the §12/§13 T-7 manual workflow, over the
-nominated deployment; dispatch shape today:
-`pnpm test:spike -- --id UDG-SPIKE-001 --cell full-window --profile <lan|moderate|elevated|poor> --seed <n>`
-per coordinate, plus the ga-scenarios scenario-evidence cell and the recovery cell, unchanged.
-What remains between here and there is EXACTLY §15B(1)–(5) + the owner-executed matrix + the
-§19 representative-deployment nomination; nothing in this repo substitutes, and none of it is
-blocked on code that this repo is missing except the labelled full-session endpoint-injection mode
-of §2 above, which should be built when, and only when, a nominated endpoint exists.
+- **The official 4×3 Gate A matrix** (the impairment harness): 4 profiles (lan/moderate/elevated/
+  poor — the IMPAIRMENT PROXY regimes) × 3 official seeds (1001/1002/1003) = 12 coordinates of the
+  full-window cell, formal mode (`UDG_GATE_A_FORMAL=1`, clean tree) producing kind-GATE-A ROW
+  artefacts, dispatched
+  `pnpm test:spike -- --id UDG-SPIKE-001 --cell full-window --profile <p> --seed <n>`
+  plus the ga-scenarios/recovery cells. Its evidence is about the PREDICTION/RECOVERY behaviour
+  under the fixture's declared impairment class — `dropModel: application-layer delivery loss`
+  labels EVERY number, because the impairment source is the proxy, not a network.
+- **GA-11's representative-deployment measurement** is a DIFFERENT evidence set with its own
+  requirements (§15B(1)–(5) + §19's EXACT OPEN NEED): a nominated production-like deployment and
+  real client machines on named provider paths; the OFFICIAL PROFILES RE-DERIVED from that path
+  topology; per-profile path CHARACTERISATION populations (matched-socket RTT percentiles, patch-
+  interval distributions, arrival-stall maxima) feeding ADR-0003 §5's two NAMED inequalities
+  (`B + J·λ + stall ≤ bufferMaxSize`; `clientSnapshotDeadlineMs ≥ 4 × patch interval + 2 × measured
+  p99 RTT`); and the owner's NOMINATION of every provisional value (G, 500/4000/backoffs, the
+  deadline, the 1000 ms floor proposal). Running the 4×3 matrix over the owner's deployment is
+  the Gate A rows over real conditions — it does NOT by itself constitute GA-11's measurement,
+  and GA-11 numbers must NEVER be sourced from loopback proxy runs (ADR-0003 GA-11 row: harness-
+  modelled loss may not be presented as network loss).
+What remains between here and either matrix is EXACTLY §15B(1)–(5) plus the owner-executed runs;
+the only in-repo engineering gap is the labelled endpoint-injection session mode of §2 (build it
+when a nomination exists, not before).
 
 ## 7. Unavoidable external inputs vs concrete remaining work
 

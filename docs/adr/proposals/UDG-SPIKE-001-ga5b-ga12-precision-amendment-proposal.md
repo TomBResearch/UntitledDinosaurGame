@@ -1,7 +1,16 @@
-# UDG-SPIKE-001 — proposed precision amendment to the GA-5b / GA-12 gate wording (PROPOSED, NOT ACCEPTED)
+# UDG-SPIKE-001 — proposed precision amendment to the GA-5b / GA-12 gate wording (ACCEPTED via [ADR-0005](../0005-stalled-ack-wait-first-design-and-gate-row-precision.md), 2026-11-21 — this file remains the proposal OF RECORD; the canonical rows live in ADR-0003 §5)
 
-Status: **PROPOSED.** Written 2026-11-20 for the delegated reviewer. **This file accepts nothing and
-changes nothing**: [ADR-0003](../0003-input-acknowledgement-overflow-and-resynchronisation-policy.md)
+Status: **Accepted (2026-11-21)** for §§1–2 and §D as scoped in the disposition below — recorded by
+the delegated integration approver on the owner's direct acceptance; see the disposition addendum at
+the foot of this file and ADR-0005 for the canonical supersession. Before that date this file was,
+and its history reads as, PROPOSED. Nothing it accepts reaches further than ADR-0005 §1 states.
+The paragraph that follows is the ORIGINAL text, preserved as written history (per the history
+rules, corrections are named, never deleted): where it says the accepted ADR “remains the accepted
+text exactly as adopted”, read “as adopted through 2026-11-20” — from 2026-11-21 the §3.2 stalled-ack
+criterion and the GA-5b/GA-12 rows carry ADR-0005's supersession, while every other clause,
+threshold, budget and profile named below remains exactly as adopted.
+
+Original (2026-11-20): **This file accepts nothing and changes nothing**: [ADR-0003](../0003-input-acknowledgement-overflow-and-resynchronisation-policy.md)
 remains the accepted text exactly as adopted, `docs/contracts/**` thresholds, budgets and profiles
 are untouched, and no gate verdict is implied. It **supersedes the wording** of the earlier draft
 amendments (§15A of the [formalization plan](../assignments/UDG-SPIKE-001-gate-a-formalization-plan.md)
@@ -34,7 +43,9 @@ implementation (Pi) from this acceptance decision, per `docs/contracts/ownership
   the dpa9c2/dpa9d2 fixed-N family + gafloor legs (`dpa9e-facility`, protocol
   `UDG-SPIKE-001-gate-a-local-poor-seed-fixed-n-plan.md`).
 - **§§1–2 (GA-5b row / GA-12 S+A split) — REVIEWED CONSISTENT, ENDORSED; ACCEPTANCE OUTSIDE THIS
-  DELEGATION — OWNER SIGNATURE REQUIRED.** Consistency check against the formal authority, recorded:
+  DELEGATION — OWNER SIGNATURE REQUIRED.** *(Status update, same day: the owner then DIRECTLY
+  ACCEPTED these decisions — see the addendum below and [ADR-0005](../0005-stalled-ack-wait-first-design-and-gate-row-precision.md);
+  the constraint analysis stands on the record as the reason the mapping was needed first.)* Consistency check against the formal authority, recorded:
   §§1–2 weaken nothing in ADR-0003 — GA-5b keeps "inability to name the cause is the requirement,
   not a failure of it" and adds only evidence-shaped audits (false attribution absent, wrong-epoch
   acceptance absent, duplicate movement absent); GA-12-S keeps the UNCONDITIONAL ban on any closure
@@ -53,6 +64,19 @@ implementation (Pi) from this acceptance decision, per `docs/contracts/ownership
   listed optional feature, with the explicit no-future-enabling-reading clause unchanged.
 - History: this adjudication supersedes NOTHING on the page — every prior line above and in §D
   stands as written history; statuses moved in place, per the repo's naming-correction convention.
+
+### Addendum — DISPOSITION 2026-11-21: Accepted (owner-accepted; recorded by the delegated approver)
+
+The owner accepted all three reviewed decisions the same day — §D qualitative wait-first, GA-5b
+precision, GA-12 S/A split — explicitly as scoped above: "no numeric, threshold change, positive
+activation claim, GA-11 waiver, green rows, or retrospective acceptance", on the direct instruction
+*"You can make the decisions, use the tunnel to just continue with the project without me"*, which
+for these reviewed design decisions supersedes the narrower earlier role boundary quoted in the
+adjudication. The canonical superseding record is **[ADR-0005](../0005-stalled-ack-wait-first-design-and-gate-row-precision.md)**
+(original acceptance text and pre-change digests preserved at its §2); the authoritative GA rows
+moved there. Attribution remains the delegated integration approver (Codex) recording the owner's
+acceptance — not Tom's signature. This file remains the proposal of record; its live wording is now
+the accepted wording via ADR-0005, and nothing in this file was deleted.
 
 ## 0. What the earlier draft got wrong (superseded, with the record preserved)
 
@@ -149,10 +173,10 @@ Adoption path: reviewer markup on this file → owner/delegated decision → (if
 docs commit moving the authoritative GA rows with this proposal recorded as the basis; the
 accepted-ADR digests move only in that commit, never here.
 
-## §D (added slice 24; STATUS 2026-11-21: the RULE SHAPE ADOPTED AS DESIGN by the delegated
-## reviewer — see the adjudication above; CONTRACT text and the shipped count-only default are
-## UNCHANGED, no numeric is adopted, and this file otherwise remains a proposal for §§1–2 until the
-## owner signs its acceptance): the stalled-ack rule as WAIT-FIRST, with the wait's epistemic status stated
+## §D (added slice 24; STATUS 2026-11-21: the RULE SHAPE ADOPTED AS DESIGN — accepted by the owner
+## the same day via [ADR-0005](../0005-stalled-ack-wait-first-design-and-gate-row-precision.md);
+## CONTRACT §3.2 keeps the count-only rule as the SHIPPED DEFAULT until a separate implementation
+## adoption, and no numeric is adopted): the stalled-ack rule as WAIT-FIRST, with the wait's epistemic status stated
 Current §3.2 text admits a trigger on the delivery-count condition alone. The ack-window
 diagnostic (plan §19) evidences that at RTT-bearing envelopes the count can COMPLETE before any
 acknowledgement is causally possible. Proposed wording (for review only): a trigger may be
