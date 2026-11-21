@@ -1136,3 +1136,109 @@ describe('UDG-SPIKE-001 §3.2 INPUT_ACK_STALLED — stall detection under a stil
     expect(predictor.recoveryLedger().find((entry) => entry.event === 'trigger')?.detail).toMatch(/input-ack-stalled/);
   });
 });
+
+describe('UDG-SPIKE-001 slice 28 — the §D-design configurable path on the seat (fail closed; honest status; clock origins distinguished)', () => {
+  // A buildStall twin that lets the DECLARED clock start at any ORIGIN: the same relative
+  // sequences at different origins must take identical paths (the rule may read only the
+  // injected trigger clock, never an ambient one).
+  const buildStallAt = (origin: number, overrides: Record<string, unknown> = {}) => {
+    const clock = createFakeClock();
+    clock.now = origin;
+    const fake = createFakeTransport(7);
+    const next = createFakeTransport(8);
+    const rejoin = vi.fn(async () => toTransport(next));
+    const predictor = new DirectMotionPredictor(toTransport(fake), {
+      speed: 4,
+      clock: toClock(clock),
+      rejoin,
+      snapshotDeadlineMs: 60_000, // raised DECLARED test setting: the hold advances the clock past the
+      // provisional 500 ms snapshot deadline ON PURPOSE (that rule stays independent and armed —
+      // the e2e gafloor leg exercises the shipped 500 ms value); this cell isolates ONLY the wait.
+      recoveryDeadlineMs: 60_000,
+      rejoinWindowMs: 60_000,
+      maxRejoinsPerWindow: 2,
+      rejoinBackoffMs: [250, 500, 1000],
+      ...overrides,
+    });
+    predictor.attach();
+    fake.patch({ lastAuthorityTick: 1, z: 1.5 });
+    return { clock, fake, next, predictor, rejoin };
+  };
+  const stageStall = (fake: ReturnType<typeof createFakeTransport>, predictor: InstanceType<typeof DirectMotionPredictor>, patches: number) => {
+    predictor.send({ generation: 1, moveX: 1, moveZ: 0 }, true);
+    for (let i = 1; i <= patches; i += 1) fake.patch({ lastAuthorityTick: 1 + i, z: 1.5 + i });
+  };
+
+  it('INVALID opt-ins fail closed AT CONSTRUCTION — the seat never exists, reasons are named', () => {
+    expect(() => buildStallAt(1_000, { stallAckFloor: { waitMs: 0, provenance: 'p' } })).toThrow(/refused at config validation/);
+    expect(() => buildStallAt(1_000, { stallAckFloor: { waitMs: 500 } })).toThrow(/provenance is REQUIRED/);
+    expect(() => buildStallAt(1_000, { stallAckFloor: { waitMs: 500, provenance: 'p', matchedBudgetMs: 100 } })).toThrow(/at least COVER the wait/);
+    expect(() => buildStallAt(1_000, { stallAckFloor: 500, stallAckFloorMs: 400 })).toThrow(/mutually exclusive/);
+  });
+
+  it('ABSENT opt-in stays the provisional count-only default and SAYS so — no value silently selected', () => {
+    const { fake, predictor } = buildStallAt(1_000);
+    const status = predictor.stallAckFloorStatus();
+    expect(status.state).toBe('default-provisional-count-only');
+    expect(JSON.stringify(status)).not.toMatch(/waitMs|\b400\b/); // no hidden local W anywhere in the status
+    stageStall(fake, predictor, 3); // three unmoved deliveries AFTER the baseline row: streak hits G=3
+    expect(predictor.stateName()).toBe('recovering');
+    expect(predictor.recoveryLedger().find((entry) => entry.event === 'trigger')?.detail).toMatch(/input-ack-stalled at 1$/); // count-only detail carries the OUTSTANDING COUNT, unchanged from the shipped rule
+  });
+
+  it('a CONFIGURED measured wait HELDS under the envelope (labelled, provenanced) and FIRES only past it — no PROTOTYPE wording, no loss claim', () => {
+    const { clock, fake, predictor, rejoin } = buildStallAt(1_000, { stallAckFloor: { waitMs: 900, provenance: 'unit: same-room epoch-7 p95 + allowance (synthetic stand-in)' } });
+    expect(predictor.stallAckFloorStatus().state).toBe('configured');
+    stageStall(fake, predictor, 3); // streak G at age ~0: HELD, tracking continues
+    expect(predictor.stateName()).toBe('tracking');
+    const held = predictor.recoveryLedger().find((entry) => entry.event === 'stall-floor-held');
+    expect(held?.detail).toMatch(/configured 900 ms wait/);
+    expect(held?.detail).toMatch(/provenance unit: same-room epoch-7/);
+    expect(held?.detail).toMatch(/not a bound, not a loss claim/);
+    expect(rejoin).not.toHaveBeenCalled(); // the held state armed NO episode: episode timers untouched
+    clock.advance(800);
+    fake.patch({ lastAuthorityTick: 5, z: 5 }); // age 800 < 900: still held
+    expect(predictor.stateName()).toBe('tracking');
+    clock.advance(200);
+    fake.patch({ lastAuthorityTick: 6, z: 6 }); // age 1000 > 900: fires
+    expect(predictor.stateName()).toBe('recovering');
+    const trigger = predictor.recoveryLedger().find((entry) => entry.event === 'trigger');
+    expect(trigger?.detail).toMatch(/input-ack-stalled at stalled-ack floor: CONFIGURED wait 900 ms/);
+    expect(trigger?.detail).toMatch(/age 1000 ms/);
+    expect(trigger?.detail).not.toMatch(/PROTOTYPE/);
+  });
+
+  it('the rule reads ONLY the DECLARED trigger clock: an 80-million-ms ORIGIN shift changes no decision and no age; the episode rejoin runs on the injected driver AFTER the fire, never during the hold', async () => {
+    const runAt = (origin: number) => {
+      const built = buildStallAt(origin, { stallAckFloor: { waitMs: 900, provenance: 'p' } });
+      stageStall(built.fake, built.predictor, 3); // held at age ~0
+      const heldState = built.predictor.stateName();
+      const heldWithoutEpisode = built.rejoin.mock.calls.length === 0;
+      built.clock.advance(1_000);
+      built.fake.patch({ lastAuthorityTick: 5, z: 5 }); // age 1000 > 900: fires
+      return { heldState, fired: built.predictor.stateName(), trigger: built.predictor.recoveryLedger().find((e) => e.event === 'trigger')?.detail ?? '', built, heldWithoutEpisode };
+    };
+    const atNear = runAt(1_000);
+    const atFar = runAt(80_001_000);
+    expect(atFar.heldState).toBe(atNear.heldState);
+    expect(atFar.fired).toBe(atNear.fired);
+    expect(atFar.trigger.match(/age (\d+) ms/)?.[1]).toBe(atNear.trigger.match(/age (\d+) ms/)?.[1]);
+    expect(atNear.heldWithoutEpisode).toBe(true); // nothing armed while held
+    atNear.built.clock.advance(250); // the episode backoff is the injected driver\u2019s OWN timer domain
+    await flush();
+    expect(atNear.built.rejoin).toHaveBeenCalled();
+  });
+
+  it('an epoch-scoped measurement that no longer matches the epoch holds on the older wait (safe direction) and SAYS stale — never fires early, never assumes', () => {
+    const { clock, fake, predictor } = buildStallAt(1_000, { stallAckFloor: { waitMs: 300, provenance: 'measured under epoch 3', appliedEpoch: 3 } });
+    stageStall(fake, predictor, 3); // deliveries are epoch 7 (fake transport); age ~0: held on the wait
+    clock.advance(400);
+    fake.patch({ lastAuthorityTick: 5, z: 5 }); // age 400 > 300: fires, labelled STALE
+    expect(predictor.stateName()).toBe('recovering');
+    const trigger = predictor.recoveryLedger().find((entry) => entry.event === 'trigger');
+    expect(trigger?.detail).toMatch(/STALE for current epoch 7/);
+    expect(trigger?.detail).toMatch(/never fired early/);
+    const st = predictor.stallAckFloorStatus();
+    expect(st.state === 'configured' && st.staleForCurrentEpoch).toBe(true);
+  });
+});

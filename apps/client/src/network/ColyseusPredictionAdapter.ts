@@ -61,7 +61,7 @@
 import { Client, Reconciler, type InputHandle } from '@colyseus/sdk';
 import { validateDirectFrame, type DirectFrame, type MovementMode, type SessionEpoch } from '@udg/protocol';
 import { flatDirectStep } from './flatStep.js';
-import { stalledAckFloorDecision } from './stallAckFloor.js';
+import { stalledAckFloorDecision, resolveStallAckFloorOption, type StallAckFloorConfig, type StallAckFloorResolved } from './stallAckFloor.js';
 
 /** The join presentation the room's hash gate demands (protocol-v1 §6.3; `screenJoin` on the server). */
 export interface RegionJoinPresentation {
@@ -580,8 +580,9 @@ interface PredictorSettings {
   readonly maxRejoinsPerWindow: number;
   readonly rejoinBackoffMs: readonly number[];
   readonly stallDetectionDeliveries: number;
-  /** PROTOTYPE stalled-ack TEST WAIT (null = off = today's rule); see PredictorOptions. */
-  readonly stallAckFloorMs: number | null;
+  /** Resolved stalled-ack opportunity-wait opt-in (null = provisional count-only default); see
+   * PredictorOptions.stallAckFloor. */
+  readonly stallFloor: StallAckFloorResolved | null;
   readonly clock: PredictorClock;
   readonly ledgerLimit: number;
   readonly rejoin?: (() => Promise<PredictionTransport>) | undefined;
@@ -605,15 +606,23 @@ export interface PredictorOptions {
    */
   readonly stallDetectionDeliveries?: number;
   /**
-   * DIAGNOSTIC PROTOTYPE ONLY (slice 24, candidate; NOT adopted, NOT a product default): a
-   * minimum acknowledgement-OPPORTUNITY WAIT in front of `input-ack-stalled`. Undefined/null
-   * (the default EVERYWHERE today) keeps the count-only rule byte-identical. When a harness
-   * supplies a value it is the run's DECLARED TEST WAIT — a measured conservative envelope
-   * assembled from named observations (same-socket RTT + delivery/authority service allowance),
-   * explicitly NOT a mathematical lower bound for every acknowledgement. The wait never gates
-   * the snapshot deadline, the episode deadline or the rolling cap, and requires NO timed
-   * activity from the server. See apps/client/src/network/stallAckFloor.ts.
+   * SLICE-28 (plan §21 / ADR-0005: the §D wait-first rule is adopted AS DESIGN; the SHIPPED
+   * DEFAULT stays the provisional count-only rule until an implementation adoption changes it).
+   * The configurable acknowledgement-opportunity WAIT opt-in: undefined/null (the default
+   * EVERYWHERE) keeps the count-only rule byte-identical — the client NEVER silently selects a
+   * wait value. Supplying a number keeps the legacy harness path (labelled in every ledger event);
+   * supplying a config object requires a provenanced measured wait and optionally a matched
+   * recovery budget that must at least cover the wait (fuller detection+recovery coverage needs
+   * real-environment measurement — declared budgets are always labelled
+   * `declared-matched-not-independently-verified`). INVALID OPT-INS FAIL CLOSED HERE, at
+   * construction: the seat never exists; nothing degrades silently. The wait gates ONLY the
+   * stalled-ack trigger; snapshot/episode/cap timers keep their own origins and still own truly
+   * missing deliveries; NO timed server activity is required or assumed. See
+   * apps/client/src/network/stallAckFloor.ts.
    */
+  readonly stallAckFloor?: number | StallAckFloorConfig | null;
+  /** @deprecated Legacy numeric form of `stallAckFloor` (harness diagnostics). Mutually exclusive
+   * with it; supplying both fails closed. */
   readonly stallAckFloorMs?: number | null;
   readonly clock?: PredictorClock;
   /** A host-performed rejoin: leave + fresh join + issued-epoch wait, returning a rearmed transport. */
@@ -702,6 +711,21 @@ export class DirectMotionPredictor {
 
   constructor(transport: PredictionTransport, options: PredictorOptions) {
     this.transport = transport;
+    // FAIL CLOSED at the config-validation stage: an opt-in that is malformed, unprovenanced or
+    // internally incoherent throws BEFORE the seat exists; absent options keep the provisional
+    // count-only default and NO wait value is ever selected silently.
+    const suppliedFloor = options.stallAckFloor ?? null;
+    const legacyFloor = options.stallAckFloorMs ?? null;
+    if (suppliedFloor !== null && legacyFloor !== null) {
+      throw new Error('stallAckFloor and the deprecated stallAckFloorMs are mutually exclusive (fail closed): supply exactly one config surface');
+    }
+    const floorSource = suppliedFloor !== null ? suppliedFloor : legacyFloor;
+    let stallFloor: StallAckFloorResolved | null = null;
+    if (floorSource !== null) {
+      const resolved = resolveStallAckFloorOption(floorSource);
+      if (!resolved.ok) throw new Error(`stallAckFloor opt-in refused at config validation (fail closed): ${resolved.reasons.join('; ')}`);
+      stallFloor = resolved;
+    }
     this.options = {
       speed: options.speed,
       snapshotDeadlineMs: options.snapshotDeadlineMs ?? 500,
@@ -712,9 +736,10 @@ export class DirectMotionPredictor {
       // Mirrors INPUT_ENVELOPE_DEFAULTS.stallDetectionDeliveries (packages/config) — the scenario
       // wiring passes the config value explicitly; this default keeps standalone users coherent.
       stallDetectionDeliveries: options.stallDetectionDeliveries ?? 3,
-      // PROTOTYPE default OFF: null keeps today's count-only §3.2 behaviour exactly. Only the
-      // env-gated ack-window diagnostic supplies a value, and it labels every effect it has.
-      stallAckFloorMs: options.stallAckFloorMs ?? null,
+      // Provisional default OFF: null keeps the shipped count-only §3.2 behaviour exactly — no
+      // local wait is substituted. An opt-in arrives via stallAckFloor(-Ms) and is resolved
+      // (validated, fail closed) above.
+      stallFloor,
       clock: options.clock ?? wallClock,
       ledgerLimit: options.ledgerLimit ?? 512,
       ...(options.rejoin === undefined ? {} : { rejoin: options.rejoin }),
@@ -1115,6 +1140,26 @@ export class DirectMotionPredictor {
   pruneAuthorityLedger(): typeof this.pruneAuthority { return { ...this.pruneAuthority }; }
   rejoinTimestamps(): readonly number[] { return [...this.rejoinAts]; }
 
+  /** HONEST status of the §D-design opt-in (plan §21): the shipped DEFAULT is the provisional
+   * count-only rule and this surface never claims production enablement. A configured seat
+   * reports its wait, provenance, budget status, DECLARED clock origin and a stale-epoch flag
+   * instead of silent assumptions; a default seat says explicitly that no value was selected. */
+  stallAckFloorStatus():
+    | { readonly state: 'default-provisional-count-only'; readonly note: string }
+    | { readonly state: 'configured'; readonly source: 'config-object' | 'legacy-numeric'; readonly waitMs: number; readonly provenance: string; readonly matchedBudgetMs: number | null; readonly budgetStatus: 'declared-matched-not-independently-verified' | 'not-declared'; readonly appliedEpoch: number | null; readonly clockOrigin: string; readonly staleForCurrentEpoch: boolean } {
+    const floor = this.options.stallFloor;
+    if (floor === null) {
+      return { state: 'default-provisional-count-only', note: 'no wait supplied; the product default remains the provisional adopted count-only rule — no local value is silently selected' };
+    }
+    const currentEpoch = this.stallBoundary?.epoch ?? null;
+    return {
+      state: 'configured', source: floor.source, waitMs: floor.waitMs, provenance: floor.provenance,
+      matchedBudgetMs: floor.matchedBudgetMs, budgetStatus: floor.budgetStatus,
+      appliedEpoch: floor.appliedEpoch, clockOrigin: floor.clockOrigin,
+      staleForCurrentEpoch: floor.appliedEpoch !== null && currentEpoch !== null && floor.appliedEpoch !== currentEpoch,
+    };
+  }
+
   async close(): Promise<void> {
     this.state = 'closed';
     this.cancelEpisodeTimer();
@@ -1221,33 +1266,41 @@ export class DirectMotionPredictor {
     }
     this.stallBoundary = { ack: delivery.ack, resolvedThrough: delivery.resolvedThrough, epoch: delivery.epoch };
     if (this.stallStreak >= this.options.stallDetectionDeliveries) {
-      const floorMs = this.options.stallAckFloorMs;
-      if (floorMs === null) {
+      const floor = this.options.stallFloor;
+      if (floor === null) {
         this.enterRecovery('input-ack-stalled', this.pending.size);
         return true;
       }
-      // PROTOTYPE (diagnostic candidate): the count is necessary but the fire additionally waits
-      // until the OLDEST ACTUAL same-epoch outstanding input has aged past the declared TEST
-      // WAIT (a measured conservative envelope, never a bound). Obsolete entries — another
-      // domain's journal, retired identities — never hold the condition; the streak resets when
-      // nothing genuine is outstanding. Snapshot/episode timers are untouched and still own an
-      // actually missing delivery.
+      // The paired count/disposition condition holds; per the ADOPTED §D DESIGN (plan §21 /
+      // ADR-0005) the fire additionally waits until the OLDEST ACTUAL same-epoch outstanding input
+      // has aged past the CONFIGURED wait — a measured conservative envelope from the supplied
+      // provenance, NEVER a bound and never a claim that the input is lost. An appliedEpoch-scoped
+      // measurement that no longer matches the current epoch is used anyway in the SAFE DIRECTION
+      // (it can only hold the fire LONGER, never fire early) and says so. Snapshot/episode timers
+      // are untouched and still own an actually missing delivery. The age is measured on the
+      // seat's DECLARED clock (trigger origin); the episode budget keeps its own timer origin.
       const oldest = this.oldestOutstandingSameEpochMs(delivery.epoch);
       const nowMs = this.options.clock.nowMs();
       const decision = stalledAckFloorDecision({
-        floorMs,
+        floorMs: floor.waitMs,
         streak: this.stallStreak,
         deliveriesRequired: this.options.stallDetectionDeliveries,
         oldestOutstandingSameEpochSentAtMs: oldest,
         nowMs,
       });
+      const staleEpoch = floor.appliedEpoch !== null && floor.appliedEpoch !== delivery.epoch;
       if (decision === 'fire') {
         const ageMs = oldest === null ? 'unknown' : String(Math.round(nowMs - oldest));
-        this.enterRecovery('input-ack-stalled', `PROTOTYPE stalled-ack floor: TEST WAIT ${String(floorMs)} ms elapsed (age ${ageMs} ms, pending ${String(this.pending.size)})`);
+        const detail = floor.source === 'legacy-numeric'
+          ? `PROTOTYPE stalled-ack floor: TEST WAIT ${String(floor.waitMs)} ms elapsed (age ${ageMs} ms, pending ${String(this.pending.size)})`
+          : `stalled-ack floor: CONFIGURED wait ${String(floor.waitMs)} ms elapsed (age ${ageMs} ms, pending ${String(this.pending.size)}; provenance ${floor.provenance}${staleEpoch ? `; STALE for current epoch ${String(delivery.epoch)} — held on the older measurement, the safe direction, never fired early` : ''}${floor.matchedBudgetMs !== null ? `; matched budget ${String(floor.matchedBudgetMs)} ms declared-matched, not independently verified` : ''})`;
+        this.enterRecovery('input-ack-stalled', detail);
         return true;
       }
       if (decision === 'held') {
-        this.recordRecovery('stall-floor-held', `streak ${String(this.stallStreak)} >= ${String(this.options.stallDetectionDeliveries)} but the oldest outstanding input is younger than the ${String(floorMs)} ms TEST WAIT (measured conservative envelope, not a bound)`);
+        this.recordRecovery('stall-floor-held', floor.source === 'legacy-numeric'
+          ? `streak ${String(this.stallStreak)} >= ${String(this.options.stallDetectionDeliveries)} but the oldest outstanding input is younger than the ${String(floor.waitMs)} ms TEST WAIT (measured conservative envelope, not a bound)`
+          : `streak ${String(this.stallStreak)} >= ${String(this.options.stallDetectionDeliveries)} but the oldest outstanding input is younger than the configured ${String(floor.waitMs)} ms wait (provenance ${floor.provenance}; measured conservative envelope on the ${floor.clockOrigin} — not a bound, not a loss claim)`);
         return false;
       }
       // no-condition with the prototype on: nothing genuinely outstanding in this epoch holds it.

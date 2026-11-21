@@ -14,7 +14,11 @@
  * RULES (unit-pinned): ZERO dependencies (Node built-ins + the runtime's global WebSocket; its
  * absence is a NAMED failure, never a silent skip); the endpoint must be supplied EXPLICITLY
  (env UDG_STAGING_ENDPOINT for the CLI — there is no default and nothing is ever guessed); the
- record NEVER contains the host, port literal, or URL — only its irreversible digest; every
+ record NEVER contains the host, port literal, or URL — only a ONE-WAY digest of host:port; that
+ DIGEST IS REDACTION, NOT ACCESS CONTROL AND NOT ANONYMITY (a low-entropy hostname:port is
+ dictionary-guessable by anyone who can read the record — the endpoint value stays owner-sensitive
+ and records stay local until the owner rules on publication; see the GA-11 staging handoff §4).
+ Every
  connection is opened with the runtime's default TLS verification (wss) and closed or destroyed
  within the declared budget; samples and total time are CLAMPED, and the probe ALWAYS returns a
  finite record — failures are named entries, never thrown.
@@ -47,8 +51,9 @@ const getWebSocketGlobal = (): WebSocketGlobal | null => {
   return typeof candidate === 'function' ? (candidate as WebSocketGlobal) : null;
 };
 
-/** Irreversible endpoint identity: sha256 over the lowercased host:port ONLY (never the path,
- * which could carry a room token, and never any userinfo). */
+/** One-way endpoint identity: sha256 over the lowercased host:port ONLY (never the path, which
+ * could carry a room token, and never any userinfo). ONE-WAY ≠ UNLINKABLE: host:port is
+ * low-entropy and dictionary-guessable — treat this as redaction, never as access control. */
 export const endpointDigest = (endpoint: string): { digest: string; scheme: 'ws' | 'wss' } | { error: string } => {
   let url: URL;
   try {
@@ -131,7 +136,7 @@ export const runStagingConnectProbe = async (
   const connectTimeoutMs = Math.min(MAX_CONNECT_TIMEOUT_MS, Math.max(100, Math.floor(options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS)));
   const base: Pick<StagingProbeRecord, 'kind' | 'redaction' | 'runtime'> = {
     kind: PROBE_KIND,
-    redaction: 'the endpoint value is NEVER recorded; endpointDigest = sha256(lowercased host:port) only; no path, no userinfo, nothing reversible',
+    redaction: 'the endpoint value is NEVER recorded; endpointDigest = sha256(lowercased host:port) only; no path, no userinfo; the digest is ONE-WAY but a low-entropy host:port is guessable — this is redaction, NOT access control and NOT anonymity',
     runtime: { node: process.version, webSocketGlobal: getWebSocketGlobal() === null ? ('absent' as const) : ('present' as const) },
   };
   if ('error' in identity) {
