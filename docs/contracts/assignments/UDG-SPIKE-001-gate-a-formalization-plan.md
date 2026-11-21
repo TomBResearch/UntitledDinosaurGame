@@ -1032,3 +1032,99 @@ no hosted grid dispatched; the routine CI on the exact pushed head is verified a
 separately from this file. NOTHING HERE ADOPTS the wait-first wording, changes a default,
 threshold, profile or status, closes a GA row, or touches main / the accepted ADR / P06 /
 workflows.
+
+### §20A FOLLOW-UP 2 (slice 26, reviewer correction) — the hop's half-close rule FIXED (the earlier follow-up pinned the WRONG behavior), the W-diagnostic vs DEFAULT-baseline distinction, and the per-seed default-path results AS MEASURED
+
+CORRECTION, NAMED NOT ERASED (§17 precedent). The FOLLOW-UP 1 closed-direction paragraph and its
+unit case measured and PINNED A FIXTURE DEFECT, not the primitive's contract: the published
+primitive is a TRANSPARENT TCP hop, an orderly FIN of the client's WRITE side is a HALF-CLOSE of
+that direction only, and a peer may legitimately keep reading. The code connected the UPSTREAM
+with allowHalfOpen:true but accepted the DOWNSTREAM with createServer((client)=>…) — Node's
+default auto-END + destroy on peer FIN — so the hop silently tore down a reverse leg that still
+worked, and "reverse bytes after a client FIN counted lost at destination" was that defect
+mislabelled as honest semantics. FIX (commit 467acffefb72075b1f820530bbf41d7d73e4bbb8, code change
+test-harness-only): the accepted side is created with allowHalfOpen:true, symmetric with the
+upstream; every direction still FINs its destination only after its own queue drains; retirement
+stays bounded on every path (both-directions drain → finish; reset → loud abort; proxy.close()
+drain grace unchanged). TESTS, re-derived not rebased: a half-open-capable client writes the
+request and socket.end(); the TARGET receives the request BYTES and the EOF (the b5e68eb
+propagation rule, retained as the initial stale-pool regression in the same file); the target
+sends a delayed MULTI-CHUNK response; the client receives the EXACT bytes then EOF; accounting
+asserts both chunks DELIVERED, nothing lost, no error, firstFin 'client', buffered 0, pair
+RETIRES. The LOSS guarantee is kept as a GENUINE abort: a client RESET (RST, no FIN) makes the
+queued reverse byte counted LOST exactly once with an ERRORED (loud) closure — the previous
+case's plain destroy() with no unread data was an orderly FIN in disguise, i.e. the half-close
+class, and is covered by the delivery case instead. 15/15 ws-delay-proxy, 198/198 spike-001,
+full unit 661 passed / 3 SKIPPED — ACCOUNTED: the three skips are the UDG-003 PHASE-3
+BYTES-PRESENT gates (tests/unit/udg-003/task-capture-refusals.test.ts, itBytes = existsSync of
+phase-3/vectors-manifest.json): Phase-3 vector bytes are not staged in this local checkout; they
+are existence skips, unrelated to this change and never counted as passes. The paired-browser
+closed-stats counter-consumer cell re-ran green on the fixed hop (26.9 s, exit 0).
+WHAT FOLLOW-UP 1'S PER-SEED RUNS ACTUALLY WERE (distinction the reviewer required): dpa8y/dpa8z
+exercised the LOCAL W DIAGNOSTIC — the harness env-gated F-batch with the PROTOTYPE W = 400 ms
+test wait AND one INTENTIONALLY injected terminal loss (the F4 leg's design). They prove the
+rejoin MACHINERY settles under the composed tree and the captures measure; they DO NOT attribute
+the DEFAULT poor path, which fires no W and injects no loss. The FORWARD-path attribution in
+FOLLOW-UP 1 (dpa8m's never-settled attempt = the keep-alive-FIN fixture fault repaired at
+b5e68eb) stands: that fault was the UPSTREAM-FIN direction, unaffected by this fix, and the F4
+legs demonstrate the settled attempt. The FOUR-CLASS verdicts in FOLLOW-UP 1 apply to the W
+diagnostic ONLY.
+DEFAULT BASELINE (reviewer instruction): ONE bounded local reproduction of the ORIGINAL
+full-window mover baseline per previously-red poor seed, on the APPROVED dispatcher
+(pnpm test:spike -- --id UDG-SPIKE-001 --cell full-window --profile poor --seed N), the REAL
+harness topology and inputs, the DEFAULT count-only rule (no opt-in W — GA_STALL_FLOOR_MS null
+when unset), NO injected loss, NO rejoin hook (joinImpSeat wires none by construction — FIXTURE
+CONFIGURATION, unchanged), first attempts retained, ZERO retries. Instrumentation inspected
+BEFORE running: the mover ledger already captured page sends (sent), authoritative prefix/ack
+return, lastAccepted receipts, connectionError and the recoveryLedger events VERBATIM; the
+artifact did NOT capture the FIRST observed receipt or any ack AGE, so the ledger probe gained
+two TEST-ONLY read-only fields (firstDelivery = delivery-ledger first row {atMs, authorityTick,
+epoch}; oldestOutstandingAgeMs = page-clock age of the oldest UNACKED input via
+PendingInput.sentAtMs, the same clock the predictor stamps) — no product surface touched.
+RESULTS AS MEASURED (HEAD 467acff…, worktree clean, first dispatch each):
+• poor-1001 (dpa9a): 1 PASSED, exit 0, 2.9 m. ZERO ledger events — NO episode on the default
+  path. firstDelivery atMs 1097.6 authorityTick 6 epoch 1 (stable across all 634 samples); ack
+  and prefix returned to 2560/2560 by window end; ack AGE captured in 633/634 samples, max
+  371 ms — healthy poor-hop transit routinely EXCEEDS the 400 ms-adjacent count-window order,
+  the §19 structural finding visible on the DEFAULT baseline; last sample tracking, single
+  epoch, connectionError null throughout.
+• poor-1002 (dpa9b): 1 FAILED, exit 1, 2.6 m — KEPT RED, first attempt, NOT retried, NOT
+  re-hashed. The hosted-class stop REPRODUCED ON THE DEFAULT PATH locally: ledger VERBATIM,
+  +252.4 ms of pump clock (WARMUP) trigger `input-ack-stalled at 4` with ack 0 / prefix 0 and
+  sent 4 (4 inputs OUTSTANDING) while STATE deliveries flowed healthily (firstDelivery atMs
+  1154 authorityTick 7 epoch 1; deliveries 9 → 12, authorityTick 23 → 29 at ~47 ms spacing,
+  connectionError null) → stop-sending → discard-pending 4 → domain 1 quarantined → `suspended:
+  host provides no rejoin route` (the fixture's declared configuration) → send-refused → window
+  truncated (measureMs 15) → the cell published itself INVALID (no-achieved-samples, probe
+  aborted socket-closed) rather than being re-hashed. Consistent with §18A's cold-start
+  coin-flip (hosted: 1001 red once/green once, 1002 red twice, 1003 green twice — timing
+  variance, not seed semantics) and §19's arithmetic (the count-only streak at poor RTT
+  completes while the FIRST ack is still in normal transit). MISSING EVIDENCE, SAID PLAINLY:
+  oldestOutstandingAgeMs is null in ALL 590 samples — the stop and discard-pending land between
+  the 250 ms ledger ticks, so the run captured NO numeric ack age at the stop (the trigger row
+  plus sent 4 / ack 0 is the only age evidence); and the full-window artefact does NOT capture
+  a ROOM-SIDE observation AFTER the stop, so whether those 4 in-transit inputs were ultimately
+  resolved server-side is UNCERTAIN from these bytes — NOT claimed either way. Whether the same
+  coordinate would have red on 7d46bff is NOT asserted (not run there; a reroll is exactly what
+  the retention rule forbids).
+HISTORICAL HOSTED RESULTS STAND UNCHANGED: poor-1001 and poor-1002 remain RED AT run
+44791166883 (and the first-run poor-1002 at 44771876137) at their own bytes; the three published
+layers are now DISTINGUISHED: (1) LOCAL W DIAGNOSTIC (dpa8y/dpa8z: W=400 + injected terminal
+loss, rejoin machinery settles, captures measure); (2) DEFAULT BASELINE LOCAL (dpa9a green /
+dpa9b red — the default rule's cold-start coin-flip reproduced forward, no hosted rehash);
+(3) HISTORICAL HOSTED (reds stand, cited as such). FORWARD/REVERSE/FIXTURE attribution
+corrected: FORWARD (dpa8o/dpa8m keep-alive-FIN hang) — repaired at b5e68eb, unchanged here;
+REVERSE (half-close) — FOLLOW-UP 1's "lost at destination is the honest outcome" was the
+ACCEPTED-SIDE DEFECT mislabelled; the hop now preserves reverse traffic across an orderly
+half-close (467acff), and only GENUINE resets lose; FIXTURE (no-rejoin stop) — unchanged and
+still FIXTURE CONFIGURATION: dpa9b's stop staying stopped is the fixture's declared posture, not
+a product rejoin failure, and NOTHING here ratifies any threshold: every value involved remains
+PROVISIONAL UNDER GA-11, the wait-first wording remains a PROPOSAL DRAFT for ADR review, Gate A
+remains NOT-PASS overall and NOT RUN for acceptance, no hosted matrix dispatched, main/ADR/P06/
+workflows untouched.
+LOCAL CHECKS ON 467acff…: tsc root+e2e exit 0; eslint exit 0; ws-delay-proxy 15/15; spike-001
+198/198; tests/unit 661 passed / 3 accounted skips; counter-consumer cell green (26.9 s);
+dpa9a dispatch exit 0; dpa9b dispatch exit 1 (RETAINED — the red is evidence, not a task
+failure). RETAINED DIGESTS (bundles local-only, sha256-manifested, no secrets): dpa9a artefact
+under cell-full-window-poor-1001/spike-cell.json, dpa9b artefact under
+cell-full-window-poor-1002/spike-cell.json (exact digests in each bundle's SHA256MANIFEST.txt).
