@@ -19,6 +19,16 @@
  *   reorders**: bytes enter each direction's queue in arrival order and leave it one at a time,
  *   under a single in-flight stall per direction, with a delivery-sequence audit that counts any
  *   violation (structurally zero — counted anyway, because "zero" must be CHECKED, not asserted);
+ * - "forwarded" means **handed to a live destination socket at this hop**, and nothing stronger.
+ *   The proxy is a loopback instrument, not an observer of its peer's kernel: `chunksDelivered` /
+ *   `bytesDelivered` count the LOCAL HANDOFF only and never claim a remote application received
+ *   anything. When a direction's destination is already gone (an orderly peer half-close racing
+ *   bytes still in the tube) the bytes that could not be handed off are counted in
+ *   `chunksLostAtDestination` / `bytesLostAtDestination`, the closure carries `error: true`, and the
+ *   invariant `chunksReceived = chunksDelivered + chunksLostAtDestination + chunksHeld + queued`
+ *   holds at every snapshot. Before that accounting existed, such bytes were counted as DELIVERED
+ *   while they in fact crossed nothing — a blind spot that made a stuck client look served (§20A,
+ *   `artifacts/.local/spike-001/dpa8o/`);
  * - the stall delays the byte stream, it does not delete from it — which is precisely what the
  *   adopted measurement rule requires: *"Preserve byte order and model TCP stalls as stalls; do
  *   not call application message dropping packet-loss simulation."*
@@ -155,6 +165,16 @@ export interface DirectionStats {
   readonly holdRemaining: number;
   /** Structural constant zero: this primitive has no drop path. Kept visible so zero is CHECKED. */
   readonly chunksDropped: number;
+  /**
+   * LOCAL-HANDOFF HONESTY: chunks that left the delay tube but could NOT be handed to this
+   * direction's destination because that destination was already gone (peer half-closed / reset).
+   * These are NEVER counted in `chunksDelivered`/`bytesDelivered`, are visible in the closure
+   * (`error: true`), and exist so a hop that could not forward can never report a full delivery.
+   * This is not a TCP drop either: the bytes had already lost their peer, and the proxy says so
+   * instead of claiming a handoff. Zero on every healthy run and checked as such.
+   */
+  readonly chunksLostAtDestination: number;
+  readonly bytesLostAtDestination: number;
   /** Delivery-sequence audit. Structurally zero; counted anyway. */
   readonly orderViolations: number;
   /** Times the destination signalled backpressure and the pump paused before the next write. */
@@ -343,6 +363,11 @@ interface DirectionState {
   bytesDelivered: number;
   chunksReceived: number;
   chunksDelivered: number;
+  /** Counted when the LOCAL handoff was impossible (destination gone). See `DirectionStats`. */
+  chunksLostAtDestination: number;
+  bytesLostAtDestination: number;
+  /** True once a handoff attempt found the destination gone; ends THIS direction only. */
+  destinationGone: boolean;
   orderViolations: number;
   backpressurePauses: number;
   earlyFireReschedules: number;
@@ -381,6 +406,9 @@ const newDirection = (label: 'c2s' | 's2c', seed: number): DirectionState => ({
   bytesDelivered: 0,
   chunksReceived: 0,
   chunksDelivered: 0,
+  chunksLostAtDestination: 0,
+  bytesLostAtDestination: 0,
+  destinationGone: false,
   orderViolations: 0,
   backpressurePauses: 0,
   earlyFireReschedules: 0,
@@ -440,10 +468,18 @@ class ProxyConnection {
     client.on('data', (chunk: Buffer) => {
       this.enqueue(this.c2s, chunk);
     });
+    // ORDERLY HALF-CLOSE. A peer that FINs first emits 'end'; with `allowHalfOpen: true` (the
+    // upstream is connected that way, so a half-closed leg stays observable instead of vanishing)
+    // 'close' does NOT follow until this side ends too. Handling only 'close' meant a server that
+    // closed an idle keep-alive pair left the browser's pooled socket looking alive: the client's
+    // NEXT request was written into a socket whose peer was gone, vanished at this hop, and the
+    // caller hung with neither response nor failure. 'end' is therefore handled on BOTH legs, and
+    // it closes only the direction whose SOURCE ended — the reverse leg keeps draining.
+    client.on('end', () => {
+      this.noteSourceClosed('c2s', 'client');
+    });
     client.on('close', () => {
-      if (this.firstFin === 'none') this.firstFin = 'client';
-      this.c2s.sourceClosed = true;
-      this.pump(this.c2s);
+      this.noteSourceClosed('c2s', 'client');
     });
     client.on('error', () => {
       this.abort();
@@ -458,10 +494,11 @@ class ProxyConnection {
       this.upstream.on('data', (chunk: Buffer) => {
         this.enqueue(this.s2c, chunk);
       });
+      this.upstream.on('end', () => {
+        this.noteSourceClosed('s2c', 'upstream');
+      });
       this.upstream.on('close', () => {
-        if (this.firstFin === 'none') this.firstFin = 'upstream';
-        this.s2c.sourceClosed = true;
-        this.pump(this.s2c);
+        this.noteSourceClosed('s2c', 'upstream');
       });
       this.pump(this.c2s);
     });
@@ -469,8 +506,7 @@ class ProxyConnection {
       this.abort();
     });
     this.upstream.on('close', () => {
-      if (this.firstFin === 'none') this.firstFin = 'upstream';
-      this.maybeFinish();
+      this.noteSourceClosed('s2c', 'upstream');
     });
     client.on('close', () => {
       this.maybeFinish();
@@ -522,6 +558,43 @@ class ProxyConnection {
   holdQuota(dir: 'c2s' | 's2c', remaining: { left: number }): void {
     if (dir === 'c2s') this.c2s.holdRemaining = remaining;
     else this.s2c.holdRemaining = remaining;
+  }
+
+  /**
+   * One idempotent accounting of "the SOURCE of this direction finished" (FIN via 'end', or the
+   * socket fully closed). Records who closed first, marks the direction, and pumps it — the pump
+   * drains the direction's own queue first and only then FINs the destination of THAT direction.
+   * 'end' and 'close' both land here, so an orderly peer half-close and a later full close cannot
+   * disagree or double-count, and neither one ever touches the opposite direction.
+   */
+  private noteSourceClosed(label: 'c2s' | 's2c', fin: 'client' | 'upstream'): void {
+    if (this.firstFin === 'none') this.firstFin = fin;
+    const dir = label === 'c2s' ? this.c2s : this.s2c;
+    dir.sourceClosed = true;
+    this.pump(dir);
+    this.maybeFinish();
+  }
+
+  /**
+   * The destination of this direction cannot take the bytes (never connected, destroyed, or no
+   * longer writable). The chunk in flight AND everything still queued for that destination are
+   * counted as lost at this hop — never as delivered — the closure is marked errored so the event
+   * can never be silent, and only THIS direction is terminated. The opposite leg is untouched:
+   * a dead forward destination never tears down a reverse path that still works.
+   */
+  private loseToGoneDestination(dir: DirectionState, inFlight: Chunk): void {
+    if (dir.destinationGone) return;
+    dir.destinationGone = true;
+    let bytes = inFlight.data.length;
+    for (const queued of dir.queue) bytes += queued.data.length;
+    dir.chunksLostAtDestination += 1 + dir.queue.length;
+    dir.bytesLostAtDestination += bytes;
+    dir.queue.length = 0;
+    // Attribution, not blanket blame: bytes whose ENDPOINT had already left (a seat closing its
+    // socket, a page navigating away — `firstFin` already says who) are an accounted loss with a
+    // named closer, NOT a proxy fault. Only a destination that vanished while both endpoints were
+    // still there, or a proxy-side hard close, marks the closure errored.
+    if (this.firstFin !== 'client' && this.firstFin !== 'upstream') this.errored = true;
   }
 
   private enqueue(dir: DirectionState, data: Buffer): void {
@@ -598,6 +671,17 @@ class ProxyConnection {
       this.maybeFinish();
       return;
     }
+    // `dest === null` for c2s means "the upstream is still connecting" — the queue HOLDS order and
+    // nothing is lost. A destination that exists but is destroyed/no-longer-writable is a different
+    // thing: those bytes can never be handed off, so they are accounted as lost at this hop rather
+    // than held silently forever.
+    const destGone = dest === null ? this.upstream.destroyed : dest.destroyed || !dest.writable;
+    if (destGone) {
+      const head = dir.queue.shift();
+      if (head !== undefined) this.loseToGoneDestination(dir, head);
+      this.maybeFinish();
+      return;
+    }
     if (dest === null || dest.destroyed) return; // upstream not ready: the queue holds order
     dir.pumping = true;
     this.pumpStep(dir);
@@ -642,6 +726,15 @@ class ProxyConnection {
       if (timerLag > dir.maxTimerLagMs) dir.maxTimerLagMs = timerLag;
       const achieved = firedAtMs - chunk.arrivedAtMs;
       if (chunk.flushed) dir.flushedChunks += 1;
+      // The LOCAL HANDOFF is decided BEFORE any delivery is counted: `delivered` may only ever mean
+      // "a live destination at this hop accepted these bytes", never "a remote peer received them".
+      const dest = this.destination(dir);
+      if (dest === null || dest.destroyed || !dest.writable) {
+        this.loseToGoneDestination(dir, chunk);
+        dir.pumping = false;
+        this.maybeFinish();
+        return;
+      }
       if (chunk.seq !== dir.lastDeliveredSeq + 1) dir.orderViolations += 1;
       dir.lastDeliveredSeq = chunk.seq;
       dir.bytesDelivered += chunk.data.length;
@@ -651,11 +744,6 @@ class ProxyConnection {
       if (dir.label === 's2c' && this.c2s.lastForwardAchievedMs !== null) {
         // Leg-sum pairing (DIAGNOSTIC, not an accepted RTT — see ProxyStats.proxyLegSumSamples).
         this.env.onLegSumSample(this.c2s.lastForwardAchievedMs + achieved);
-      }
-      const dest = this.destination(dir);
-      if (dest === null || dest.destroyed) {
-        dir.pumping = false;
-        return;
       }
       this.env.onFrame?.({ label: dir.label, edge: dir.label === 'c2s' ? 'serverIn' : 'clientOut', atMs: this.env.timer.nowMs(), bytes: chunk.data.length, conn: this.index });
       if (dest.write(chunk.data) === false) {
@@ -717,8 +805,12 @@ class ProxyConnection {
 
   private maybeFinish(): void {
     if (this.finished) return;
-    const clientGone = this.client.destroyed || (!this.client.writable && !this.client.readable && this.c2s.queue.length === 0);
-    const upstreamGone = this.upstream.destroyed || (!this.upstream.writable && !this.upstream.readable && this.s2c.queue.length === 0);
+    // A direction whose DESTINATION is gone is terminated too (its queue was accounted as lost at
+    // that moment), otherwise a half-closed peer could leave the pair live forever.
+    const clientGone = this.client.destroyed || this.c2s.destinationGone
+      || (!this.client.writable && !this.client.readable && this.c2s.queue.length === 0);
+    const upstreamGone = this.upstream.destroyed || this.s2c.destinationGone
+      || (!this.upstream.writable && !this.upstream.readable && this.s2c.queue.length === 0);
     if (clientGone && upstreamGone && this.c2s.queue.length === 0 && this.s2c.queue.length === 0) {
       this.finish();
     }
@@ -727,14 +819,22 @@ class ProxyConnection {
   private finish(): void {
     if (this.finished) return;
     this.finished = true;
-    // Integrity rule: a close that still has bytes queued means the hard-close path collected a
-    // live stall — those bytes never crossed. That must be VISIBLE (counted as a connection
-    // error), never a silent drop. A clean drained close always finishes with empty queues.
-    if (this.c2s.queue.length > 0 || this.s2c.queue.length > 0) this.errored = true;
+    // Integrity rule: a close that still has bytes queued means a live stall was collected before
+    // its departure — those bytes never crossed, so they are COUNTED (into the direction's
+    // lost-at-destination totals, once each) and, unless an endpoint had already left, VISIBLE as a
+    // connection error. A clean drained close always finishes with empty queues and no error.
+    if ((this.c2s.queue.length > 0 || this.s2c.queue.length > 0) && this.firstFin !== 'client' && this.firstFin !== 'upstream') {
+      this.errored = true;
+    }
     for (const cancel of this.pendingCancels) cancel();
     this.pendingCancels.clear();
-    this.c2s.queue.length = 0;
-    this.s2c.queue.length = 0;
+    for (const dir of [this.c2s, this.s2c]) {
+      for (const stranded of dir.queue) {
+        dir.chunksLostAtDestination += 1;
+        dir.bytesLostAtDestination += stranded.data.length;
+      }
+      dir.queue.length = 0;
+    }
     this.client.destroy();
     this.upstream.destroy();
     this.env.onClosed(this, this.errored);
@@ -751,6 +851,8 @@ const directionStats = (d: DirectionState): DirectionStats => ({
   bytesDelivered: d.bytesDelivered,
   chunksReceived: d.chunksReceived,
   chunksDelivered: d.chunksDelivered,
+  chunksLostAtDestination: d.chunksLostAtDestination,
+  bytesLostAtDestination: d.bytesLostAtDestination,
   /** Chunks released ahead of their pinned departure by an explicit harness FLUSH (labelled). */
   chunksFlushed: d.flushedChunks,
   chunksHeld: d.chunksHeld,
@@ -776,6 +878,8 @@ const mergeStats = (a: DirectionStats, b: DirectionStats): DirectionStats => ({
   bytesDelivered: a.bytesDelivered + b.bytesDelivered,
   chunksReceived: a.chunksReceived + b.chunksReceived,
   chunksDelivered: a.chunksDelivered + b.chunksDelivered,
+  chunksLostAtDestination: a.chunksLostAtDestination + b.chunksLostAtDestination,
+  bytesLostAtDestination: a.bytesLostAtDestination + b.bytesLostAtDestination,
   chunksFlushed: a.chunksFlushed + b.chunksFlushed,
   chunksHeld: a.chunksHeld + b.chunksHeld,
   // the quota object is SHARED per proxy; directions/connections report the SAME counter —
