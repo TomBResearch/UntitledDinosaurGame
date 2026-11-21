@@ -1128,3 +1128,42 @@ dpa9a dispatch exit 0; dpa9b dispatch exit 1 (RETAINED — the red is evidence, 
 failure). RETAINED DIGESTS (bundles local-only, sha256-manifested, no secrets): dpa9a artefact
 under cell-full-window-poor-1001/spike-cell.json, dpa9b artefact under
 cell-full-window-poor-1002/spike-cell.json (exact digests in each bundle's SHA256MANIFEST.txt).
+
+FOLLOW-UP 3 (dpa9c/dpa9e family — the dpa9b evidence gap CLOSED under a PRE-REGISTERED fixed-N
+plan; `UDG-SPIKE-001-gate-a-local-poor-seed-fixed-n-plan.md`, protocol committed at 69a9b59
+BEFORE any dispatch). §20A FOLLOW-UP 2 limitation 4 (age-at-trigger unseen; room-side receipts
+uncaptured) is closed by READ-ONLY watchers: a 25 ms page trigger-age watch (the trigger event is
+AGED against its own cause — the oldest UNACKED input's send stamp from the retained sent audit,
+same page clock; explicit triggered:false record when nothing fires) and a 200 ms node-side room
+watch (the room's OWN evidence().seats resolvedThrough/epoch plus tick-record CONSUMED seq for the
+seat's authority entityId = sessionId.slice(0, 64) — identity, never proxy byte-counter
+inference). FIXED-N POPULATION (N=3 per seed, first attempts only, all retained): poor-1001
+GREEN 3/3 (explicit non-events; client ack 2520/2521/2526 EQUALS room resolvedThrough/consumed
+seq to the last input); poor-1002 RED 3/3 — every attempt stopped at `input-ack-stalled at 4`
+with oldest unacked = SEQ 1 aged 213.5/209.7/201.6 ms at the trigger, client prefix frozen at
+epoch 1 : tick 29 : ack 0 BEFORE the stop and identical at the end (suspended, no rejoin wired),
+while the ROOM consumed seq 1/2/3 at ticks 30/32/33 and resolved through 3 AFTER the third frozen
+delivery: at every local trigger the aged inputs were LATE WITHIN THE PROFILE'S OWN DELAY
+ENVELOPE, NOT LOST; the 4th discarded entry's wire fate is unreachable and stated so. The
+stop-line class matches dpa9b and hosted dpa8r; hosted rows are NOT re-hashed. LOCAL FLOOR-AWARE
+CONTROLS (opt-in UDG_GA_FLOOR + harness-supplied UDG_GA_FLOOR_MS=400, labelled PROTOTYPE, product
+default unchanged, unset = tracked cell shape): gafloor-truth fired ONLY after the wait and was
+aged against the suppressed input's OWN stamp (441.1 ms > 400 ms), 8 stall-floor-held events
+preceded, nothing re-issued, discard followed the trigger, settle bounded (green on the corrected
+check after Fix B named in place at 0ae1741); the GA-5b malformed-stamp trio re-ran with the
+floor armed and the wait added NO episode. NAMED HARNESS CORRECTIONS (all bytes retained, nothing
+re-hashed): Fix A — watcher reads placed after pageM.close() killed dpa9c-trigger-1001-a1..a3 in
+teardown (dpa9c-trigger-1001-defect/README.md; population continues as dpa9c2/dpa9d2 under the
+same pre-registration); Fix B — gafloor settles conjunct read GaSnapshot.transportEpoch (never
+moves on rejoin) instead of the recovered domain epoch. LOCAL GA-5l TIMING ROWS ARE PROVEN
+ENVIRONMENT-CLASS: the suppression quiet-window and benign-release rows went red locally on the
+CURRENT code AND on a named control running the PRE-INSTRUMENTATION 7af95d4 spec file in this
+container (dpa9e-facility/README.md) — the pinned CI stays the green authority for that cell.
+DIRECTION, NOT ADOPTION: 3/3 local stops fired against inputs still in flight within the
+profile's declared envelope, and the floor legs show a wait-aged rule fires exactly when the age
+says lost and never strands — this is direction-evidence for the ADR §D wait-first wording
+(reviewers own that decision) and NOTHING here adopts a numeric, changes a default/threshold/
+status, dispatches a hosted grid, or moves Gate A (still NOT-PASS overall, NOT RUN for
+acceptance; GA-11 §19 stays the sole nomination authority). Local checks on 5efaddf: tsc 0,
+eslint 0, six full-window dispatches + five ga-scenarios runs all retained with READMEs and
+per-bundle digests (bundles local-only, no secrets).
