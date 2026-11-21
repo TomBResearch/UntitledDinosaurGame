@@ -6564,8 +6564,8 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
           const recElapsedF = recEventF !== undefined && trigF !== undefined ? recEventF.atMs - trigF.atMs : null; // SAME page clock as the trigger event (slice-26 timebase)
           const finalB = await readGaBoundary(ctx.pageM);
           cellCheck('GA-FLOOR TRUTH settles: the episode still ENDS bounded on the wired rejoin route — snapshot-recovered on a NEW domain epoch within the provisional budget + declared tolerance, measured on the SAME page clock from the trigger event (the wait adds delay to WHEN the rule may fire; it never strands the seat) — and the seat is tracking with pending 0 afterwards',
-            recF !== null && recElapsedF !== null && recElapsedF <= EPISODE_BUDGET_MS + BUDGET_TOLERANCE_MS && (recF.transportEpoch as number) > quietF.epoch && finalB.state === 'tracking' && finalB.pending === 0,
-            { recoveredWithinMs: recElapsedF, budgetMs: EPISODE_BUDGET_MS + BUDGET_TOLERANCE_MS, transportEpochAfter: recF?.transportEpoch ?? null, finalState: finalB.state, finalPending: finalB.pending, epochAtQuiet: quietF.epoch });
+            recF !== null && recElapsedF !== null && recElapsedF <= EPISODE_BUDGET_MS + BUDGET_TOLERANCE_MS && finalB.epoch > quietF.epoch && finalB.state === 'tracking' && finalB.pending === 0,
+            { recoveredWithinMs: recElapsedF, budgetMs: EPISODE_BUDGET_MS + BUDGET_TOLERANCE_MS, epochAtQuiet: quietF.epoch, epochAfterRecovery: finalB.epoch, finalState: finalB.state, finalPending: finalB.pending });
         });
         await malformedStampLeg('ga5b-msdup-floor', 'dup', { floorLocalMs: W });
         await malformedStampLeg('ga5b-msdec-floor', 'dec', { floorLocalMs: W });
