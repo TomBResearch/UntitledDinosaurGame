@@ -950,6 +950,8 @@ interface GatedRoom {
     signals?: readonly { entityId: string; signal: string }[];
   }[];
   evidence(): Record<string, unknown>;
+  /** Public method on RegionRoom (RegionRoom.ts nowMs()) — the room's OWN clock for the watch. */
+  nowMs(): number;
   journal(): { rows: readonly Record<string, unknown>[]; chain: readonly { tick: number; atMs: number }[]; dropped: number };
   /** PUBLIC readonly arrays on RegionRoom (RegionRoom.ts:178/180) — the room's own join-gate and
    * close observations. The slice-25 roomView reads ONLY these and evidence().seats, never the
@@ -2660,6 +2662,117 @@ const startMoverLedger = (page: Page): Promise<{ samples: Record<string, unknown
     return { samples, events };
   });
 
+/* ------------------------------------------------------------------ trigger-age + room-side watch
+ *
+ * SLICE-26 dpa9b GAP CLOSERS (pure READS; nothing here disposes, rescues, retimes or otherwise
+ * changes what the seat does — the stop and its consequences run their adopted course exactly).
+ * The default-rule stop discards pending SYNCHRONOUSLY with the trigger, so the 250 ms ledger
+ * cannot see the outstanding set at the stop (dpa9b: oldestOutstandingAgeMs null in every
+ * sample). The trigger-age watch polls every 25 ms and AGEs THE TRIGGER AGAINST ITS OWN CAUSE:
+ * the trigger event's own atMs minus the send stamp of the oldest UNACKED input of the trigger's
+ * epoch (from the retained sent audit — frozen at the stop, published surface), correlated with
+ * the client-decoded delivery identity (epoch : authorityTick : ack) and its prefix BEFORE the
+ * stop and AT THE END. The room-side watch samples the room's OWN evidence seam (resolvedThrough
+ * / epoch per 200 ms) and its tick-record CONSUMPTION BY SEQ for the mover's authority entity
+ * (RegionRoom join: entityId === sessionId.slice(0, 64)) — server receipts and resolution by
+ * IDENTITY, never inferred from proxy byte counters. A missing outcome is EXPLICIT in the
+ * record ({triggered:false,...} / named sample gaps), never an absence of data.
+ */
+const startTriggerAgeWatch = (page: Page): Promise<boolean> =>
+  page.evaluate(async () => {
+    const g = globalThis as unknown as { __udgAgeWatch?: Record<string, unknown> | null; __udgAgeStop?: boolean };
+    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+    if (holder === undefined) return false;
+    const p = holder.predictor;
+    g.__udgAgeWatch = null;
+    g.__udgAgeStop = false;
+    const loop = (): void => {
+      if (g.__udgAgeStop === true || g.__udgAgeWatch !== null) return;
+      const events = p.recoveryLedger().map((r) => ({ event: r.event, detail: r.detail, atMs: r.atMs }));
+      const idx = events.findIndex((e) => e.event === 'trigger' && e.detail.startsWith('input-ack-stalled'));
+      if (idx !== -1) {
+        const ev = events[idx]!;
+        const rows = p.deliveryLedger();
+        const d = rows.length > 0 ? rows[rows.length - 1]!.delivery : undefined;
+        const ack = d?.ack ?? -1;
+        const epoch = d?.epoch ?? holder.transport.issuedEpoch();
+        let oldest: { seq: number; atMs: number } | null = null;
+        for (const r of p.sentAudit()) {
+          if (r.epoch === epoch && r.seq > ack && (oldest === null || r.atMs < oldest.atMs)) oldest = { seq: r.seq, atMs: r.atMs };
+        }
+        g.__udgAgeWatch = {
+          triggered: true, detail: ev.detail, triggerAtMs: ev.atMs,
+          detectedWithinMs: performance.now() - ev.atMs,
+          ackAtTrigger: ack, epochAtTrigger: epoch,
+          sameDeliveryBeforeStop: d === undefined ? null : { epoch: d.epoch, authorityTick: d.authorityTick, ack: d.ack, resolvedThrough: d.resolvedThrough, atMs: d.atMs },
+          deliveriesAtTrigger: rows.length,
+          oldestUnackedSeq: oldest?.seq ?? null, oldestSendAtMs: oldest?.atMs ?? null,
+          oldestAgeAtTriggerMs: oldest === null ? null : ev.atMs - oldest.atMs,
+          pendingAtDetect: p.pendingJournal().length,
+          discardDetail: events.slice(idx + 1, idx + 3).find((e) => e.event === 'discard-pending')?.detail ?? null,
+        };
+        return;
+      }
+      setTimeout(loop, 25);
+    };
+    loop();
+    return true;
+  });
+const readTriggerAgeWatch = (page: Page): Promise<Record<string, unknown>> =>
+  page.evaluate(async () => {
+    const g = globalThis as unknown as { __udgAgeWatch?: Record<string, unknown> | null; __udgAgeStop?: boolean };
+    g.__udgAgeStop = true;
+    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+    const rows = holder?.predictor.deliveryLedger() ?? [];
+    const last = rows.length > 0 ? rows[rows.length - 1]!.delivery : undefined;
+    const end = {
+      deliveriesAtEnd: rows.length,
+      sameDeliveryAtEnd: last === undefined ? null : { epoch: last.epoch, authorityTick: last.authorityTick, ack: last.ack, resolvedThrough: last.resolvedThrough, atMs: last.atMs },
+      stateAtEnd: holder?.predictor.stateName() ?? 'no-seat',
+    };
+    return { ...(g.__udgAgeWatch ?? { triggered: false, note: 'NO input-ack-stalled trigger fired during this attempt — the age-at-trigger question is an EXPLICIT non-event, not missing data' }), ...end };
+  });
+const startRoomWatch = (roomId: string, seatSessionId: string): (() => Record<string, unknown>) => {
+  // The room runs IN this process; identity is the room's OWN seat-entity (RegionRoom.ts:291 /
+  // MovementAuthorityAdapter.ts:181: authorityEntityId(sessionId) === sessionId.slice(0, 64)).
+  const entityId = seatSessionId.slice(0, 64);
+  const samples: Record<string, unknown>[] = [];
+  const timer = setInterval(() => {
+    try {
+      const room = gatedRoom(roomId);
+      const ev = room.evidence();
+      const seats = Array.isArray(ev['seats']) ? ev['seats'] as { entityId?: string; epoch?: number; resolvedThrough?: number; closing?: boolean }[] : [];
+      const me = seats.find((s) => s.entityId === entityId);
+      samples.push({ atRoomMs: room.nowMs(), tickTip: ev['ticks'] ?? null, resolvedThrough: me?.resolvedThrough ?? null, epoch: me?.epoch ?? null, seatPresent: me !== undefined, closing: me?.closing ?? null, joinRefusalCount: ev['joinRefusals'] ?? null });
+      if (samples.length > 1400) samples.shift();
+    } catch {
+      if (samples.at(-1)?.['gap'] !== 'room-not-live') samples.push({ gap: 'room not live at this sample' });
+    }
+  }, 200);
+  return () => {
+    clearInterval(timer);
+    let consumedTicks: { tick: number; seq: number }[] = [];
+    let refusedTicks: { tick: number; count: number }[] = [];
+    let closed = false;
+    let refusals: unknown[] = [];
+    let finalScan = 'captured';
+    try {
+      const room = gatedRoom(roomId);
+      for (const rec of room.tickRecords) {
+        for (const c of rec.consumed) if (c.entityId === entityId) consumedTicks.push({ tick: rec.tick, seq: c.seq });
+        for (const r of rec.refused ?? []) if (r.entityId === entityId) refusedTicks.push({ tick: rec.tick, count: r.count });
+        for (const cl of rec.closures ?? []) if (cl.entityId === entityId) closed = true;
+      }
+      refusals = [...room.joinRefusals];
+      consumedTicks = consumedTicks.slice(-512);
+      refusedTicks = refusedTicks.slice(-64);
+    } catch {
+      finalScan = 'room not live for the final scan — samples above stand alone';
+    }
+    return { entityId, sampleCount: samples.length, samples: samples.slice(-900), consumedToTail: consumedTicks.at(-1)?.seq ?? null, consumedTickCount: consumedTicks.length, consumedTicksTail: consumedTicks, refusedTicks, seatClosedObserved: closed, joinRefusals: refusals, finalScan };
+  };
+};
+
 /* ------------------------------------------------------------------ accepted RTT probe (slice 6d)
  *
  * The probe's slot-reservation state machine lives in tools/load-test/src/rtt-probe.ts —
@@ -3546,6 +3659,14 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
     // ---- the mover event ledger starts BEFORE the pump: every state/recovery transition is
     // bound to clock, phase and epoch from the first moment of the cell (slice 22).
     const moverLedgerPromise = startMoverLedger(pageM);
+    // dpa9b GAP CLOSERS (pure reads, started with the ledger BEFORE the pump): the 25 ms trigger-
+    // age watch (trigger event aged against the send stamp of the oldest UNACKED input, and the
+    // client-decoded delivery identity/prefix before the stop and at the end) and the node-side
+    // 200 ms room watch (the room's OWN resolvedThrough/epoch samples plus tick-record CONSUMED
+    // SEQ for this seat's authority entity — server receipts by identity, never inferred from
+    // proxy byte counters). Neither observes-and-acts: they read published ledgers only.
+    const triggerAgeStarted = await startTriggerAgeWatch(pageM);
+    const stopRoomWatch = startRoomWatch(roomId, joinM.sessionId ?? '');
     const pumpMs = 20_000 + 120_000 + 30_000;
     const pump = startRoutePump(pageM, pumpMs);
     // Phase boundaries are pump-clock waits, not node-side wall sleeps (slice 12): the warmup ends
@@ -3858,6 +3979,9 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
     const closeStats = await closeProxyBounded(host, handle);
     handle = -1;
     hostShutdown = await host.shutdown();
+    // Read the two watchers while the room object still lives and the mover page is open.
+    const triggerWatch = triggerAgeStarted ? await readTriggerAgeWatch(pageM) : { triggered: false, note: 'watch never started (no seat) — EXPLICIT non-event' };
+    const roomWatch = stopRoomWatch();
     cellCheck('cell: bounded teardown with receipts — proxy closed, host exited FINITE (exit 0) with NO active resources; the route pump ended finitely',
       hostShutdown.receipt !== null && hostShutdown.exitCode === 0 && JSON.stringify(hostShutdown.receipt?.activeResourcesAfterClose) === '[]' && closeStats.c2s.bytesReceived > 0 && pumpFinished.sendError === null,
       { activeResourcesAfterClose: hostShutdown.receipt?.activeResourcesAfterClose ?? null, exitCode: hostShutdown.exitCode, signal: hostShutdown.signal, pumpFinished });
@@ -3892,6 +4016,8 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
       route: { kind: 'canonical 12s/48m square (+x,+z,-x,-z), spawn-verified unobstructed', spawn, motion, holdControl: holdAudit },
       acceptedRttProbe: { rules: 'slot reservation (rtt-probe.ts, unit-tested, imported UNCHANGED by the page via the loopback pipeline); 100 pings at 1180 ms predeclared cadence spanning the measure window', outcome: probe, summary: { validity: probeValidity } },
       ackLedger: { report, warmupLeakControl: { leakedMeasuredBoundaries: ledger.leakedMeasuredBoundaries, honestMeasuredBoundaries: report.measuredBoundaries }, correctionClaim: probeValidity.valid ? (targetClaim ? 'MET' : 'MISSED') : 'NOT-CLAIMED (network invalid)' },
+      triggerWatch: { purpose: 'age the trigger against its own cause; identity-correlated client prefix before/after the stop; explicit non-event when no trigger fired', ...(typeof triggerWatch === 'object' && triggerWatch !== null ? triggerWatch : { triggered: false, raw: String(triggerWatch) }) },
+      roomWatch: { purpose: 'server-side receipts/resolution by (epoch, seq) identity from the room\u2019s OWN ledgers (evidence().seats, tickRecords) — NOT proxy byte-counter inference', ...(typeof roomWatch === 'object' && roomWatch !== null ? roomWatch : { raw: String(roomWatch) }) },
       moverLedger: {
         rejoinConfigured: false,
         rejoinNote: 'joinImpSeat wires DirectMotionPredictor with NO rejoin route: a recovery-stopped mover seat stays stopped for the rest of the window. This is FIXTURE CONFIGURATION — “no rejoin connection” is not a product rejoin claim — and it equally means no compliant resync/closed period can silently pass the window.',
@@ -4590,6 +4716,10 @@ interface GaBoundary {
   deliveries: number; ack: number; resolvedThrough: number; epoch: number;
   gapStart: number; gapEnd: number; retired: number; pending: number;
   stallStreak: number; sentAuditLen: number; state: string; authorityTick: number;
+  /** Slice-26 gap closer: the page-clock send stamp of the OLDEST UNACKED input at this sample
+   * (PendingInput.sentAtMs — the same clock the predictor stamps), null when nothing is pending.
+   * Pure read; it lets a trigger be aged against its own cause instead of inferred. */
+  oldestPendingSentAtMs: number | null;
   events: { event: string; detail: string; atMs: number }[];
 }
 
@@ -4620,6 +4750,12 @@ const readGaBoundary = (page: Page): Promise<GaBoundary & { atPageMs: number }> 
       sentAuditLen: p.sentAudit().length,
       state: p.stateName(),
       authorityTick: d?.authorityTick ?? -1,
+      oldestPendingSentAtMs: (() => {
+        const pend = p.pendingJournal();
+        let oldest: number | null = null;
+        for (const e of pend) if (oldest === null || e.sentAtMs < oldest) oldest = e.sentAtMs;
+        return oldest;
+      })(),
       events: p.recoveryLedger().map((r) => ({ event: r.event, detail: r.detail, atMs: r.atMs })),
     };
   }, {});
@@ -4656,6 +4792,12 @@ const startGaPoller = (page: Page): Promise<boolean> =>
         sentAuditLen: p.sentAudit().length,
         state: p.stateName(),
         authorityTick: d?.authorityTick ?? -1,
+        oldestPendingSentAtMs: (() => {
+          const pend = p.pendingJournal();
+          let oldest: number | null = null;
+          for (const e of pend) if (oldest === null || e.sentAtMs < oldest) oldest = e.sentAtMs;
+          return oldest;
+        })(),
         events: p.recoveryLedger().map((r) => ({ event: r.event, detail: r.detail, atMs: r.atMs })),
       };
     };
@@ -4809,6 +4951,15 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
   // The §3.2 budget the ADOPTED settings declare — every within-budget claim is measured against
   // these exact numbers plus a stated tolerance (browser rAF/timer slack), never a fitted one.
   const EPISODE_BUDGET_MS = 4_000;
+  // LOCAL FLOOR-AWARE CONTROLS (§19 reviewer item; slice-26 follow-up). OPT-IN ONLY:
+  // UDG_GA_FLOOR=1 plus an EXPLICIT UDG_GA_FLOOR_MS — the wait is a HARNESS-SUPPLIED PROTOTYPE
+  // value passed at dispatch, NEVER read from a default and NEVER a production numeric adopted
+  // from localhost measurements. Unset (the tracked cell, every CI route, every prior dispatch):
+  // GA_STALL_FLOOR_MS stays null and this cell is byte-identical to its pre-floor shape; the
+  // product default remains the adopted count-only rule everywhere else.
+  const GA_FLOOR_LOCAL_MS = process.env['UDG_GA_FLOOR'] === '1' && Number(process.env['UDG_GA_FLOOR_MS']) > 0
+    ? Number(process.env['UDG_GA_FLOOR_MS'])
+    : null;
   const BUDGET_TOLERANCE_MS = 300;
 
   const host = await startProxyHost();
@@ -6344,6 +6495,85 @@ test('spike cell: ga-scenarios — ADR-0003 GA-6a/6b/6c + GA-7 + GA-5t + GA-5l s
     await malformedStampLeg('ga5b-msdup', 'dup', sMSD);
     await malformedStampLeg('ga5b-msdec', 'dec', sMSDec);
     await malformedStampLeg('ga5b-msepoch', 'epoch', sMSEp);
+
+    // ── FLOOR-AWARE LOCAL LEGS (opt-in; see GA_FLOOR_LOCAL_MS above). The §19 close-out stated
+    // these controls must GAIN a floor-aware leg if the wait-first wording is ever adopted; this
+    // is that leg, LOCAL and labelled, adopting nothing. The floor reaches the seats through the
+    // existing harness-supplied joinGaSeat option (product default untouched), scoped STRICTLY
+    // to this family and reset in the finally. Expectations are DERIVED, not rebased:
+    //  TRUTH — a TERMINALLY LOST input must still fire under the wait, and fire ONLY after it:
+    //  the trigger is AGED against its own cause (the suppressed input's own send stamp, first
+    //  seen by the 50 ms page poller while pending ≥ 1) on the page clock; the labelled floor-
+    //  held events must precede the fire; exactly one input suppressed, NOTHING re-issued; the
+    //  discard follows the trigger; and the episode must still SETTLE bounded on the wired
+    //  rejoin route with a fresh snapshot — the wait may add delay, it may never strand.
+    //  MALFORMED (dup/dec/epoch) — the SAME staged-stamp controls re-run with the wait armed:
+    //  the floor adds a WAIT to a rule that must not fire here and can add NO episode (nothing
+    //  stays outstanding after a journalled disposition); every original conjunct stands.
+    if (GA_FLOOR_LOCAL_MS !== null) {
+      const W = GA_FLOOR_LOCAL_MS;
+      const bagF: Record<string, unknown> = { wDeclaredMs: W, provenance: 'harness-supplied at dispatch (UDG_GA_FLOOR_MS); declared constant for THIS local family; not adopted anywhere' };
+      GA_STALL_FLOOR_MS = W;
+      try {
+        await scenario('gafloor-truth', ROOM_NAME, async (ctx) => {
+          const connAtJoinF = await perConnC2s(ctx.handle);
+          void gaPump(ctx.pageM);
+          await wait(1_500);
+          await gaStopPump(ctx.pageM);
+          const drainStartedF = Date.now();
+          let drainF: GaBoundary;
+          for (;;) {
+            const b = await readGaBoundary(ctx.pageM);
+            if ((b.pending === 0 && b.ack === b.sentAuditLen && b.resolvedThrough === b.sentAuditLen) || Date.now() - drainStartedF > 30_000) { drainF = b; break; }
+            await wait(100);
+          }
+          const quietF = drainF;
+          bagF['preArmDrain'] = { drained: quietF.pending === 0 && quietF.ack === quietF.sentAuditLen && quietF.resolvedThrough === quietF.sentAuditLen, waitedMs: Date.now() - drainStartedF };
+          const moverIdxF = await identifyMoverConn(ctx.handle, connAtJoinF, bagF);
+          void moverIdxF; // the arm is the labelled holdNext quota on THIS scenario's hop; the mover wire is this scenario's own mover
+          await startGaPoller(ctx.pageM);
+          await host.request({ op: 'holdNext', handle: ctx.handle, direction: 'c2s', count: 1 });
+          const lostSendF = await gaOneShot(ctx.pageM, 1, 0);
+          bagF['lostSend'] = lostSendF;
+          const pollsF = await collectGaPoller(ctx.pageM, 20_000);
+          const fireIdxF = pollsF.findIndex((s) => s.events.some((e) => e.event === 'trigger' && e.detail.startsWith('input-ack-stalled')));
+          const firedF = fireIdxF === -1 ? null : pollsF[fireIdxF]!;
+          const trigF = firedF === null ? undefined : firedF.events.find((e) => e.event === 'trigger' && e.detail.startsWith('input-ack-stalled'));
+          const heldF = pollsF.flatMap((s) => s.events).filter((e) => e.event === 'stall-floor-held');
+          const firstPendingF = pollsF.find((s) => s.pending >= 1);
+          const ageAtTriggerF = firedF !== null && trigF !== undefined && firstPendingF !== undefined && firstPendingF.oldestPendingSentAtMs !== null
+            ? trigF.atMs - firstPendingF.oldestPendingSentAtMs
+            : null;
+          bagF['floorObservation'] = {
+            heldEvents: heldF.length, heldFirstAtMs: heldF[0]?.atMs ?? null,
+            triggerDetail: trigF?.detail ?? null, triggerAtMs: trigF?.atMs ?? null,
+            oldestPendingSendAtMs: firstPendingF?.oldestPendingSentAtMs ?? null,
+            ageAtTriggerMs: ageAtTriggerF, wMs: W,
+            polls: pollsF.length, frozenBoundaryAtTrigger: firedF === null ? null : { ack: firedF.ack, resolvedThrough: firedF.resolvedThrough, epoch: firedF.epoch },
+          };
+          cellCheck(`GA-FLOOR TRUTH (local, opt-in prototype wait — NOT adopted; product default remains count-only): with the wait armed the TERMINALLY LOST input STILL FIRES, ONLY AFTER the wait — trigger detail is the labelled PROTOTYPE floor rule, at least one floor-HELD event precedes it, and the trigger is aged against the suppressed input's OWN send stamp: age STRICTLY > the declared wait (no proxy-counter inference, page clock throughout)`,
+            firedF !== null && trigF !== undefined && trigF.detail.includes('PROTOTYPE stalled-ack floor') && heldF.length >= 1 && ageAtTriggerF !== null && Number.isFinite(ageAtTriggerF) && ageAtTriggerF > W,
+            bagF);
+          cellCheck('GA-FLOOR TRUTH no-compensation: exactly ONE input crossed (the suppressed one, send-audit +1 from the drained boundary), NOTHING re-issued, the frozen window held ack AND prefix at every poll, and the discard follows the trigger with exactly 1 journal entry',
+            firedF !== null && firedF.sentAuditLen === quietF.sentAuditLen + 1
+            && pollsF.slice(0, fireIdxF + 1).every((s) => s.ack === quietF.ack && s.resolvedThrough === quietF.resolvedThrough)
+            && (firedF.events.slice(firedF.events.findIndex((e) => e.event === 'trigger' && e.detail.startsWith('input-ack-stalled'))).find((e) => e.event === 'discard-pending')?.detail ?? '').includes('1 journal entries'),
+            { sentAuditQuiet: quietF.sentAuditLen, sentAuditAtTrigger: firedF?.sentAuditLen ?? null, discard: firedF?.events.find((e) => e.event === 'discard-pending')?.detail ?? null });
+          const recF = await waitLedger(ctx.pageM, (s) => s.events.some((e) => e.event === 'snapshot-recovered'), 'snapshot-recovered under the prototype floor', EPISODE_BUDGET_MS + BUDGET_TOLERANCE_MS).catch(() => null);
+          const recEventF = recF === null ? undefined : recF.events.find((e) => e.event === 'snapshot-recovered');
+          const recElapsedF = recEventF !== undefined && trigF !== undefined ? recEventF.atMs - trigF.atMs : null; // SAME page clock as the trigger event (slice-26 timebase)
+          const finalB = await readGaBoundary(ctx.pageM);
+          cellCheck('GA-FLOOR TRUTH settles: the episode still ENDS bounded on the wired rejoin route — snapshot-recovered on a NEW domain epoch within the provisional budget + declared tolerance, measured on the SAME page clock from the trigger event (the wait adds delay to WHEN the rule may fire; it never strands the seat) — and the seat is tracking with pending 0 afterwards',
+            recF !== null && recElapsedF !== null && recElapsedF <= EPISODE_BUDGET_MS + BUDGET_TOLERANCE_MS && (recF.transportEpoch as number) > quietF.epoch && finalB.state === 'tracking' && finalB.pending === 0,
+            { recoveredWithinMs: recElapsedF, budgetMs: EPISODE_BUDGET_MS + BUDGET_TOLERANCE_MS, transportEpochAfter: recF?.transportEpoch ?? null, finalState: finalB.state, finalPending: finalB.pending, epochAtQuiet: quietF.epoch });
+        });
+        await malformedStampLeg('ga5b-msdup-floor', 'dup', { floorLocalMs: W });
+        await malformedStampLeg('ga5b-msdec-floor', 'dec', { floorLocalMs: W });
+        await malformedStampLeg('ga5b-msepoch-floor', 'epoch', { floorLocalMs: W });
+      } finally {
+        GA_STALL_FLOOR_MS = null; // the prototype NEVER leaks past this family
+      }
+    }
 
     // ═════ GA-3 (slice 17) — CONFIRMED RETIREMENT, PREVENTION DISABLED, TWO SEATS. The ADR row:
     // "confirmed retirement, prevention disabled | closure within closureMaxMs; residue > 0,
