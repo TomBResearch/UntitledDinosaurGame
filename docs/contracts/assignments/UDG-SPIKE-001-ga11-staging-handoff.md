@@ -135,3 +135,30 @@ budget clause is the gate on that work); the labelled endpoint-injection harness
 before) a nomination exists; the floor-aware GA-5l/malformed legs are ALREADY landed (opt-in);
 denser trigger-time capture already landed (25 ms age watch + room watch). No local sequences are
 needed to fill time between slices — the honest blocker list is above, and it is external.
+
+## 8. RECONCILIATION (slice 29): what the client stall-floor seam can actually do today, and where
+## production-enabling evidence must come from
+
+The client now carries THREE clearly distinct surfaces (full statement at plan §21A): the legacy
+numeric harness path (unchanged, PROTOTYPE-labelled, experimental only); the config-object path
+(locally DECLARED waits, budgets labelled declared-matched-not-independently-verified); and the
+new MEASURED-RECEIPT path — a machine-validated record of a measurement: recorded detection+recovery
+are summed only on identical declared clock origins and timer bases, compared against the declared
+available budget only on matching origins (or via an explicit, labelled declared send→fire offset),
+with under-budget, missing, nonfinite, inconsistent, unprovenanced, wildcard-scoped and cross-clock
+claims refused by named reason. Scope binds only to the ACTUAL supported room identity (join-supplied
+or explicitly bound — never guessed, never wildcarded, never silently re-scoped), and a room/epoch
+mismatch at use NEVER silently activates the measured profile: the shipped count-only default
+continues with the refusal named in the trigger detail and in `stallAckFloorStatus()`. Applied
+episodes reconcile the ACTUAL episode (seat-declared clock, fire → first accepted snapshot) against
+the declared budget ONLY on matching origin+basis; anything else is stored as an explicitly
+REPORTING-ONLY entry that carries no within/over wording. All exercises are SYNTHETIC test records;
+no real value is admitted and the product default has not moved.
+
+WHAT THIS SEAM CANNOT DO — the boundary this handoff exists to keep honest: machine validation
+checks a receipt's INTERNAL coherence and scope only. It cannot confirm the truth of a measurement
+about a network the client never saw. Production-enabling evidence comes exclusively from §15B(1)–(5)
+— the owner's representative-deployment nomination, per-profile path characterisation, and the
+owner-run formal matrix — whose measurements would ARRIVE AS RECEIPTS for this seam to validate,
+never as something this seam manufactures. Until such receipts exist, every applied wait remains
+local-experimental by labelling, and every GA row's status is exactly as previously recorded.

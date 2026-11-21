@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { resolveStallAckFloorOption, WAIT_SANITY_CEILING_MS } from '../../../apps/client/src/network/stallAckFloor.ts';
+import { resolveStallAckFloorOption, validateMeasuredWaitReceipt, WAIT_SANITY_CEILING_MS } from '../../../apps/client/src/network/stallAckFloor.ts';
 
 describe('UDG-SPIKE-001 — stallAckFloor config validation (fail closed; no numeric chosen by the product)', () => {
   it('absent values are NOT this function\\u2019s business: it refuses rather than inventing a default', () => {
@@ -65,5 +65,135 @@ describe('UDG-SPIKE-001 — stallAckFloor config validation (fail closed; no num
     const lok = legacy as Extract<typeof legacy, { ok: true }>;
     expect(lok.source).toBe('legacy-numeric');
     expect(lok.provenance).toMatch(/legacy option/);
+  });
+});
+
+/* ── slice 29: the MEASURED-CONFIG PATH — machine validation of receipt RECORDS. Every record
+ * below is an explicitly SYNTHETIC test fixture: no real deployment value is admitted anywhere,
+ * and nothing here proves or enables anything. */
+
+const SYN = 'unit:synthetic test receipt (declared stand-in, no real values)';
+const seg = (durationMs: number, over: Record<string, unknown> = {}) => ({
+  durationMs, clockOrigin: 'seat-declared-clock', basis: 'from-fire', ...over,
+});
+const receipt = (over: Record<string, unknown> = {}) => ({
+  kind: 'measured-wait-receipt', waitMs: 900, provenance: SYN, roomScope: 'room-synth-1', epochScope: 7,
+  detection: seg(200), recovery: seg(700),
+  budget: { availableMs: 1_000, clockOrigin: 'seat-declared-clock', basis: 'from-fire' },
+  ...over,
+});
+
+describe('UDG-SPIKE-001 slice 29 — measured-wait receipt validation (synthetic records; below/equal/above budget, origins, provenance, scope)', () => {
+  it('EQUAL budget: recorded detection+recovery exactly filling the declared budget validates on matching origins', () => {
+    const r = validateMeasuredWaitReceipt(receipt({ detection: seg(200), recovery: seg(800) })); // 1000 == 1000
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.validation.comparison).toBe('within-budget');
+      expect(r.validation.comparedMs).toBe(1_000);
+      expect(r.validation.availableBudgetMs).toBe(1_000);
+      expect(r.validation.normalized).toBe(false);
+      expect(r.validation.roomScope).toBe('room-synth-1');
+      expect(r.validation.epochScope).toBe(7);
+    }
+  });
+
+  it('ABOVE headroom (recorded duration well under budget) validates the same way', () => {
+    const r = validateMeasuredWaitReceipt(receipt({ detection: seg(100), recovery: seg(300) }));
+    expect(r.ok && r.validation.comparison).toBe('within-budget');
+  });
+
+  it('BELOW-budget claims are REFUSED: a budget that cannot contain its own measured duration is not a supportable wait', () => {
+    const r = validateMeasuredWaitReceipt(receipt({ detection: seg(400), recovery: seg(800) })); // 1200 > 1000
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reasons.join('; ')).toMatch(/under-budget claim refused/);
+  });
+
+  it('unrelated clocks are NEVER summed: detection and recovery must declare the same origin AND basis', () => {
+    const r = validateMeasuredWaitReceipt(receipt({ recovery: seg(700, { clockOrigin: 'room-side-stopwatch' }) }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reasons.join('; ')).toMatch(/do not sum unrelated clocks/);
+    const basis = validateMeasuredWaitReceipt(receipt({ recovery: seg(700, { basis: 'from-oldest-send' }) }));
+    expect(basis.ok).toBe(false);
+    if (!basis.ok) expect(basis.reasons.join('; ')).toMatch(/do not sum unrelated clocks/);
+  });
+
+  it('a from-fire episode vs a from-oldest-send budget may NOT be compared unnormalized; explicit declared offsets normalize, and the offset can flip the verdict', () => {
+    const unnormalized = validateMeasuredWaitReceipt(receipt({
+      budget: { availableMs: 1_100, clockOrigin: 'seat-declared-clock', basis: 'from-oldest-send' },
+    }));
+    expect(unnormalized.ok).toBe(false);
+    if (!unnormalized.ok) expect(unnormalized.reasons.join('; ')).toMatch(/may not be compared unnormalized/);
+    const normalized = validateMeasuredWaitReceipt(receipt({
+      budget: { availableMs: 1_100, clockOrigin: 'seat-declared-clock', basis: 'from-oldest-send' },
+      sendToFireOffsetMs: 150, // 900 + 150 = 1050 <= 1100
+    }));
+    expect(normalized.ok && normalized.validation.comparison).toBe('within-budget-normalized');
+    expect(normalized.ok && normalized.validation.normalized).toBe(true);
+    const flipped = validateMeasuredWaitReceipt(receipt({
+      budget: { availableMs: 1_100, clockOrigin: 'seat-declared-clock', basis: 'from-oldest-send' },
+      sendToFireOffsetMs: 250, // 900 + 250 = 1150 > 1100 — normalization exposes the under-budget claim
+    }));
+    expect(flipped.ok).toBe(false);
+    if (!flipped.ok) expect(flipped.reasons.join('; ')).toMatch(/under-budget claim refused/);
+  });
+
+  it('cross-CLOCK comparisons are refused outright — no offset normalizes across clocks; an unneeded offset is an inconsistent record', () => {
+    const cross = validateMeasuredWaitReceipt(receipt({
+      budget: { availableMs: 1_200, clockOrigin: 'host-monotonic-clock', basis: 'from-fire' },
+    }));
+    expect(cross.ok).toBe(false);
+    if (!cross.ok) expect(cross.reasons.join('; ')).toMatch(/DIFFERENT clock origin/);
+    const crossWithOffset = validateMeasuredWaitReceipt(receipt({
+      budget: { availableMs: 1_200, clockOrigin: 'host-monotonic-clock', basis: 'from-oldest-send' },
+      sendToFireOffsetMs: 100,
+    }));
+    expect(crossWithOffset.ok).toBe(false);
+    if (!crossWithOffset.ok) expect(crossWithOffset.reasons.join('; ')).toMatch(/DIFFERENT clock origin/);
+    const unneeded = validateMeasuredWaitReceipt(receipt({ sendToFireOffsetMs: 100 })); // bases already match
+    expect(unneeded.ok).toBe(false);
+    if (!unneeded.ok) expect(unneeded.reasons.join('; ')).toMatch(/unneeded normalization/);
+  });
+
+  it('unsupported, missing, nonfinite or placeholder fields are each refused with their OWN named reason', () => {
+    const cases: Array<[Record<string, unknown>, RegExp]> = [
+      [receipt({ provenance: '   ' }), /provenance is REQUIRED/],
+      [receipt({ roomScope: '' }), /roomScope is REQUIRED/],
+      [receipt({ roomScope: '*' }), /may not be a wildcard/],
+      [receipt({ epochScope: undefined }), /epochScope is REQUIRED/], // must be an explicit int or an explicit null
+      [receipt({ epochScope: 1.5 }), /epochScope is REQUIRED/],
+      [receipt({ detection: seg(Number.NaN) }), /detection\.durationMs must be a finite number/],
+      [receipt({ detection: seg(200, { clockOrigin: '' }) }), /detection\.clockOrigin is REQUIRED/],
+      [receipt({ detection: seg(200, { basis: undefined }) }), /detection\.basis is REQUIRED/],
+      [receipt({ detection: seg(0), recovery: seg(0) }), /totals 0 ms/],
+      [receipt({ budget: undefined }), /budget is REQUIRED/],
+      [receipt({ budget: { availableMs: 0, clockOrigin: 'seat-declared-clock', basis: 'from-fire' } }), /budget must declare/],
+      [receipt({ bogusField: 1 }), /unknown receipt field 'bogusField'/],
+      [receipt({ kind: 'something-else' }), /kind must be 'measured-wait-receipt'/],
+      [receipt({ waitMs: 0 }), /waitMs must be a finite positive number/],
+      [receipt({ waitMs: WAIT_SANITY_CEILING_MS + 1 }), /measurement-sanity ceiling/],
+    ];
+    for (const [input, pattern] of cases) {
+      const r = validateMeasuredWaitReceipt(input);
+      expect(r.ok, `must refuse ${JSON.stringify(input)}`).toBe(false);
+      if (!r.ok) expect(r.reasons.join('; '), `reason for ${JSON.stringify(input)}`).toMatch(pattern);
+    }
+  });
+
+  it('resolveStallAckFloorOption routes receipts to their OWN source and labels the budget honestly; the legacy/config paths are untouched', () => {
+    const r = resolveStallAckFloorOption(receipt() as never);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.source).toBe('measured-receipt');
+      expect(r.budgetStatus).toBe('machine-validated-recorded-durations-not-production-enabled');
+      expect(r.roomScope).toBe('room-synth-1');
+      expect(r.appliedEpoch).toBe(7);
+      expect(r.receiptValidation?.comparison).toBe('within-budget');
+    }
+    const bad = resolveStallAckFloorOption(receipt({ detection: seg(Number.NaN) }) as never);
+    expect(bad.ok).toBe(false);
+    const legacy = resolveStallAckFloorOption(400);
+    expect(legacy.ok && legacy.source === 'legacy-numeric' && legacy.roomScope === null).toBe(true);
+    const config = resolveStallAckFloorOption({ waitMs: 500, provenance: 'unit: p' });
+    expect(config.ok && config.source === 'config-object' && config.receiptValidation === null).toBe(true);
   });
 });

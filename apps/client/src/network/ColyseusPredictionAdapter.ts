@@ -61,7 +61,7 @@
 import { Client, Reconciler, type InputHandle } from '@colyseus/sdk';
 import { validateDirectFrame, type DirectFrame, type MovementMode, type SessionEpoch } from '@udg/protocol';
 import { flatDirectStep } from './flatStep.js';
-import { stalledAckFloorDecision, resolveStallAckFloorOption, type StallAckFloorConfig, type StallAckFloorResolved } from './stallAckFloor.js';
+import { stalledAckFloorDecision, resolveStallAckFloorOption, EPISODE_CLOCK_ORIGIN, EPISODE_BASIS_FROM_FIRE, type MeasuredWaitReceipt, type StallAckFloorConfig, type StallAckFloorResolved, type ReceiptValidation } from './stallAckFloor.js';
 
 /** The join presentation the room's hash gate demands (protocol-v1 §6.3; `screenJoin` on the server). */
 export interface RegionJoinPresentation {
@@ -583,9 +583,26 @@ interface PredictorSettings {
   /** Resolved stalled-ack opportunity-wait opt-in (null = provisional count-only default); see
    * PredictorOptions.stallAckFloor. */
   readonly stallFloor: StallAckFloorResolved | null;
+  readonly measuredWaitRoomId: string | null;
   readonly clock: PredictorClock;
   readonly ledgerLimit: number;
   readonly rejoin?: (() => Promise<PredictionTransport>) | undefined;
+}
+
+/** Slice 29: what one APPLIED measured-receipt episode actually measured, versus what the receipt
+ * DECLARED — reported only, proving nothing, enabling nothing. When the origins/bases do not match
+ * the entry says REPORTING-ONLY and carries no within/over wording (an unnormalized cross-basis
+ * comparison must never be presentable as an applied validation). */
+export interface StallFloorEpisodeReconciliation {
+  readonly actualEpisodeMs: number;
+  readonly measurementClockOrigin: string;
+  readonly measurementBasis: string;
+  readonly declaredBudgetMs: number;
+  readonly declaredBudgetClockOrigin: string;
+  readonly declaredBudgetBasis: string;
+  readonly validation: 'compared-on-matching-origins' | 'reporting-only-basis-mismatch';
+  readonly verdict: 'within-declared-budget' | 'exceeded-declared-budget' | 'not-compared-basis-mismatch';
+  readonly note: string;
 }
 
 export interface PredictorOptions {
@@ -620,7 +637,11 @@ export interface PredictorOptions {
    * missing deliveries; NO timed server activity is required or assumed. See
    * apps/client/src/network/stallAckFloor.ts.
    */
-  readonly stallAckFloor?: number | StallAckFloorConfig | null;
+  readonly stallAckFloor?: number | StallAckFloorConfig | MeasuredWaitReceipt | null;
+  /** Measured-receipt scope binding (slice 29): the ACTUAL room identity, supplied by the join
+   * route (or bindMeasuredWaitScope for hosts that construct predictors directly). A receipt with
+   * no bound room stays explicitly ineligible — never applied against a guessed ID. */
+  readonly measuredWaitRoomId?: string | null;
   /** @deprecated Legacy numeric form of `stallAckFloor` (harness diagnostics). Mutually exclusive
    * with it; supplying both fails closed. */
   readonly stallAckFloorMs?: number | null;
@@ -684,6 +705,11 @@ export class DirectMotionPredictor {
    * and how many CONSECUTIVE deliveries have left it unmoved while inputs are outstanding. */
   private stallStreak = 0;
   private stallBoundary: { readonly ack: number; readonly resolvedThrough: number; readonly epoch: number } | null = null;
+  /** Slice 29 (measured-config path): the applied receipt episode and its reconciliation entry.
+   * The bound room identity lives in options.measuredWaitRoomId / boundRoomId — set only by the
+   * join route or bindMeasuredWaitScope, never guessed. */
+  private stallEpisode: { readonly firedAtMs: number; readonly settledAtMs: number | null } | null = null;
+  private receiptReconciliation: StallFloorEpisodeReconciliation | null = null;
   private recoveryStartedAt: number | null = null;
   private episodeExpired = false;
   /**
@@ -740,6 +766,7 @@ export class DirectMotionPredictor {
       // local wait is substituted. An opt-in arrives via stallAckFloor(-Ms) and is resolved
       // (validated, fail closed) above.
       stallFloor,
+      measuredWaitRoomId: options.measuredWaitRoomId ?? null,
       clock: options.clock ?? wallClock,
       ledgerLimit: options.ledgerLimit ?? 512,
       ...(options.rejoin === undefined ? {} : { rejoin: options.rejoin }),
@@ -1143,10 +1170,12 @@ export class DirectMotionPredictor {
   /** HONEST status of the §D-design opt-in (plan §21): the shipped DEFAULT is the provisional
    * count-only rule and this surface never claims production enablement. A configured seat
    * reports its wait, provenance, budget status, DECLARED clock origin and a stale-epoch flag
-   * instead of silent assumptions; a default seat says explicitly that no value was selected. */
+   * instead of silent assumptions; a default seat says explicitly that no value was selected.
+   * A measured-receipt seat additionally reports its scope state (bound room, live scope issue,
+   * machine validation of the recorded durations) and the last episode reconciliation. */
   stallAckFloorStatus():
     | { readonly state: 'default-provisional-count-only'; readonly note: string }
-    | { readonly state: 'configured'; readonly source: 'config-object' | 'legacy-numeric'; readonly waitMs: number; readonly provenance: string; readonly matchedBudgetMs: number | null; readonly budgetStatus: 'declared-matched-not-independently-verified' | 'not-declared'; readonly appliedEpoch: number | null; readonly clockOrigin: string; readonly staleForCurrentEpoch: boolean } {
+    | { readonly state: 'configured'; readonly source: 'config-object' | 'legacy-numeric' | 'measured-receipt'; readonly waitMs: number; readonly provenance: string; readonly matchedBudgetMs: number | null; readonly budgetStatus: 'declared-matched-not-independently-verified' | 'not-declared' | 'machine-validated-recorded-durations-not-production-enabled'; readonly appliedEpoch: number | null; readonly clockOrigin: string; readonly staleForCurrentEpoch: boolean; readonly roomScope: string | null; readonly boundRoomId: string | null; readonly scopeIssue: string | null; readonly receiptValidation: ReceiptValidation | null; readonly episodeReconciliation: StallFloorEpisodeReconciliation | null } {
     const floor = this.options.stallFloor;
     if (floor === null) {
       return { state: 'default-provisional-count-only', note: 'no wait supplied; the product default remains the provisional adopted count-only rule — no local value is silently selected' };
@@ -1157,7 +1186,57 @@ export class DirectMotionPredictor {
       matchedBudgetMs: floor.matchedBudgetMs, budgetStatus: floor.budgetStatus,
       appliedEpoch: floor.appliedEpoch, clockOrigin: floor.clockOrigin,
       staleForCurrentEpoch: floor.appliedEpoch !== null && currentEpoch !== null && floor.appliedEpoch !== currentEpoch,
+      roomScope: floor.roomScope, boundRoomId: this.effectiveMeasuredRoomId(),
+      scopeIssue: floor.source === 'measured-receipt' ? this.measuredReceiptScopeIssue(currentEpoch) : null,
+      receiptValidation: floor.receiptValidation,
+      episodeReconciliation: this.receiptReconciliation,
     };
+  }
+
+  /** The only supported room-identity binding for a measured receipt (slice 29): hosts that build
+   * a predictor directly (no join route to supply the real id) bind the ACTUAL joined room id
+   * here. First bind wins; rebinding to a different id throws — a measured profile is never
+   * silently re-scoped. There is no wildcard, no default and no guessing. */
+  bindMeasuredWaitScope(roomId: string): void {
+    const floor = this.options.stallFloor;
+    if (floor?.source !== 'measured-receipt') {
+      throw new Error('bindMeasuredWaitScope: no measured-wait receipt is configured — there is nothing to scope-bind (fail closed, nothing is activated by binding)');
+    }
+    if (roomId.trim() === '') {
+      throw new Error('bindMeasuredWaitScope requires the ACTUAL room identity — an empty or placeholder id is refused; no guessed IDs');
+    }
+    const current = this.effectiveMeasuredRoomId();
+    if (current !== null && current !== roomId.trim()) {
+      throw new Error(`bindMeasuredWaitScope: the room scope is already bound to a different identity — rebinding a measured profile is refused (it would silently move it outside its measurement scope)`);
+    }
+    this.boundRoomId = roomId.trim();
+  }
+
+  private boundRoomId: string | null = null;
+
+  private effectiveMeasuredRoomId(): string | null {
+    if (this.boundRoomId !== null) return this.boundRoomId;
+    const fromJoin = this.options.measuredWaitRoomId;
+    return typeof fromJoin === 'string' && fromJoin.trim() !== '' ? fromJoin.trim() : null;
+  }
+
+  /** Why a configured measured receipt must NOT be applied to THIS seat/epoch right now (null =
+   * in scope). Out-of-scope never silently activates the measured profile: the shipped count-only
+   * default continues and the trigger detail names the refusal. */
+  private measuredReceiptScopeIssue(currentEpoch: number | null): string | null {
+    const floor = this.options.stallFloor;
+    if (floor?.source !== 'measured-receipt' || floor.roomScope === null) return null;
+    const bound = this.effectiveMeasuredRoomId();
+    if (bound === null) {
+      return 'no room identity bound at the public entry point — the measured profile stays explicitly INELIGIBLE until bound with the actual supported identity (join-supplied roomId or bindMeasuredWaitScope); no guessed IDs';
+    }
+    if (bound !== floor.roomScope) {
+      return `room-scope mismatch — the receipt is scoped to a different room identity than this seat's bound id; measured profiles are never applied outside their scope`;
+    }
+    if (floor.roomScope !== null && floor.appliedEpoch !== null && currentEpoch !== null && currentEpoch !== floor.appliedEpoch) {
+      return `epoch-scope mismatch — the receipt was measured at epoch ${String(floor.appliedEpoch)} and this seat is at epoch ${String(currentEpoch)}; the profile is not applied outside its declared epoch scope`;
+    }
+    return null;
   }
 
   async close(): Promise<void> {
@@ -1230,6 +1309,7 @@ export class DirectMotionPredictor {
         this.state = 'tracking';
         this.anchor = null;
         this.captureAckCheckpoint(delivery);
+        this.reconcileStallEpisode();
       }
       if (firstForDomain && this.state === 'dormant') this.state = 'tracking';
       if (this.state === 'waiting-boundary') this.state = 'tracking';
@@ -1271,6 +1351,16 @@ export class DirectMotionPredictor {
         this.enterRecovery('input-ack-stalled', this.pending.size);
         return true;
       }
+      // MEASURED-CONFIG PATH scope gate (slice 29): a receipt outside its room/epoch scope — or
+      // with no room identity bound at all — is NEVER silently activated. The shipped count-only
+      // default continues, the trigger detail names the refusal, and the status surface reports it.
+      if (floor.source === 'measured-receipt') {
+        const issue = this.measuredReceiptScopeIssue(delivery.epoch);
+        if (issue !== null) {
+          this.enterRecovery('input-ack-stalled', `${String(this.pending.size)} — count-only shipped default fired; MEASURED RECEIPT NOT APPLIED (${issue}; see stallAckFloorStatus())`);
+          return true;
+        }
+      }
       // The paired count/disposition condition holds; per the ADOPTED §D DESIGN (plan §21 /
       // ADR-0005) the fire additionally waits until the OLDEST ACTUAL same-epoch outstanding input
       // has aged past the CONFIGURED wait — a measured conservative envelope from the supplied
@@ -1291,9 +1381,18 @@ export class DirectMotionPredictor {
       const staleEpoch = floor.appliedEpoch !== null && floor.appliedEpoch !== delivery.epoch;
       if (decision === 'fire') {
         const ageMs = oldest === null ? 'unknown' : String(Math.round(nowMs - oldest));
+        const v = floor.receiptValidation;
         const detail = floor.source === 'legacy-numeric'
           ? `PROTOTYPE stalled-ack floor: TEST WAIT ${String(floor.waitMs)} ms elapsed (age ${ageMs} ms, pending ${String(this.pending.size)})`
-          : `stalled-ack floor: CONFIGURED wait ${String(floor.waitMs)} ms elapsed (age ${ageMs} ms, pending ${String(this.pending.size)}; provenance ${floor.provenance}${staleEpoch ? `; STALE for current epoch ${String(delivery.epoch)} — held on the older measurement, the safe direction, never fired early` : ''}${floor.matchedBudgetMs !== null ? `; matched budget ${String(floor.matchedBudgetMs)} ms declared-matched, not independently verified` : ''})`;
+          : floor.source === 'measured-receipt'
+            ? `stalled-ack floor: MEASURED-RECEIPT wait ${String(floor.waitMs)} ms elapsed (age ${ageMs} ms, pending ${String(this.pending.size)}; provenance ${floor.provenance}; machine-validated ${v?.comparison ?? 'unknown'}: recorded detection+recovery ${String(v?.comparedMs ?? NaN)} ms${v?.normalized ? ' including the DECLARED send→fire offset (declared, not re-measured here)' : ''} vs declared available budget ${String(v?.availableBudgetMs ?? NaN)} ms on ${v?.budgetClockOrigin ?? '?'}/${v?.budgetBasis ?? '?'}; in-scope for this room${floor.appliedEpoch !== null ? ` and epoch ${String(floor.appliedEpoch)}` : ' (declared epoch-agnostic)'}; declared-scope validation only — NOT a proof, NOT production-enabled)`
+            : `stalled-ack floor: CONFIGURED wait ${String(floor.waitMs)} ms elapsed (age ${ageMs} ms, pending ${String(this.pending.size)}; provenance ${floor.provenance}${staleEpoch ? `; STALE for current epoch ${String(delivery.epoch)} — held on the older measurement, the safe direction, never fired early` : ''}${floor.matchedBudgetMs !== null ? `; matched budget ${String(floor.matchedBudgetMs)} ms declared-matched, not independently verified` : ''})`;
+        if (floor.source === 'measured-receipt') {
+          // The applied receipt episode: measured on the seat's declared clock from fire, settled
+          // on the first accepted snapshot delivery — reconciled against the declared budget ONLY
+          // when the receipt's budget declares the same origin and basis (else reporting-only).
+          this.stallEpisode = { firedAtMs: nowMs, settledAtMs: null };
+        }
         this.enterRecovery('input-ack-stalled', detail);
         return true;
       }
@@ -1389,6 +1488,35 @@ export class DirectMotionPredictor {
   private cancelEpisodeTimer(): void {
     this.episodeTimer?.cancel();
     this.episodeTimer = null;
+  }
+
+  /** Slice 29: an APPLIED in-scope measured-receipt episode just settled — record what ACTUALLY
+   * happened (seat-declared clock, fire → first accepted snapshot delivery) against what the
+   * receipt DECLARED. Compared only on matching origin AND basis; anything else is stored as an
+   * unambiguously reporting-only entry with no within/over wording. */
+  private reconcileStallEpisode(): void {
+    if (this.stallEpisode === null || this.stallEpisode.settledAtMs !== null) return;
+    const nowMs = this.options.clock.nowMs();
+    const actualEpisodeMs = nowMs - this.stallEpisode.firedAtMs;
+    this.stallEpisode = { firedAtMs: this.stallEpisode.firedAtMs, settledAtMs: nowMs };
+    const floor = this.options.stallFloor;
+    const v = floor?.receiptValidation ?? null;
+    if (floor?.source !== 'measured-receipt' || v === null) return;
+    const comparable = v.budgetClockOrigin === EPISODE_CLOCK_ORIGIN && v.budgetBasis === EPISODE_BASIS_FROM_FIRE;
+    this.receiptReconciliation = comparable
+      ? {
+          actualEpisodeMs, measurementClockOrigin: EPISODE_CLOCK_ORIGIN, measurementBasis: EPISODE_BASIS_FROM_FIRE,
+          declaredBudgetMs: v.availableBudgetMs, declaredBudgetClockOrigin: v.budgetClockOrigin, declaredBudgetBasis: v.budgetBasis,
+          validation: 'compared-on-matching-origins',
+          verdict: actualEpisodeMs <= v.availableBudgetMs ? 'within-declared-budget' : 'exceeded-declared-budget',
+          note: 'the ACTUAL episode (fire → first accepted snapshot delivery) on the seat-declared clock versus the declared budget of the receipt on the SAME origin and basis; a reporting surface — it proves nothing and enables nothing',
+        }
+      : {
+          actualEpisodeMs, measurementClockOrigin: EPISODE_CLOCK_ORIGIN, measurementBasis: EPISODE_BASIS_FROM_FIRE,
+          declaredBudgetMs: v.availableBudgetMs, declaredBudgetClockOrigin: v.budgetClockOrigin, declaredBudgetBasis: v.budgetBasis,
+          validation: 'reporting-only-basis-mismatch', verdict: 'not-compared-basis-mismatch',
+          note: `the actual episode rode ${EPISODE_CLOCK_ORIGIN}/${EPISODE_BASIS_FROM_FIRE} but the budget of the receipt is declared on ${v.budgetClockOrigin}/${v.budgetBasis} — no within/over wording is produced across mismatched origins; this entry is REPORTING-ONLY and must never be presented as an applied validation`,
+        };
   }
 
   /**
@@ -1848,6 +1976,9 @@ export const joinPredictionSeat = async (options: PredictionAdapterOptions): Pro
   const predictor = new DirectMotionPredictor(transport, {
     speed: options.speed ?? 4,
     ...(options.predictor ?? {}),
+    // THE supported scope binding for a measured-wait receipt: the ACTUAL joined room id, set
+    // after the host spread so it can never be overridden by a guessed or stale value.
+    measuredWaitRoomId: roomId,
     ...(options.predictor?.rejoin === undefined
       ? {
           // The production rejoin route: a fresh join of the same room under the same

@@ -1317,3 +1317,39 @@ head, and the byte-bind mechanism itself is untouched — it did exactly its job
 amendment that forgot its second copy failed loudly. The lesson is part of the record: the
 movement-authority clause is TWO-COPY BYTE-BOUND text; any future amendment edits §4 and §5.1 in
 the same commit.
+
+## §21A (slice 29) — RECONCILIATION: what the client-side stall-floor surfaces ACTUALLY are, and
+## where production-enabling evidence has to come from
+
+Three distinct surfaces exist now; keeping them straight is the point of this paragraph.
+(1) THE LEGACY EXPERIMENTAL PATH — unchanged: the numeric `stallAckFloorMs` harness option, every
+fire PROTOTYPE-labelled, no provenance claimed, no gate weight, exactly the local declared
+experimental path it always was. (2) THE CONFIG-OBJECT PATH (slice 28) — a locally DECLARED,
+provenanced opt-in for experiments: the budget it may carry is `declared-matched-not-independently-
+verified` and its epoch staleness can only hold a fire longer. (3) THE MEASURED-RECEIPT PATH (new,
+clearly distinct, source-labelled `measured-receipt`): a RECORD of a measurement, machine-validated
+before use — recorded detection and recovery durations are summed ONLY on identical declared clock
+origins and timer bases (unrelated clocks are never summed); the sum is compared against the
+declared available budget ONLY on matching origins, or via an EXPLICIT declared send→fire offset
+(the only sanctioned normalization, labelled `within-budget-normalized`, never re-measured here);
+under-budget claims, missing/nonfinite/inconsistent fields, absent or wildcard provenance/room
+scope, and cross-clock comparisons are REFUSED with named reasons. Scope binds at the public entry
+point to the ACTUAL supported identity only — the joined room id (never overridable) or an explicit
+`bindMeasuredWaitScope` with the real id; no guesses, no wildcards, rebinding is refused. At USE,
+a room/epoch mismatch NEVER silently activates the measured profile: the shipped count-only default
+continues and both the trigger detail and `stallAckFloorStatus()` name the refusal. After an
+APPLIED in-scope episode, the seat reconciles the ACTUAL episode (seat-declared clock, fire → first
+accepted snapshot) against the DECLARED budget — comparing only when origins and bases match, and
+otherwise recording an unambiguously REPORTING-ONLY entry that carries no within/over wording and
+says it must never be presented as applied. All tests are explicitly SYNTHETIC records (below/
+equal/above budget in both the validator and the actual-episode verdict, clock/provenance/epoch
+failures, resets, binding guards, legacy-path compatibility): 695 unit tests pass at this head;
+no real deployment value is admitted anywhere.
+
+WHAT NO SURFACE HERE ENABLES: the product default remains ADR-0003 §3.2's count-only rule; no
+numeric is adopted; no gate row moves. Production-enabling evidence is NOT produced by this seam —
+it can only come from the GA-11-class representative-deployment work (§15B(1)–(5): nomination,
+path characterisation, owner-run formal matrix), whose measurements would arrive AS receipts this
+seam can validate. Machine validation confirms a receipt's internal coherence and scope honesty —
+it can never confirm the truth of a measurement about a network the client never saw; that
+distinction is the seam's limit, and the handoff carries it.

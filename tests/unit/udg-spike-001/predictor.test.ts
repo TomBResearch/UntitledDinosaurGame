@@ -1242,3 +1242,160 @@ describe('UDG-SPIKE-001 slice 28 — the §D-design configurable path on the sea
     expect(st.state === 'configured' && st.staleForCurrentEpoch).toBe(true);
   });
 });
+
+describe('UDG-SPIKE-001 slice 29 — the MEASURED-RECEIPT path on the seat: scope enforced at USE, reconciliation honest, out-of-scope never silently applied', () => {
+  // ALL receipts below are explicitly SYNTHETIC test records: they declare stand-in numbers and
+  // prove nothing. The seat fake issues epoch 7; the fake transport/clock is the slice-4 harness.
+  const SYN = 'unit:synthetic test receipt (declared stand-in, no real values)';
+  const seg = (durationMs: number, over: Record<string, unknown> = {}) => ({
+    durationMs, clockOrigin: 'seat-declared-clock', basis: 'from-fire', ...over,
+  });
+  const receipt = (over: Record<string, unknown> = {}) => ({
+    kind: 'measured-wait-receipt' as const, waitMs: 900, provenance: SYN, roomScope: 'room-synth-1', epochScope: 7,
+    detection: seg(200), recovery: seg(700),
+    budget: { availableMs: 1_000, clockOrigin: 'seat-declared-clock', basis: 'from-fire' },
+    ...over,
+  });
+  const buildSeat = (overrides: Record<string, unknown> = {}) => {
+    const clock = createFakeClock();
+    clock.now = 1_000;
+    const fake = createFakeTransport(7);
+    const next = createFakeTransport(8);
+    const rejoin = vi.fn(async () => toTransport(next));
+    const predictor = new DirectMotionPredictor(toTransport(fake), {
+      speed: 4,
+      clock: toClock(clock),
+      rejoin,
+      snapshotDeadlineMs: 60_000, // raised DECLARED test setting ON PURPOSE to isolate the wait leg
+      recoveryDeadlineMs: 60_000, // (same posture as the slice-28 block; the e2e gafloor leg keeps
+      rejoinWindowMs: 60_000,     // exercising the shipped values)
+      maxRejoinsPerWindow: 2,
+      rejoinBackoffMs: [250, 500, 1000],
+      ...overrides,
+    });
+    predictor.attach();
+    fake.patch({ lastAuthorityTick: 1, z: 1.5 });
+    const stage = (patches: number) => {
+      predictor.send({ generation: 1, moveX: 1, moveZ: 0 }, true);
+      for (let i = 1; i <= patches; i += 1) fake.patch({ lastAuthorityTick: 1 + i, z: 1.5 + i });
+    };
+    const firePastWait = () => {
+      stage(3); // streak G at age ~0
+      clock.advance(1_000);
+      fake.patch({ lastAuthorityTick: 5, z: 5 }); // age 1000 > 900
+    };
+    const settle = async () => {
+      clock.advance(250); // the episode backoff rides the injected driver
+      await flush();
+      next.patch({ lastAuthorityTick: 1, z: 1.5 }); // first accepted snapshot of the new domain
+    };
+    return { clock, fake, next, predictor, rejoin, stage, firePastWait, settle };
+  };
+
+  it('NO room identity at the public entry point: the receipt stays explicitly INELIGIBLE — the shipped count-only default fires and NAMES the refusal', () => {
+    const { predictor, firePastWait } = buildSeat({ stallAckFloor: receipt() });
+    firePastWait();
+    expect(predictor.stateName()).toBe('recovering');
+    const trigger = predictor.recoveryLedger().find((e) => e.event === 'trigger');
+    expect(trigger?.detail).toMatch(/MEASURED RECEIPT NOT APPLIED/);
+    expect(trigger?.detail).toMatch(/INELIGIBLE/);
+    expect(trigger?.detail).toMatch(/no guessed IDs/);
+    const st = predictor.stallAckFloorStatus();
+    expect(st.state === 'configured' && st.scopeIssue !== null && /INELIGIBLE/.test(st.scopeIssue)).toBe(true);
+  });
+
+  it('room-scope mismatch: a receipt measured for another room NEVER activates on this seat — count-only continues, detail and status say why', () => {
+    const { predictor, firePastWait } = buildSeat({ stallAckFloor: receipt(), measuredWaitRoomId: 'room-synth-OTHER' });
+    firePastWait();
+    const trigger = predictor.recoveryLedger().find((e) => e.event === 'trigger');
+    expect(trigger?.detail).toMatch(/room-scope mismatch/);
+    expect(trigger?.detail).toMatch(/MEASURED RECEIPT NOT APPLIED/);
+    expect(trigger?.detail).not.toMatch(/MEASURED-RECEIPT wait/); // the measured profile was not used
+  });
+
+  it('epoch-scope mismatch: an epoch-7 receipt does not activate on an epoch-8 seat; an EXPLICIT null epochScope is declared epoch-agnostic and does', () => {
+    const mismatch = buildSeat({ stallAckFloor: receipt({ epochScope: 8 }), measuredWaitRoomId: 'room-synth-1' });
+    mismatch.firePastWait();
+    expect(mismatch.predictor.recoveryLedger().find((e) => e.event === 'trigger')?.detail).toMatch(/epoch-scope mismatch/);
+    const agnostic = buildSeat({ stallAckFloor: receipt({ epochScope: null }), measuredWaitRoomId: 'room-synth-1' });
+    agnostic.firePastWait();
+    const detail = agnostic.predictor.recoveryLedger().find((e) => e.event === 'trigger')?.detail ?? '';
+    expect(detail).toMatch(/MEASURED-RECEIPT wait 900 ms/);
+    expect(detail).toMatch(/declared epoch-agnostic/);
+  });
+
+  it('IN SCOPE (join-bound room): HELD under the wait, FIRES past it with the machine validation carried in the detail — labelled, never a proof, never production-enabled', () => {
+    const { predictor, stage, firePastWait } = buildSeat({ stallAckFloor: receipt(), measuredWaitRoomId: 'room-synth-1' });
+    stage(3); // streak G at age ~0: held (the wait leg applies)
+    expect(predictor.stateName()).toBe('tracking');
+    expect(predictor.recoveryLedger().some((e) => e.event === 'trigger')).toBe(false);
+    firePastWait(); // re-stages: the second stage(3) continues from the first — the fire lands past the wait
+    const detail = predictor.recoveryLedger().find((e) => e.event === 'trigger')?.detail ?? '';
+    expect(detail).toMatch(/MEASURED-RECEIPT wait 900 ms/);
+    expect(detail).toMatch(/machine-validated within-budget/);
+    expect(detail).toMatch(/recorded detection\+recovery 900 ms vs declared available budget 1000 ms/);
+    expect(detail).toMatch(/NOT a proof, NOT production-enabled/);
+    expect(detail).not.toMatch(/PROTOTYPE/); // the legacy experimental label belongs to the legacy path only
+  });
+
+  it('APPLIED episode reconciliation: a receipt whose budget declares the SAME origin+basis as the actual episode compares; the verdict comes from the ACTUAL measured episode', async () => {
+    const { predictor, firePastWait, settle } = buildSeat({ stallAckFloor: receipt(), measuredWaitRoomId: 'room-synth-1' });
+    firePastWait();
+    await settle();
+    const st = predictor.stallAckFloorStatus();
+    expect(st.state === 'configured' && st.episodeReconciliation !== null).toBe(true);
+    if (st.state === 'configured' && st.episodeReconciliation !== null) {
+      const rec = st.episodeReconciliation;
+      expect(rec.validation).toBe('compared-on-matching-origins');
+      expect(rec.actualEpisodeMs).toBe(250); // the injected driver advanced exactly the backoff
+      expect(rec.verdict).toBe('within-declared-budget'); // 250 <= 1000 declared
+      expect(rec.note).toMatch(/proves nothing and enables nothing/);
+    }
+    // The exceeded branch, from the ACTUAL episode: a valid tight-budget receipt, slow recovery.
+    const slow = buildSeat({ stallAckFloor: receipt({ detection: seg(50), recovery: seg(100), budget: { availableMs: 200, clockOrigin: 'seat-declared-clock', basis: 'from-fire' } }), measuredWaitRoomId: 'room-synth-1' });
+    slow.firePastWait();
+    await slow.settle(); // actual episode 250 > 200 declared
+    const st2 = slow.predictor.stallAckFloorStatus();
+    expect(st2.state === 'configured' && st2.episodeReconciliation?.verdict).toBe('exceeded-declared-budget');
+  });
+
+  it('a receipt whose budget basis does NOT match the actual episode yields an unambiguously REPORTING-ONLY entry with no within/over wording — never presentable as applied', async () => {
+    const { predictor, firePastWait, settle } = buildSeat({
+      stallAckFloor: receipt({
+        budget: { availableMs: 1_100, clockOrigin: 'seat-declared-clock', basis: 'from-oldest-send' },
+        sendToFireOffsetMs: 150, // the receipt itself validates (normalized) at the config stage
+      }),
+      measuredWaitRoomId: 'room-synth-1',
+    });
+    firePastWait();
+    await settle();
+    const st = predictor.stallAckFloorStatus();
+    if (st.state !== 'configured' || st.episodeReconciliation === null) throw new Error('expected a reconciliation entry');
+    const rec = st.episodeReconciliation;
+    expect(rec.validation).toBe('reporting-only-basis-mismatch');
+    expect(rec.verdict).toBe('not-compared-basis-mismatch'); // NO within/over wording across mismatched origins
+    expect(rec.note).toMatch(/REPORTING-ONLY/);
+    expect(rec.note).toMatch(/must never be presented as an applied validation/);
+  });
+
+  it('the binding seam fails closed: no receipt — nothing to bind; empty/placeholder ids refused; re-binding to a different room is refused (a profile is never silently re-scoped)', () => {
+    const plain = buildSeat();
+    expect(() => plain.predictor.bindMeasuredWaitScope('room-synth-1')).toThrow(/no measured-wait receipt is configured/);
+    const seat = buildSeat({ stallAckFloor: receipt() });
+    expect(() => seat.predictor.bindMeasuredWaitScope('   ')).toThrow(/ACTUAL room identity/);
+    seat.predictor.bindMeasuredWaitScope('room-synth-1'); // the supported direct-host binding
+    expect(() => seat.predictor.bindMeasuredWaitScope('room-synth-2')).toThrow(/rebinding a measured profile is refused/);
+    seat.firePastWait();
+    expect(seat.predictor.recoveryLedger().find((e) => e.event === 'trigger')?.detail).toMatch(/MEASURED-RECEIPT wait 900 ms/);
+  });
+
+  it('RESET while an in-scope receipt is applied: a boundary that MOVES clears the streak — no episode, no wait fire (health still wins)', () => {
+    const { fake, predictor, clock, stage } = buildSeat({ stallAckFloor: receipt(), measuredWaitRoomId: 'room-synth-1' });
+    stage(2); // unmoved streak 2, under G
+    fake.patch({ lastAuthorityTick: 4, z: 4, ackTo: 1, inputResolvedThrough: 1 }); // disposed: boundary moves
+    clock.advance(5_000);
+    for (let i = 1; i <= 4; i += 1) fake.patch({ lastAuthorityTick: 5 + i, z: 5 + i });
+    expect(predictor.stateName()).toBe('tracking');
+    expect(predictor.recoveryLedger().some((e) => e.event === 'trigger')).toBe(false);
+  });
+});
