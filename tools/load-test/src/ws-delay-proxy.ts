@@ -940,7 +940,19 @@ export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<
   let listening = true;
   let closeWaiter: (() => void) | null = null;
 
-  const server = createServer((client) => {
+  // TRANSPARENT TCP, SYMMETRICALLY. The published primitive is a delay proxy for a TCP pair: an
+  // ORDERLY FIN on one leg is a HALF-CLOSE of THAT DIRECTION, never a full disconnect — a peer may
+  // legitimately keep reading after it stops writing (the client write-end FIN followed by a
+  // delayed, multi-chunk server response is the ordinary HTTP/1.1 keep-alive shape, and dpa8o
+  // proved the hop must propagate FINs promptly). The upstream leg was already connected with
+  // `allowHalfOpen: true`; the ACCEPTED leg must match, or Node's default auto-END + destroy on
+  // peer FIN silently tears down a reverse leg that still works — which is exactly the wrong
+  // behavior an earlier unit case pinned (corrected in this revision, with the half-open
+  // delivery case and a separate GENUINE reset case). Retirement stays bounded: each direction
+  // FINs its destination only after its own queue drains (noteSourceClosed/pump), the pair
+  // finishes when both directions are closed (maybeFinish), a reset aborts loudly (abort), and
+  // proxy.close() arms the existing drain grace on every live pair (beginClose).
+  const server = createServer({ allowHalfOpen: true }, (client) => {
     const conn = new ProxyConnection(client, {
       targetHost: options.targetHost,
       targetPort: options.targetPort,

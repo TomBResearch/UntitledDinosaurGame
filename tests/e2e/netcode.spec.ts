@@ -803,7 +803,7 @@ interface PredPredictorSurface {
   rawPredicted(): { x: number; z: number } | null;
   presentation(): { x: number; z: number } | null;
   heldSnapshot(): { x: number; z: number } | null;
-  pendingJournal(): readonly { seq: number; epoch: number }[];
+  pendingJournal(): readonly { seq: number; epoch: number; sentAtMs: number }[];
   deliveryLedger(): readonly { accepted: boolean; reason: string; delivery: { revision: number; epoch: number; authorityTick: number; atMs: number; ack: number; resolvedThrough: number; gapStart: number; gapEnd: number; retiredUnrepresented: number; sentCount: number } }[];
   tickLedger(): readonly { action: string; reason: string; reconcileSeq: number }[];
   /** END-POSE DIAGNOSTIC (renamed): pre-smoothing end-pose delta, pending window included. */
@@ -2618,17 +2618,31 @@ const startMoverLedger = (page: Page): Promise<{ samples: Record<string, unknown
     for (;;) {
       const rows = p.deliveryLedger();
       const d = rows.length > 0 ? rows[rows.length - 1]!.delivery : undefined;
+      const first = rows.length > 0 ? rows[0]!.delivery : undefined;
       const evs = p.recoveryLedger().map((r) => ({ event: r.event, detail: r.detail, atMs: r.atMs }));
       const connError = (p as unknown as { connectionError(): { code: string; message: string; atMs: number } | null }).connectionError();
+      // ACK-AGE INSTRUMENTATION (slice 26 default-baseline review; probe-only, test file): the
+      // baseline attribution needs, PER SAMPLE, the page-side send count (below), the FIRST
+      // observed receipt (the delivery ledger's first row — a fixed anchor, not just the latest),
+      // the authoritative prefix return (prefix/ack below) and the AGE of the OLDEST UNACKED
+      // input on the SAME page clock the predictor stamps (PendingInput.sentAtMs, default clock
+      // = performance.now). Nothing new is invented: every field reads an existing published
+      // ledger; the fields only make the artifact capture what the attribution must inspect.
+      const nowMs = performance.now();
+      const pending = p.pendingJournal();
+      let oldestSentMs: number | null = null;
+      for (const entry of pending) if (oldestSentMs === null || entry.sentAtMs < oldestSentMs) oldestSentMs = entry.sentAtMs;
       const snap: Record<string, unknown> = {
-        atMs: performance.now(),
-        sincePumpMs: typeof g.__udgCellPumpStartedAt === 'number' ? performance.now() - g.__udgCellPumpStartedAt : null,
+        atMs: nowMs,
+        sincePumpMs: typeof g.__udgCellPumpStartedAt === 'number' ? nowMs - g.__udgCellPumpStartedAt : null,
         epoch: d?.epoch ?? holder.transport.issuedEpoch(),
         state: p.stateName(),
         ack: d?.ack ?? -1,
         prefix: d?.resolvedThrough ?? -1,
         sent: p.sentAudit().length,
-        outstanding: p.pendingJournal().length,
+        outstanding: pending.length,
+        oldestOutstandingAgeMs: oldestSentMs === null ? null : nowMs - oldestSentMs,
+        firstDelivery: first === undefined ? null : { atMs: first.atMs, authorityTick: first.authorityTick, epoch: first.epoch },
         deliveries: rows.length,
         lastAccepted: d === undefined ? null : { atMs: d.atMs, authorityTick: d.authorityTick, epoch: d.epoch },
         authorityTick: d?.authorityTick ?? -1,

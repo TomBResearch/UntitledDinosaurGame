@@ -604,32 +604,36 @@ describe('UDG-SPIKE-001 ws-delay-proxy — orderly half-close and local-handoff 
     echo.close();
   });
 
-  it('a reverse byte whose CLIENT has gone away is NEVER counted delivered: it is counted lost once, attributed to the client, and the pair retires', async () => {
+  it('a GENUINE client RESET (RST, no FIN) is a loss at this hop: the queued reverse byte is counted lost exactly once, the closure is an error, and the pair retires (abort class — kept separate from the half-close class)', async () => {
+    // CORRECTION NOTES (no blind rebasing): the PREVIOUS version of this case destroyed the client
+    // with a plain destroy(), which — with no unread data — is an orderly FIN, i.e. a HALF-CLOSE,
+    // and the fixed transparent hop legitimately forwards the due byte to the still-live read leg.
+    // That class is now covered by the half-close delivery case above. The LOSS guarantee below is
+    // re-derived from an actual RESET: a reset is not an orderly close and never a half-open — the
+    // accepted socket errors at once, the queued reverse byte can never be handed off, and finish()
+    // counts it LOST once. A reset closure is LOUD (error true) — never silent, never delivered.
     const clock = new FakeClock();
     const peer: { socket: Socket | null } = { socket: null };
-    const echo = createServer((socket) => { peer.socket = socket; });
+    const echo = createServer((socket) => { peer.socket = socket; socket.on('error', () => { /* the pair is being reset */ }); });
     const echoPort = await listen(echo);
     const proxy = await createWsDelayProxy({ listenPort: 0, targetHost: '127.0.0.1', targetPort: echoPort, profile: { name: 'unit', oneWayMs: 20, jitterBudgetMs: 0, seed: 1001 }, timer: clock });
     const client = connect({ host: '127.0.0.1', port: proxy.port });
-    client.on('error', () => { /* the client removes itself; not the point of the case */ });
+    client.on('error', () => { /* self-inflicted reset — not the point of the case */ });
     await new Promise<void>((resolve) => client.once('connect', resolve));
     await until(() => peer.socket !== null, 'upstream connection');
 
-    peer.socket?.write(Buffer.from('TO-VANISHED-CLIENT'));
-    await until(() => proxy.stats().s2c.chunksReceived === 1, 'the reverse chunk into the tube');
-    client.destroy();                              // the destination of the reverse leg disappears
-    await until(() => proxy.stats().connLog.some((r) => r.firstFin === 'client'), 'the proxy to OBSERVE the client leg close');
-    clock.advance(25);                             // NOW its departure comes due — to a gone socket
+    peer.socket?.write(Buffer.from('TO-RESET-CLIENT'));
+    await until(() => proxy.stats().s2c.chunksReceived === 1, 'the reverse chunk into the tube (not yet due)');
+    client.resetAndDestroy();                    // a GENUINE RST: the peer hard-goes-away class
+    await until(() => proxy.stats().connections.active === 0, 'the pair to retire on the reset (a hang would time out HERE)');
 
     const stats = proxy.stats();
-    expect(stats.s2c.chunksDelivered, 'a byte handed to no live destination is NOT delivered').toBe(0);
-    expect(stats.s2c.chunksLostAtDestination, 'it is counted exactly once, where it was lost').toBe(1);
-    expect(stats.s2c.bytesLostAtDestination, 'and its bytes are counted too').toBe(Buffer.from('TO-VANISHED-CLIENT').length);
-    expect(stats.s2c.bufferedBytes, 'nothing stays stranded inside the proxy').toBe(0);
-    expect(stats.connections.errors, 'an ENDPOINT that left first owns that loss — it is attributed, not blamed on the proxy').toBe(0);
-    expect(proxy.stats().connLog.at(-1)?.firstFin, 'the closure names the client as the first to finish').toBe('client');
-    await until(() => proxy.stats().connections.active === 0, 'the pair to retire instead of lingering half-open');
-    client.destroy();
+    expect(stats.s2c.chunksDelivered, 'a byte whose destination reset is NEVER counted delivered').toBe(0);
+    expect(stats.s2c.chunksLostAtDestination, 'it is counted lost exactly once at this hop').toBe(1);
+    expect(stats.s2c.bytesLostAtDestination, 'and its bytes are counted too').toBe(Buffer.from('TO-RESET-CLIENT').length);
+    expect(stats.s2c.bufferedBytes + stats.c2s.bufferedBytes, 'nothing stays stranded inside the proxy').toBe(0);
+    expect(stats.connections.errors, 'a reset closure is an ERROR — loud, never silent').toBe(1);
+    expect(stats.connLog.at(-1)?.error, 'the retired pair says so').toBe(true);
     await proxy.close();
     echo.close();
   });
@@ -667,49 +671,61 @@ describe('UDG-SPIKE-001 ws-delay-proxy — orderly half-close and local-handoff 
     echo.close();
   });
 
-  it('a NONEMPTY reverse response that arrives AFTER the client\u2019s orderly FIN is accounted once, attributed, and never hung (slice-26 closed-direction review)', async () => {
-    // REVIEW ITEM after b5e68eb: the closed direction's reverse bytes. Measured Node semantics
-    // (probed directly): an ACCEPTED socket with the default allowHalfOpen:false becomes
-    // unwritable the moment its peer FINs, so a target that answers a half-closed seat CANNOT
-    // have its late bytes handed off at this hop. The honest outcome is therefore: the FIN still
-    // propagates (the b5e68eb rule), the late response ARRIVES and is COUNTED at the hop, is
-    // counted LOST at the destination exactly once (never delivered, never stranded), the loss is
-    // attributed to the endpoint that left first (firstFin 'client', no error), and the pair
-    // RETIRES \u2014 a hang here (the dpa8o failure mode) fails this test by timeout.
+  it('an ORDERLY client half-close PRESERVES the reverse leg: a half-open-capable client receives the delayed MULTI-CHUNK response EXACTLY, then EOF, with clean accounting and bounded retirement (corrected slice-26 review)', async () => {
+    // THE CORRECTED RULE (reviewer-caught; the first version of this case pinned the WRONG
+    // behavior and is superseded here, not rerolled away). The published primitive is a
+    // TRANSPARENT TCP hop: an orderly FIN of the client's WRITE side is a half-close, not a full
+    // disconnect, and the accepted side is now allowHalfOpen:true — symmetric with the upstream
+    // leg — so reverse traffic must keep flowing after that FIN. Measured against the fixed hop
+    // (and probed against plain Node first): the target receives the request bytes AND the EOF,
+    // answers with a delayed multi-chunk response, and the client receives the EXACT bytes and
+    // then its own EOF — nothing at this hop is lost, blamed or stranded; the pair still RETIRES
+    // within bounds (every unmet step lands as a named timeout, never a silent pass).
     const clock = new FakeClock();
-    const peer: { ended: boolean } = { ended: false };
+    const peer: { got: Buffer[]; eof: boolean; answer: (() => void) | null } = { got: [], eof: false, answer: null };
     const echo = createServer({ allowHalfOpen: true }, (socket) => {
-      socket.on('data', () => { /* consume the request; answer only after the FIN */ });
+      socket.on('error', () => { /* teardown */ });
+      socket.on('data', (d) => { peer.got.push(Buffer.from(d)); });
       socket.on('end', () => {
-        peer.ended = true;
-        socket.write(Buffer.from('LATE-RESPONSE')); // NONEMPTY response to the half-closed seat
+        peer.eof = true;
+        socket.write(Buffer.from('R1-'));            // chunk 1 of the delayed response, at the EOF
+        peer.answer = () => { socket.write(Buffer.from('R2-')); socket.end(); }; // chunk 2 + FIN
       });
     });
     const echoPort = await listen(echo);
-    const proxy = await createWsDelayProxy({ listenPort: 0, targetHost: '127.0.0.1', targetPort: echoPort, profile: { name: 'unit', oneWayMs: 0, jitterBudgetMs: 0, seed: 1001 }, timer: clock });
-    const client = connect({ host: '127.0.0.1', port: proxy.port, allowHalfOpen: true });
-    client.on('error', () => { /* teardown RST is expected */ });
+    const proxy = await createWsDelayProxy({ listenPort: 0, targetHost: '127.0.0.1', targetPort: echoPort, profile: { name: 'unit', oneWayMs: 20, jitterBudgetMs: 0, seed: 1001 }, timer: clock });
+    const client = connect({ host: '127.0.0.1', port: proxy.port, allowHalfOpen: true }); // half-open CAPABLE
+    client.on('error', () => { /* teardown */ });
     const clientGot: Buffer[] = [];
+    let clientSawFin = false;
     client.on('data', (d) => { clientGot.push(Buffer.from(d)); });
+    client.on('end', () => { clientSawFin = true; });
     await new Promise<void>((resolve) => client.once('connect', resolve));
 
     client.write(Buffer.from('REQ'));
-    client.end(); // ORDERLY FIN from the client, while the request is still in the tube
+    client.end();                              // ORDERLY FIN of the WRITE side only
     await until(() => proxy.stats().c2s.chunksReceived === 1, 'the request into the tube');
-    clock.advance(1);
-    await until(() => peer.ended, 'the client FIN to reach the target through the hop (the b5e68eb rule)');
-    await until(() => proxy.stats().s2c.chunksReceived === 1, 'the NONEMPTY late response to ARRIVE at the hop');
-    clock.advance(1); // its departure comes due \u2014 toward a destination the FIN already took away
+    clock.advance(25);
+    await until(() => peer.eof, 'the target to see the request bytes AND the EOF (FIN propagated after the drain)');
+    expect(Buffer.concat(peer.got).toString(), 'the target received the request bytes').toBe('REQ');
+    await until(() => proxy.stats().s2c.chunksReceived === 1, 'response chunk 1 to ARRIVE at the hop after the FIN');
+    clock.advance(25);
+    await until(() => Buffer.concat(clientGot).toString() === 'R1-', 'the HALF-CLOSED client to receive response chunk 1 (the reverse leg survives the FIN — the corrected rule)');
+    if (peer.answer !== null) peer.answer();      // chunk 2 + the target's own FIN
+    await until(() => proxy.stats().s2c.chunksReceived === 2, 'response chunk 2 to arrive at the hop');
+    clock.advance(25);
+    await until(() => clientSawFin, 'the client to see EOF only AFTER the response (FIN follows the drained leg)');
 
     const stats = proxy.stats();
-    expect(stats.s2c.chunksDelivered, 'a byte with no live destination is NEVER claimed delivered').toBe(0);
-    expect(stats.s2c.chunksLostAtDestination, 'the late response is counted lost exactly once at this hop').toBe(1);
-    expect(stats.s2c.bytesLostAtDestination, 'and its bytes are the response\u2019s own bytes').toBe(Buffer.from('LATE-RESPONSE').length);
-    expect(stats.s2c.bufferedBytes, 'nothing stays stranded inside the proxy').toBe(0);
-    expect(stats.connections.errors, 'an endpoint that left first owns the loss \u2014 attributed, not a proxy fault').toBe(0);
-    expect(stats.connLog.at(-1)?.firstFin, 'the closure names the CLIENT as the first to finish').toBe('client');
-    expect(Buffer.concat(clientGot).length, 'the half-closed client receives nothing after its own FIN').toBe(0);
-    await until(() => proxy.stats().connections.active === 0, 'the pair to RETIRE (a hang would land here as a timeout)');
+    expect(Buffer.concat(clientGot).toString(), 'the client received the EXACT delayed multi-chunk response, then EOF').toBe('R1-R2-');
+    expect(stats.c2s.chunksReceived + stats.c2s.chunksDelivered, 'forward direction: the request arrived and was handed off').toBe(2);
+    expect(stats.s2c.chunksDelivered, 'reverse direction: BOTH response chunks were handed off').toBe(2);
+    expect(stats.s2c.bytesDelivered, 'exactly the response bytes').toBe(Buffer.from('R1-R2-').length);
+    expect(stats.s2c.chunksLostAtDestination + stats.c2s.chunksLostAtDestination, 'a half-close loses NOTHING').toBe(0);
+    expect(stats.connections.errors, 'an orderly half-close is not an error').toBe(0);
+    expect(stats.connLog.at(-1)?.firstFin, 'the closure is attributed to the client FIN').toBe('client');
+    expect(stats.s2c.bufferedBytes + stats.c2s.bufferedBytes, 'nothing stays inside the hop').toBe(0);
+    await until(() => proxy.stats().connections.active === 0, 'the pair to RETIRE within bounds after both directions drained');
     expect(proxy.stats().connLog.at(-1)?.error, 'the retired pair carries no error').toBe(false);
     client.destroy();
     await proxy.close();
