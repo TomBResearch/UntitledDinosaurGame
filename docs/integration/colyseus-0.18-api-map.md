@@ -557,5 +557,1044 @@ protocol change, and no compatibility claim — `stackCompatibility` remains `no
 `PR-14` has since landed as the Phase 2 W-8 substrate (above); Phase 0's assertion of its absence was correct for
 every run taken before that work item, and the historical records are not rewritten (rule R-1).
 
+## 12. The browser seat (UDG-SPIKE-001 §5): the public client API, and the compiler claim kept apart
+
+UDG-SPIKE-001's first slice put a real browser client behind the pinned `@colyseus/sdk`. The names below are the
+**whole** client-side surface the seat uses — `apps/client/src/network/ColyseusPredictionAdapter.ts` and
+`apps/client/src/network/RemotePresentation.ts`, driven by `tests/e2e/netcode.spec.ts` in two Chromium contexts and
+recorded again by `tests/probes/colyseus-client.probe.ts`. Declaration text is quoted from the installed
+`@colyseus/sdk@0.18.9` / `@colyseus/core@0.18.27` trees, not from documentation prose.
+
+### 12.1 Compiler status for `apps/client`, stated separately (the §0 rule, applied to a second project)
+
+| question | answer today | where it is proven |
+| --- | --- | --- |
+| Does first-party client code typecheck against the pinned declarations? | **yes** — `pnpm --filter @udg/client typecheck` exits 0, under the [ADR-0004](../adr/0004-client-declaration-checking-exception.md) exception, with zero diagnostics in repository code | `tests/contracts/UDG-SPIKE-001.test.ts` ("keeps the client gate clean") |
+| Are the vendor declaration defects fixed? | **no** — 3 remain under the client's browser library shape (`TS1192` in `@colyseus/core`'s router, `TS2344` ×2 inside `@colyseus/sdk`'s own HTTP types), listed and pinned | `pnpm --filter @udg/client typecheck:declarations`, [colyseus-client-declaration-inventory.json](colyseus-client-declaration-inventory.json) |
+| Did those diagnostics cost anything at runtime? | **no runtime consequence was measured** — the same import that the compiler cannot fully check joins a room, sends input and receives authoritative state in two browsers | `tests/e2e/netcode.spec.ts` → `netcode-smoke-results.json` |
+| Is the pinned stack compatible at runtime? | **not established** — Gate A is Not Run, and no §12 row changes that | `compatibility-verdict.json` still reads `not-established` |
+
+Two measurements that decide the shape of the exception, both taken on this branch:
+
+- **The client-shape inventory is 3, not the server's 27.** Under the browser library set the 18+1 `HeadersInit`
+  `TS2304` class does not fire, because `lib.dom` declares the name. The server inventory above is unchanged and
+  was not re-scored.
+- **There is no cleaner public import.** `@colyseus/sdk` publishes one documented entry (`exports "."`); the
+  `browser` condition swaps the *runtime* file only, and types stay `build/index.d.ts`. The package also exposes a
+  `"./*"` subpath map, and `@colyseus/sdk/Client` does resolve — it is **worse**: 6 additional `TS2591`
+  `Cannot find name 'Buffer'` defects in `Connection.d.ts`, `transport/ITransport.d.ts` and `msgpackr/index.d.ts`,
+  whose only relief is `@types/node` in a browser project, which the ambient-type policy refuses. The root import
+  is therefore the cleanest public route, and the 3-diagnostic floor is the vendor's, not ours.
+
+### 12.2 Client API rows: what the seat uses
+
+| name | package | declaration | exact declared signature | used by | status |
+| --- | --- | --- | --- | --- | --- |
+| `new Client(settings, options?)` | `@colyseus/sdk@0.18.9` | `build/Client.d.ts` | `constructor(settings?: string \| EndpointSettings, options?: ClientOptions)` — a matchmake URL string is the documented form | `joinPredictionSeat` | passes: both seats construct and connect over loopback |
+| `client.create<State>(roomName, options?, rootSchema?)` | `@colyseus/sdk@0.18.9` | `build/Client.d.ts` | `create<State = any>(roomName: string, options?: JoinOptions, rootSchema?: SchemaConstructor<State>): Promise<Room<any, State>>` — seat A creates the room | `joinPredictionSeat` | passes. `State` is the seat's own structural replica view (`RegionReplicaState`) and every field read through it is validated before use; no `rootSchema` is passed, so the state serializer comes from the server's handshake reflection |
+| `client.joinById<State>(roomId, options?, rootSchema?)` | `@colyseus/sdk@0.18.9` | `build/Client.d.ts` | as above with `roomId` — seat B joins the seat-A room | `joinPredictionSeat` | passes; **measured in slice 1 and re-measured here:** `create()` makes a *new* room every call, so a pair must share one id (`joinById`), which is why the smoke creates once and joins by id |
+| `room.sessionId`, `room.roomId` | `@colyseus/sdk@0.18.9` | `build/Room.d.ts` | `sessionId: string`; `roomId: string` | seat identity, peer partition | passes: distinct per seat, same room |
+| `room.state` | `@colyseus/sdk@0.18.9` | `build/Room.d.ts` | `get state(): State` | `snapshot()` | passes, **read only**. Nothing in `apps/client` writes to the received schema; the input handle's own staging object is the only thing the seat mutates |
+| `room.onStateChange(cb)`, `.clear()` | `@colyseus/sdk@0.18.9` | `build/Room.d.ts` | callable signal: `(cb: (state: State) => void) => EventEmitter`, with `once`/`remove`/`invoke`/`clear` | delivery counting, issued-epoch wait, teardown | passes. The epoch wait is the UDG-003 harness rule restated client-side: a seat sends only after its own row carries the room's issued epoch |
+| `room.input<I>(options?)` | `@colyseus/sdk@0.18.9` | `build/Room.d.ts` | `input<I = …>(options?: InputOptions<I>): InputHandle<I>` — `I` is intentionally unconstrained by the declaration | the fixed-step channel | passes with **no local input schema**: `RegionRoom.defineInput(DirectInputSchema)` advertises the fields through the `INPUT_REFLECTION` handshake section and the SDK rebuilds them client-side (`"the synthesized class mirrors the server's fields, but `instanceof YourInput` won't pass on it"`, quoted from `InputOptions` docs) |
+| `InputHandle.data` | `@colyseus/sdk@0.18.9` | `build/input/InputHandle.d.ts` | `readonly data: I` — the mutable staging instance | frame staging | passes; the seat writes only the six reflected `DirectInputSchema` fields, after `validateDirectFrame` |
+| `InputHandle.send()`, `.sentCount`, `.lastProcessed` | `@colyseus/sdk@0.18.9` | `build/input/InputHandle.d.ts` | `send(): number` (returns the assigned seq; 0 when nothing was sent), `readonly sentCount: number`, `readonly lastProcessed: number` | one input per `send()`, seq `sentCount + 1`, ack read-back | passes: the smoke asserts the authority acknowledged every frame it sent |
+| `InputHandle.tickRate`, `.stepMs`, `.patchRate` | `@colyseus/sdk@0.18.9` | `build/input/InputHandle.d.ts` | `readonly tickRate?: number`, `readonly stepMs?: number`, `readonly patchRate?: number` — advertised by `defineInput` through the join handshake | the seat's fixed-step facts | passes: `tickRate 20`, `stepMs 50`, `patchRate 100` observed by both seats. (A *missing* advertised rate is a required Gate A case and stays with the spike harness.) |
+| `room.leave(consented?)` | `@colyseus/sdk@0.18.9` | `build/Room.d.ts` | `leave(consented?: boolean): Promise<number>` — called with no argument, i.e. consented | `close()` | passes: consented leave also cancels automatic reconnection, which is what keeps a finished run from holding a room |
+
+### 12.3 Client names deliberately not used, and why
+
+| name | why not |
+| --- | --- |
+| `room.reconnectionToken`, `client.reconnect(token)`, `joinByToken` | A credential. Root rule and evidence sanitisation (§19.1) keep tokens out of client state and out of evidence; `tests/contracts/UDG-SPIKE-001.test.ts` greps both seat modules for the identifier, and the smoke asserts neither browser context retains storage. Reconnection is ADR-0003 §3.2 client work (UDG-008), not this slice's |
+| `client.joinOrCreate`, `client.join`, `client.filterCreate`, `Client.selectByLatency` | The smoke needs one shared room with a known join order (create once, join by id), which is what `create` + `joinById` measure. `joinOrCreate` was measured in slice 1 to hide the room identity behind a second creation path; the spike names the room instead |
+| `room.input({ mode: "unreliable", historySize, allowRewind, renderDelay })`, `room.clock`/`RoomClock`, `InputHandle.at/reckonTimeAt/onSend/reset/epoch/pendingCount/replayBufferSize` | Lag compensation, clocks and replay rings belong to prediction and reconciliation. The declaration itself says `mode: "unreliable"` is only unreliable on the experimental `@colyseus/h3-transport`, and this repository pins the WebSocket transport — using it would add a redundancy ring the ordered channel does not need. Later slices add them with their own evidence |
+| `@colyseus/sdk/predict` (`predict.sim`, `predict.reconciler`, `Predict`) | The spike's local-prediction and forced-correction limbs are later slices, and ADR-0003 §4 makes the ack/disposition pairing the thing that must be re-measured first. Importing a predictor now would decide Gate A's answer by borrowing a primitive the contract has not yet proven on this room |
+| `room.send`/message handlers, `getStateCallbacks`, `room.lock`/`unlock`, `room.onDrop`/`onReconnect`/`onError` | No discrete effect exists in the Gate A flat scope (`M`/`P` are UDG-003 and UDG-007), room locking is server policy, and error/drop handling is the ADR-0003 §3.2 client recovery surface owned by UDG-008 |
+| a local `rootSchema` / local schema classes | The server's reflection already rebuilds both the state serializer and the input schema in the browser (slice-1 measurement, re-confirmed by this smoke). Shipping a second copy of the schema in the client would create two sources of truth for one wire format |
+
+The **distinction this section exists to keep**: the vendor *declarations* are defective (3 pinned diagnostics, no
+first-party error, an exception confined to one project and audited by a suite), and the *runtime* path over the same
+public API works in two browsers. Neither statement may be read as the other, and `stackCompatibility` stays
+`not-established` until Gate A runs on an exact candidate.
+
+## 13. The seat-side predictor (UDG-SPIKE-001 slice 4): the public `predict` surface, and the one boundary it cannot move
+
+Slice 4 adds seat-side prediction on public primitives only. `ColyseusPredictionAdapter.ts` composes the SDK's
+published `Reconciler` — it does not re-implement prediction — behind a delivery guard that ADR-0003 owns. Names
+used, all from the package root (`@colyseus/sdk@0.18.9`):
+
+| name | declaration (installed tree) | how the seat uses it |
+| --- | --- | --- |
+| `new Reconciler(instance, options)` | `predict/reconciler.ts`: `class Reconciler<S extends object, I>`, `constructor(instance: object, opts: ReconcilerOptions<S, I>)` | constructed only after the guard's FIRST verified delivery, on the seat's issued epoch; `instance` is the seat's own replica row, `fields: ['x','z']`, `step` applies the shared flat relation with the advertised `dt` |
+| `ReconcilerOptions.input / step / fields / stepMs / stepSeconds / smoothMs` | `predict/rollback.ts` + `ReconcilerOptions` | `step` receives `ctx.dt` in seconds — the room's advertised `1/tickRate`; if the handle advertises no rate the seat REFUSES to construct (no guessed `dt`), asserted by `predictor.test.ts` and reported by the browser suite's missing-rate detector |
+| `reconciler.tick(now)` | `tick(now: number): void` | called by the seat's own frame loop and by nothing else; polls `input.lastProcessed` internally and reconciles at most one advance per call (`reconcileSeq` delta ≤ 1 asserted) |
+| `reconciler.state / .reconcileSeq / .value(field)` | `readonly state: S`; `readonly reconcileSeq: number`; `value(field)` | the raw-predicted reader, the exactly-once ledger, and the presentation reader — kept as distinct readers, never conflated with the replicated row |
+| `InputHandle.onSend(cb)`, `InputHandle.at(seq)` | `onSend(listener): () => void`; `at(seq): I \| undefined` (`undefined` outside the live window) | the pending journal observes every send through the handle, so a frame staged directly on the public handle enters the same journal; `at(seq)` is read inside the listener, where it is documented valid |
+
+Two measured properties define the guard's shape. **First**, the reconciler's reconcile boundary is
+`InputHandle.lastProcessed` and is not injectable: `RollbackOptions`/`ReconcilerOptions` accept no boundary hook,
+and `at(seq)` returns `undefined` for `seq <= lastProcessed` (eviction reproduced live in
+`tests/probes/colyseus-roundtrip.probe.ts`, `control_and_adverse_ledgers`). **Second**, on this room's compliant
+in-envelope stream `lastProcessed === inputResolvedThrough` on every paired delivery (same probe, and the browser
+suite's `pred: accepted delivery paired ack with resolution` check), so the public primitive reconciles exactly
+where the ADR permits it — and the disposition record, not the watermark, remains the retention and
+resynchronisation authority: the journal prunes by `inputResolvedThrough` only (`byAckWatermark` stays 0 by
+construction and is asserted so), unequal pairs never reach `tick`, and divergence follows ADR-0003 §3.2
+(stop-send, discard, hold, bounded rejoin, fresh snapshot) instead of replaying across it. The SDK's own
+"predicted value read BEFORE this frame's `input.send()`" frame-order warning was observed while the seat's
+presentation reader ran ahead of sends in the first tick loops; it is a smoothing-accuracy advisory for
+`value()` reads, not an error, and the seat now reads presentation after its tick in all measured paths.
+
+
+### 13.1 Review-round additions (2026-11-19): what the prediction layer names now
+
+Names used by the revised slice, each with its public-SDK basis; names deliberately NOT used are listed after.
+
+| Prediction-layer name | What it is | Public basis or reason |
+| --- | --- | --- |
+| `DirectMotionPredictor.matchedCorrections()` | the per-matched-ack correction ledger (checkpoint instrumenter): for every guard-verified delivery whose ack advanced, predicted-at-ack minus authoritative, per axis, measured exactly once via a monotone cursor | reconstruction replays journal frames through `flatDirectStep` — the SAME module export the reconciler's `step` closure uses (one function on both sides; the parity test against `FlatReferenceStepper` is retained as a separate diagnostic, not the metric) |
+| `DirectMotionPredictor.replayIdentityLedger()` | per reconcile: adopted ⊕ Σ step(pending) − raw | zero residual is the ledger for "each valid remaining seq stepped exactly once"; an induced double replay leaves exactly the extra steps (unit-proven negative control) |
+| `DirectMotionPredictor.endPoseDiagnostics()` | the renamed former `correctionLedger` | kept, honestly labelled: the end-of-tick pre-smoothing difference INCLUDES the pending window and is not a per-ack correction; the browser run reports where it disagrees with the real metric |
+| unavailable checkpoints | recorded `invalidated-missing-frames`; the anchor is held | an unmeasurable boundary is never counted as a zero correction; measurement resumes only after a domain resync re-anchors |
+| domain quarantine at recovery entry | unsubscribe + `transport.close()` at the trigger, quarantined epoch remembered; accepting branch refuses the quarantined epoch; rejoin results install only under live `recovering` state and an unelapsed episode, else the joined transport is closed and discarded | the SDK `Reconciler` exposes NO supported disposer for its internal `onSend` subscription (verified against the pinned sources); isolation is therefore consented leave plus dropping every subscription the predictor itself holds (`subscribe`, `onSend`) — both public unsubscribers |
+| rejoin-error semantics | an ordinary route failure spends the rolling allowance through the ladder; suspension only on budget or episode exhaustion | ADR-0003 §3.2 retry posture; a late success after close/episode/suspend is refused and its transport discarded (unit-pinned) |
+| the tick gate (test-only seam) | `tests/e2e/netcode.spec.ts` wraps the LIVE room instance's public `tick()` in the harness process and pumps authority steps one at a time, staging one input per step | the disposition tick is then read from the room's own public `tickRecords` consumption ledger: the refused frames are consumed at EXACTLY the labelled ticks 40 and 120 by construction; no server file is edited; the wrapper is removed at the end of the section |
+| label convention | `evidence().ticks` counts COMPLETED steps; `tickRecords[].tick` and replica `lastAuthorityTick` label a step by the counter BEFORE it | the seam asserts the room's own record labels; both counters are recorded in evidence |
+
+Browser facts newly measured (same suite): recovery that resumes through a REAL bounded-retry rejoin and
+fresh snapshot (the old domain never completes recovery — the late-valid-old-patch defect is unit-pinned
+red-before/fixed-after); a genuine overflow/retirement trigger — an over-rate in-envelope stream makes the
+SERVER ledger retire unrepresented inputs, and that row-named disposition, not a deadline, runs the §3.2
+ladder to a fresh-snapshot resume; on this server build the rejoin lands on the seat the §3.3 bounded
+closure has already claimed, so post-resume motion may be ended by the server's own closure — recorded
+honestly as a server-design observation for the owners, with the client ledger correct in every branch.
+The named-gap trigger remains unobservable on loopback (the server names no range there) and stays
+unit-pinned only.
+
+
+### 13.2 Amendment (OWNER-APPROVED 2026-11-19, APPLIED): the server side of the spike consumes the ONE shared step function
+
+Slice 5 review item 1 asked for a single pure exported step relation used by BOTH sides of the spike
+and by the 200-tick AC-1 trace, with no production-default edits. The reviewer then granted the
+amendment below (scope: the two server files named in point 1–2, one optional process-local
+parameter each; recorded in the assignment record §3.5). What is true after the applied amendment:
+
+* the prediction side has ONE function object — `apps/client/src/network/flatStep.ts` exports
+  `flatDirectStep`; the reconciler's step closure, the matched-ack checkpoint instrumenter, the
+  replay-identity ledger, the browser pages (`/network/flatStep.js`) and the adapter's public
+  re-export (signature unchanged) all resolve to it; the unit suite pins the export identity;
+* the AC-1 trace (`tests/reference/flat-direct-step.ts`, a test reference file the review granted
+  for refactoring) now produces its rows THROUGH the kernel wrapper and composes the SAME compiled
+  module (`apps/client/dist/network/flatStep.js`) tick-by-tick over its reference window, reporting
+  `rowsSteppedBySharedKernel` (module identity), `kernelStepperCalls`, `productionDefaultMatchesKernel`
+  (parity against the untouched default stepper) and `sharedKernelCompositionMetres` /
+  `sharedKernelAgreesWithRows` beside the published `speed × step × ticks` product — so the trace's
+  cross-check is no longer a separately written formula, and the stepper identity is a wired fact
+  inside the verdict;
+* the spike's in-browser expectations (refusal deltas at ticks 40/120, mixed-input zero windows) are
+  computed from the shared function inside the page, and they agree with the LIVE room's consumed
+  dispositions — behavioural agreement measured at runtime, not a parity check as sole evidence.
+
+What the amendment added (exactly two server files, one optional parameter each):
+
+1. `apps/server/src/movement/MovementAuthorityAdapter.ts` — ONE optional parameter on
+   `buildMovementAuthority`:
+   `readonly stepperFactory?: (speed: number) => EntityStepper`
+   used as `stepper: (options.stepperFactory ?? ((speed) => new FlatReferenceStepper(speed)))(speed)`
+   — the same shape as the factory's existing process-local injection precedents
+   (`time?: TimeSource`, `scheduler?: Scheduler`, `routeCompletions?: () => ...`).
+2. `apps/server/src/rooms/RegionRoom.ts` — an optional `stepperFactory` on `RegionRoomOptions`,
+   passed through at `onCreate` when present. Trusted-only by construction: `RegionRoomOptions`
+   is reachable solely through a deployment envelope carrying the per-process `OPERATOR_NONCE`
+   (`trustedDeployment`), which discards a client's create/join options WHOLESALE without the
+   nonce — and a function object is not wire-serialisable in any case.
+
+Default-preservation design: the parameter is OPTIONAL; when absent the expression constructs
+`new FlatReferenceStepper(config.movement.speed)` — the identical object the current code builds.
+No production call site changes; `pnpm test:contract` re-pins config/movement hashes; the AC-1 trace
+reports `productionDefaultMatchesKernel` (one identical request through the unchanged production
+stepper and through the kernel wrapper must agree to 1e-12 m), so a silent default change cannot
+pass the suite.
+
+Proof that callers cannot configure a step via the network (all three layers pinned by
+`tests/unit/udg-spike-001/trusted-stepper-seam.test.ts`):
+
+* the wire surface is fixed: `DIRECT_WIRE_FRAME_FIELDS = ['sessionEpoch', 'generation',
+  'directIntent', 'moveX', 'moveZ', 'seq']` (`packages/protocol/src/validation/direct.ts`) — an
+  exact-key gate, no field names a function, an extra key is refused;
+* the amendment adds NO config key: the config compiler silently DROPS unknown keys
+  (`withConfigOverrides(DEFAULT, { …, stepperFactory: 'x' })` yields a compiled config carrying no
+  such key), so a config-carried factory cannot reach the authority or the hashes;
+* the deployment envelope is nonce-gated: a guessed or missing `deploymentNonce` discards the
+  options wholesale (the hostile room is refused for the very bounds it tried to supply, and a
+  sentinel factory is never constructed, let alone stepped); the nonce is a module-private
+  `randomUUID()` per process;
+* the parameter is a FUNCTION living in the server process at composition time — the same class of
+  seam as the existing `sink`/`time`/`scheduler` options, reachable only by code that imports the
+  factory, not by any message, join option (presentation only) or deployment payload;
+* `defineRoom` options remain data; the amendment alters no wire or config surface.
+
+Consumers of the seam (test compositions only): the netcode harness room runs through
+`tests/support/step-kernel/kernel-stepper.mjs` — a wrapper whose every step goes through THE
+`flatDirectStep` imported from `apps/client/dist/network/flatStep.js` — and records a sentinel
+count; the AC-1 trace produces its rows through the same wrapper and asserts module identity
+(`rowsSteppedBySharedKernel`) plus a parity diagnostic against the unchanged production default
+(`productionDefaultMatchesKernel`). Nothing in `apps/server` production code imports the client or
+test trees; the dependency direction stays trusted-caller → adapter.
+
+Status: APPROVED and APPLIED 2026-11-19. Production default unchanged: any room that does not pass
+the option constructs exactly the `FlatReferenceStepper(config.movement.speed)` it constructed
+before; the camera suite and every other composition exercise precisely that unchanged path.
+
+### 13.3 Adoption corroboration of the matched-ack metric (slice 5 review item 3, applied)
+
+The review's point: `captureAckCheckpoint` advanced its anchor on every guard-verified MATCHED
+delivery, before establishing whether the SDK had actually ADOPTED that state — under render
+batching several matched deliveries can be accepted between two `predictor.tick()` calls, and only
+the LAST one's state is what `reconcile()` adopts. The instrumenter must therefore distinguish a
+boundary the SDK directly adopted from one reconstructed inside a larger adoption, and must fail
+loudly when a required boundary is unobservable. No private hooks, no custom predictor:
+
+| Public observation | Where the adapter reads it | What it proves |
+| --- | --- | --- |
+| the guard-verified `(state, ack)` pair at reconcile time | the same `evaluateDeliveryGuard` verdict the SDK's `stateAt` returns (`verified.ack` at each `tick`) | the exact ack the SDK adopted on this reconcile (`adoptedAck`) — adoption, not delivery |
+| raw pose BEFORE the reconcile | the step closure's first call reads `state` untouched (already instrumented: `rawBeforeX/Z`) | the actual pre-adoption prediction, i.e. the controller's real starting point |
+| raw pose AFTER the reconcile + pending seqs | existing `replayIdentityLedger` capture point | the actual post-adoption state and what the SDK replays |
+| the matched-checkpoint ledger rows' ack spans | `captureAckCheckpoint` (read-only) | which boundaries the run observed and their statuses |
+
+On every reconcile the adapter appends an `AdoptionRecord` (`adoptionLedger()`): `{ atMs, adoptedAck,
+directBoundaryAck, coveredCheckpoints: [{ ackFrom, ackTo, status, correctionX/Z }],
+coverageComplete, attributedSumX/Z, actualAdoptionDeltaX/Z (rawBefore − adopted),
+unresolvedSteppedX/Z (Σ step over journal seqs > adoptedAck), residualX/Z }`. The conservation
+equation is REAL behaviour, not a hypothetical rebase:
+
+`actualAdoptionDelta − unresolvedStepped − attributedSum == 0` (per axis, within 1e-9)
+
+i.e. the actual distance the controller moved between adoption boundaries, minus what frames past
+the adopted ack legitimately stepped, equals the SUM of the corrections the checkpoint ledger
+attributes to the boundaries inside that adoption. A checkpoint whose `ackTo` equals the reconcile's
+`adoptedAck` was DIRECTLY adopted (`directBoundaryAck`); earlier boundaries inside the same adoption
+are explicitly `reconstructed-within-adoption` — still algebraically exact for this flat relation,
+but flagged as not being an SDK adoption point. `coverageComplete` fails the metric when a reconcile
+adopts an ack span its checkpoint rows do not fully chain (a gap between `prevAdoptedAck` and
+`adoptedAck`, or an `invalidated-missing-frames` row inside the span): the metric then reports the
+hole instead of averaging over it. Instrumentation remains read-only: checkpoints and adoption rows
+read the journal, the delivery ledger and the state objects the SDK hands the step closure; nothing
+in the instrumentation path writes predictor or SDK state.
+
+The browser negative control (netcode suite, section 3) constructs exactly the review's scenario: a
+staged refused frame whose matched delivery lands, then a second advancing matched delivery, both
+inside ONE render batch with `predictor.tick` held off — then a single tick. Checks: exactly one
+reconcile adopted; the refusal's correction attributed to exactly ONE boundary (the one whose span
+covers the refused seq) with magnitude equal to the shared function's step; the later boundary is
+the direct adoption boundary; conservation residual < 1e-9; coverage complete; no checkpoint
+double-counted. A unit control mirrors it in the fake (`stalled batch` test).
+
+
+### 13.4 Post-retirement replacement semantics (slice 5 review item 2 — RESOLVED: root cause was the client-side generation sequence, NOT a server defect)
+
+**History, kept honest.** The slice-4/5 rounds reported the replacement seat after a §3.3 retirement
+closure as a REPORTED REAL SERVER FAILURE: it consumed every direct frame (room seat
+`resolvedThrough` advancing, deliveries flowing) while the authoritative row never moved (4 s trace,
+span exactly 0.000 m), deterministically at both rejoin cadences. That section concluded "server-side
+post-retirement semantics, not client state". **That conclusion was wrong**, and the owner question
+(whether `joinById` after a §3.3 closure should mint a new session at all) is withdrawn as
+unnecessary for this symptom — the replacement seat was always healthy.
+
+**Root cause (protocol-side, client obligation).** The client-side step relation is unchanged; the
+defect was in this spike's own test mover. Protocol §4.2 (implemented in
+`apps/server/src/authority/entity.ts::resetForNewEpoch` → generation watermark resets to 0, and
+screened in `apps/server/src/authority/screen.ts`): a frame whose generation exceeds
+`MAX_GENERATION_FORWARD_GAP = 64` beyond the watermark is refused as `RESYNC_REQUIRED`, and a refusal
+of any kind is still a journalled disposition answered with a NEUTRAL step (`RegionRoom.tick`) —
+consumed, acked, watermark-advanced, unmoving. The retirement fixture's mover continued the
+OFFENDER's generation counter (120–300 by then) into the replacement's fresh-epoch domain, so every
+replacement frame sat outside the forward-gap window of the zero watermark and was screened to a
+neutral step. The offline-recovery test never hit this because its reconnection lands with a small
+generation gap (≤ 64) — which is why the asymmetry looked server-side.
+
+**Positive control (before naming anything).** The netcode suite now runs the frozen variant as a
+RED scenario with a same-seat control: after the 0-span settle is established, ONLY the frame
+generation is restarted at 1 (`controlDeltaZ` ≈ 7.4 m within 2 s, tail matched corrections back to
+zero) — same room, same replacement seat, same session, same epoch. The room ledger attributes the
+refusals precisely: the replacement entity's frames are CONSUMED in volume with ZERO wire-level
+refusals (`tickRecords.refused` is the transport gate; the §4.2 screen refusals are core
+journalled dispositions). Two GREEN scenarios — replacement movers that restart the generation
+sequence when the epoch changes (§4.2-compliant), at the default ladder and at a 1500 ms deferred
+ladder landing after the §3.3 closure — then satisfy the strict BOTH-events claim end to end
+(EVENT 1 offender closed with code 4100 by exact identity; EVENT 2 new session/epoch, snapshot
+before any fresh input, ≥ 0.4 m of motion with zero nominal corrections).
+
+**Fix applied (fixture-only).** The retirement, recovery-resume and prediction-slice browser movers
+now observe §4.2: each mover tracks the replicated epoch and restarts its generation counter at 1
+when the epoch changes. No server path was edited for this; no server behaviour changed.
+
+**Standing client guidance (worth a production contract later).** `DirectMotionPredictor.send` takes
+a CALLER-stamped generation; any client that enters a new epoch — whether by reconnection or by a
+new session after a §3.3 closure — MUST restart its generation sequence at 1, or the forward-gap
+screen silently (but correctly) neutral-steps every frame. An open, non-blocking owner question:
+whether the predictor should own per-epoch generation management (reset-on-epoch-change or
+enforce-the-caller-restarting) rather than trusting the caller. Recorded, not implemented — the
+SDK-facing client surface is outside this round's grants.
+
+
+## 14. DPA-2: the WS-delay-proxy transport seam — measured, then reported (slice 6, 2026-11-19)
+
+DPA-2 (assignment §5) asks whether the development impairment proxy needs a dependency. The seam was
+built, driven by real browser seats and by pure-Node loops, and measured; nothing here is adopted —
+the decision returns to the delegated approver.
+
+**What was built (granted paths §3.1/§3.2, `tools/load-test/src/`, dependency-free).**
+`ws-delay-proxy.ts` — a transparent TCP-stream stall proxy: seeded (mulberry32 per direction, derived
+from the profile seed alone), **centred bounded uniform** one-way stall `halfRtt + U(−b/2, +b/2)`,
+single-in-flight FIFO pump per direction, backpressure-respecting writes, injectable `TimerDriver`
+(unit tests run it on a synthetic clock and reproduce the seeded schedule exactly), explicit `close()`
+that drains pending stalls **in order** before FIN, bounded buffers, and counters that make "zero"
+CHECKED (`chunksDropped` is structurally zero — the primitive has no drop path — and a hard close that
+would still find bytes queued marks the connection errored so a cut can never masquerade as a drain).
+`statistics.ts` — nearest-rank percentiles (sorted sample at `ceil(p·N)`), zero retention, the 100-ack
+insufficient-evidence floor, missing-samples failure, and the §2.2 achieved-network INVALID rule.
+`trace-writer.ts` — canonical key-ordered JSONL with stamped sequence numbers, reader-side gap
+re-derivation (a lost record FAILS the trace), append-after-close refusal, explicit drain/close.
+`run-spike.ts` — profile/seed/window guards (official cells need an adopted profile, a seed in
+{1001, 1002, 1003} and 20 s + 120 s; **a diagnostic label always demotes**), the §7.4 environment
+record, the epoch-aware `InputProducer` (restarts the generation sequence ONLY on a fresh issued
+epoch/snapshot — the A-2 regression written as code; it holds no timer, so a stall structurally cannot
+restart it), and a `--self-check` loopback measurement with a watchdog and a dangling-handle audit.
+
+**Measured behaviour (all on this container, pinned Node v24.22.2 / pnpm 12.18.0, chromium 158.0.8127.18).**
+
+| Measurement | Result |
+| --- | --- |
+| Pinned stack through the proxy | handshake, binary WS traffic and clean close complete; `@colyseus/ws-transport` → `ws@8.22.2` never observes the proxy (it is protocol-blind) |
+| Pure-Node self-check `lan` (30 RTs) | achieved p50 **4.06 ms** vs requested 4; achieved jitter (p95−p50) 2.04 vs budget 2; 0 order violations; 0 dropped; close drained; zero dangling handles |
+| Pure-Node self-check `elevated` (40 RTs) | achieved p50 **101.23 ms** vs requested 100; jitter 9.44 vs budget 20; valid; clean close |
+| Paired browser seats through the proxy (netcode suite, run 2026-11-19) | suite 109 checks / 0 failed (86 baseline + 23 impairment); observer saw the mover through both profiles; authority acked frames sent through the proxy; matched-ack ledger complete (one row per eligible ack, invalidated rows counted separately, coverage complete), zeros retained end to end (browser instrumenter zeros === Node retained zeros); trace files continuous |
+| Browser `lan` validity | achieved p50 2.80 vs requested 4 — **valid** |
+| Browser `elevated` calibration | achieved p50 96.17 vs 100 (median limb passes); achieved jitter **39.79 vs budget 20 → INVALID, recorded as INVALID** (see caveat below) |
+| Stalls are not a new domain (browser, A-2 over real impairment) | through ~1.4 s of 100/20 impairment: one epoch, generations 1..14, **zero restarts** |
+| Synthetic-clock unit tests | 5 proxy cases (exact per-chunk seeded stall reproduction, jitter-0 boundary, backpressure pause, bounded-buffer refusal, stall-never-drops byte fidelity) + 34 statistics/plan/trace cases — 39 total, deterministic |
+
+**Achieved-metric caveat the matrix must respect (honest, and it fired).** The proxy's achieved sample is the
+byte's real queue time inside the proxy, which includes any **backpressure drain wait** at the destination.
+The pure-Node elevated self-check (idle loopback) is valid at 9.44 ms jitter; the browser calibration on a
+loaded container page showed 39.79 — the renderer's bursty socket reads, not the stall model, widened the
+distribution. That is the §2.2 rule working: the run reported INVALID rather than a pass, and no rerun erased
+it. Consequences for the §4 matrix: run matrix cells on an unco-tenant runner, keep the raw
+requested/achieved pairs in the record (they are kept), and treat an INVALID cell as rerun-per-the-rule, never
+as a silent retry. An open DPA-2 sub-question for the approver: whether the record should ALSO carry an
+"achieved-at-fire" sample (schedule time before drain waiting) beside the end-to-end one; the harness can
+emit both without a model change — not added here because §7.4 asks for the end-to-end one and one number
+must own the verdict.
+
+**Why a TCP stall is not packet loss (the §2.2 documentation obligation).** A stall withholds bytes the
+connection has already guaranteed to deliver; a drop destroys a segment and leans on TCP recovery. This
+primitive only withholds — it never destroys a byte, forges a RST or exercises retransmission — so a run
+through it has an RTT/jitter distribution and **no loss distribution at all**. Any loss population over this
+path can only be the harness refusing to deliver an application message, and must be reported
+`dropModel: "application-layer delivery loss"`, `tcpLossModelled: false` (ADR-0003 §2.4); the harness names
+its own source via `impairmentSourceRecord` and `APP_LAYER_LOSS_LABEL`. Calling these stalls packet loss
+would overstate what the transport experienced, and the overstatement would travel into the gate evidence.
+
+**Dependency report (exact, per the instruction).** No dependency was added and the lockfile is unchanged
+(`pnpm dependencies:verify` green on this commit; no `tools/load-test/package.json` exists yet, so the
+workspace graph is untouched). The package that WOULD have sufficed for a message-level variant is the one
+already in the lockfile as the pinned transport's own dependency: **`ws@8.22.2`**, integrity
+`sha512-/rEZ2ejown2N5gxVTHUu9bVVC7ttu0/Tgzf5hbTOixR3Fs7mbbXgn2DbdbcKgJOmpQMtrIUWivtYuVMnp/W/yA==`
+(pnpm-lock.yaml), reached transitively via `@colyseus/ws-transport@0.18.4`; its scope of use would have
+been **test-only** (`@udg/load-test` devDependency, never shipped). It is NOT used and NOT adopted: a
+framing proxy adds a dependency between the measurement and the thing measured, re-encodes frames the
+server's TCP stack then sees differently, and buys nothing the TCP-level seam cannot do. If the approver
+later wants message-level impairment (e.g. per-message jitter for large patches), that is a T-9
+registration of exactly that package with that scope; the alternative kept here is the status quo:
+`node:net`, zero pins. **DPA-2 ask, precisely:** (1) accept `node:net` as the supported public transport
+seam — no new pin; (2) when the matrix slice wires the harness into the workspace graph (T-1/T-3),
+creating `tools/load-test/package.json` (zero external dependencies) will add one importer entry to
+`pnpm-lock.yaml` and one workspace row to `docs/integration/dependencies.json` (re-recorded by
+`pnpm dependencies:record`). That zero-dependency bookkeeping is the only lockfile touch this route needs;
+it is named here for the approver rather than performed.
+
+**First-run defects preserved as evidence (not hidden).** The first elevated self-check (18:25 UTC) hung in
+close and left a 39/40-record trace whose records carried `runLabel "official:elevated:1001"` — a labelling
+defect (`planSpikeRun` let a diagnostic-labelled run wear an official cell's clothes) and a harness defect
+(a `drain`-waited write could outlive its socket, so the pump never resumed). Both are fixed (diagnostic
+always demotes; a driver-time backstop collects a dead-peer pump; close now errors a connection whose
+queue was cut; output files are namespaced per profile/seed; the self-check carries a watchdog and a
+handle audit). The preserved artefacts live under `artifacts/.local/spike-001/dpa2/`
+(`first-elevated-self-check-stalls-INCOMPLETE.jsonl` + `README-first-run.md`), gitignored store, named here
+so the reviewer can ask for them.
+
+**Where the remaining Gate A cases attach (plan, not implementation).** All mount on this infrastructure in
+later slices; none is implemented here.
+
+| Case | Mounts on | How |
+| --- | --- | --- |
+| GA-5a/5b (dedupe followed / terminal dedupe) | `tests/spikes/spike-001.test.ts` via `run-spike` | loss is injected ONLY as application-layer delivery refusal (labelled); the stall proxy stays byte-complete; the named-gap reproduction stays with the harness envelope, never a "packet loss" claim |
+| GA-6a/6b/6c (stalled delivery, client-local deadline) | same, + the existing browser deadline-recovery evidence in `netcode.spec.ts` | the proxy is the natural stall generator for 6a/6b (stop forwarding a direction — a forward-stop is a stall, still not a drop); 6c rides the ADR ladder already proven in the browser suite |
+| GA-7 (final publication withheld) | spike harness | close-with-held-patch at the application layer with the §3.1 close record read from the authority ledger, attribution kept per CF-4 |
+| GA-11 (production settings measured) | `run-spike` matrix record | every population names its source (`impairmentSourceRecord`); achieved p99 RTT and jitter come from the RAW pairs the proxy keeps; the two inequalities evaluate only on declared-measured values; harness loss populations carry `dropModel`/`tcpLossModelled` beside every number |
+| GA-12 (PE-1…PE-5 positive evidence) | spike harness + the retirement ladder already in the browser suite | terminal dedupe stays outside the closure path; Codex reviews the GA-12 record against ADR-0003 before any Gate A decision (§2.4) |
+| CF-1 (W-7 delivery count vs GA-6c premise) | spike envelope | the spike's own envelope (this harness, its own ledgers) is the evidence; the UDG-003 harness numbers cannot close it — resolved with spike evidence or the gate blocks |
+| CF-3 (post-close input observation vs GA-6c/GA-7 containment) | spike envelope | same route: post-close send observation recorded from the spike's own client ledgers, never inferred |
+| CF-4 (P-2b refusal wording vs GA-7 branch attribution) | spike envelope | branch attribution read from the room's closure ledger through the harness, wording reproduced from the refusal actually raised |
+
+**What this section does not claim.** No p95 correction verdict (the smoke's populations deliberately fail
+the 100-ack floor and say so); no profile/seed/window above is an official matrix cell; `test:spike` dispatch
+(T-1b/T-2/T-3 wiring) is deliberately NOT exercised — the harness is a library plus smoke until the matrix
+slice wires it, and the accepted contract suite's "still refuses the spike command" assertion therefore
+remains true and green; Gate A remains **Not Run**; DPA-1 stands as measured earlier (§12); nothing here
+passes, adopts or freezes anything.
+
 [docs]: https://docs.colyseus.io/ 'Colyseus documentation (versionless URL; the pinned package is the authority)'
 [pinned]: https://www.npmjs.com/package/@colyseus/core/v/0.18.27 'pinned package page'
+
+## 14.1. DPA-2 follow-up: what "achieved latency" actually measures on the paired-browser path (slice 6b, 2026-11-19)
+
+Published candidate `c4792c79…` was reviewed at report level; this bounded follow-up ran ONE short
+diagnostic batch on the two-real-browser Colyseus path to clarify and validate the ACHIEVED latency
+record. No matrix, no thresholds moved, no official verdicts; the c479 elevated INVALID record is
+preserved verbatim (`artifacts/.local/spike-001/preserved-c479/`, sha256-indexed) alongside every
+raw requested/achieved sample.
+
+**Where the timestamps come from.** Every accepted network sample is measured with
+`process.hrtime.bigint()` (monotonic) INSIDE the dedicated proxy-host Node process: `arrivedAt` is
+stamped on the socket `data` event, `deliveredAt` at stall-timer fire, achieved = delivered −
+arrived. The browser's `performance.now()` enters ONLY the separately recorded
+`browserApplicationPath` observation (accepted-delivery inter-arrival gaps inside the page —
+patch interval, authority tick and renderer scheduling live there). It is never subtracted from,
+added to, or mixed into the accepted metric.
+
+**The RTT is a real production-shaped round trip through the same WebSocket transport.** Both
+browser seats join through the proxy endpoint (a check asserts the named port is the proxy's, not
+the room's); forward chunks are real input frames, reverse chunks are the same connection's real
+state patches, paired by the documented rule (reverse chunk pairs with the newest forward chunk
+already delivered upstream). No echo path feeds any browser verdict — the pure-Node echo
+self-check is labelled transport-feasibility only. Patch APPLICATION (browser JS applying state)
+is nowhere in any sample.
+
+**Contamination: found, removed, receipts.** The c479 elevated INVALID (jitter p95−p50 ≈ 39.8 vs a
+20 ms budget) decomposed into three instrument faults, each fixed with its own receipt:
+
+1. *Wrong process.* The proxy ran inside the Playwright worker, sharing one event loop with the
+   room, the tick gate and CDP traffic. It now runs in its own Node process (`proxy-host.ts`,
+   NDJSON control over stdio). Receipt: `shutdown` → `{exitCode: 0, activeResourcesAfterClose: [],
+   shutdownMs ≈ 100}` asserted in-suite; every control reply carries a pre-declared timeout, and
+   the caps (start 10 s / request 15 s / settle 8 s / shutdown 10 s / case 120 s) are CHECKED as
+   values BEFORE any phase starts.
+2. *Scheduler re-anchoring + early fire.* Due times were recomputed AFTER the previous chunk
+   fired, letting sub-millisecond early fires shave the band (observed: achieved p50 93.2 vs
+   requested 100 — the MEDIAN sat below the band floor's expectation). Departures are now pinned
+   at admission — `dep(k) = max(arr(k)+d(k), dep(k−1) − b/2)`, the delay-tube constraint any
+   order-preserving link must obey — and an early timer fire RESCHEDULES instead of delivering
+   below its pinned departure. Deterministically unit-tested (burst at staggered arrivals: every
+   achieved delay inside `[d(k), d+b/2]`, FIFO order intact, nothing delivered early; 90/90 spike
+   unit tests green).
+3. *CPU-quota throttling — the measured residual.* The container carries a 6-core CFS quota
+   (`cpu.max 600000 100000`). The host now samples `/sys/fs/cgroup/cpu.stat` every second and
+   reports its worst per-second throttle delta beside every stats reply. The record is unambiguous:
+   INVALID runs carry 5.5–5.7 s of throttled time within one second (whole-process freezes) with
+   stall-timer lags of 27–44 ms; VALID runs carry zero throttle events with lags of 1.7–3.0 ms. An
+   idle baseline measures 0.00 s throttled. Releasing the LAN phase's browser contexts before the
+   elevated phase and widening the elevated sample base (~2× steps at the same cadence — the
+   honest p95 of a bigger window, not a moved threshold) reduced exposure to episodic host
+   contention.
+
+**Reproducibility, same runner, same code, ordered:** run9 INVALID (throttle 10 events, lag 44 ms)
+· run10 INVALID (10 events) · run11 INVALID (10 events, lag 43.9) · run12 **VALID** (0 events, lag
+2.7, jitter 10.5) · run13 **VALID** (0, 2.0, 12.6) · run14 **VALID** (0, 3.0, 14.9) — the final
+harness is reproducibly valid across three consecutive full-suite runs (achieved p50 95.9–96.6 vs
+requested 100, jitter inside budget+10, order audits zero, byte-fidelity over closed stats,
+finite-teardown receipts `proxiesClosed: 2/2, activeResourcesAfterClose: []`).
+
+**Measured blocker (reported, not hidden).** On THIS runner the short-window connected elevated
+diagnostic remains PROBABILISTIC until runner load settles: CFS throttle arrives in episodic
+multi-second whole-process freezes (co-tenant and suite-peak driven), and a freeze inside the
+window inflates every queued sample behind it — which is exactly what a real FIFO queue does to
+real bytes, so the metric keeps it and the verdict goes INVALID honestly. The pre-existing marginal
+case `recovery resumes…` exhibits the identical pattern under the same freezes (2 of the last 6
+in-run failures; 3.0 s in isolation), confirming it is runner-wide, not slice-specific. The
+official matrix must therefore (a) run on a quiet runner with the throttle receipt attached to
+every cell, (b) use the full 20 s/120 s windows — a multi-second freeze inflates a far smaller
+fraction of a 120 s sample base — and (c) keep the per-cell diagnostics this slice now records
+(timer lag, stream wait, throttle deltas, browser-application observation) as first-class
+evidence. None of this selects, adjusts or exempts any profile: the §2.2 rule fired honestly on
+every run above, VALID and INVALID alike.
+
+## 14.2. The ACCEPTED achieved round trip: the SDK's own protocol ping on the playing socket (slice 6c, 2026-11-20)
+
+Review of `74e84179` approved the TCP/FIFO stall primitive **as diagnostics** and cleared nothing as
+an achieved ROUND TRIP: the proxy leg-sum pairs the newest delivered forward chunk with any later
+reverse chunk, but a periodic patch is not CAUSED by that chunk, coalescing and repeated forward
+pairings bias percentiles, and the sum omits the time between legs — the same socket is not a
+causal pair. Every earlier leg-sum VALID label counts as queue-health diagnostics only. Prior
+on-disk runs are preserved untouched; in the onward schema (`schemaVersion: 2`) the aggregate is
+named `diagnosticProxyLegSum`, and the accepted metric is below.
+
+**The public seam exists — found in installed types, confirmed in shipped source, measured in the
+browser.** `@colyseus/sdk@0.18.9` exposes `Room.ping(callback)`: it sends a one-byte
+`Protocol.PING` frame on THE joined WebSocket (`src/Room.ts:307-317`), and `@colyseus/core@0.18.27`
+answers it SYNCHRONOUSLY at the protocol layer with `client.raw(...)` (`build/Room.mjs:1436-1437`)
+— no room code, no tick, no patch involvement. The echo fires the callback EXACTLY ONCE and clears
+the single slot (`Room.ts:788-791`), so a stale echo can never double-resolve. `room.connection`
+is public (`build/Room.d.ts:19`) with `get isOpen()`, letting the harness refuse to pose a dead
+socket as a slow reply (`Room.ping` silently NO-OPS when closed — `Room.ts:308-310` — which would
+otherwise read as endless slow replies). Rejected alternatives, with reasons: `client.getLatency`
+(separate probe connection + `Date.now` wall clock — a parallel path), `room.clock` RTT (a smoothed
+server-time ESTIMATE, not a raw round trip), proxy leg-sum (demoted), rAF/poll inter-arrival (not
+RTT). Because the public seam works, the test-room nonce-echo fallback is NOT built and NOT
+proposed — nothing is split off.
+
+**Harness composition.** The contract-owned adapter (`§3.1`) gained one OPTIONAL member,
+`pingLatency?(callback)`, a documented pass-through that refuses when the socket is closed. The
+browser-side probe: one ping in flight (serialized; after a retirement it WAITS a grace so a late
+echo fires the OLD callback and is counted as a discard before any new send — the single SDK slot
+can never be crossed); the probe's own `performance.now()` brackets send→matching receive (the
+SDK's rounded ms rides along as a drift receipt, never subtracted); a reply deadline RETIRES the
+sample as invalid — never estimated, never reused; late echoes are discarded, never sampled.
+Overhead: 1 byte up, 1 byte down per sample (both endpoints' source lines cited above).
+
+**Negative controls (both in-suite, both observed passing — runs 24/25):** (1) MISSING REPLY: a
+30 ms-deadline ping on the ~100 ms elevated path RETIRED, its late echo was DISCARDED, and the
+next ping answered cleanly — a missing reply is an invalid-sample opportunity, never a silent pass;
+(2) PATCH/MOVEMENT INDEPENDENCE: under the test-only tick gate (movement frozen, observer advances
+< 1 m) every ping still answered exactly once at cadence with a comparable median — the sample
+brackets the ping's own causal reply, not the patch pipeline or its application. Drift receipts:
+SDK-vs-wrapper agreement max 0.5 ms; page-clock/wall-clock ratio within 0.03% over each window;
+every sample strictly positive.
+
+**Two harness defects surfaced by the probe's own forensics and fixed (each visible in evidence,
+none hidden):** (a) the close-grace timer had been mis-armed at connection OPEN in slice 6b,
+force-finishing EVERY connection exactly 5 s after it opened — the new per-connection `connLog`
+(every death at lifetimeMs == closeGraceMs, `firstFin 'none'`) caught the regression red-handed;
+elevated "socket deaths" in runs 15–18 were this harness bug, not the machine, and the records
+saying so are preserved. (b) A close-ORDERING deadlock: `server.close()` only calls back once all
+sockets are gone, but `beginClose` waited behind that callback — the 5 s bug had been masking it by
+killing connections early. Close now begins draining live connections FIRST, with an 8 s hard cap
+that force-finishes stragglers into ERRORED (visible) closures. A half-open-connection regression
+test proves close() returns in 0 ms.
+
+**Raw results, every run recorded (no cherry-picking; throttle = host cpu.stat worst per-second
+CFS events at probe end):**
+
+| run | machine | LAN p50/jit | elevated p50/jit | quiet p50/jit | throttle | verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| 20 | quiet | (pre-quiet-window build; loaded p50 110.3, jit 17.8) | | | 0 | median +10.3 |
+| 24 | quiet | 5.1 / 2.0 ✓ | 106.9 / 38.3 | 103.0 / 45.8 | 0 | jitter INVALID |
+| 25 | quiet | 5.7 / 1.6 ✓ | 106.8 / 33.0 | 104.0 / 43.2 | 0 | jitter INVALID |
+| 26 | throttled | 4.9 / 57.3 | 107.8 / 37.1 | 102.6 / 34.1 | 10 | INVALID |
+| 27 | throttled | 5.1 / 1.4 | 110.5 / 41.6 | 114.1 / 32.3 | 10 | INVALID |
+
+The shape is consistent: **the median rule passes on every quiet-runner probe (103–108 vs 100,
+inside ±10), the LAN cell passes outright (p50 ≈ 5 vs 4, jitter ≈ 2), and the elevated SHORT window
+fails the jitter rule on 2–4 browser-side tail samples per run** (raw quiet distribution
+`102 102 103 103 104 104 106 106 107 | 129 138 147`: a +25…+45 ms tail of browser main-thread
+delivery latency — counted, never subtracted, per the review's no-subtraction rule). The quiet
+window (tick gate held — the room's own patch stream is background traffic for the probe) isolates
+the path's core to ±3 ms of the profile, showing the impairment instrument itself is calibrated;
+the tail belongs to the browser thread, not to the proxy (its stream-wait and lag diagnostics read
+zero during those windows).
+
+**Measured blocker, precisely stated.** On this runner the connected short-window elevated ping
+cell is INVALID today and CANNOT be honestly turned VALID: (i) n = 24 tolerates only TWO samples
+above p95 — any single ~30 ms browser hiccup flips the verdict; (ii) the runner has degraded
+mid-session: runs 26–27 carry 10 CFS throttle events per second (5+ s freezes) even at what was
+earlier an idle baseline, and under freezes LAN cells flip too (run 26: 43.7 ms outlier). What a
+Gate A cell needs, in order of evidence: a quiet runner (the throttle receipt must read zero), the
+FULL 20 s/120 s windows (a 5% hiccup rate must not flip p95 at n = 700+ the way it does at n = 24),
+and idle-phase probe windows recorded alongside the loaded cell — which is exactly what this slice
+now emits per run: raw samples, summaries, controls, drift, throttle, overhead, connLog, teardown
+receipts. No threshold moved; the rule fired on every run above, on VALID and INVALID alike.
+
+## 14.3. Slot reservation on the ping seam, and the Gate A LOCAL cell wiring (slice 6d, 2026-11-20)
+
+The review of `4db1a0f` named a real crossing: `Room.ping` stores ONE callback slot
+(`@colyseus/sdk@0.18.9` `src/Room.ts:307-317`) and the PING frame carries no request id
+(echo path `src/Room.ts:788-791`), so under the OLD harness a late echo arriving after the
+fixed 1500 ms grace fired the FOLLOWING ping's callback — a sample attributed to the wrong
+send. The fix is a state machine, not a longer grace.
+
+**`tools/load-test/src/rtt-probe.ts`** is a pure, dependency-injected window runner. A send
+reserves the slot; a reply deadline RETIRES the sample but the slot STAYS RESERVED until the
+original echo is positively observed (a late-echo counter cell the still-pending callback
+increments). Only then may the next ping go. If no confirmation arrives within `confirmCapMs`
+the slot is POISONED: the window STOPS, remaining opportunities are counted `notSent`, and no
+ping is ever sent on that socket from that window again — measurement continues only after a
+verified returned callback or on a separately labelled new connection/domain. A socket-epoch
+change mid-window stops the cell (`epoch-changed`: slot continuity across a rejoin is not
+knowable from outside). A refused send on a closed socket stops as `socket-closed`, never as a
+retirement cascade. Nothing is ever subtracted; late echoes are counted discards.
+
+The machine runs UNCHANGED in both worlds. Node unit tests drive it with a virtual clock and
+scripted echo delivery — 6/6 in `tests/unit/udg-spike-001/spike-rtt-probe.test.ts`, pinning: a
+late echo arriving LATER than the old 1500 ms grace is confirmed before the next send (no
+crossing); no echo poisons at the cap with every later opportunity not-sent and zero further
+sends; recovery after a confirmed late echo; epoch change stops the window; closed-socket
+refusal; and the accounting invariant (every send ends sampled, confirmed-discarded, or the one
+poison stop). The browser imports the SAME compiled module through the loopback vite pipeline
+(`/@fs…/tools/load-test/dist/rtt-probe.js`) and supplies real timers, `performance.now`, the
+adapter's `pingLatency` pass-through and the epoch guard — the page and the tests cannot drift.
+
+**Wiring (grants T-1b/T-2/T-3, DPA-2 zero-dependency path).** `tools/load-test/package.json`
+exists with ZERO dependencies and ZERO devDependencies (the build script invokes the repo's
+existing TypeScript), so `@udg/load-test` joined the pnpm workspace and the lockfile is
+BYTE-IDENTICAL after `pnpm install` — there is nothing to resolve. `pnpm test:spike --
+--id UDG-SPIKE-001 [--cell self-check|elevated-full] [--profile …] [--seed …]` now dispatches
+the harness (announce line states DIAGNOSTIC, never an official matrix cell); a bare
+`test:spike`, `--id UDG-SPIKE-002`, `--id UDG-SPIKE-003` and unknown cells still refuse or exit 2
+with the owning task named — verified against the built dispatcher, and the UDG-001 (50/50) and
+UDG-SPIKE-001 (17/17) contract suites needed NO change: every refusal the contract still demands
+is intact.
+
+**The elevated-full cell** (`spike cell: elevated-full` in `tests/e2e/netcode.spec.ts`, skipped
+unless dispatched) is candidate-bound and LABELLED DIAGNOSTIC: exact commit sha + dirty flag +
+node/pnpm/playwright + seed in the record; two TRUE browser contexts reaching the room ONLY
+through the proxy port; FULL windows (20 000 ms warmup, then ≥120 000 ms measured); the accepted
+RTT as 100 slot-reserving SDK pings on the mover's own socket; matched-ack corrections sampled
+across the window with zeros RETAINED and invalidations counted apart against the pre-registered
+0.15 m p95 target; cgroup throttle receipts around the measure window; loopback-only request
+isolation (CSP is absent on the dev server — recorded, not assumed); bounded teardown with the
+host's finite-exit receipt. Raw first dispatch (`dpa2d/`, tree dirty with the slice itself):
+every harness check PASS — 100/100 pings answered, `abortedReason: null`, nothing not-sent, zero
+retention, corrections p95 0.0 m (< 0.15 target), teardown `exit 0`/`[]` — and the §2.2 verdict
+itself FAILS honestly at n = 100 on a window with ZERO runner throttling: median 112.2 ms
+(+12.2 over the 100 ms requested), jitter p95−p50 40.3 ms over the 20 ms budget. At full window
+size under continuous authored motion the browser-thread tail (p95 152.5, max 186.7 ms) is part
+of the achieved path; short-window quiet runs (§14.2) understated it. That is stated, not
+subtracted: the §2.2 rule as written is NOT satisfied by this candidate on this runner's
+full-window loaded cell, and no threshold was touched to make it so.
+
+**Missing obligations, plainly.** This slice does not run Gate A and passes nothing. Still owed
+at Gate A (assignment §8, adoption record): GA-5a/5b (dedupe naming vs terminal dedupe),
+GA-6a/6b/6c (client-local deadline expiry, bounded rejoin ladder, both branches), GA-7
+(retirement containment, both branches), GA-10a/GA-10b (navigation effects, outstanding at
+UDG-007), GA-11 (measure and justify PRODUCTION envelope settings — today's numbers are test
+settings), GA-12 with PE-1…PE-5 (positive validation before any dedupe-triggered closure;
+`INPUT_STRAND_SUSPECTED` stays diagnostic), and CF-1/CF-3/CF-4 must each be resolved by actual
+Gate A evidence or block the gate. The official matrix itself — non-diagnostic plans, the full
+client counts, hosted first-attempt green, candidate binding to a clean commit — is the Gate A
+dispatch, not this cell. Also unchanged and reported: the UDG-004 camera-artefact 6-hour
+freshness expiry (a re-capture work item) and the `recovery resumes…` case's in-run flake under
+episodic runner throttling.
+
+Clean-tree re-dispatch of the same cell (candidate `344e5dc`, `dirty: false` recorded, seed 1001,
+2026-11-20): harness checks PASS again — 100/100 pings answered, `abortedReason: null`, notSent 0,
+corrections 1357 eligible ALL zero-magnitude retained, invalidations 0, p95 correction 0.0 m,
+teardown `exit 0` / `[]`, measure window again with ZERO cgroup throttle delta — and §2.2 FAILS
+honestly again: median 112.5 ms (+12.5), jitter p95−p50 31.5 ms, p95 144.0, max 180.2. Two
+consecutive full-window records therefore say the same thing: on this runner, with the full
+loaded window, the achieved elevated median sits ~12.5 ms ABOVE the 100 ms requested — roughly a
+tick-and-a-batch of browser-side pacing on top of the proxy's 100 ms of stalls — and the tail
+exceeds the declared 20 ms budget. The short-window medians of §14.2 (103–110) were the quieter,
+shorter load. No threshold was moved, nothing subtracted; both raw JSON records are retained in
+`artifacts/.local/spike-001/dpa2d/spike-cell-elevated-full.json` (latest run; the first dirty-tree
+dispatch is preserved in `cell-run-first.log`). What Gate A still needs from the recipe side:
+whether the +12.5 ms median offset is the candidate's real network behaviour (then the elevated
+profile or the §2.2 tolerance is a design conversation, not this slice's to have) or an artefact
+of continuous authored motion under stall — which the existing quiet-window probe cells and the
+tick gate can now separate at full window size on a hosted runner.
+
+## 14.4. Where the +12.5 ms actually lived: phase windows, a route that cannot be clamped, and four attribution legs (slice 6e, 2026-11-20)
+
+The review of `f87f8cf` refused the "browser pacing" label and demanded measurement. The
+measurement now says what it was, and the label was wrong in kind: the excess was a HARNESS
+DEFECT with a specific mechanism, not a property of the browser or the proxy.
+
+**Phase and accounting corrections (cell rewrite).** Phase boundaries are stamped on the browser
+monotonic clock — the same clock the adapter stamps matched rows with — pairing
+`performance.now()` with the acknowledged-input counter in one page evaluation, so boundaries
+and opportunities cannot disagree. The ledger is analysed IN THE PAGE by
+`tools/load-test/src/ack-ledger.ts` (11 new deterministic unit tests, the control surface the
+review demanded): every measurement-phase eligible ack counted EXACTLY ONCE with zeros retained,
+warm-up rows EXCLUDED AND COUNTED (`excludedBeforeWindow`), duplicates and gaps computed over the
+covered seq range, truncation checked against the ledger cap, and the whole reconciled against
+the acknowledged opportunities (|delta| ≤ 3 to be complete). The p95 < 0.15 m target is
+`CLAIMED ONLY WHEN THE NETWORK CELL IS VALID` — §2.2 INVALID makes the claim NOT-CLAIMED, never
+an untested green. The 100 pings run at a predeclared 1180 ms cadence whose DERIVED span
+(cadence + median RTT) × 99 matches the sampling clock within 8 s — the ping window spans the
+whole measure window, not a subwindow.
+
+**The route.** Continuous +X across a 100 m region CANNOT be unobstructed: ~17 s at the 4 m/s
+ceiling reaches a bound, and from spawn (0, 0) the old cell spent most of every window clamped.
+The cell now runs a predeclared canonical route — 12 s legs on a 48 m square (+x → +z → −x → −z),
+driven by the same module the unit tests pin — PRE-VALIDATED from the observed spawn to stay
+≥ 1.5 m inside the bounds, so a clamp is structurally impossible, and audited per run:
+stationary intervals 0, boundary plateaus 0, out-of-bounds 0 (the detectors are shown FIRING on
+synthetic defects in the unit tests and on a live held-motion control in the cell — a detector
+that never fires is not evidence). Controls that catch warm-up leakage (widening the window adds
+acks — the exclusion does real work), ledger gaps, and stationary motion all run per cell.
+
+**Corrected full-window diagnostic (n=100, §2.2 VALID)**: median **106.1** (was 112.5), jitter
+p95−p50 **12.9**, p95 120.3, max 128.3; ledger eligible 2076 counted once, complete, zeros
+retained, claim MET; observer path audited clean; render-lag lower bound recorded (0 ticks at
+read time). The clamped straight route had inflated the achieved median by ~+3–6 ms ON TOP OF
+the structural cost — the old cell's own motion was contaminating its latency.
+
+**Attribution legs (equal 20 s + 60 s windows, identical canonical motion and rendering, one
+fresh context pair per leg, raw samples in `dpa2e/spike-cell-ab-controls.json`):**
+
+| leg | path | p50 | p95 | what it isolates |
+| --- | --- | --- | --- | --- |
+| D | direct, no proxy | **0.6 ms** | 1.3 | browser + SDK + loopback floor |
+| Z | proxy, 0 ms stalls (FIFO machinery intact, noDelay on) | **3.6 ms** | 4.9 | the proxy path's own cost: +3.0 (tube-recorded excess 1.4 + 1.4 per leg — consistent) |
+| E | elevated 50+50, jitter 20 | **109.4 ms** | 121.9 | stall path +105.8 over Z ≈ the DECLARED 100 + tube excess (recorded 2.4 + 1.5) + dispatch |
+| N | Z with TCP_NODELAY OFF (documented harness-only knob, Z as control) | 3.6 ms | **29.6** | Nagle/coalescing shifts NO median — it fattens the TAIL; the default-on proxy never suffered it |
+
+The accepted metric stays symmetric half-RTT with NOTHING subtracted; these legs are recorded
+beside it. The +12.5 dissolves into: ~3 ms proxy path + ~4 ms tube queueing under background
+traffic + ~2 ms browser dispatch + ~3–6 ms of the OLD CELL'S OWN CLAMPED MOTION, against a
+requested 100. With the defect removed the candidate sits inside the pre-registered §2.2
+tolerances on the runner — measured, not argued; every attempt (including the straight-route
+INVALID records) is retained. Gate A remains Not Run; GA-5/6/7/11/12 and CF-1/CF-3/CF-4 stay
+owed there (GA-10a/GA-10b are deferred to UDG-007 and are NOT Gate A blockers); no thresholds
+moved; the camera freshness and `recovery resumes…` items remain reported, untouched.
+
+## 14.5. The ack population is DELIVERIES, and the ADR-0003 scenario harness (slice 6f, 2026-11-20)
+
+Director batch, two parts. Both are DIAGNOSTIC evidence toward the Gate A recipe; Gate A itself
+remains Not Run.
+
+**Part 1 — the percentile population was the wrong set, now corrected.** The §2.2 ledger had been
+gating on `eligibleAcks` — DISTINCT INPUT STAMPS covered by matched rows. Deliveries can batch many
+stamps per boundary, so a giant-batch path could have satisfied a ≥100 gate on far too few measured
+rows. `analyzeAckLedger(rows, deliveries, window, ledgerLimit)` now consumes the
+`deliveryLedger()` population directly (each verified delivery carries its immutable `ack`,
+`authorityTick`, `epoch`): the opportunity ledger is the accepted deliveries whose ack ADVANCED,
+keyed `epoch:authorityTick:ackTo`, bound EXACTLY ONCE to a measurement row; the gated population is
+`measuredBoundaries` — actual delivery boundaries, zeros retained — while `coveredInputStamps` is
+reported separately and NEVER gates. Duplicates, overlaps with prior accepted keys, missing
+measurements, unbound rows, or truncation each fail completeness outright; reconciliation against
+opportunities runs at ZERO tolerance. Fourteen unit tests are the control surface: the giant-batch
+red control (one 600-stamp delivery produces ONE boundary, not 600), missing first/last boundary,
+overlap, duplicate, non-advancing exclusion, unbound row, truncation, warm-up leak — each detector
+is SHOWN firing. One bounded re-run of the corrected cell on the runner
+(`dpa2f/spike-cell-elevated-full.json`): **1245 measured boundaries** (the real population, all
+zero-correction) against 2076 covered stamps (reported, not gated), 13/13 checks PASS, §2.2 valid.
+
+**Part 2 — `--cell ga-scenarios`: real browser/room scenarios for the ADR-0003 rows.** The proxy
+gained a window-stall primitive (`setStall(direction, ms)` — uniform delay can only shift a
+delivery, never create silence; a withheld window is the authentic "no delivery, open socket"
+injection). Rows, injections, and OUTCOMES (twelve runs; every attempt retained):
+
+| row | scenario / seam | outcome |
+| --- | --- | --- |
+| GA-6a + CF-1 | s2c WINDOW STALL 6000 ms on an open socket after a zero-stall baseline; observer DIRECT | PASS: deadline fires on NON-DELIVERY ALONE (`snapshot-deadline-expired`), stop-sending, discard-pending (held pose), bounded attempt in flight, 5/5 sends refused, ZERO deliveries crossed the withheld window (counted, not asserted), NO close event and none invented, no mid-withhold recovery |
+| GA-6c | `context.setOffline(true)` 9 s (real socket loss) past deadline + episode budget | PASS: exactly TWO bounded attempts → `suspended`; sends refused; journal drained; suspension HOLDS after 2 s more; observer (direct, online throughout) saw healthy motion before the cut |
+| GA-6b | owned by the suite test "recovery resumes through a real rejoin…" (M3 mapping — title-present evidence, not directory-dependent) | PASS (mapped) |
+| GA-7 / CF-4 | owned by "retirement overflow in the browser…" (M2 mapping) + CF-1 counted fact (M1) | PASS (mapped/counted) |
+| CF-3 | `predictor.close()` on a recovered seat; online direct observer | PASS: 3/3 post-close sends REFUSED client-side (`closed`); observer's track shows ZERO samples advanced after the close (pose frozen; deep-compare) |
+| GA-5a/GA-5b | — | **BLOCKED** (named): no public seam injects a server-side input gap / duplicate stamp / terminal unrepresented input without a private hook; smallest remediation proposed: test-only operator commands on `RegionRoom` behind the existing deployment nonce (`injectInputGap` / `replayInput`), journalled — a distinct scope decision |
+| GA-10a/GA-10b | — | UDG-007 deferrals, unchanged (NOT Gate A blockers) |
+
+**S1b — a FINDING, not a contract row.** Through the window-stall seam, a rejoin attempt whose own
+JOIN lands inside the withheld window never settles: both the matchmake response and the ws
+handshake response are held, the transport join has no watchdog for a held handshake, no second
+attempt is scheduled, and after release the seat stays `recovering` past 40 s with motion refused
+(four timed runs agree). GA-6b's actual wording — network returns within budget — is carried by
+the offline arm and passes; the held-handshake case is recorded as a **hung-join watchdog gap
+candidate** for ADR discussion rather than quietly dropped or claimed red.
+
+**Predeclaration honesty.** The first run's predeclared S1 expectation ("exactly two attempts then
+suspension inside the stall") was DISPROVED by run mechanics — the blocked attempt waits rather
+than failing fast — and the revised expectation ships with the disproving first log preserved
+(`ga-run1.log`). The run history also records two harness lessons written into the code: pump
+promises must be settled BEFORE `predictor.close()` (a dying page's pending evaluate rejects and
+masks the real error as 'Target page closed'), and observer evidence uses the presentation seam
+(`joinPredictionSeat` + `createRemotePresentation`), never the imp-side join's globals.
+
+Full attempt logs `/tmp/ga-run1..14.log` mirrored into `artifacts/.local/spike-001/dpa2ga/` with
+the final green records (`spike-cell-ga-scenarios.json`, two consecutive greens); no thresholds
+moved; no Gate A claim; GA-5/6/7/11/12 and CF-1/CF-3/CF-4 remain OWED at Gate A with this cell as
+their scenario recipe.
+
+## 14.6. The episode watchdog lands, GA-7 runs for real, and the scenario rows stand on measured evidence (slice 6g, 2026-11-21)
+
+Director batch on the review of `fc939e6`: S1b was a REAL §3.2/GA-6c failure, GA-6a requires
+recovery COMPLETING in budget, and GA-6b/GA-7/CF-4 cannot pass through a test-title check. All
+three were taken literally; the results are below, with red receipts kept.
+
+**The per-episode hard deadline (client predictor, §3.2).** The starvation was structural: the
+episode deadline was re-checked only when the 500 ms snapshot timer re-fired, and a HUNG rejoin
+attempt left that timer unarmed (it re-arms through paths the hung `await` never reaches). The
+fix is an INDEPENDENT timer armed at episode start (`armEpisodeDeadline` in `enterRecovery`) and
+a single expiry funnel (`expireEpisode`): whichever limit is reached first wins — the handler
+no-ops unless the state is still `recovering`, so a rolling-window suspension is never relabelled.
+On expiry: stay stopped, prediction stays discarded, the prescribed connection error is surfaced
+(`connectionError(): {code:'recovery-episode-expired', …}` — non-null exactly on EPISODE expiry),
+and `suspensionReason(): 'episode-deadline' | 'rolling-window' | null` makes the two §3.2 limits
+DISTINCT on the public surface. No supported SDK seam aborts a join already in flight (recorded
+in this map), so the attempt is QUARANTINED at settle: the late-returned room is closed, nothing
+is adopted, no extra concurrent join exists (`rejoinInFlight`), and no send/resume race exists
+(the install path re-reads state after `await`, and expiry sets `suspended` before any settle can
+land). Budgets are preserved exactly: one timer per episode, `clientRecoveryDeadlineMs` from the
+episode START, cancelled on recovery-success and close. Controls: a fake-clock test whose rejoin
+promise NEVER settles — RED before the fix (`expected false to be true` at the 4000 ms mark,
+`/tmp/watchdog-RED.log` preserved in `dpa3j/`), GREEN after, plus late-settle refusal (transport
+closed, no adoption), budget exactness at 3999 ms, and a distinctness control proving the rolling
+suspension invents NO error. In the browser (ga-scenarios, real held handshake): expiry within
+budget, error surfaced, sent count FROZEN across the whole episode (no extra sends), exactly one
+join, and 15 s after release NO adoption/resume while the held join stays unsettled (late probes
+recorded; the settle-time quarantine itself is the unit-proven path).
+
+**`--cell ga-scenarios`, rebuilt as ten independently-judged rows** (fresh proxy + fresh room +
+fresh page pair per scenario; erroring scenarios record their own FAILED row and the cell
+continues — a mid-scenario throw can no longer poison neighbours via the page-close cascade):
+
+| row | what the run measured |
+| --- | --- |
+| GA-6a | withheld window (open socket, zero-stall baseline) → deadline on non-delivery ALONE → stop + discard → REAL rejoin → snapshot recovery **COMPLETES in 284–344 ms** (≤ 4000 + 300 slack, page clock) on epoch 3; withheld finals on the old domain: ZERO accepted; motion resumes under the NEW identity on the unaffected observer |
+| CF-1 | COUNTED: accepted deliveries across the withheld window = 0 (old-epoch acceptances after recovery = 0), from the delivery ledger — deliveries, not stamps |
+| GA-6b | distinct required case: ZERO deliveries and NO closure between join and trigger (counted); trigger is `snapshot-deadline-expired`, state never `closed`; recovery completes in budget on its OWN timer |
+| GA-6c EPISODE | the S1b finding as a first-class assertion (above) — PASS |
+| CF-3 | 3/3 post-close refusals, observer: ZERO samples advanced after close (deep-compare) — PASS |
+| GA-6c ROLLING | offline 9 s → exactly two attempts → `suspended`; DISTINCT from expiry: no flag, **no connection error**, reason `rolling-window`; suspension holds |
+| GA-7 | labelled injection (WITHHELD APPLICATION DELIVERY at the proxy hop — socket open, never TCP loss — then a proxy-side sever so the SERVER really closes): server records the §3.1 observation for the mover's exact entityId (`retiredUnrepresented 1` — a CONFIRMED loss — `serverQueuedAtClose 0`, `consumedCountAtClose`, `dequeuedTotal` recorded separately); client never relies on the close (local-deadline trigger, state never `closed`); recovery in 630–764 ms; zero old-epoch acceptances; accepted-send generations strictly increasing (nothing reissued); server replica publishes the NEW identity at the new epoch; observer sees motion resume |
+| CF-4 | branch attribution NAMED from this run's ledgers: a code-4100 closure carrying the mover's entityId (the ADR consequence branch — this run's stranded input made it so; measured, not assumed) alongside the confirmed-loss observation |
+| B1 | GA-5a/b stay BLOCKED (existing operator-command proposal, distinct scope) |
+| B2 | GA-11/GA-12 outstanding, existing proposal, no gate verdict |
+
+**Two protocol truths the first red runs re-taught (records in `dpa3a–dpa3f`):** hosts must
+CONTINUE the seat's generation watermark (`§4.2` refuses frames far ahead of a fresh epoch's
+zeroed watermark — high fixed bases silently RESYNC-refuse, so a 'moving' seat moved not at all),
+and after `resetForNewEpoch` a protocol-correct host RESTARTS its sequence — the scenario pump now
+does exactly that inside the rejoin seam, which is why the observer finally saw motion resume
+under the new identity. The proxy gained `flushStalled` (a withheld window ends AT an instant;
+flushed chunks are counted per direction, `chunksFlushed`, never silent) and `killSockets` (the
+proxied pair severs, server-side first) — both unit-controlled on the synthetic clock.
+
+Suite invocations now bind RECORDED evidence (this cell's ledgers and the room's own closure/
+observation logs), not spec-title greps. One netcode-suite smoke re-run failed under a heavy
+cgroup-throttle window (5.1 s throttle inside a 7 s measurement window — stated as measured) and
+passed in 34 s on an uncontended re-run; the receipt is kept, the metric was not adjusted.
+Two consecutive full-greens: `dpa3h`, `dpa3i` (10/10 rows each). Gate A: still Not Run; GA-5/6/
+7/11/12 + CF rows remain OWED with this cell as their recipe; no thresholds moved; camera,
+workflows, main and P06 untouched.
+
+## 14.7. GA-5 gets a real seam (it was never missing), GA-7 gets timed, and the pinned core answers W-9 (slice 6h, 2026-11-22)
+
+Director batch on the review of `e8411c8`: study PR-15, the Phase-2/3 harness and the pinned core
+BEFORE proposing seams; reuse an existing technically valid pre-buffer dedupe seam if one exists;
+tighten GA-7 to the server's real decision tick and the exact §3.3 window; no operator commands.
+
+**The study found the seam, and it is public.** `RegionRoom` declares `defineInput(… , { seqField:
+'seq' })`, and the pinned `@colyseus/core@0.18.27` runs `RoomInput.capture -> InputBuffer.accept`:
+any stamp `<= _lastSeq` is dropped BEFORE the buffer — decoded (the receive counter counts it),
+never queued, invisible to `consumedCount`. Re-stamping through the same public input handle the
+production adapter writes reaches it with no new API, no server change and no operator command;
+the earlier `B1` "no public seam" BLOCKED claim is REFUTED and ships corrected beside the record
+(the `injectInputGap`/`replayInput` proposal is withdrawn as unnecessary). What the pinned discard
+does NOT do is leave a room-visible trace of the discarded frame — so GA-5a's "gap named as a
+range in the record" is nameable only through the mechanism this slice MEASURED: a replayed stamp
+consumes a slot of the SDK send counter (`sent <= stamped` — PR-15's measured limit), the next
+contiguous stamp jumps, and the room NAMES the resulting consumed-range gap. The client's delivery
+guard refuses gap-carrying deliveries (`gap-named`) and resynchronises through a complete §3.2
+episode in budget — exactly GA-5a's requirement — with zero retirement subtraction and no server
+closure, while the deduped frame's content moved nothing (observer z-axis; discrete-effect ledger
+untouched). GA-5a PASSES with the named range present in both records. GA-5b's terminal case runs
+for real too — the client's OWN next auto-stamped input re-stamps an accepted value and is eaten
+pre-buffer — and its server side is exactly the ADR's 'unidentifiable': plain leave, retired 0,
+queue 0, no gap invented, no closure, applied zero times. Its CLIENT sub-leg is BLOCKED with
+proof, not passed silently: the accepted twin carries the same stamp, the ack watermark covers it,
+the pending entry prunes legitimately, and the armed snapshot deadline bounds only OUTSTANDING
+inputs (`armDeadlineIfNeeded`, measured) — no well-formed client expectation can exist to time
+out; the recoveries that DO evidence resync-from-unidentifiable-loss are GA-5a's gap-named resync
+and GA-6a/6b's deadline recoveries.
+
+**Three substrate truths this slice measured (recorded, not fitted):** the leave-drain (`clear()`)
+advances the consumed counter WITHOUT dequeuing, and the room then charges §3.1's subtraction on
+the abandoned seat and closes it 4100 — the open W-9 question, answered live, cause-attributed,
+with the scenario quieting the wire first so GA-5a's "no closure" claim is tested against the
+dedupe evidence rather than a leave-mid-flight artefact; the deadline arms only with inputs
+outstanding; `effectCount` is the GA-10 DISCRETE ledger (direct frames advance nothing), so
+'no duplicate movement' is evidenced by consumed-once + refusals-zero + distinctive-content
+absence, not by an effects arithmetic the substrate does not offer.
+
+**GA-7T: the ordering the row always claimed, now actually timed.** The injection is still
+labelled WITHHELD APPLICATION DELIVERY (socket open), and NO harness sever participates: two
+contiguous stamp waves push the pinned buffer past `bufferMaxSize`, the room CONFIRMS THE LOSS
+ITSELF (consumed-without-dequeued at its own step — the DECISION tick, journalled with room-clock
+time and caught live in the in-process poll trail with the seat `closing: true`), the exact §3.3
+window `[decision, decision + 250 ms]` (cap 1000 ms) runs, and the client-local deadline — bridged
+from the page's monotonic clock by a loopback bridge with a stated error budget — fires INSIDE it
+(measured: ~170–180 ms after the decision in both green runs). The 4100 consequence closure runs
+at window end and its close frame is itself withheld; the withheld window is MEASURED WHILE HELD
+(s2c received-minus-delivered at the proxy); the withheld-final proof is epoch-scoped (zero
+OLD-domain acceptances at/after the decision tick — the new domain's own ticks are a different
+domain, and the first-run conflation is preserved as a red record); `(domain, seq)` consumed
+stamps are unique with zero refusals on the supported substrate; controls: C1 — a harness kill
+ALONE produces a plain leave with NO 4100 (a sever cannot stand in for the consequence branch);
+C2 — the identical confirmed-loss chain with nothing withheld: the client is still `tracking` at
+the decision moment and the closure ARRIVES, the exact delivered-vs-withheld contrast. CF-4 keeps
+its former distinctions and gains the decision tick.
+
+**GA-12 stays BLOCKED for a positive proof, closure policy untouched**, and the PE plan is now
+concrete: PE-1 is unsatisfiable for pre-buffer dedupe on the pinned core (this run MEASURED the
+absence of any signature while a replayed stamp was observed); PE-2 seeds at zero false positives
+across this cell's compliant legs and names the dedupe-replay counter-slot jump as a benign
+gap-naming false positive to include in the control population; PE-3's naming works on the
+eviction chain (C2) and not on terminal dedupe, as the ADR anticipates; PE-4 maps every benign
+alternative to an existing scenario; PE-5 rides the accepted Phase 1 journal replay. No closure
+adoption; no policy change; GA-11 outstanding; Gate A remains Not Run. Two consecutive 15/15
+greens (`dpa4h`, `dpa4i`); every first-run refutation (`dpa4a–dpa4g`) preserved in the bundle.
+
+## 14.8. GA-5b's counter identity under the microscope, and GA-11's two inequalities actually evaluated (slice 6i, 2026-11-23)
+
+Two bounded deliverables, both DIAGNOSTIC, neither a Gate A verdict.
+
+**(i) The GA-5b identity, instrumented — and a decision proposal, not an ADR edit.**
+`deliveryLedger()` rows now carry the FULL disposition record (`resolvedThrough`, `gapStart`,
+`gapEnd`, `retiredUnrepresented`, `sentCount` beside `ack`), and `gaRecovery` exposes the pending
+journal's ENTRIES, so the same-delivery correlation is traceable per sample. The GA-5b scenario now
+samples the client's disposition view ACROSS the prune: `pending [K]` on one sample, and the next
+delivery row `{ack: K, resolvedThrough: K, gap: [0,0], pending: []}` — the eaten frame's own ack slot
+covered on the delivery that prunes it, no gap named, while the domain's consumed set is exactly the
+twin. A FIRST-RUN ASSERTION THAT THE STAMP EQUALITIES WERE SHARED WITH THE TWIN WAS REFUTED BY THIS
+TRACE (`dpa5f`, preserved) and the expectation revised to the measured watermark-pushed form: three
+counters (producer domain-local stamp, raw handle send/ack slot, server `_lastSeq`) with distinct
+owners, and the pre-buffer decline arising because the RAW BYPASS pushed `_lastSeq` past the producer
+frontier. The new `GA-5b invariant control` row is the ANTI-ALIAS control: in the healthy window the
+consumed stamps are contiguous from 1, `resolvedThrough` tracks sends, no gap is named, and dedupe
+NEVER fires — under (pinned accept rule + stamp = sentCount + 1 strictly increasing) a pre-buffer
+discard is unreachable, terminal form included; the alias exists ONLY via the fixture's labelled raw
+re-stamp. Twin coverage reconciles with "resolvedThrough never advances past a genuine hole" because
+the eaten stamp HAS a disposition (declined at the boundary) and a hole has none — GA-5a's named-gap
+blocking, measured in the same run, is the contrast case. The ADR question is answered by
+`docs/adr/proposals/PROPOSED-0003a-dedupe-observability-and-terminal-dedup-decision.md` (PROPOSAL, ADR-0003
+untouched): options A (keep the letter, keep blocked rows), B (refine to observable safety + causal
+correlation + invariant control + unidentified-loss-stays-unidentified; recommended), C (upstream
+disposition hook ask), each with cost/risk; PE-1 failing alone continues to DENY production dedupe
+closure regardless of option; no production edits, no monkeypatches, closure policy unchanged.
+
+**(ii) GA-11: the two inequalities, EVALUATED — with sources named and production staying Not-Run.**
+New cell `--cell ga11-calibration` (small targeted batch, not the full grid): three legs
+(direct / proxy-zero / proxy 100±20 seeded), fixed seed 1001, 90 pings per leg on the ACCEPTED seam
+(`transport.pingLatency` → `Room.ping` on the playing socket) at a declared 100 ms cadence, every raw
+sample retained; patch intervals measured from `deliveryLedger` arrivals beside the adopted 100 ms
+configuration; server tick population read IN PROCESS (raw inter-tick overrun, step duration, queue
+residence p99 + high-water); arrival stall from the NEW proxy inter-arrival instrumentation
+(`interArrivalGapsMs`/`maxInterArrivalMs`, raw host-monotonic per direction, unit-tested on the
+synthetic clock) with the direct leg declaring its different stall source. Declared formulas, not
+fitted: `J = ceil((p99−p50)/tickMs)`, `stallFrames = max(0, ceil((stallMax−tickMs)/tickMs))`,
+`B + J·λ + stall ≤ bufferMaxSize` (provisional B/λ/bufferMaxSize READ from `INPUT_ENVELOPE_DEFAULTS`),
+`clientSnapshotDeadlineMs ≥ 4×100 + 2×p99(RTT)`. Results (`dpa5d`, `dpa5h`, consecutive greens):
+inequality 1 holds on every leg (LHS 11/21/23 ≤ 32); inequality 2 HOLDS on the direct floor
+(p99 ≈ 2–3 ms) and FAILS on the 200 ms-class profile (p99 ≈ 228 ms ⇒ RHS ≈ 856 > 500) EXACTLY AS
+PREDECLARED — the provisional 500 ms deadline tolerates p99 RTT ≤ 50 ms at the adopted patch
+interval, and that tolerance bound IS the production-tuning question. Every leg's impairment source
+is named; NO leg is production or production-directed (all loopback), so the PRODUCTION-DIRECTED
+evaluation of both inequalities stays Not-Run, with the exact missing representative conditions
+recorded (WAN RTT/jitter against deployed topology; production-host tick overrun under production
+load; production client cadence patch intervals). No production values adopted; nothing shifted.
+16/16 ga-scenarios and 5/5 ga11 rows, two consecutive greens each; unit suite green including the
+new inter-arrival proxy test. Gate A remains Not Run.
+
+## 14.9. The GA-5b claim retracted, rebuilt as a transcript that can only say what the room knows; and the GA-11 record named honestly (slice 7, 2026-11-23)
+
+**(i) Retraction and rebuild (review-driven).** Review of `129961b` was correct on both counts: the
+room's `resolvedThrough` advances ONLY over real dequeues satisfying `seq === resolvedThrough + 1`
+(`apps/server/src/network/ColyseusInputAdapter.ts:190-193`), the SDK slot-ack is an INDEPENDENT
+counter, and the accepted client guard fuses them only to REFUSE on disagreement
+(`apps/client/src/network/ColyseusPredictionAdapter.ts:339-340`: accepted deliveries REQUIRE
+`ack === inputResolvedThrough`). A pre-buffer decline therefore has NO room-owned disposition — it
+is ABSENT, and the slice-6i "covered by the same delivery" row (whose cited `ack 1 / resolvedThrough
+1` row was never domain-keyed and cannot follow from a lone dequeue of stamp 40) is RETRACTED. The
+dpa5-era Case-B fixture is DELETED (its sends followed a §3.2 rejoin through a raw handle; no wire
+receipt proved they left the client), and `dpa5f/g/h` are preserved as refuted evidence — not
+patched. The replacement is scenario `ga5t`: a FRESH isolated seat, ONE `(roomId, sessionId, epoch)`
+transcript — per-send ordinal/staged-stamp-read-back/slot-before-after/ack/epoch/wire-receipt,
+per-tick real dequeues joined by tick, immutable epoch-keyed ledger rows sliced from the quiet
+baseline, pending-journal samples, and FULL send provenance including the pre-window pump frames —
+audited by `tools/load-test/src/ga5-transcript.ts` (prefix rule mirrored; forged-prefix,
+foreign-epoch, aliasing, early-prune and duplicate-consumption RED controls unit-tested, 12 tests).
+The validator caught TWO of this slice's own errors before any claim shipped: a window-scoped prefix
+rebuild (legitimately fails on pre-window history) and missing pump provenance. What GA-5t proves:
+`fixture soundness` (original consumed once; the replay send's own proxy c2s receipt — a silent
+no-op bypass is now a RED condition), `TRANSCRIPT AUDIT` (every published prefix rebuildable from
+the domain's real dequeues, ack==resolved equality on accepted rows, no foreign-epoch selection,
+forged control row rejected), and `DECLINE IS ABSENCE, NOT COVERAGE` (consumed count of the
+replayed stamp stays exactly the accepted original's; refusals 0; no gap/retired/closure; the
+replay's distinguishing z-content never reaches the observer; plain leave; no client episode — and
+NO statement that anything covered it). The narrower invariant is stated with its exclusion:
+a decline needs a stamp ≤ the watermark — the protocol-corrupted class (replay/stale domain/
+external re-stamp), which the admissible producer cannot emit (invariant-control row); within that
+class the non-terminal sibling is nameable and recoverable (GA-5a) and the terminal sibling is
+silent-absent (GA-5t) — a unique lawful terminal loss with a surviving distinct twin is NOT
+representable on the pinned single-input substrate, and is reported as excluded rather than forged.
+`PROPOSED-0003a` rev 2 records the retraction, keeps the ack/disposition separation, states that
+**PE-1…PE-5 remain the prerequisite for ever ENABLING dedupe closure** (nothing makes PE-1 optional
+for closure), and compares refining ADR-0003 to separate Gate A safety evidence from the
+unsupported closure versus the upstream/pin path to a public disposition counter. 17/17 rows twice
+(`dpa6d`, `dpa6e`).
+
+**(ii) GA-11 calibration record, named and validity-checked as measured.** The reviewed wording is
+corrected here: the leg is the DECLARED ONE-WAY profile 100 ± 20 ms (loopback harness proxy) — any
+"~200 ms" figure is a DERIVED two-way scale, never a profile name — and the cell now RECORDS each
+proxy leg's ACHIEVED validity against its OWN declared budget (both directions' delay pairs:
+achieved p50 within 100 ± 20 ms AND achieved jitter p95−p50 ≤ 20 ms, ≥ 60 pairs; asserted, not
+narrated). No inference is drawn from a leg that failed its declared profile; the direct leg is
+labelled NO-IMPAIRMENT-SOURCE. The batch remains calibration-only: every population loopback,
+production-directed evaluation Not-Run with the missing representative conditions named, nothing
+adopted.
+
+## 14.10. The stalled-ack rule the contract always mandated gets implemented, and one distinct admitted input stops being silent (slice 8, 2026-11-24)
+
+ADR-0003 §3.2 defines `INPUT_ACK_STALLED` solely from client-observable quantities — an outstanding
+input whose SDK acknowledgement AND `inputResolvedThrough` advance NEITHER across G consecutive
+state deliveries, epoch unchanged (`stallDetectionDeliveries`, the named spec config in
+`packages/config/src/input.ts`, default 3). Slice 8 proved the rule was **contract-mandated and
+unimplemented**: the adapter owned only the 500 ms snapshot deadline, and that deadline RESTARTS on
+every accepted delivery — a still-flowing state stream refreshed the timer forever, so an input
+lost while publications continue was the one §3.2 case with NO client-side recourse. The unit
+harness proved that RED first (`predictor.test.ts`, four tests: fire-at-G, benign-in-flight,
+compliant-idle, and the config-seam override), then the rule went into the granted adapter
+(`observeStalledAck`, wired into the verified-accepted path; a fired trigger returns true so the
+same delivery cannot also complete a recovery — an early draft learned that the accept-branch
+would otherwise undo the episode in the same call). The scenario cell now measures the whole shape
+for real (rows in `ga-scenarios`, scenario `ga5l`):
+
+* **A test-only application-delivery suppression seam, because no production one exists and none
+  was invented.** The spike proxy gains a labelled `holdNext(direction, count)`: the NEXT `count`
+  chunks of that direction, across ONE SHARED per-proxy quota, are TERMINALLY withheld from the
+  application — the bytes are RECEIVED at the hop and counted (`chunksReceived`, bytes,
+  inter-arrival, new `chunksHeld`) and never depart; connections opened later (the bounded
+  rejoin's) share the SPENT counter and route normally. This is suppression of delivery to the
+  application — never TCP loss, never native dedupe (the suppressed input is a fresh
+  producer-stamp `sentCount + 1`, strictly ABOVE the watermark, which `accept()` cannot decline).
+  A per-connection quota was the first draft and is preserved as refuted (dpa7a: the SDK's extra
+  connections each got armed, the rejoin's join frame got suppressed, the episode expired — the
+  shared quota fixes it honestly, and the unit test asserts quota-spent-later-routes-normally).
+* **The measurement came out exactly as the contract predicts**: trigger `input-ack-stalled` with
+  the observed streak EXACTLY at G=3, ack and prefix frozen at every poll of the window, no gap
+  named, retired 0, the pending entry HELD until the trigger and discarded ONCE after it, nothing
+  reissued (send-audit delta 1), bounded rejoin, fresh snapshot, movement resumes; the room, which
+  never received the input, reports the loss UNIDENTIFIABLE (retired 0, queue 0, no signal) — what
+  GA-5b says the client must recover from. Controls: compliant idle (pending 0 → no expectation),
+  benign in-flight released after TWO frozen deliveries (< G → in flight is not lost).
+* **The ga5t transcript gained a measured consequence, and the evidence corrected the prose.**
+  The adapter journals every send through the handle's `onSend`, so the raw-bypass replay leaves
+  the MEASURING client's own journal holding a slot no prefix can resolve — the preserved
+  pendingSamples (dpa6d/dpa6e) refute the earlier "no pending entry" wording, and with the
+  mandated rule now implemented that stuck entry triggers exactly one blind `input-ack-stalled`
+  recovery on the ga5t seat. Nothing about the ABSENCE proof changed (the decline still contributes
+  zero consumptions, no gap, no closure, the z content never reaches the observer); what changed
+  is that the client is no longer silently frozen — it recovers BLINDLY, as §3.2 requires, and
+  PE-1 remains unmet and un-masked (the only route that shape takes is the stall rule; no room
+  record appears). The proposal carries this as rev 3.
+
+Part B added the `ga9-ga13` cell: GA-9 solo-vs-shared determinism over the room's OWN journal
+StateRows (identity `entityId` and the absolute `lastAuthorityTick` normalized with the fields
+declared; every locomotion byte exact; digests equal across solo/repeat/shared, ticks strictly
+consecutive), with the detector controls carrying the claim (the mover-flipped step diverges at
+EXACTLY its step — after dpa7j caught a vacuous SYMMETRIC flip; the ungated leg diverges because
+timing is part of the record); and GA-13 replaying the real room journal through the accepted
+Phase-1 machinery (`toReplayInputs → replayRun`, `compareJournal` over `journalFromPersisted` —
+the reviewer's boundary) with blanked digests still replaying identical, a tampered prologue
+refused, and a mutated input payload detected. Replay's canonical-state comparison states its
+equality BOTH ways: exact hash equality when it holds, and a 4-ULP numeric companion whose first
+observation (one velocity.z, one ULP, one tick, dispositions/chain otherwise identical) is
+preserved in dpa7j — re-executing floating point is a fact, and the tolerance is named three
+orders of magnitude below any physical claim rather than hidden. Two first-attempt facts are kept
+as findings, not smoothed: held-room steps past ~400 ms start replacing the seat transport
+(dpa7k), and publications already inside the delay tube at stall-open are legitimately accepted
+BEFORE the trigger — the GA-7 quarantine tally is trigger-scoped and counts them separately
+(dpa7o, where the conflated tally first flaked).

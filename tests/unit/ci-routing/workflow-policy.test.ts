@@ -318,6 +318,43 @@ describe('CI workflows — one policy across both files', () => {
 });
 
 describe('CI workflows — full capture is an explicit act, and a routine run is not evidence', () => {
+  it('runs the spike fast smoke in the runtime lane only, and nowhere that captures (grants T-6/T-8)', () => {
+    const runtimeBlock = job(routine, 'runtime');
+    expect(runtimeBlock).toContain('test:spike');
+    expect(runtimeBlock).toContain('--cell lan-smoke');
+    // The smoke launches browsers, so the pinned chromium install must sit in the SAME job, at
+    // step level, immediately BEFORE the spike invocation — the AC-1 trace and system suites in
+    // that lane must not be structured to depend on it, and a fresh runner without a cached
+    // browser would otherwise fail. The pattern is the repo's own (no `--with-deps`, no new
+    // action references; the checkout above already sets persist-credentials: false).
+    const installAt = runtimeBlock.indexOf('playwright install chromium');
+    const spikeAt = runtimeBlock.indexOf('test:spike');
+    expect(installAt, 'the runtime lane never installs chromium for the browser smoke').toBeGreaterThan(-1);
+    expect(installAt, 'chromium must be installed before the smoke runs').toBeLessThan(spikeAt);
+    expect(runtimeBlock).not.toContain('playwright install --with-deps');
+    const runtimeUses = [...runtimeBlock.matchAll(/uses:\s*(\S+)/gu)].map((match) => match[1] as string);
+    expect(runtimeUses.every((spec) => /^actions\/(checkout|setup-node)@/u.test(spec))).toBe(true);
+    // Exactly one lane runs the smoke: no other job may invoke the spike runner, so a netcode
+    // change cannot accidentally start browser work in four lanes.
+    for (const id of jobIds(routine)) {
+      if (id === 'runtime') continue;
+      expect(job(routine, id), `${id} must not run the spike smoke`).not.toContain('test:spike');
+    }
+    // The smoke declares its artefact home under artifacts/.local — and C-07 still holds over the
+    // whole routine file: a routine run captures nothing.
+    expect(runtimeBlock).toContain('artifacts/.local');
+    expect(routine).not.toContain('evidence:capture');
+    // The dispatched workflow is untouched by the smoke: T-7 (the full grid) belongs there and is
+    // not implemented in this slice; the ONLY spike invocation in the routine file is the smoke —
+    // a routed file must not have grown a matrix runner (comment mentions aside).
+    const spikeRuns = [...routine.matchAll(/run:.*test:spike[^\n]*/gu)].map((match) => match[0]);
+    expect(spikeRuns.length).toBe(1);
+    expect(spikeRuns[0]).toContain('--cell lan-smoke');
+    // The routine file may MENTION the formal-mode variable in a comment; what it must never do is
+    // SET it — nothing routed can execute under the formal schedule policy.
+    expect(routine).not.toMatch(/^\s*UDG_GATE_A_FORMAL:/mu);
+  });
+
   it('reaches acceptance only through workflow_dispatch', () => {
     const triggers = acceptance.slice(acceptance.indexOf('\non:\n'), acceptance.indexOf('\npermissions:\n'));
     expect(triggers).toContain('workflow_dispatch:');

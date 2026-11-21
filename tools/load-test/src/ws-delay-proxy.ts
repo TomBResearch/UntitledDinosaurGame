@@ -1,0 +1,1097 @@
+/**
+ * UDG-SPIKE-001 — the development WebSocket impairment proxy (assignment §2.2, §5 DPA-2).
+ *
+ * ## What this primitive is
+ *
+ * A transparent **TCP-stream** proxy between the browser seats and the pinned room server that
+ * introduces a **bounded, seeded, per-chunk stall** in each direction:
+ *
+ * - `requested stall = oneWayMs + U(-jitterBudgetMs/2, +jitterBudgetMs/2)` — a bounded uniform
+ *   delay VARIATION around the half-RTT base, drawn from a seeded PRNG, so a run is replayable
+ *   from its seed alone. Zero-centred on purpose: a one-sided `+U(0, b)` draw inflates the
+ *   achieved MEDIAN by b/2 per direction, which (measured on the first elevated self-check:
+ *   achieved p50 121 ms against a requested 100 ms) makes the §2.2 achieved-median rule
+ *   unfalsifiably INVALID — the impairment would fail its own declaration instead of being
+ *   measured against it. The profile is validated so the centred stall stays non-negative
+ *   (`oneWayMs >= jitterBudgetMs / 2`), and `boundedUniformStall` itself remains the primitive
+ *   over [base, base + budget] with the centring done at the call site.
+ * - every byte the proxy accepts is eventually forwarded — **the proxy never drops and never
+ *   reorders**: bytes enter each direction's queue in arrival order and leave it one at a time,
+ *   under a single in-flight stall per direction, with a delivery-sequence audit that counts any
+ *   violation (structurally zero — counted anyway, because "zero" must be CHECKED, not asserted);
+ * - "forwarded" means **handed to a live destination socket at this hop**, and nothing stronger.
+ *   The proxy is a loopback instrument, not an observer of its peer's kernel: `chunksDelivered` /
+ *   `bytesDelivered` count the LOCAL HANDOFF only and never claim a remote application received
+ *   anything. When a direction's destination is already gone (an orderly peer half-close racing
+ *   bytes still in the tube) the bytes that could not be handed off are counted in
+ *   `chunksLostAtDestination` / `bytesLostAtDestination`, the closure carries `error: true`, and the
+ *   invariant `chunksReceived = chunksDelivered + chunksLostAtDestination + chunksHeld + queued`
+ *   holds at every snapshot. Before that accounting existed, such bytes were counted as DELIVERED
+ *   while they in fact crossed nothing — a blind spot that made a stuck client look served (§20A,
+ *   `artifacts/.local/spike-001/dpa8o/`);
+ * - the stall delays the byte stream, it does not delete from it — which is precisely what the
+ *   adopted measurement rule requires: *"Preserve byte order and model TCP stalls as stalls; do
+ *   not call application message dropping packet-loss simulation."*
+ *
+ * ## Why a TCP stall is NOT packet loss (the standing documentation obligation)
+ *
+ * TCP is a reliable, ordered byte channel. A **stall** withholds bytes the connection has already
+ * guaranteed to deliver; a **drop** destroys a segment and relies on TCP retransmission and
+ * recovery to paper over it. This primitive only ever withholds: nothing here destroys a byte,
+ * forges a RST, or exercises a retransmit path. A run through it therefore has an RTT/jitter
+ * distribution the impairment genuinely produced and **no loss distribution at all**. Loss-
+ * flavoured populations (GA-11's loss limbs, ADR-0003's dedupe/recovery evidence) can only be
+ * produced over this path by *explicitly refusing to deliver an application message* inside the
+ * harness, and every such population must be labelled `dropModel: "application-layer delivery
+ * loss"`, `tcpLossModelled: false` wherever its numbers appear (§2.4). Calling these stalls
+ * "packet loss" would overstate what the transport experienced, and the overstatement would
+ * travel into the gate evidence.
+ *
+ * ## Why TCP level and not a `ws`-framing dependency (DPA-2, measured)
+ *
+ * A message-level proxy must parse and re-emit WebSocket frames — another dependency between the
+ * measurement and the thing measured, and re-framing changes what the server's own TCP stack
+ * sees. At the TCP level the proxy is protocol-blind: byte order is preserved by the streams
+ * themselves, HTTP upgrade and permessage-deflate pass through untouched, and the only thing the
+ * harness adds is the stall. The measurement recorded in
+ * `docs/integration/colyseus-0.18-api-map.md` §14: the pinned `@colyseus/ws-transport` →
+ * `ws@8.22.2` stack completes handshake, binary traffic and clean close through this proxy with
+ * zero new dependencies, so DPA-2 recommends keeping it that way.
+ *
+ * ## Achieved metrics, honestly defined
+ *
+ * - per direction: raw requested/achieved stall pairs (achieved measured on the monotonic clock
+ *   the injected `TimerDriver` exposes — `process.hrtime.bigint` with the real driver), byte and
+ *   chunk counters, backpressure pause count, order-violation count, and delivery counters that
+ *   make "nothing was dropped" checkable (`chunksReceived === chunksDelivered` after a drain);
+ * - achieved RTT: each reverse chunk is paired with the most recent forward chunk the proxy had
+ *   already delivered upstream when that reverse chunk ARRIVED at the proxy from the server; the
+ *   sample is `achievedForward + achievedReverse` — the stall the round trip actually spent
+ *   inside the proxy, excluding server processing and the (loopback, ≈0) wire. The pairing rule
+ *   is part of the record, not an implementation detail; application-level round trips measured
+ *   in the browser are recorded separately because they include server tick time.
+ *
+ * Determinism: pass `timer` (a `TimerDriver`) and the profile `seed`; the per-direction jitter
+ * streams derive from the seed alone, so a unit test on a synthetic clock reproduces the exact
+ * stall schedule of a real run with the same seed.
+ */
+
+import { connect, createServer, isIPv4, type Socket } from 'node:net';
+
+import type { DelayPair } from './statistics.js';
+
+// --------------------------------------------------------------------------- seeded jitter
+
+/** mulberry32: a small, fully-specified 32-bit PRNG over [0, 1). */
+export const mulberry32 = (seed: number): (() => number) => {
+  let state = Math.trunc(seed) >>> 0;
+  return (): number => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+/** Derive an independent stream per (seed, lane) without a second PRNG. */
+export const laneSeedRng = (seed: number, lane: number): (() => number) => mulberry32(laneSeedInternal(seed, lane));
+
+const laneSeedInternal = (seed: number, lane: number): number => {
+  let h = (Math.trunc(seed) ^ Math.imul(lane + 1, 0x9e3779b9)) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
+  return (h ^ (h >>> 16)) >>> 0;
+};
+
+/** The bounded uniform stall for one chunk: `base + U(0, budget)`, always inside [base, base+budget]. */
+export const boundedUniformStall = (baseMs: number, jitterBudgetMs: number, draw: number): number => {
+  if (!(draw >= 0 && draw < 1)) throw new Error(`rng draw must be in [0,1), got ${String(draw)}`);
+  if (!(baseMs >= 0) || !(jitterBudgetMs >= 0)) throw new Error('stall bounds must be non-negative');
+  return baseMs + draw * jitterBudgetMs;
+};
+
+// --------------------------------------------------------------------------- time
+
+/** Injectable monotonic clock + scheduler; unit tests drive this with a synthetic clock. */
+export interface TimerDriver {
+  nowMs(): number;
+  /** Run `cb` after `afterMs` of this clock's time. Returns a cancel that is safe after firing. */
+  schedule(afterMs: number, cb: () => void): () => void;
+}
+
+/** The production driver: `process.hrtime.bigint` for time, `setTimeout` for scheduling. */
+export const realTimerDriver: TimerDriver = {
+  nowMs: (): number => Number(process.hrtime.bigint()) / 1_000_000,
+  schedule: (afterMs, cb): (() => void) => {
+    let handle: ReturnType<typeof setTimeout> | undefined = setTimeout(cb, Math.max(0, afterMs));
+    return () => {
+      if (handle !== undefined) clearTimeout(handle);
+      handle = undefined;
+    };
+  },
+};
+
+// --------------------------------------------------------------------------- profiles
+
+/** One impairment profile: symmetric half-RTT one-way stall plus bounded uniform jitter (§2.2). */
+export interface ImpairmentProfile {
+  readonly name: string;
+  /** One-way base stall: half the requested RTT. The proxy is symmetric by construction. */
+  readonly oneWayMs: number;
+  /** Per-direction uniform jitter budget, ms. */
+  readonly jitterBudgetMs: number;
+  readonly seed: number;
+}
+
+// --------------------------------------------------------------------------- stats
+
+export interface DirectionStats {
+  readonly bytesReceived: number;
+  readonly bytesDelivered: number;
+  readonly chunksReceived: number;
+  readonly chunksDelivered: number;
+  /** Chunks released ahead of their pinned departure by an explicit harness FLUSH (labelled). */
+  readonly chunksFlushed: number;
+  /**
+   * APPLICATION-DELIVERY SUPPRESSION (GA-5l, slice 8): chunks TERMINALLY withheld from the
+   * application by the labelled `holdNext` harness op. The bytes ARE RECEIVED at this hop and
+   * counted (`chunksReceived`, bytes, inter-arrival) and NEVER depart — this is suppression of
+   * delivery to the application, never a TCP drop. A held chunk can be released ONLY by
+   * teardown; it never re-enters the delay tube.
+   */
+  readonly chunksHeld: number;
+  /** Remaining holdNext suppression quota on this direction (scenario-scoped, never flushed). */
+  readonly holdRemaining: number;
+  /** Structural constant zero: this primitive has no drop path. Kept visible so zero is CHECKED. */
+  readonly chunksDropped: number;
+  /**
+   * LOCAL-HANDOFF HONESTY: chunks that left the delay tube but could NOT be handed to this
+   * direction's destination because that destination was already gone (peer half-closed / reset).
+   * These are NEVER counted in `chunksDelivered`/`bytesDelivered`, are visible in the closure
+   * (`error: true`), and exist so a hop that could not forward can never report a full delivery.
+   * This is not a TCP drop either: the bytes had already lost their peer, and the proxy says so
+   * instead of claiming a handoff. Zero on every healthy run and checked as such.
+   */
+  readonly chunksLostAtDestination: number;
+  readonly bytesLostAtDestination: number;
+  /** Delivery-sequence audit. Structurally zero; counted anyway. */
+  readonly orderViolations: number;
+  /** Times the destination signalled backpressure and the pump paused before the next write. */
+  readonly backpressurePauses: number;
+  readonly earlyFireReschedules: number;
+  /** Raw requested/achieved stall pairs, in delivery order. */
+  readonly delayPairs: readonly DelayPair[];
+  /** Bytes currently buffered inside the proxy (queue depth, this direction). */
+  readonly bufferedBytes: number;
+  /**
+   * READ-SIDE COALESCING EVIDENCE (slice 6e): histogram of read-chunk sizes on this leg. A 1-byte
+   * SDK ping that shares a read chunk with room inputs is coalesced somewhere in the stack —
+   * `le2` (chunks of 1-2 bytes) vs the larger buckets is what that looks like at the proxy.
+   */
+  readonly readSizeBuckets: { readonly le2: number; readonly le64: number; readonly le512: number; readonly gt512: number };
+  /**
+   * CONTAMINATION DIAGNOSTICS — instrumented ALONGSIDE the accepted metric, never subtracted
+   * from it (§2.2 says measure what the bytes experienced; these say WHAT caused it):
+   * `maxTimerLagMs` is the scheduler overshoot (clock/loop contention — the proxy's own fault);
+   * `total/maxStreamWaitMs` is time a write spent waiting for the destination to accept bytes
+   * (kernel/socket backpressure — the receiver's flow control); `chunksBackpressured` counts
+   * the chunks that met a full write buffer. A clean elevated run keeps the lag small AND keeps
+   * the achieved jitter inside the budget; a run whose diagnostics show big lag or stream wait
+   * explains its own INVALID verdict without changing the verdict.
+   */
+  readonly maxTimerLagMs: number;
+  readonly chunksBackpressured: number;
+  readonly totalStreamWaitMs: number;
+  readonly maxStreamWaitMs: number;
+  /**
+   * RAW ARRIVAL-STALL EVIDENCE (GA-11): the raw host-monotonic inter-arrival series of read
+   * chunks on this leg (bounded), with its max kept beside it. Nothing is smoothed or averaged
+   * away: an arrival stall is exactly a stretch of this series, and the stall term of the
+   * envelope inequality is derived from it in the scenario, not here.
+   */
+  readonly interArrivalGapsMs: readonly number[];
+  readonly maxInterArrivalMs: number;
+}
+
+/** Which endpoint ended a proxied connection, and how. The proxy is the LAST place both sides
+ * are observable at once — a death attribution belongs here: firstFin 'client' means the browser
+ * sent FIN/RST first, 'upstream' means the target server did, 'proxy' means close() was requested
+ * on the proxy itself, 'none' means neither FIN arrived (an RST/abort cut the loop). */
+export interface ConnectionClosureRecord {
+  readonly firstFin: 'client' | 'upstream' | 'proxy' | 'none';
+  readonly lifetimeMs: number;
+  readonly error: boolean;
+}
+
+export interface FrameStamp {
+  readonly label: 'c2s' | 's2c';
+  readonly edge: 'clientIn' | 'serverIn' | 'clientOut' | 'dropped';
+  readonly atMs: number;
+  readonly bytes: number;
+  readonly conn: number;
+}
+
+export interface ProxyStats {
+  readonly connLog: readonly ConnectionClosureRecord[];
+  readonly listening: boolean;
+  readonly connections: { readonly opened: number; readonly closed: number; readonly active: number; readonly errors: number };
+  /**
+   * Per-connection c2s receipts by OPEN ORDER at this hop (slice 22): index 0 is the FIRST
+   * connection — in the ga scenario cells that is the mover, which joins before every other
+   * seat. Quiet-wire preconditions use this to measure the NAMED mover wire instead of an
+   * aggregate that other seats' transport frames could pollute.
+   */
+  readonly c2sPerConn: readonly { readonly index: number; readonly chunksReceived: number; readonly open: boolean }[];
+  readonly c2s: DirectionStats;
+  readonly s2c: DirectionStats;
+  /** The proxy sockets' TCP_NODELAY setting at run time (harness-only A/B knob; default true). */
+  readonly tcpNoDelay: boolean;
+  /** Window-stall override in effect at snapshot time (GA-6a injection; null = profile). */
+  readonly stallOverride: { readonly c2s: number | null; readonly s2c: number | null };
+  /** ACK-WINDOW DIAGNOSTIC ONLY (slice 23): per-frame hop-edge stamps, node clock, capped. */
+  readonly c2sDropped: number;
+  /** Paired achieved round-trip stall samples per the documented pairing rule. */
+  /**
+   * DIAGNOSTIC PROXY-LEG SUM — demoted at review of 74e84179, and the demotion is part of the
+   * name. Each entry is (achieved stall of the newest forward chunk already delivered upstream)
+   * + (this reverse chunk's achieved stall), on the SAME connection. It is NOT an accepted round
+   * trip: the periodic reverse patch need not be CAUSED by that forward chunk, coalescing and
+   * repeated forward pairings bias percentiles, and the sum omits the time between the legs.
+   * The accepted achieved-RTT metric is the SDK protocol ping probe (api map §14.2); this record
+   * stays what it always honestly measured — what the proxy's two queues did to bytes.
+   */
+  readonly proxyLegSumSamples: readonly number[];
+  readonly requestedOneWayBaseMs: number;
+  readonly requestedJitterBudgetMs: number;
+}
+
+export interface WsDelayProxyOptions {
+  readonly listenPort: number;
+  readonly targetHost: string;
+  readonly targetPort: number;
+  readonly profile: ImpairmentProfile;
+  readonly timer?: TimerDriver;
+  /** Buffer ceiling per direction; exceeding it destroys the connection and counts an error. */
+  readonly maxBufferedBytesPerDirection?: number;
+  /** Hard-close timer after close() begins (driver time). Pending stalls drain first. */
+  readonly closeGraceMs?: number;
+  /**
+   * Harness-only documented experiment knob (A/B latency diagnostics, slice 6e): when FALSE both
+   * proxy sockets run with TCP_NODELAY off. Default TRUE — Node's default, what every accepted
+   * run used. The coalescing hypothesis is only testable if the setting is toggled WITH a control
+   * leg and recorded in the stats; no kernel or SDK setting outside the proxy is touched.
+   */
+  readonly tcpNoDelay?: boolean;
+}
+
+export interface WsDelayProxy {
+  readonly port: number;
+  readonly profile: ImpairmentProfile;
+  /**
+   * GA-6a window stall (slice 6f): override ONE direction's base stall at runtime — a genuine
+   * "no state delivery, socket OPEN" window (bytes queue FIFO; order preserved; nothing drops).
+   * Null restores the profile. This is the honest withholding injection: a UNIFORM stall only
+   * shifts deliveries and can never produce a no-delivery window.
+   */
+  setStall(direction: 'c2s' | 's2c' | 'both', oneWayMs: number | null): void;
+  /**
+   * End a withheld window AT THIS INSTANT: every queued chunk departs now, FIFO order intact.
+   * Flushed chunks are counted per direction in stats — a labelled harness action, never
+   * silent. Needed where a withheld window must END for NEW traffic (the rejoin's path) while
+   * a withheld FINAL PUBLICATION stays withheld in effect: flush lets it arrive ON THE OLD
+   * DOMAIN, where the client's quarantine REFUSES it — the refusal is the evidence.
+   */
+  flushStalled(direction: 'c2s' | 's2c' | 'both'): void;
+  /**
+   * GA-5l (slice 8): suppress the NEXT `count` chunks of ONE direction TERMINALLY on every
+   * LIVE connection — the honest application-delivery suppression seam: bytes arrive here
+   * (counted), the application never gets them, the socket stays OPEN, and later traffic on the
+   * same connection (the quota is per connection) routes normally. A labelled harness action,
+   * counted in stats (`chunksHeld`), never silent, and NO native dedupe or TCP loss involved.
+   */
+  holdNext(direction: 'c2s' | 's2c' | 'both', count: number): void;
+  /**
+   * ACK-WINDOW DIAGNOSTIC ONLY (slice 23, never armed by any formal workload): drop the NEXT
+   * `count` c2s frames at this hop on every live connection — a genuine wire loss the server
+   * never sees, so no ack can ever exist for them. Counted (c2sDropped), labelled, no fake
+   * acknowledgement, no native dedupe.
+   */
+  armC2sDrop(count: number): void;
+  /** ACK-WINDOW DIAGNOSTIC ONLY: toggle per-frame hop-edge stamps (default OFF, capped). */
+  setFrameTrace(on: boolean): void;
+  diagStats(): { readonly c2sDropped: number; readonly frames: readonly FrameStamp[] };
+  /** Sever every currently-proxied TCP pair (server-side socket first). A drop, labelled. */
+  killSockets(): void;
+  stats(): ProxyStats;
+  /** Explicit close: stop accepting, drain each direction's pending stalls IN ORDER, then FIN. */
+  close(): Promise<void>;
+}
+
+// --------------------------------------------------------------------------- internals
+
+interface Chunk {
+  readonly seq: number;
+  readonly data: Buffer;
+  readonly arrivedAtMs: number;
+  readonly requestedStallMs: number;
+  /** Set when flushStalled released this chunk ahead of its pinned departure (labelled, counted). */
+  flushed: boolean;
+  /**
+   * PINNED departure time, computed once at admission — the delay-tube constraint a real
+   * order-preserving link must obey: `dep(i) = max(arrival(i) + d(i), dep(i−1) − b/2)`.
+   * Consequence (induction): every achieved delay lands inside [d(i), d + b/2] ⊆ the profile
+   * band, AND one chunk's scheduler hiccup no longer re-anchors the chunks behind it. The
+   * earlier scheme recomputed each due AFTER the previous fire, so a burst of chunks stacked a
+   * FULL stall behind its neighbour and any timer overshoot compounded down the queue — the
+   * instrument's own distortion, inflating achieved jitter past the band it claims to apply.
+   */
+  departureAtMs: number; // mutable ONLY via flushStalled (labelled early release of a withheld window)
+}
+
+interface DirectionState {
+  readonly label: 'c2s' | 's2c';
+  readonly rng: () => number;
+  readonly queue: Chunk[];
+  readonly delayPairs: DelayPair[];
+  nextSeq: number;
+  lastDeliveredSeq: number;
+  /** Departure time pinned for the most recently admitted chunk (delay-tube floor input). */
+  lastScheduledDepartureMs: number;
+  bytesReceived: number;
+  readSizeBuckets: { le2: number; le64: number; le512: number; gt512: number };
+  bytesDelivered: number;
+  chunksReceived: number;
+  chunksDelivered: number;
+  /** Counted when the LOCAL handoff was impossible (destination gone). See `DirectionStats`. */
+  chunksLostAtDestination: number;
+  bytesLostAtDestination: number;
+  /** True once a handoff attempt found the destination gone; ends THIS direction only. */
+  destinationGone: boolean;
+  orderViolations: number;
+  backpressurePauses: number;
+  earlyFireReschedules: number;
+  pumping: boolean;
+  /** Cancels the in-flight pump timer and re-enters pumpStep NOW (used by flushStalled). */
+  wake: (() => void) | null;
+  /** Chunks delivered after a harness flush released them ahead of their pinned departure. */
+  flushedChunks: number;
+  /** Shared holdNext quota (GA-5l): ONE object per PROXY so one arm suppresses exactly one
+   * chunk across ALL live connections — connections opened later (the bounded rejoin) share
+   * the SPENT counter and can never be suppressed. Null when no hold is armed. */
+  holdRemaining: { left: number } | null;
+  chunksHeld: number;
+  sourceClosed: boolean;
+  /** For c2s: achieved stall of the newest chunk already delivered upstream (leg-sum pairing). */
+  lastForwardAchievedMs: number | null;
+  maxTimerLagMs: number;
+  chunksBackpressured: number;
+  totalStreamWaitMs: number;
+  maxStreamWaitMs: number;
+  lastAdmissionMs: number | null;
+  interArrivalGapsMs: number[];
+  maxInterArrivalMs: number;
+}
+
+const newDirection = (label: 'c2s' | 's2c', seed: number): DirectionState => ({
+  label,
+  rng: laneSeedRng(seed, label === 'c2s' ? 1 : 2),
+  queue: [],
+  delayPairs: [],
+  nextSeq: 1,
+  lastDeliveredSeq: 0,
+  lastScheduledDepartureMs: 0,
+  bytesReceived: 0,
+  readSizeBuckets: { le2: 0, le64: 0, le512: 0, gt512: 0 },
+  bytesDelivered: 0,
+  chunksReceived: 0,
+  chunksDelivered: 0,
+  chunksLostAtDestination: 0,
+  bytesLostAtDestination: 0,
+  destinationGone: false,
+  orderViolations: 0,
+  backpressurePauses: 0,
+  earlyFireReschedules: 0,
+  lastAdmissionMs: null,
+  interArrivalGapsMs: [],
+  maxInterArrivalMs: 0,
+  pumping: false,
+  wake: null,
+  flushedChunks: 0,
+  holdRemaining: null,
+  chunksHeld: 0,
+  sourceClosed: false,
+  lastForwardAchievedMs: null,
+  maxTimerLagMs: 0,
+  chunksBackpressured: 0,
+  totalStreamWaitMs: 0,
+  maxStreamWaitMs: 0,
+});
+
+interface ConnectionEnv {
+  readonly targetHost: string;
+  readonly targetPort: number;
+  readonly profile: ImpairmentProfile;
+  readonly timer: TimerDriver;
+  readonly maxBufferedBytesPerDirection: number;
+  readonly onClosed: (conn: ProxyConnection, error: boolean) => void;
+  readonly onLegSumSample: (sampleMs: number) => void;
+  readonly tcpNoDelay: boolean;
+  readonly stallOverride: { c2s: number | null; s2c: number | null };
+  onFrame: ((rec: FrameStamp) => void) | null;
+  c2sDrop: { left: number; dropped: number } | null;
+}
+
+class ProxyConnection {
+  readonly index: number;
+  private readonly c2s: DirectionState;
+  private readonly s2c: DirectionState;
+  private readonly upstream: Socket;
+  private upstreamReady = false;
+  private finished = false;
+  private errored = false;
+  private readonly pendingCancels = new Set<() => void>();
+
+  private readonly closeGraceMs: number;
+
+  private readonly openedAtMs: number;
+  private firstFin: 'client' | 'upstream' | 'proxy' | 'none' = 'none';
+  private closeInitiated = false;
+
+  constructor(private readonly client: Socket, private readonly env: ConnectionEnv, closeGraceMs: number, index: number) {
+    this.index = index;
+    this.closeGraceMs = closeGraceMs;
+    this.openedAtMs = env.timer.nowMs();
+    this.c2s = newDirection('c2s', env.profile.seed);
+    this.s2c = newDirection('s2c', env.profile.seed);
+    client.setTimeout(0);
+    client.on('data', (chunk: Buffer) => {
+      this.enqueue(this.c2s, chunk);
+    });
+    // ORDERLY HALF-CLOSE. A peer that FINs first emits 'end'; with `allowHalfOpen: true` (the
+    // upstream is connected that way, so a half-closed leg stays observable instead of vanishing)
+    // 'close' does NOT follow until this side ends too. Handling only 'close' meant a server that
+    // closed an idle keep-alive pair left the browser's pooled socket looking alive: the client's
+    // NEXT request was written into a socket whose peer was gone, vanished at this hop, and the
+    // caller hung with neither response nor failure. 'end' is therefore handled on BOTH legs, and
+    // it closes only the direction whose SOURCE ended — the reverse leg keeps draining.
+    client.on('end', () => {
+      this.noteSourceClosed('c2s', 'client');
+    });
+    client.on('close', () => {
+      this.noteSourceClosed('c2s', 'client');
+    });
+    client.on('error', () => {
+      this.abort();
+    });
+
+    this.upstream = connect({ host: env.targetHost, port: env.targetPort, allowHalfOpen: true });
+    this.upstream.setNoDelay(env.tcpNoDelay);
+    client.setNoDelay(env.tcpNoDelay);
+    this.upstream.setTimeout(0);
+    this.upstream.on('connect', () => {
+      this.upstreamReady = true;
+      this.upstream.on('data', (chunk: Buffer) => {
+        this.enqueue(this.s2c, chunk);
+      });
+      this.upstream.on('end', () => {
+        this.noteSourceClosed('s2c', 'upstream');
+      });
+      this.upstream.on('close', () => {
+        this.noteSourceClosed('s2c', 'upstream');
+      });
+      this.pump(this.c2s);
+    });
+    this.upstream.on('error', () => {
+      this.abort();
+    });
+    this.upstream.on('close', () => {
+      this.noteSourceClosed('s2c', 'upstream');
+    });
+    client.on('close', () => {
+      this.maybeFinish();
+    });
+
+    // (No timer is armed at OPEN — a connection lives until an endpoint or close() ends it.
+    // A previous revision armed the hard-close grace HERE, which force-finished EVERY connection
+    // exactly closeGraceMs after it opened: the connLog lifecycle records (every death at
+    // lifetimeMs == closeGraceMs, firstFin 'none') caught the regression. The grace belongs to
+    // beginClose, where a close has actually been initiated.)
+  }
+
+  /**
+   * Flush the WITHHELD window NOW: every queued chunk's departure becomes this instant and the
+   * pump re-enters immediately — FIFO preserved (queue order is arrival order). This is what
+   * lets a withheld-application-delivery window end at a measured instant instead of leaving
+   * queued bytes stranded at arr+stallMs.
+   */
+  flushStalled(labels: readonly ('c2s' | 's2c')[]): void {
+    for (const label of labels) {
+      const dir = label === 'c2s' ? this.c2s : this.s2c;
+      const now = this.env.timer.nowMs();
+      for (const chunk of dir.queue) {
+        if (chunk.departureAtMs > now) chunk.flushed = true;
+        chunk.departureAtMs = now;
+      }
+      dir.lastScheduledDepartureMs = now;
+      if (dir.wake !== null) dir.wake();
+      else this.pump(dir);
+    }
+  }
+
+  /**
+   * Sever this proxied TCP pair (server side FIRST, so the authority's close observation lands
+   * the same way a real drop lands it). The proxy NEVER invents a reason: both endpoints see an
+   * ordinary FIN/RST from their peer.
+   */
+  killSockets(): void {
+    this.upstream.destroy();
+    this.client.destroy();
+  }
+
+  /**
+   * Arm application-delivery suppression: the NEXT `count` chunks of these directions are held
+   * TERMINALLY (arrived-and-counted at this hop, never delivered while the scenario lives).
+   * The quota is per live connection, so the SAME connection's later traffic — a bounded
+   * rejoin's join frame, for instance — routes normally once the quota is spent.
+   */
+  holdQuota(dir: 'c2s' | 's2c', remaining: { left: number }): void {
+    if (dir === 'c2s') this.c2s.holdRemaining = remaining;
+    else this.s2c.holdRemaining = remaining;
+  }
+
+  /**
+   * One idempotent accounting of "the SOURCE of this direction finished" (FIN via 'end', or the
+   * socket fully closed). Records who closed first, marks the direction, and pumps it — the pump
+   * drains the direction's own queue first and only then FINs the destination of THAT direction.
+   * 'end' and 'close' both land here, so an orderly peer half-close and a later full close cannot
+   * disagree or double-count, and neither one ever touches the opposite direction.
+   */
+  private noteSourceClosed(label: 'c2s' | 's2c', fin: 'client' | 'upstream'): void {
+    if (this.firstFin === 'none') this.firstFin = fin;
+    const dir = label === 'c2s' ? this.c2s : this.s2c;
+    dir.sourceClosed = true;
+    this.pump(dir);
+    this.maybeFinish();
+  }
+
+  /**
+   * The destination of this direction cannot take the bytes (never connected, destroyed, or no
+   * longer writable). The chunk in flight AND everything still queued for that destination are
+   * counted as lost at this hop — never as delivered — the closure is marked errored so the event
+   * can never be silent, and only THIS direction is terminated. The opposite leg is untouched:
+   * a dead forward destination never tears down a reverse path that still works.
+   */
+  private loseToGoneDestination(dir: DirectionState, inFlight: Chunk): void {
+    if (dir.destinationGone) return;
+    dir.destinationGone = true;
+    let bytes = inFlight.data.length;
+    for (const queued of dir.queue) bytes += queued.data.length;
+    dir.chunksLostAtDestination += 1 + dir.queue.length;
+    dir.bytesLostAtDestination += bytes;
+    dir.queue.length = 0;
+    // Attribution, not blanket blame: bytes whose ENDPOINT had already left (a seat closing its
+    // socket, a page navigating away — `firstFin` already says who) are an accounted loss with a
+    // named closer, NOT a proxy fault. Only a destination that vanished while both endpoints were
+    // still there, or a proxy-side hard close, marks the closure errored.
+    if (this.firstFin !== 'client' && this.firstFin !== 'upstream') this.errored = true;
+  }
+
+  private enqueue(dir: DirectionState, data: Buffer): void {
+    if (this.finished) return;
+    const now = this.env.timer.nowMs();
+    // ACK-WINDOW DIAGNOSTIC seam: a targeted c2s WIRE loss (the frame departs no further than
+    // here; the server never sees it and can never ack it — a genuine lost input, no fake
+    // acknowledgement anywhere). Counted separately, NEVER inside chunksReceived.
+    if (dir.label === 'c2s' && this.env.c2sDrop !== null && this.env.c2sDrop.left > 0) {
+      this.env.c2sDrop.left -= 1;
+      this.env.c2sDrop.dropped += 1;
+      this.env.onFrame?.({ label: 'c2s', edge: 'clientIn', atMs: now, bytes: data.length, conn: this.index });
+      this.env.onFrame?.({ label: 'c2s', edge: 'dropped', atMs: now, bytes: data.length, conn: this.index });
+      return;
+    }
+    this.env.onFrame?.({ label: dir.label, edge: dir.label === 'c2s' ? 'clientIn' : 'serverIn', atMs: now, bytes: data.length, conn: this.index });
+    // Suppression first: an armed hold counts the arrival (bytes DID reach the hop — this is
+    // NOT a drop), records it in the inter-arrival and size populations, and never queues it.
+    if (dir.holdRemaining !== null && dir.holdRemaining.left > 0) {
+      dir.holdRemaining.left -= 1;
+      dir.chunksHeld += 1;
+      dir.bytesReceived += data.length;
+      dir.chunksReceived += 1;
+      if (dir.lastAdmissionMs !== null) {
+        const gapMs = Math.max(0, now - dir.lastAdmissionMs);
+        if (dir.interArrivalGapsMs.length < 4_000) dir.interArrivalGapsMs.push(Number(Math.trunc(gapMs * 100) / 100));
+        if (gapMs > dir.maxInterArrivalMs) dir.maxInterArrivalMs = gapMs;
+      }
+      dir.lastAdmissionMs = now;
+      return;
+    }
+    const centredBaseMs = this.env.profile.oneWayMs - this.env.profile.jitterBudgetMs / 2;
+    const overrideMs = this.env.stallOverride[dir.label];
+    const centred = overrideMs === null ? centredBaseMs : Math.max(0, overrideMs - this.env.profile.jitterBudgetMs / 2);
+    const requested = overrideMs === null
+      ? boundedUniformStall(centredBaseMs, this.env.profile.jitterBudgetMs, dir.rng())
+      : overrideMs;
+    void centred;
+    const departureAtMs = Math.max(now + requested, dir.lastScheduledDepartureMs - this.env.profile.jitterBudgetMs / 2);
+    dir.lastScheduledDepartureMs = departureAtMs;
+    dir.queue.push({ seq: dir.nextSeq, data, arrivedAtMs: now, requestedStallMs: requested, departureAtMs, flushed: false });
+    dir.nextSeq += 1;
+    dir.bytesReceived += data.length;
+    dir.chunksReceived += 1;
+    if (dir.lastAdmissionMs !== null) {
+      const gapMs = Math.max(0, now - dir.lastAdmissionMs);
+      if (dir.interArrivalGapsMs.length < 4_000) dir.interArrivalGapsMs.push(Number(Math.trunc(gapMs * 100) / 100));
+      if (gapMs > dir.maxInterArrivalMs) dir.maxInterArrivalMs = gapMs;
+    }
+    dir.lastAdmissionMs = now;
+    if (data.length <= 2) dir.readSizeBuckets.le2 += 1;
+    else if (data.length <= 64) dir.readSizeBuckets.le64 += 1;
+    else if (data.length <= 512) dir.readSizeBuckets.le512 += 1;
+    else dir.readSizeBuckets.gt512 += 1;
+    const buffered = dir.queue.reduce((sum, c) => sum + c.data.length, 0);
+    if (buffered > this.env.maxBufferedBytesPerDirection) {
+      this.abort(); // bounded buffers: a harness that cannot keep up fails loudly, never silently
+      return;
+    }
+    this.pump(dir);
+  }
+
+  private destination(dir: DirectionState): Socket | null {
+    if (dir.label === 'c2s') return this.upstreamReady ? this.upstream : null;
+    return this.client;
+  }
+
+  /** The single-in-flight pump: strict FIFO, one stall at a time, per direction. */
+  private pump(dir: DirectionState): void {
+    if (dir.pumping || this.finished) return;
+    const dest = this.destination(dir);
+    if (dir.queue.length === 0) {
+      if (dir.sourceClosed && dest !== null && dest.writable) dest.end();
+      this.maybeFinish();
+      return;
+    }
+    // `dest === null` for c2s means "the upstream is still connecting" — the queue HOLDS order and
+    // nothing is lost. A destination that exists but is destroyed/no-longer-writable is a different
+    // thing: those bytes can never be handed off, so they are accounted as lost at this hop rather
+    // than held silently forever.
+    const destGone = dest === null ? this.upstream.destroyed : dest.destroyed || !dest.writable;
+    if (destGone) {
+      const head = dir.queue.shift();
+      if (head !== undefined) this.loseToGoneDestination(dir, head);
+      this.maybeFinish();
+      return;
+    }
+    if (dest === null || dest.destroyed) return; // upstream not ready: the queue holds order
+    dir.pumping = true;
+    this.pumpStep(dir);
+  }
+
+  private pumpStep(dir: DirectionState): void {
+    const head = dir.queue[0];
+    if (head === undefined) {
+      dir.pumping = false;
+      const dest = this.destination(dir);
+      if (dir.sourceClosed && dest !== null && dest.writable) dest.end();
+      this.pump(dir); // covers data that raced the FIN decision
+      return;
+    }
+    dir.wake = () => {
+      dir.wake = null;
+      this.pendingCancels.delete(cancel);
+      cancel();
+      this.pumpStep(dir); // departures were rewritten (flush): re-enter NOW, still strict FIFO
+    };
+    const dueAtMs = Math.max(this.env.timer.nowMs(), head.departureAtMs);
+    const remaining = dueAtMs - this.env.timer.nowMs();
+    const cancel = this.env.timer.schedule(remaining, () => {
+      this.pendingCancels.delete(cancel);
+      dir.wake = null;
+      if (this.finished) return;
+      // An early fire (timer coalescing/sub-ms rounding) must NOT deliver below the pinned
+      // departure: that would breach the band from the low side. Reschedule the remainder.
+      const earlyByMs = head.departureAtMs - this.env.timer.nowMs();
+      if (earlyByMs > 0.5) {
+        dir.earlyFireReschedules += 1;
+        this.pumpStep(dir); // recomputes due against the pinned departure — never delivers early
+        return;
+      }
+      const chunk = dir.queue.shift();
+      if (chunk === undefined) {
+        dir.pumping = false;
+        return;
+      }
+      const firedAtMs = this.env.timer.nowMs();
+      const timerLag = firedAtMs - dueAtMs;
+      if (timerLag > dir.maxTimerLagMs) dir.maxTimerLagMs = timerLag;
+      const achieved = firedAtMs - chunk.arrivedAtMs;
+      if (chunk.flushed) dir.flushedChunks += 1;
+      // The LOCAL HANDOFF is decided BEFORE any delivery is counted: `delivered` may only ever mean
+      // "a live destination at this hop accepted these bytes", never "a remote peer received them".
+      const dest = this.destination(dir);
+      if (dest === null || dest.destroyed || !dest.writable) {
+        this.loseToGoneDestination(dir, chunk);
+        dir.pumping = false;
+        this.maybeFinish();
+        return;
+      }
+      if (chunk.seq !== dir.lastDeliveredSeq + 1) dir.orderViolations += 1;
+      dir.lastDeliveredSeq = chunk.seq;
+      dir.bytesDelivered += chunk.data.length;
+      dir.chunksDelivered += 1;
+      dir.delayPairs.push({ requestedMs: chunk.requestedStallMs, achievedMs: achieved });
+      if (dir.label === 'c2s') dir.lastForwardAchievedMs = achieved;
+      if (dir.label === 's2c' && this.c2s.lastForwardAchievedMs !== null) {
+        // Leg-sum pairing (DIAGNOSTIC, not an accepted RTT — see ProxyStats.proxyLegSumSamples).
+        this.env.onLegSumSample(this.c2s.lastForwardAchievedMs + achieved);
+      }
+      this.env.onFrame?.({ label: dir.label, edge: dir.label === 'c2s' ? 'serverIn' : 'clientOut', atMs: this.env.timer.nowMs(), bytes: chunk.data.length, conn: this.index });
+      if (dest.write(chunk.data) === false) {
+        dir.backpressurePauses += 1;
+        dir.chunksBackpressured += 1;
+        const streamWaitStartMs = this.env.timer.nowMs();
+        dest.once('drain', () => {
+          const waited = this.env.timer.nowMs() - streamWaitStartMs;
+          dir.totalStreamWaitMs += waited;
+          if (waited > dir.maxStreamWaitMs) dir.maxStreamWaitMs = waited;
+          this.pumpStep(dir);
+        });
+        // A FIN-receiving peer can close the read side and END the socket while a write is still
+        // queued; 'drain' may then never fire. finish() cancels nothing here, so arm the same
+        // driver-time backstop the close path uses: if drain has not resumed the pump by the
+        // grace deadline, the hard close collects the connection. (Stall semantics unchanged:
+        // the bytes were accepted for delivery; only a peer-driven close can stop them.)
+        const backstop = this.env.timer.schedule(this.closeGraceMs, () => {
+          if (dir.pumping) this.finish();
+        });
+        this.pendingCancels.add(backstop);
+        return;
+      }
+      this.pumpStep(dir);
+    });
+    this.pendingCancels.add(cancel);
+  }
+
+  private abort(): void {
+    if (this.finished) return;
+    this.errored = true;
+    this.finish();
+  }
+
+  /** Explicit close (proxy.close()): FIN the client side; pending stalls still drain in order. */
+  hardFinish(): void {
+    this.finish();
+  }
+
+  lifecycle(): ConnectionClosureRecord {
+    return { firstFin: this.firstFin, lifetimeMs: this.env.timer.nowMs() - this.openedAtMs, error: this.errored };
+  }
+
+  beginClose(): void {
+    if (this.firstFin === 'none') this.firstFin = 'proxy';
+    if (this.finished) return;
+    if (!this.closeInitiated) {
+      this.closeInitiated = true;
+      // Hard-close grace: the drains normally finish long before this; it exists so close()
+      // cannot hang on a half-open socket the kernel has not finished with. ARMED AT CLOSE
+      // INITIATION — never at connection open.
+      const grace = this.env.timer.schedule(this.closeGraceMs, () => {
+        this.finish();
+      });
+      this.pendingCancels.add(grace);
+    }
+    if (this.client.writable) this.client.end();
+  }
+
+  private maybeFinish(): void {
+    if (this.finished) return;
+    // A direction whose DESTINATION is gone is terminated too (its queue was accounted as lost at
+    // that moment), otherwise a half-closed peer could leave the pair live forever.
+    const clientGone = this.client.destroyed || this.c2s.destinationGone
+      || (!this.client.writable && !this.client.readable && this.c2s.queue.length === 0);
+    const upstreamGone = this.upstream.destroyed || this.s2c.destinationGone
+      || (!this.upstream.writable && !this.upstream.readable && this.s2c.queue.length === 0);
+    if (clientGone && upstreamGone && this.c2s.queue.length === 0 && this.s2c.queue.length === 0) {
+      this.finish();
+    }
+  }
+
+  private finish(): void {
+    if (this.finished) return;
+    this.finished = true;
+    // Integrity rule: a close that still has bytes queued means a live stall was collected before
+    // its departure — those bytes never crossed, so they are COUNTED (into the direction's
+    // lost-at-destination totals, once each) and, unless an endpoint had already left, VISIBLE as a
+    // connection error. A clean drained close always finishes with empty queues and no error.
+    if ((this.c2s.queue.length > 0 || this.s2c.queue.length > 0) && this.firstFin !== 'client' && this.firstFin !== 'upstream') {
+      this.errored = true;
+    }
+    for (const cancel of this.pendingCancels) cancel();
+    this.pendingCancels.clear();
+    for (const dir of [this.c2s, this.s2c]) {
+      for (const stranded of dir.queue) {
+        dir.chunksLostAtDestination += 1;
+        dir.bytesLostAtDestination += stranded.data.length;
+      }
+      dir.queue.length = 0;
+    }
+    this.client.destroy();
+    this.upstream.destroy();
+    this.env.onClosed(this, this.errored);
+  }
+
+  snapshot(): { c2s: DirectionStats; s2c: DirectionStats; finished: boolean } {
+    return { c2s: directionStats(this.c2s), s2c: directionStats(this.s2c), finished: this.finished };
+  }
+}
+
+const directionStats = (d: DirectionState): DirectionStats => ({
+  readSizeBuckets: { ...d.readSizeBuckets },
+  bytesReceived: d.bytesReceived,
+  bytesDelivered: d.bytesDelivered,
+  chunksReceived: d.chunksReceived,
+  chunksDelivered: d.chunksDelivered,
+  chunksLostAtDestination: d.chunksLostAtDestination,
+  bytesLostAtDestination: d.bytesLostAtDestination,
+  /** Chunks released ahead of their pinned departure by an explicit harness FLUSH (labelled). */
+  chunksFlushed: d.flushedChunks,
+  chunksHeld: d.chunksHeld,
+  holdRemaining: d.holdRemaining === null ? 0 : d.holdRemaining.left,
+  chunksDropped: 0,
+  orderViolations: d.orderViolations,
+  backpressurePauses: d.backpressurePauses,
+  earlyFireReschedules: d.earlyFireReschedules,
+  delayPairs: [...d.delayPairs],
+  bufferedBytes: d.queue.reduce((sum, c) => sum + c.data.length, 0),
+  maxTimerLagMs: d.maxTimerLagMs,
+  chunksBackpressured: d.chunksBackpressured,
+  totalStreamWaitMs: d.totalStreamWaitMs,
+  maxStreamWaitMs: d.maxStreamWaitMs,
+  interArrivalGapsMs: [...d.interArrivalGapsMs],
+  maxInterArrivalMs: d.maxInterArrivalMs,
+});
+
+const blankDirection = (): DirectionStats => directionStats(newDirection('c2s', 0));
+
+const mergeStats = (a: DirectionStats, b: DirectionStats): DirectionStats => ({
+  bytesReceived: a.bytesReceived + b.bytesReceived,
+  bytesDelivered: a.bytesDelivered + b.bytesDelivered,
+  chunksReceived: a.chunksReceived + b.chunksReceived,
+  chunksDelivered: a.chunksDelivered + b.chunksDelivered,
+  chunksLostAtDestination: a.chunksLostAtDestination + b.chunksLostAtDestination,
+  bytesLostAtDestination: a.bytesLostAtDestination + b.bytesLostAtDestination,
+  chunksFlushed: a.chunksFlushed + b.chunksFlushed,
+  chunksHeld: a.chunksHeld + b.chunksHeld,
+  // the quota object is SHARED per proxy; directions/connections report the SAME counter —
+  // max, never a sum (a sum would double-count the shared value).
+  holdRemaining: Math.max(a.holdRemaining, b.holdRemaining),
+  chunksDropped: 0,
+  orderViolations: a.orderViolations + b.orderViolations,
+  backpressurePauses: a.backpressurePauses + b.backpressurePauses,
+  earlyFireReschedules: a.earlyFireReschedules + b.earlyFireReschedules,
+  delayPairs: [...a.delayPairs, ...b.delayPairs],
+  bufferedBytes: a.bufferedBytes + b.bufferedBytes,
+  maxTimerLagMs: Math.max(a.maxTimerLagMs, b.maxTimerLagMs),
+  chunksBackpressured: a.chunksBackpressured + b.chunksBackpressured,
+  totalStreamWaitMs: a.totalStreamWaitMs + b.totalStreamWaitMs,
+  maxStreamWaitMs: Math.max(a.maxStreamWaitMs, b.maxStreamWaitMs),
+  readSizeBuckets: {
+    le2: a.readSizeBuckets.le2 + b.readSizeBuckets.le2,
+    le64: a.readSizeBuckets.le64 + b.readSizeBuckets.le64,
+    le512: a.readSizeBuckets.le512 + b.readSizeBuckets.le512,
+    gt512: a.readSizeBuckets.gt512 + b.readSizeBuckets.gt512,
+  },
+  interArrivalGapsMs: [...a.interArrivalGapsMs, ...b.interArrivalGapsMs].slice(0, 4_000),
+  maxInterArrivalMs: Math.max(a.maxInterArrivalMs, b.maxInterArrivalMs),
+});
+
+// --------------------------------------------------------------------------- public API
+
+export const createWsDelayProxy = async (options: WsDelayProxyOptions): Promise<WsDelayProxy> => {
+  const timer = options.timer ?? realTimerDriver;
+  const maxBufferedBytesPerDirection = options.maxBufferedBytesPerDirection ?? 8 * 1024 * 1024;
+  const closeGraceMs = options.closeGraceMs ?? 5_000;
+  /** Shared, mutable window-stall override (GA-6a injection; read at admission time). */
+  const stallOverride: { c2s: number | null; s2c: number | null } = { c2s: null, s2c: null };
+  // ACK-WINDOW DIAGNOSTIC state (slice 23): shared across connections; null-safe, never armed
+  // unless a diagnostic explicitly turns it on.
+  const frameTrace: FrameStamp[] = [];
+  const diagDrop: { left: number; dropped: number } = { left: 0, dropped: 0 };
+  let traceOn = false;
+  if (!isIPv4(options.targetHost)) throw new Error(`targetHost must be an IPv4 literal, got ${options.targetHost}`);
+  if (!(options.profile.oneWayMs >= 0) || !(options.profile.jitterBudgetMs >= 0)) {
+    throw new Error('profile stalls must be non-negative');
+  }
+  if (options.profile.oneWayMs * 2 < options.profile.jitterBudgetMs) {
+    throw new Error(`profile ${options.profile.name}: one-way base ${String(options.profile.oneWayMs)} ms is below half the jitter budget — a centred stall would go negative; declare a wider base or a smaller budget`);
+  }
+
+  const live = new Set<ProxyConnection>();
+  /** Stats of finished connections, accumulated so the run record still sees their samples. */
+  let c2sDone = blankDirection();
+  let s2cDone = blankDirection();
+  /** Per-connection c2s receipts by OPEN ORDER (slice 22): isolates the named mover wire. */
+  const c2sPerConnDone: { index: number; chunksReceived: number }[] = [];
+  let opened = 0;
+  let closedCount = 0;
+  let errors = 0;
+  const legSumSamples: number[] = [];
+  const connLogDone: ConnectionClosureRecord[] = [];
+  let listening = true;
+  let closeWaiter: (() => void) | null = null;
+
+  // TRANSPARENT TCP, SYMMETRICALLY. The published primitive is a delay proxy for a TCP pair: an
+  // ORDERLY FIN on one leg is a HALF-CLOSE of THAT DIRECTION, never a full disconnect — a peer may
+  // legitimately keep reading after it stops writing (the client write-end FIN followed by a
+  // delayed, multi-chunk server response is the ordinary HTTP/1.1 keep-alive shape, and dpa8o
+  // proved the hop must propagate FINs promptly). The upstream leg was already connected with
+  // `allowHalfOpen: true`; the ACCEPTED leg must match, or Node's default auto-END + destroy on
+  // peer FIN silently tears down a reverse leg that still works — which is exactly the wrong
+  // behavior an earlier unit case pinned (corrected in this revision, with the half-open
+  // delivery case and a separate GENUINE reset case). Retirement stays bounded: each direction
+  // FINs its destination only after its own queue drains (noteSourceClosed/pump), the pair
+  // finishes when both directions are closed (maybeFinish), a reset aborts loudly (abort), and
+  // proxy.close() arms the existing drain grace on every live pair (beginClose).
+  const server = createServer({ allowHalfOpen: true }, (client) => {
+    const conn = new ProxyConnection(client, {
+      targetHost: options.targetHost,
+      targetPort: options.targetPort,
+      tcpNoDelay: options.tcpNoDelay ?? true,
+      stallOverride,
+      onFrame: (rec) => { if (traceOn && frameTrace.length < 40_000) frameTrace.push(rec); },
+      c2sDrop: diagDrop,
+      profile: options.profile,
+      timer,
+      maxBufferedBytesPerDirection,
+      onClosed: (done, error) => {
+        const snap = done.snapshot();
+        c2sDone = mergeStats(c2sDone, snap.c2s);
+        s2cDone = mergeStats(s2cDone, snap.s2c);
+        c2sPerConnDone.push({ index: done.index, chunksReceived: snap.c2s.chunksReceived });
+        connLogDone.push(done.lifecycle());
+        live.delete(done);
+        closedCount += 1;
+        if (error) errors += 1;
+        if (live.size === 0 && closeWaiter !== null) {
+          const wake = closeWaiter;
+          closeWaiter = null;
+          wake();
+        }
+      },
+      onLegSumSample: (sample) => {
+        legSumSamples.push(sample);
+      },
+    }, closeGraceMs, opened);
+    opened += 1;
+    live.add(conn);
+  });
+
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once('error', rejectListen);
+    server.listen(options.listenPort, '127.0.0.1', () => {
+      server.off('error', rejectListen);
+      resolveListen();
+    });
+  });
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('the delay proxy bound no port');
+
+  return {
+    port: address.port,
+    profile: options.profile,
+    setStall(direction, oneWayMs) {
+      if (direction === 'c2s' || direction === 'both') stallOverride.c2s = oneWayMs;
+      if (direction === 's2c' || direction === 'both') stallOverride.s2c = oneWayMs;
+    },    armC2sDrop(count: number): void {
+      // ACK-WINDOW DIAGNOSTIC ONLY: arms the shared per-connection drop quota (slice 23).
+      diagDrop.left = count;
+    },
+    setFrameTrace(on: boolean): void {
+      traceOn = on;
+    },
+    diagStats(): { c2sDropped: number; frames: readonly FrameStamp[] } {
+      return { c2sDropped: diagDrop.dropped, frames: [...frameTrace] };
+    },
+
+    flushStalled(direction) {
+      const labels = direction === 'both' ? (['c2s', 's2c'] as const) : ([direction] as const);
+      for (const conn of [...live]) conn.flushStalled(labels);
+    },
+    holdNext(direction, count) {
+      const labels = direction === 'both' ? (['c2s', 's2c'] as const) : ([direction] as const);
+      // ONE SHARED quota object for the whole proxy: the arm suppresses EXACTLY `count`
+      // chunks across all live connections (the scenario's predeclared quiet-wire check pins
+      // WHICH chunk that is), and connections opened afterwards — the bounded rejoin's —
+      // share the SPENT counter and can never be suppressed.
+      const quota = { left: count };
+      for (const conn of [...live]) {
+        for (const label of labels) conn.holdQuota(label, quota);
+      }
+    },
+    killSockets() {
+      for (const conn of [...live]) conn.killSockets();
+    },
+    stats(): ProxyStats {
+      let c2s = c2sDone;
+      let s2c = s2cDone;
+      for (const conn of live) {
+        const snap = conn.snapshot();
+        c2s = mergeStats(c2s, snap.c2s);
+        s2c = mergeStats(s2c, snap.s2c);
+      }
+      return {
+        listening,
+        c2sDropped: diagDrop.dropped,
+        stallOverride: { ...stallOverride },
+        connLog: [...connLogDone, ...[...live].map((conn) => conn.lifecycle())],
+        connections: { opened, closed: closedCount, active: live.size, errors },
+        c2sPerConn: [
+          ...c2sPerConnDone.map((c) => ({ index: c.index, chunksReceived: c.chunksReceived, open: false as const })),
+          ...[...live].map((conn) => ({ index: conn.index, chunksReceived: conn.snapshot().c2s.chunksReceived, open: true as const })),
+        ].sort((a, b) => a.index - b.index),
+        c2s,
+        s2c,
+        proxyLegSumSamples: [...legSumSamples],
+        requestedOneWayBaseMs: options.profile.oneWayMs,
+        requestedJitterBudgetMs: options.profile.jitterBudgetMs,
+        tcpNoDelay: options.tcpNoDelay ?? true,
+      };
+    },
+    async close(): Promise<void> {
+      listening = false;
+      // ORDER MATTERS (a real deadlock lived here): `server.close()` only calls back once every
+      // open socket is gone — if BEGIN-close waited behind that callback, live connections could
+      // never drain, because draining is exactly what closes those sockets. So: stop accepting,
+      // begin-close every live connection FIRST, then await the drain with a hard cap, then the
+      // listener's own close (which follows the sockets on its own).
+      const listeningClosed = new Promise<void>((resolveClose) => {
+        server.close(() => {
+          resolveClose();
+        });
+      });
+      for (const conn of [...live]) conn.beginClose();
+      await new Promise<void>((resolveDrain) => {
+        if (live.size === 0) {
+          resolveDrain();
+          return;
+        }
+        closeWaiter = resolveDrain;
+        const cap = setTimeout(() => {
+          // Hard cap: an unfinishable connection (half-open peer, lost FIN) is force-finished —
+          // queued bytes then make it an ERRORED closure in the connLog, visible, never a hang.
+          for (const conn of [...live]) conn.hardFinish();
+          const wake = closeWaiter;
+          closeWaiter = null;
+          if (wake !== null) wake();
+        }, 8_000);
+        cap.unref();
+      });
+      await Promise.race([listeningClosed, new Promise<void>((resolveCap) => {
+        const t = setTimeout(() => {
+          resolveCap();
+        }, 2_000);
+        t.unref();
+      })]);
+    },
+  };
+};

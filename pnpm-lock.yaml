@@ -196,6 +196,9 @@ importers:
       '@babylonjs/core':
         specifier: 8.56.2
         version: 8.56.2
+      '@colyseus/sdk':
+        specifier: 0.18.9
+        version: 0.18.9(@colyseus/core@0.18.27)(typescript@5.9.3)
       '@udg/config':
         specifier: workspace:*
         version: link:../../packages/config

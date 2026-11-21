@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Pinned inventory of third-party declaration diagnostics retained by the ADR-0004 client exception. The accepted client compiler gate skips checking inside declaration files; this file is what keeps the vendor defects visible. pnpm --filter @udg/client typecheck:declarations reproduces it, and tests/contracts/UDG-SPIKE-001.test.ts compares the live inventory against this document and fails on any difference.",
+  "adr": "docs/adr/0004-client-declaration-checking-exception.md",
+  "producedBy": "pnpm --filter @udg/client typecheck:declarations",
+  "project": "apps/client/tsconfig.json run with --skipLibCheck false",
+  "measuredOn": "2026-11-19, branch codex/udg-gate-a-browser-sdk at the UDG-SPIKE-001 slice-2 build",
+  "firstPartyDiagnostics": 0,
+  "pins": {
+    "@colyseus/sdk": "0.18.9",
+    "@colyseus/core": "0.18.27",
+    "@colyseus/schema": "5.0.45",
+    "typescript": "5.9.3"
+  },
+  "classification": {
+    "B: published declaration default-imports node:http (needs esModuleInterop, which this repository keeps off)": [
+      "TS1192"
+    ],
+    "C: defect inside the vendor package own published types": [
+      "TS2344"
+    ],
+    "note": "Class A (TS2304 'Cannot find name HeadersInit', 18+1 entries in the server inventory) does not fire under the browser library set: lib.dom declares HeadersInit. The client-shape strict inventory is therefore 3, not the server's 27, and docs/integration/colyseus-declaration-inventory.json is unchanged by this document."
+  },
+  "runtimeConsequence": "None measured. All three diagnostics are inside declarations the emitted browser bundle never executes, and tests/e2e/netcode.spec.ts runs the same import end to end in two browser contexts. Strict vendor diagnostics and runtime behaviour are recorded as separate claims in docs/integration/colyseus-0.18-api-map.md.",
+  "rejectedAlternative": "Importing the public subpath '@colyseus/sdk/Client' instead of the documented root import is worse, not cleaner: it adds 6 TS2591 'Cannot find name Buffer' defects in Connection.d.ts, transport/ITransport.d.ts and msgpackr/index.d.ts, whose only relief would be @types/node in a browser project (refused by the ambient-type policy).",
+  "totalDiagnostics": 3,
+  "entries": [
+    {
+      "origin": "@colyseus/core@0.18.27::@colyseus/core/build/router/node.d.ts",
+      "line": 10,
+      "code": "TS1192",
+      "count": 1,
+      "message": "Module '\"http\"' has no default export."
+    },
+    {
+      "origin": "@colyseus/sdk@0.18.9::@colyseus/sdk/build/HTTP.d.ts",
+      "line": 93,
+      "code": "TS2344",
+      "count": 1,
+      "message": "Type 'UnionToIntersection<MethodOptions<API, \"DELETE\">> extends infer T ? { [K_1 in keyof T]: T[K_1]; } : never' does not satisfy the constraint '{ [K in keyof UnionToIntersection<MethodOptions<API, \"DELETE\">>]: UnionToIntersection<MethodOptions<API, \"DELETE\">>[K]; }'."
+    },
+    {
+      "origin": "@colyseus/sdk@0.18.9::@colyseus/sdk/build/HTTP.d.ts",
+      "line": 94,
+      "code": "TS2344",
+      "count": 1,
+      "message": "Type 'UnionToIntersection<MethodOptions<API, \"DELETE\">> extends infer T ? { [K_1 in keyof T]: T[K_1]; } : never' does not satisfy the constraint '{ [K in keyof UnionToIntersection<MethodOptions<API, \"DELETE\">>]: UnionToIntersection<MethodOptions<API, \"DELETE\">>[K]; }'."
+    }
+  ]
+}

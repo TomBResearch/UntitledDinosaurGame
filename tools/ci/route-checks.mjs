@@ -177,6 +177,29 @@ export const ROUTE_RULES = Object.freeze([
       'docs/integration/dependencies.json',
     ] },
 
+  // Grant T-8: the netcode suite, the load-test tooling and the spike tests route to EXISTING
+  // lanes only — the unit lane (their policy suites) and the runtime lane (where the fast
+  // paired-browser LAN smoke step of grant T-6 lives) — plus the client's network source surface
+  // (`apps/client/src/network/**`), which those suites execute. The rule deliberately adds no new
+  // group: no route may reach the Gate A matrix (T-7 belongs to the DISPATCHED acceptance workflow,
+  // which is never routed) and no route may reach evidence capture (C-07). The literal client probe
+  // scripts (`tests/probes/colyseus-client.probe.ts`, `tests/probes/colyseus-roundtrip.probe.ts`)
+  // are NOT given a pattern here: the pre-existing server and runtime rules already route every
+  // `tests/probes/**` path to static + server + runtime — the lanes that can make them red — and
+  // this rule touching them would add `unit`, a lane that never executes a probe script, which is
+  // routing padding. The two-way test pins both exact paths, and the sibling probes, to the
+  // existing routing so a later edit cannot silently re-brand it.
+  // Camera and static routing elsewhere are untouched: a netcode-spec change still fires the
+  // pre-existing camera / source-static rules alongside this one, exactly as before it existed.
+  { id: 'spike-netcode-fast', reader: 'tests/e2e/netcode.spec.ts + tests/spikes/** + tests/unit/udg-spike-001/** + tools/load-test/** + apps/client/src/network/**', flags: ['unit', 'runtime'],
+    patterns: [
+      'tests/e2e/netcode.spec.ts',
+      'tests/spikes/**',
+      'tests/unit/udg-spike-001/**',
+      'tools/load-test/**',
+      'apps/client/src/network/**',
+    ] },
+
   // --- shared surfaces ---------------------------------------------------------------------------
   // Both apps depend on @udg/protocol and @udg/config (apps/client/package.json, apps/server/package.json),
   // so a change there is a client change and a server change at once. This rule is why a protocol edit

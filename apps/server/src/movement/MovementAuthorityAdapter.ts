@@ -128,6 +128,20 @@ export const buildMovementAuthority = (options: {
   readonly runId: string;
   readonly time?: TimeSource;
   readonly scheduler?: Scheduler;
+  /**
+   * Optional process-local stepper factory (UDG-SPIKE-001 review amendment, owner-approved 2026-11-19).
+   *
+   * The default constructs exactly the `FlatReferenceStepper(speed)` the constructor line has always
+   * constructed; omitting this option changes nothing observable. The parameter is a function object
+   * passed in-process — it is NOT a configuration key: no server config surface accepts it, no wire
+   * frame can carry it, and a client's create/join options are discarded wholesale by the room's
+   * trust gate (`RegionRoom`'s `OPERATOR_NONCE`), so a client cannot select a factory. Test
+   * compositions (the netcode harness, the AC-1 trace) pass a wrapper around THE shared client step
+   * relation (`apps/client/src/network/flatStep.ts`) so one exported function performs the movement
+   * on both sides. Nothing in `apps/server` production code imports the client or test trees; the
+   * dependency direction stays trusted-caller → adapter.
+   */
+  readonly stepperFactory?: ((speed: number) => EntityStepper) | undefined;
   readonly routeCompletions?: () => readonly RouteCompletion[];
   readonly regionProvenance?: string;
 }): MovementAuthorityResult => {
@@ -138,7 +152,11 @@ export const buildMovementAuthority = (options: {
 
   const core = AuthorityCore.build({
     config: options.config,
-    stepper: new FlatReferenceStepper(options.config.movement.speed),
+    // The default branch constructs exactly what this line constructed before the amendment; a
+    // trusted caller may inject a wrapper around the same relation (see `stepperFactory` above).
+    stepper: (options.stepperFactory ?? ((speed: number): EntityStepper => new FlatReferenceStepper(speed)))(
+      options.config.movement.speed,
+    ),
     time,
     clock,
     runId: options.runId,

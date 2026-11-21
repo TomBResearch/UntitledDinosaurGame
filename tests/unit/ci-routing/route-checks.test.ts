@@ -174,6 +174,85 @@ describe('CI router — the table decides, and never silently narrows', () => {
   });
 });
 
+describe('CI router — spike/netcode/load-test paths route to existing lanes (grant T-8)', () => {
+  it('routes the netcode suite to the unit and runtime lanes while keeping its pre-existing camera/static routing', () => {
+    // Before the rule, a netcode.spec change fired only camera + static. Those still fire — the
+    // rule ADDS the lanes where the fast spike checks actually live; it removes nothing.
+    expectOnly(['tests/e2e/netcode.spec.ts'], ['camera', 'runtime', 'static', 'unit']);
+    expect(routePaths(['tests/e2e/netcode.spec.ts']).reason).toBe('routed');
+  });
+
+  it('routes the load-test tooling, spike tests, spike unit tests and the client probe to unit + runtime (plus their pre-existing static/camera groups)', () => {
+    expectOnly(['tools/load-test/src/run-spike.ts'], ['runtime', 'static', 'unit']);
+    expectOnly(['tests/spikes/any-lab.test.ts'], ['runtime', 'static', 'unit']);
+    expectOnly(['tests/unit/udg-spike-001/gate-a-evidence.test.ts'], ['runtime', 'static', 'unit']);
+    // The client probe keeps its camera routing (pre-existing apps/client/** rule) and gains the
+    // spike lanes; a client SOURCE change outside network/ is unchanged.
+    expectOnly(['apps/client/src/network/flatStep.ts'], ['camera', 'runtime', 'static', 'unit']);
+    expectOnly(['apps/client/src/rendering/OrbitCamera.ts'], ['camera', 'static', 'unit']);
+  });
+
+  it('does NOT match lookalike paths — the patterns are exact globs, not prefixes', () => {
+    // A sibling directory of the load-test tool is not a spike path: it stays a plain tooling
+    // source change (source-static), and cannot join the spike lane by prefix similarity.
+    const sibling = flagsOf(['tools/load-test2/src/x.ts']);
+    expect(sibling.static).toBe(true);
+    expect(sibling.runtime).toBe(false);
+    expect(sibling.unit).toBe(false);
+    // `networking/` is not `network/`: the client probe rule must not spread over the app.
+    const lookalike = flagsOf(['apps/client/src/networking/extra.ts']);
+    expect(lookalike.camera).toBe(true);
+    expect(lookalike.runtime).toBe(false);
+    // A near-miss filename for the spec is just another e2e path (camera), not a spike path.
+    const nearName = flagsOf(['tests/e2e/netcode.spec.tsx']);
+    expect(nearName.runtime).toBe(false);
+    // Markdown beside the spikes is a record, never a suite (the docs carve-out wins). 
+    expectOnly(['tests/spikes/notes.md'], ['records']);
+  });
+
+  it('routes the client probe scripts to the lanes that execute what they probe — through the PRE-EXISTING rules, untouched by the spike rule', () => {
+    // The two client-side probes named by the grant, plus their siblings: every `tests/probes/**`
+    // path was ALREADY routed static + server + runtime before `spike-netcode-fast` existed, and
+    // still is. Those are the executable lanes: static type-checks the script, the runtime lane
+    // builds the dist the probe imports and runs the transport it exercises.
+    for (const probe of [
+      'tests/probes/colyseus-client.probe.ts',
+      'tests/probes/colyseus-roundtrip.probe.ts',
+      'tests/probes/colyseus-server.probe.ts',
+      'tests/probes/pr14-gate-a.probe.ts',
+    ]) {
+      expectOnly([probe], ['runtime', 'server', 'static']);
+    }
+    // And provably NOT via the spike rule: `unit` executes no probe script, so its appearance on a
+    // probe path would mean the spike patterns were widened past their grant.
+    const decision = routePaths(['tests/probes/colyseus-client.probe.ts']).decisions[0];
+    expect(decision?.rules).not.toContain('spike-netcode-fast');
+    expect(flagsOf(['tests/probes/colyseus-roundtrip.probe.ts']).unit).toBe(false);
+  });
+
+  it('a spike route can never select evidence capture, the acceptance lane, or the full Gate A matrix (C-07, T-8)', () => {
+    const spikePaths = [
+      'tests/e2e/netcode.spec.ts',
+      'tests/spikes/any-lab.test.ts',
+      'tests/unit/udg-spike-001/gate-a-evidence.test.ts',
+      'tools/load-test/src/run-spike.ts',
+      'apps/client/src/network/flatStep.ts',
+    ];
+    for (const path of spikePaths) {
+      const result = routePaths([path]);
+      expect(result.all, `${path} must route, not escalate`).toBe(false);
+      const flags = result.flags as Record<string, boolean>;
+      // The group names the workflow jobs are keyed on; capture/acceptance/evidence are not
+      // groups at all (they live in the DISPATCHED acceptance workflow), and fullSuite — the one
+      // group whose runner executes the whole Gate A matrix — is never set by a spike path.
+      for (const forbidden of ['capture', 'acceptance', 'evidence']) {
+        expect(flags, `${path} set a forbidden group ${forbidden}`).not.toHaveProperty(forbidden);
+      }
+      expect(flags['fullSuite'], `${path} selected the full-matrix group`).toBe(false);
+    }
+  });
+});
+
 describe('CI router — every rule matches something real', () => {
   /**
    * One representative path per rule, taken from what the rule's reader actually opens. A rule missing from
@@ -193,6 +272,7 @@ describe('CI router — every rule matches something real', () => {
     server: 'apps/server/src/authority/step.ts',
     runtime: 'tests/system/udg-003-phase-2/runtime.test.ts',
     tooling: 'tests/unit/udg-003/capture-loop.test.ts',
+    'spike-netcode-fast': 'tests/e2e/netcode.spec.ts',
     'shared-app-dependency': 'packages/config/src/limits.ts',
     'shared-checks': 'tools/checks/src/evidence.ts',
     'shared-full-suite': 'tests/fixtures/protocol/valid.json',

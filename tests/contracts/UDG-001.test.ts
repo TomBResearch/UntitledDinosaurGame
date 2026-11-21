@@ -709,18 +709,18 @@ describe('task and suite dispatch', () => {
     const usage = guardUnavailable(undefined, []).message;
     const guarded = usage.replace('usage: ', '').trim().split(/\s*\|\s*/).filter((entry) => entry.length > 0).sort();
     expect(guarded.length).toBeGreaterThan(0);
-    // `test:e2e` is still a guarded command: four of its five suites (netcode, physics, input, hybrid) are
-    // still owed, so the command as a whole is still not something the dispatcher will run blindly. UDG-004
-    // made the guard per-suite rather than removing it, and `tests/contracts/UDG-004.test.ts` owns the
-    // per-suite cases — including that `--suite camera` now dispatches. The forwarded suite below is `netcode`
-    // rather than `camera` for exactly that reason: this loop proves the refusal contract for a suite nobody
-    // has implemented, which is what it always meant to prove.
+    // `test:e2e` is still a guarded command: some of its suites are still owed, so the command as a whole is
+    // still not something the dispatcher will run blindly. UDG-004 made the guard per-suite rather than
+    // removing it, and `tests/contracts/UDG-004.test.ts` owns the per-suite cases — including that
+    // `--suite camera` dispatches and, since UDG-SPIKE-001's grant T-1(a), that `--suite netcode` does too.
+    // The forwarded suite below is therefore `physics`, still owed to UDG-006: this loop proves the refusal
+    // contract for a suite nobody has implemented, which is what it always meant to prove.
     expect(guarded).toContain('test:e2e');
     expect(guarded).toContain('test:spike');
 
     const rootScripts = json<{ scripts: Record<string, string> }>('package.json').scripts;
     for (const command of guarded) {
-      const guard = guardUnavailable(command, ['--suite', 'netcode']);
+      const guard = guardUnavailable(command, ['--suite', 'physics']);
       expect(guard.exitCode, command).toBe(1);
       expect(guard.message, command).toContain('owning task');
       expect(guard.message, command).toContain('never reported as a pass');

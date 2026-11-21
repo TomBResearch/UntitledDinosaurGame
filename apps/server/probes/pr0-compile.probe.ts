@@ -78,6 +78,19 @@ function findRepositoryRoot(start: string): string {
 
 const APPROVED_EXCEPTION_PROJECTS = ['apps/server/tsconfig.json', 'apps/server/tsconfig.probes.json'];
 
+/**
+ * The one project ADR-0004 excepts, and the reason PR-0 knows about it.
+ *
+ * ADR-0002 stays exactly as its own text says — server-only, two projects, its own name beside each. ADR-0004 is
+ * a **different authority for a different project** (the browser seat that imports the pinned SDK), accepted on
+ * 2026-11-19 under the UDG-SPIKE-001 delegation with its own pinned inventory. PR-0's job has always been to pin
+ * the exact exception surface *and which authority each project cites*, so a fifth project, or this one borrowing
+ * ADR-0002's name, still fails. ADR-0002's own DOM-lib prohibition is not moved either: it applies to the
+ * Node-side projects it governs, while `apps/client` is a browser application whose DOM library set is UDG-004's
+ * accepted configuration, not a relaxation.
+ */
+const ADR0004_EXCEPTION_PROJECTS = ['apps/client/tsconfig.json'];
+
 /** Every `tsconfig*.json` in the workspace, ignoring installed and generated trees. */
 function workspaceConfigs(repository: string): readonly string[] {
   const skip = new Set(['node_modules', 'dist', 'probes']);
@@ -146,6 +159,9 @@ async function main(): Promise<void> {
         if (APPROVED_EXCEPTION_PROJECTS.includes(config) && !text.includes('ADR-0002')) {
           undocumented.push(`${config} sets skipLibCheck: true without naming ADR-0002`);
         }
+        if (ADR0004_EXCEPTION_PROJECTS.includes(config) && !text.includes('ADR-0004')) {
+          undocumented.push(`${config} sets skipLibCheck: true without naming ADR-0004`);
+        }
         let lib: unknown;
         try {
           lib = ((JSON.parse(text) as { compilerOptions?: { lib?: unknown } }).compilerOptions ?? {}).lib;
@@ -153,37 +169,58 @@ async function main(): Promise<void> {
           lib = undefined;
         }
         const dom = (Array.isArray(lib) ? lib : []).filter((entry) => typeof entry === 'string' && /^DOM(\.Iterable)?$/i.test(entry));
-        if (dom.length > 0) undocumented.push(`${config} loads DOM lib entries: ${String(dom.join(', '))}`);
+        // The DOM prohibition belongs to the projects ADR-0002 governs (Node servers) and to the root tooling
+        // project. `apps/client` is the browser application: DOM is its library set by UDG-004's accepted config,
+        // and ADR-0004 neither adds it nor widens anything.
+        if (dom.length > 0 && !ADR0004_EXCEPTION_PROJECTS.includes(config)) {
+          undocumented.push(`${config} loads DOM lib entries: ${String(dom.join(', '))}`);
+        }
       }
-      // `skipLibCheck: true` may appear in exactly three places, each with its own authority: the two projects
-      // ADR-0002 approves, and the repository tooling project that has carried it since UDG-001 decision D1
-      // (playwright-core and vitest declaration bundles are not checkable under a non-DOM lib). A fourth
-      // project would mean the exception spread, so it fails here rather than in review.
+      // `skipLibCheck: true` may appear in exactly four places, each with its own authority: the two projects
+      // ADR-0002 approves, the repository tooling project that has carried it since UDG-001 decision D1
+      // (playwright-core and vitest declaration bundles are not checkable under a non-DOM lib), and the browser
+      // seat ADR-0004 approves. A fifth project would mean the exception spread, so it fails here rather than in
+      // review.
       const PREEXISTING = ['tsconfig.json'];
-      const approved = [...APPROVED_EXCEPTION_PROJECTS, ...PREEXISTING].sort();
+      const approved = [...APPROVED_EXCEPTION_PROJECTS, ...PREEXISTING, ...ADR0004_EXCEPTION_PROJECTS].sort();
       const outside = withException.filter((config) => !approved.includes(config));
       const absent = approved.filter((config) => !withException.includes(config));
       checks.check(
         'exception-confined-to-the-approved-projects',
         outside.length === 0 && absent.length === 0,
         outside.length + absent.length === 0
-          ? `skipLibCheck: true appears in the two ADR-0002 projects and, since UDG-001 D1, in ${PREEXISTING[0]}; nothing else (${String(configs.length)} tsconfig files scanned)`
+          ? `skipLibCheck: true appears in the two ADR-0002 projects, in ${PREEXISTING[0]} since UDG-001 D1, and in ${ADR0004_EXCEPTION_PROJECTS[0]} under ADR-0004; nothing else (${String(configs.length)} tsconfig files scanned)`
           : `outside approval: [${outside.join(', ')}]; missing: [${absent.join(', ')}]`,
       );
+      // Which projects claim ADR-0002 as their authority. The client project's note necessarily *names*
+      // ADR-0002 to say it is not the authority behind that project's exception, so it is excluded from the
+      // claim set here and checked on its own terms by `adr-0004-tags-exactly-its-one-project` below: any
+      // other project that turns up naming ADR-0002 has borrowed it, and fails.
       const adrTagged = withException.filter((config) => {
-        const text = readFileSync(join(root, config), 'utf8');
-        return text.includes('ADR-0002');
+        if (ADR0004_EXCEPTION_PROJECTS.includes(config)) return false;
+        return readFileSync(join(root, config), 'utf8').includes('ADR-0002');
       });
+      const borrowed = withException.filter(
+        (config) => !APPROVED_EXCEPTION_PROJECTS.includes(config) && !ADR0004_EXCEPTION_PROJECTS.includes(config) && readFileSync(join(root, config), 'utf8').includes('ADR-0002'),
+      );
       checks.check(
         'adr-0002-tags-exactly-its-two-projects',
-        adrTagged.slice().sort().join(',') === APPROVED_EXCEPTION_PROJECTS.slice().sort().join(','),
-        `projects naming ADR-0002: [${adrTagged.join(', ')}] — the pre-existing UDG-001 D1 tooling relaxation must not claim this ADR, and this ADR must not silently absorb it`,
+        borrowed.length === 0 && adrTagged.slice().sort().join(',') === APPROVED_EXCEPTION_PROJECTS.slice().sort().join(','),
+        borrowed.length > 0
+          ? `projects borrowing ADR-0002 as their authority: [${borrowed.join(', ')}] — ADR-0002 is server-only`
+          : `projects naming ADR-0002: [${adrTagged.join(', ')}] — the pre-existing UDG-001 D1 tooling relaxation and the ADR-0004 client project must not claim this ADR, and this ADR must not silently absorb them`,
+      );
+      const adr0004Tagged = withException.filter((config) => readFileSync(join(root, config), 'utf8').includes('ADR-0004'));
+      checks.check(
+        'adr-0004-tags-exactly-its-one-project',
+        adr0004Tagged.slice().sort().join(',') === ADR0004_EXCEPTION_PROJECTS.slice().sort().join(','),
+        `projects naming ADR-0004: [${adr0004Tagged.join(', ')}] — the client declaration-checking exception is one project and cites nothing else`,
       );
       checks.check(
         'exception-projects-name-the-adr-and-load-no-dom-lib',
         undocumented.length === 0 && withException.length > 0,
         undocumented.length === 0
-          ? 'each exception project names ADR-0002 in its own `//` note and loads no DOM lib'
+          ? 'each exception project names the decision it cites (ADR-0002 for the two server projects, ADR-0004 for the client seat) and no Node-side project loads a DOM lib'
           : undocumented.join('; '),
       );
       checks.observe('declarationCheckingException', {
@@ -193,6 +230,12 @@ async function main(): Promise<void> {
           project: 'tsconfig.json',
           authority: 'UDG-001 decision D1 (root tooling project: playwright-core and vitest declaration bundles)',
           unchangedByThisAdr: true,
+        },
+        clientRelaxation: {
+          project: ADR0004_EXCEPTION_PROJECTS[0],
+          authority: 'ADR-0004 (browser seat importing the pinned @colyseus/sdk; its own pinned inventory in docs/integration/colyseus-client-declaration-inventory.json)',
+          extendedByThisAdr: false,
+          audit: 'tests/contracts/UDG-SPIKE-001.test.ts',
         },
         projectsWithException: withException,
         baseSkipLibCheck: base.compilerOptions['skipLibCheck'],

@@ -443,6 +443,29 @@ jobs:
             }
           '
 
+      # UDG-SPIKE-001 grant T-6: the FAST paired-browser LAN smoke (`--cell lan-smoke`: two true
+      # browser contexts, the accepted proxy primitive under the declared LAN regime, a
+      # pre-registered 240 s wall budget the cell asserts against its own clock). The grant
+      # confines this lane to fast steps: the full-window matrix runner is T-7 and belongs to the
+      # DISPATCHED acceptance workflow on its own quiet-runner pool — never here, since a routine
+      # diff must not wait on measured windows. C-07 holds: no evidence step appears in this file;
+      # the cell writes a DIAGNOSTIC artefact under artifacts/.local and captures no bundle, and
+      # the dispatcher refuses this cell outright under UDG_GATE_A_FORMAL=1.
+      #
+      # The chromium step is the smoke's requirement at STEP level, not a job-level addition the
+      # AC-1 trace and system suites would pay for: it sits immediately before the step that
+      # launches the two browser contexts, uses the repo's existing pinned setup pattern (no new
+      # action references; checkout above already runs with persist-credentials: false), and skips
+      # `--with-deps` for the measured reason recorded in the unit and camera lanes — the hosted
+      # image already ships the pinned chromium's system libraries, and the apt traffic is what
+      # made that option slow, not the download.
+      - name: Install the pinned Playwright chromium
+        run: pnpm exec playwright install chromium
+      - name: Run the paired-browser LAN smoke (spike cell lan-smoke, pre-registered 240 s budget)
+        env:
+          UDG_SPIKE_OUT: artifacts/.local/spike-001/ci-lan-smoke
+        run: pnpm test:spike -- --id UDG-SPIKE-001 --cell lan-smoke --profile lan --seed 1001
+
   tooling:
     needs: route
     if: ${{ needs.route.outputs.tooling == 'true' }}

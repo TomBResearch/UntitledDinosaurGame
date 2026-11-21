@@ -2,10 +2,12 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "extends": "../../tsconfig.base.json",
   "//": "UDG-004 browser application project. `include` gained `src/**/*.tsx` because the accepted .ts-only list silently excluded every React component from typechecking; the JSX transform is react-jsx so components import no React default. `types` stays [] \u2014 the accepted ambient-type policy (tests/contracts/UDG-001.test.ts 'compiler.ambientTypePolicy') permits no ambient package here, and `skipLibCheck: false` is inherited unchanged from tsconfig.base.json, which is why @babylonjs/core is pinned to 8.56.2 (measured: 0 declaration diagnostics) instead of 9.36.0 (measured: 154). See docs/integration/client-stack-v1.md. `exclude` removes src/dev/** (the development mount/unmount seam) and src/main.tsx (the application entry, which is its only importer). Excluding them from `include` is not enough on its own: tsc still emits a file a kept module imports, so main.tsx leaves the emit set too and both files are typechecked by tsconfig.tools.json instead. That is the second half of the production-absence proof; the first half is the byte scan in tests/contracts/UDG-004.test.ts, and the third is the browser suite loading the built bundle and asserting the global is undefined.",
+  "//adr0004": "Declaration-checking exception per ADR-0004 (docs/adr/0004-client-declaration-checking-exception.md), NOT ADR-0002, which is server-only. `src/network/ColyseusPredictionAdapter.ts` imports the pinned public `@colyseus/sdk` 0.18.9, and with declaration checking on that import produces exactly 3 diagnostics, all inside vendor `.d.ts` files and none in repository code (TS1192 in @colyseus/core's router, 2 x TS2344 in @colyseus/sdk's HTTP types). The inventory is pinned in docs/integration/colyseus-client-declaration-inventory.json and `pnpm --filter @udg/client typecheck:declarations` re-produces it on demand; tests/contracts/UDG-SPIKE-001.test.ts fails on drift, on any first-party diagnostic, and on an unsupported SDK call that stops failing to compile. Nothing else is relaxed here: `types` stays [], no DOM lib is added beyond the browser project's own, and tsconfig.tools.json keeps full declaration checking because it imports no Colyseus module.",
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": "src",
     "jsx": "react-jsx",
+    "skipLibCheck": true,
     "lib": [
       "ES2024",
       "DOM",

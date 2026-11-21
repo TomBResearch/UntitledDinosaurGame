@@ -9,6 +9,14 @@
  * CI job runs `pnpm test` before its build step, and the scripts import the emitted room), spawns
  * each script, and reads back its verdict from the artefacts it wrote. A script that fails, hangs,
  * or writes an artefact that says `fail` fails this suite.
+ *
+ * The AC-1 trace additionally imports the SHARED step kernel (`tests/support/step-kernel/kernel-
+ * stepper.mjs`), which imports the client's EMITTED `flatStep.js` — the whole point of the seam is
+ * that one kernel function is stepped, not two formulas. So the self-containment guarantee the
+ * server build existed for extends to the client emission: a lane that routes `pnpm test` without
+ * building apps (the full-suite lane) must still run green, and the missing build is proven here
+ * rather than assumed from a warm workspace (hosted run 44738666756: the trace exited 1 with
+ * ERR_MODULE_NOT_FOUND on `apps/client/dist/network/flatStep.js`).
  */
 
 import { spawnSync } from 'node:child_process';
@@ -50,6 +58,12 @@ describe('UDG-003 Phase 2 runtime — the population and the recovery scenarios'
     const built = run(['pnpm', '--filter', '@udg/server', 'build'], 240_000);
     expect(built.exitCode, `server build failed: ${built.stdout}${built.stderr}`).toBe(0);
     expect(existsSync(join(ROOT, 'apps', 'server', 'dist', 'rooms', 'RegionRoom.js'))).toBe(true);
+    // The shared kernel the AC-1 trace steps with imports the CLIENT-emitted flatStep (see the
+    // header): the same one-build-before-scripts guarantee that covers the server has to cover it
+    // too, or the trace is green only in workspaces that happen to hold a stale app build.
+    const client = run(['pnpm', '--filter', '@udg/client', 'build'], 240_000);
+    expect(client.exitCode, `client build failed: ${client.stdout}${client.stderr}`).toBe(0);
+    expect(existsSync(join(ROOT, 'apps', 'client', 'dist', 'network', 'flatStep.js'))).toBe(true);
   });
 
   it('runs the adversarial population and reads back a passing verdict (W-10, W-9)', () => {

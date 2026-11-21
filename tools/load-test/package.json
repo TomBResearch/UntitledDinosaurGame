@@ -1,0 +1,12 @@
+{
+  "name": "@udg/load-test",
+  "version": "0.0.0",
+  "private": true,
+  "description": "UDG-SPIKE-001 DPA-2 impairment harness: the TCP stall proxy, the SDK-ping RTT probe state machine, the nearest-rank statistics module and the Gate A local-cell driver. ZERO dependencies by rule: DPA-2 forbids adding dependencies, and everything here builds on Node built-ins plus the repo's existing TypeScript.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
+    "self-check": "pnpm run build && node dist/run-spike.js --self-check --profile elevated --seed 1001"
+  }
+}

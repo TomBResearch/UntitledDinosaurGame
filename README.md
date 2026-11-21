@@ -32,8 +32,11 @@ first red one (`WA-6`) — a red that deletes other tasks' evidence is not evide
 was reviewed and accepted at `41934a1` (CI `44287836166`), and `W-7`'s episode tallies are now read at the
 episode end, before the harness is restored or cleanup starts, with cleanup observations retained separately and
 controls proving a cleanup callback cannot move an episode result. That repair was accepted at `74aa8dab` (CI `44299429735`), and the four defects still open — `W-7`'s delivery count, the authority-to-client mapping mismatch, the post-close input observation and `P-2b` — are now closed out individually with retained evidence, owners and reopening conditions rather than bundled as one flaky suite ([closeout](docs/contracts/assignments/evidence/UDG-003-phase-3-defect-closeout.md)). That closeout is now the acceptance basis: the four observations are registered as **CF-1 to CF-4**, stay **unclassified** where no cause was demonstrated, carry owners and byte-named reopening conditions, and travel to every place their guarantee is read — UDG-003, its Phase 2 evidence matrix, UDG-007, UDG-008 and UDG-SPIKE-001. Ten consecutive passing runs recorded stability under a declared load and order and establish no cause for any of them. 
-**UDG-SPIKE-001 is now assigned and Ready** — implementation **not started**, its first slice is the pinned
-public SDK browser import/API and paired-client smoke probe, and **Gate A remains Not Run**; the owner delegated
+**UDG-SPIKE-001 is assigned and its first implementation slice is In Review** — the pinned public SDK browser
+import/API, the ADR-0004 client declaration-checking exception with its pinned inventory and audit suite, and the
+paired two-browser seat smoke (`pnpm test:e2e -- --suite netcode`) are implemented on
+`codex/udg-gate-a-browser-sdk`; **Gate A remains Not Run**, no P06 freeze and no acceptance matrix, and the spike
+harness (`pnpm test:spike`) does not exist yet. The owner
 that task's review and integration approval to **Codex** (signing as delegated reviewer/approver, not as
 `TomBResearch`) on 2026-11-19 ([assignment](docs/contracts/assignments/UDG-SPIKE-001.md)). Refinements P04, P05,
 P07, P08 and P09 remain pending; **P10 was adopted on 2026-11-19 for the Gate A / UDG-SPIKE-001 scope only** —
@@ -138,7 +141,8 @@ zero discovered tests.
 | `pnpm test:contract -- --task UDG-003 … UDG-SPIKE-003` | Exits `2`: that task's suite does not exist yet | each task creates its own suite |
 | `pnpm dev` | Implemented and passing: the UDG-004 development client on `http://127.0.0.1:5173` — a **middle-button** drag orbits (the left button stays inert for UDG-008), wheel and pinch zoom within 2–20 m, a one-finger touch drag keeps the scene under the finger, and holding an arrow key orbits or pitches **continuously** while the scene canvas has focus | UDG-004 |
 | `pnpm test:e2e -- --suite camera` | Implemented and passing: the UDG-004 camera suite, its screenshots and its lifecycle counts | UDG-004 |
-| `pnpm test:e2e -- --suite netcode\|physics\|input\|hybrid` | Exits `1` naming its owner: no such suite exists, and a suite that does not exist is never a pass | UDG-SPIKE-001 netcode, UDG-006 physics, UDG-008 input, UDG-SPIKE-003 hybrid |
+| `pnpm test:e2e -- --suite netcode` | Implemented: the UDG-SPIKE-001 §5 paired-seat smoke — two Chromium contexts over the client's own typed ESM modules and the pinned SDK, asserting each seat observes the other's authoritative movement. Not Gate A evidence | UDG-SPIKE-001 |
+| `pnpm test:e2e -- --suite physics\|input\|hybrid` | Exits `1` naming its owner: no such suite exists, and a suite that does not exist is never a pass | UDG-006 physics, UDG-008 input, UDG-SPIKE-003 hybrid |
 | `pnpm test:e2e` with no `--suite` | Exits `1`, naming all five owners: no single task owns "every browser suite" | the five tasks above |
 | `pnpm test:spike -- --id UDG-SPIKE-001 …` | Exits `1`: no spike harness exists | UDG-SPIKE-001, UDG-SPIKE-002, UDG-SPIKE-003 |
 | `pnpm assets:build`, `pnpm assets:verify` | Exits `1`: no asset pipeline exists | UDG-007 |

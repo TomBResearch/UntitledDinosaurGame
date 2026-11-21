@@ -21,13 +21,16 @@
     "dist"
   ],
   "scripts": {
+    "//scripts": "`typecheck` is the accepted compiler gate and passes under the ADR-0004 declaration-checking exception (skipLibCheck true in this project only, never in tsconfig.tools.json). `typecheck:declarations` is the retained strict check ADR-0004 requires: the same project with --skipLibCheck false, which must keep reporting the 3 vendor defects pinned in docs/integration/colyseus-client-declaration-inventory.json; tests/contracts/UDG-SPIKE-001.test.ts runs it and fails on any drift.",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tools.json",
+    "typecheck:declarations": "tsc -p tsconfig.json --noEmit --skipLibCheck false",
     "build": "tsc -p tsconfig.json && vite build",
     "dev": "vite",
     "preview": "vite preview"
   },
   "dependencies": {
     "@babylonjs/core": "8.56.2",
+    "@colyseus/sdk": "0.18.9",
     "@udg/config": "workspace:*",
     "@udg/protocol": "workspace:*",
     "react": "19.3.1",
