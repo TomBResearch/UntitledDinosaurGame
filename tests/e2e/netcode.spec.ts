@@ -7850,6 +7850,16 @@ const classifyRecoveryTimeline = (input: RecoveryTimelineInput): RecoveryTimelin
     ? (postFire.length < samples.length && firstNewIndex === 0 ? samples[samples.length - postFire.length - 1] : undefined)
     : postFire[firstNewIndex - 1];
   const witnessed = prevSample !== undefined && !isNewEpoch(prevSample);
+  // Epochs observed AFTER the fire but BEFORE the candidate recovery. If such a sample already
+  // carried the epoch the `snapshot-recovered` row announces, that epoch was current BEFORE the
+  // recovery — so the row cannot be announcing a fresh domain, whichever way the baseline was
+  // observed. This is what stops an old-domain row from being read as a recovery.
+  const priorEpochs = new Set(postFire.slice(0, Math.max(0, firstNewIndex)).map((x) => x.epoch));
+  const rowEpochIsNotNew = (row: RecoveryLedgerRow): boolean => {
+    const rowEpoch = epochFromRecoveryDetail(row.detail);
+    if (rowEpoch === null) return false;
+    return (epochAtFire !== null && rowEpoch === epochAtFire) || priorEpochs.has(rowEpoch);
+  };
   const carried = blank('deadline', {
     epochAtFire,
     stateAtFire,
@@ -7876,21 +7886,33 @@ const classifyRecoveryTimeline = (input: RecoveryTimelineInput): RecoveryTimelin
     };
   };
   if (firstNew !== null && witnessed) {
+    // With NO pre-fire baseline the candidate epoch's novelty is borrowed from the ledger row, so
+    // a row that announces an epoch already seen after the fire (in a non-tracking sample) cannot
+    // certify a fresh domain — refuse instead of accepting an interval over the old domain.
+    if (epochAtFire === null && freshRow !== null && priorEpochs.has(firstNew.epoch)) {
+      return { ...carried, reason: 'ledger-epoch-not-new', ledgerRowDetail: freshRow.detail, recoveredSample: firstNew };
+    }
     return accepted(firstNew.atPageMs, 'page-observed', firstNew, firstNew.epoch, false, null);
   }
   if (firstNew !== null && !witnessed) {
     if (freshRow === null) return { ...carried, reason: 'late-start-without-ledger', recoveredSample: firstNew, epochAfter: firstNew.epoch };
-    if (epochAtFire !== null && epochFromRecoveryDetail(freshRow.detail) === epochAtFire) {
+    if (rowEpochIsNotNew(freshRow)) {
       return { ...carried, reason: 'ledger-epoch-not-new', ledgerRowDetail: freshRow.detail };
     }
     return accepted(freshRow.atPageMs, 'predictor-ledger', firstNew, firstNew.epoch, true, freshRow.detail);
   }
   if (freshRow !== null && finalSample !== null && finalSample.state === 'tracking') {
     const rowEpoch = epochFromRecoveryDetail(freshRow.detail);
-    if (epochAtFire !== null && rowEpoch === epochAtFire) {
+    if (rowEpochIsNotNew(freshRow)) {
       return { ...carried, reason: 'ledger-epoch-not-new', ledgerRowDetail: freshRow.detail };
     }
     return accepted(freshRow.atPageMs, 'predictor-ledger', finalSample, rowEpoch ?? finalSample.epoch, true, freshRow.detail);
+  }
+  // A window that opened AFTER the transition, with no pre-fire baseline and no same-episode
+  // ledger row: the seat is tracking, but nothing observed proves the epoch is new. Named as a
+  // late start, never as a ~0 ms recovery and never as a plain deadline.
+  if (epochAtFire === null && freshRow === null && postFire.some((x) => x.state === 'tracking')) {
+    return { ...carried, reason: 'late-start-without-ledger', recoveredSample: postFire.find((x) => x.state === 'tracking') ?? null };
   }
   if (expiredRows.length > 0) return { ...carried, reason: 'episode-expired' };
   return carried;
@@ -8312,7 +8334,7 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
       { leg: 'no fire at all', expected: 'no-fire, no numbers', got: { recovered: noFire.recovered, reason: noFire.reason, ms: noFire.fireToTrackingMs, staleRejected: noFire.staleRecoveryRowsRejected } },
     ];
     check('recovery-timeline regressions (synthetic, deterministic): a witnessed transition is page-observed; a LATE START may only borrow the product ledger row and is never reported as ~0 ms; a row predating the fire is stale evidence and is counted; expiry, over-budget, same-epoch and no-fire legs carry no manufactured interval',
-      normal.recovered && normal.fireToTrackingMs === 900 && normal.timestampSource === 'page-observed' && normal.samplesBeforeFire === 3 && normal.staleRecoveryRowsRejected === 0
+      normal.recovered && normal.fireToTrackingMs === 900 && normal.timestampSource === 'page-observed' && normal.samplesBeforeFire === 2 && normal.staleRecoveryRowsRejected === 0
       && lateStartWithLedger.recovered && lateStartWithLedger.fireToTrackingMs === 812 && lateStartWithLedger.timestampSource === 'predictor-ledger' && lateStartWithLedger.lateStart === true
       && lateStartNoLedger.recovered === false && lateStartNoLedger.reason === 'late-start-without-ledger' && lateStartNoLedger.fireToTrackingMs === null
       && staleRowBeforeFire.recovered === false && staleRowBeforeFire.staleRecoveryRowsRejected === 1 && staleRowBeforeFire.fireToTrackingMs === null
