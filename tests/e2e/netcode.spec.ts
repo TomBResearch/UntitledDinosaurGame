@@ -3970,6 +3970,10 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
     await pageM.evaluate(() => { (globalThis as unknown as { __udgCellStop?: boolean }).__udgCellStop = true; });
     const pumpFinished = await pump;
     const settled = await settleProxy(host, handle);
+    // Read the two watchers WHILE THE MOVER PAGE IS OPEN (the close below is final): the trigger-
+    // age record and the room-side samples are part of the attempt whether or not a trigger fired.
+    const triggerWatch = triggerAgeStarted ? await readTriggerAgeWatch(pageM) : { triggered: false, note: 'watch never started (no seat) — EXPLICIT non-event' };
+    const roomWatch = stopRoomWatch();
     cellCheck('cell: the raw proxy record still satisfies its own queue-health formula (demoted diagnostic; leg-sum is NOT the accepted RTT); the socket path CLOSES cleanly (no errored closures in the proxy connLog)',
       settled.stats.c2s.orderViolations === 0 && settled.stats.s2c.orderViolations === 0 && settled.stats.connections.errors === 0,
       { legSumValidity: networkValidity({ requestedRttMs: plan.profile.rttMs, declaredJitterBudgetMs: plan.profile.jitterBudgetMs, achievedRttSamples: settled.stats.proxyLegSumSamples }).valid, connections: settled.stats.connections });
@@ -3979,9 +3983,6 @@ test('spike cell: full-window — the parameterized full-profile matrix runner (
     const closeStats = await closeProxyBounded(host, handle);
     handle = -1;
     hostShutdown = await host.shutdown();
-    // Read the two watchers while the room object still lives and the mover page is open.
-    const triggerWatch = triggerAgeStarted ? await readTriggerAgeWatch(pageM) : { triggered: false, note: 'watch never started (no seat) — EXPLICIT non-event' };
-    const roomWatch = stopRoomWatch();
     cellCheck('cell: bounded teardown with receipts — proxy closed, host exited FINITE (exit 0) with NO active resources; the route pump ended finitely',
       hostShutdown.receipt !== null && hostShutdown.exitCode === 0 && JSON.stringify(hostShutdown.receipt?.activeResourcesAfterClose) === '[]' && closeStats.c2s.bytesReceived > 0 && pumpFinished.sendError === null,
       { activeResourcesAfterClose: hostShutdown.receipt?.activeResourcesAfterClose ?? null, exitCode: hostShutdown.exitCode, signal: hostShutdown.signal, pumpFinished });

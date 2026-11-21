@@ -123,6 +123,28 @@ control).
   after a journalled disposition) — every original conjunct stands unchanged.
 - First-attempt rule and red-kept rules as §2.
 
+## 5a. Addendum — corrections named DURING execution (all prior runs retained, nothing re-hashed)
+
+- **Fix A — watcher placement (harness defect, mine).** The first three declared seed-1001
+  attempts (`dpa9c-trigger-1001-a1..a3`) died in teardown at `readTriggerAgeWatch` because the
+  watcher reads sat AFTER `pageM.close()` — a deterministic fixture bug in `69a9b59`, zero
+  population signal, all three bytes retained (`dpa9c-trigger-1001-defect/README.md`). The
+  fixed-instrumentation population continues as **dpa9c2-trigger-1001-a{1,2,3}** and
+  **dpa9d2-trigger-1002-a{1,2,3}**, same N=3-per-seed pre-registration, same rules; the ids are
+  renamed ONLY because a1..a3 are occupied by their honest first-attempt records.
+- **Fix B — gafloor settles conjunct (field bug, mine).** The first floor-enabled run read
+  `GaSnapshot.transportEpoch` (a client-transport value that never moves on rejoin) instead of
+  the recovered DOMAIN epoch; the attempt stands red (`dpa9e-facility/ga-floor.*` — it in fact
+  recorded recovery in 303.1 ms), the correction is named in its commit message, and the retry
+  `ga-floor-retry` is separately labelled, not a replacement.
+- **Local GA-5l timing lines are FLAKY IN THIS CONTAINER, proven pre-diff.** `GA-5l suppression`
+  (mover-wire quiet-window breach) and `GA-5l CONTROL benign-in-flight` (release/poll race) went
+  red in local runs of the CURRENT code AND of the PRE-INSTRUMENTATION spec (`7af95d4` file
+  swapped in as a named control, `dpa9e-facility/ga-prediff-spec.*`) — so they are an
+  environment/fixture pacing issue of this headless box, not an effect of this family's diff, and
+  the pinned CI (green on the same pre-diff code) remains the green authority for that cell. All
+  local runs retained; no local green was substituted for any of them.
+
 ## 6. Limits (always attached)
 
 64-core headless localhost; fixture-class loss (a real hop discarding a slot, not the hosted
