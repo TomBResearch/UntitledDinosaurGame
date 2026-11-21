@@ -1155,15 +1155,85 @@ floor armed and the wait added NO episode. NAMED HARNESS CORRECTIONS (all bytes 
 re-hashed): Fix A — watcher reads placed after pageM.close() killed dpa9c-trigger-1001-a1..a3 in
 teardown (dpa9c-trigger-1001-defect/README.md; population continues as dpa9c2/dpa9d2 under the
 same pre-registration); Fix B — gafloor settles conjunct read GaSnapshot.transportEpoch (never
-moves on rejoin) instead of the recovered domain epoch. LOCAL GA-5l TIMING ROWS ARE PROVEN
-ENVIRONMENT-CLASS: the suppression quiet-window and benign-release rows went red locally on the
-CURRENT code AND on a named control running the PRE-INSTRUMENTATION 7af95d4 spec file in this
-container (dpa9e-facility/README.md) — the pinned CI stays the green authority for that cell.
-DIRECTION, NOT ADOPTION: 3/3 local stops fired against inputs still in flight within the
-profile's declared envelope, and the floor legs show a wait-aged rule fires exactly when the age
-says lost and never strands — this is direction-evidence for the ADR §D wait-first wording
-(reviewers own that decision) and NOTHING here adopts a numeric, changes a default/threshold/
+moves on rejoin) instead of the recovered domain epoch. LOCAL GA-5l TIMING ROWS SHOW STRONG
+LOCAL EVIDENCE OF ENVIRONMENT/FIXTURE PACING (phrase corrected in place per §21 — this was earlier
+worded "PROVEN ENVIRONMENT-CLASS", which overstated): the suppression quiet-window and
+benign-release rows went red locally on the CURRENT code AND on a RETAINED NAMED CONTROL running
+the PRE-INSTRUMENTATION 7af95d4 spec file in this container (dpa9e-facility/README.md) — strong
+local evidence, not an exhaustive proof; the pinned CI stays the green authority for that cell.
+DIRECTION, NOT ADOPTION (phrase corrected in place per §21): 3/3 local stops fired against inputs
+still in flight within the profile's declared envelope, and the floor legs show a wait-aged rule
+fires ONLY AFTER the declared measured opportunity wait — an OPPORTUNITY ENVELOPE, never a claim
+that any input "is lost" (true losses may exist under it; earlier acks may exist over it) — and
+never strands — this is direction-evidence for the ADR §D wait-first wording
+(since adopted AS DESIGN, §21; contract text and every numeric remain a separate, GA-11-bound
+decision) and NOTHING here adopts a numeric, changes a default/threshold/
 status, dispatches a hosted grid, or moves Gate A (still NOT-PASS overall, NOT RUN for
 acceptance; GA-11 §19 stays the sole nomination authority). Local checks on 5efaddf: tsc 0,
 eslint 0, six full-window dispatches + five ga-scenarios runs all retained with READMEs and
 per-bundle digests (bundles local-only, no secrets).
+
+## 21. Slice-27 — delegated ADOPTION RECORD (design-level), the status table, two named phrase
+## corrections, the tested-vs-docs head reconciliation, and the GA-11 staging handoff (owner-signature map)
+
+DELEGATED ADOPTION (2026-11-21, signed as delegated reviewer/integration approver — Codex — under
+the 2026-11-19 in-chat delegation recorded in UDG-SPIKE-001.md §Delegation and roles; NOT Tom's
+personal signature; implementation/acceptance separated per ownership.md): the §D WAIT-FIRST rule
+is **ADOPTED AS DESIGN** — qualitatively, clauses as written in the proposal's adjudication block
+(paired epoch/count/disposition + oldest ACTUAL outstanding same-epoch opportunity age; the wait a
+MEASURED CONSERVATIVE ENVELOPE, neither a causal lower bound nor a proof of loss; progress/epoch/
+empty resets; snapshot/episode/cap timers independent; an allowed recovery budget admitted ONLY
+when it covers the measured detection-PLUS-recovery interval under the ACTUAL intended clock
+origin). NO contract text moved; §3.2's count-only rule remains the shipped default; NO numeric
+adopted — W = 400 ms remains a harness-supplied LOCAL PROTOTYPE value only. Implementation
+(the product-side rule) and GA-11 readiness remain explicitly OUTSTANDING. The GA-5b cause-agnostic
+audit precision and the GA-12 unconditional-safety / optional-activation split (proposal §§1–2)
+were reviewed against ADR-0003 and are CONSISTENT — weakening nothing (cause-agnostic recovery
+stands; the unvalidated-`STRAND_SUSPECTED` closure ban stands; PE-1…PE-5 stand cumulative with
+"deliberately" intact) — and are **endorsed, but their ACCEPTANCE IS OUTSIDE this delegation**:
+the recorded delegation "does not … change any gate text", and ADR procedure reserves contract
+alteration to an owner-signed Accepted decision. EXACT TEXT NEEDING THE OWNER'S SIGNATURE: the
+proposal's disposition line ("Accepted or Rejected with rationale", docs/adr/README.md §20.1) and
+any commit moving ADR-0003 §5's GA-5b/GA-12 rows + their checksums.json entries. Landed within
+authority and unchanged by any of this: activation DISABLED (dedupeClosureEnabled false), PE-1…PE-5
+intact, all mandatory safety AND recovery criteria required, no pass status moved, Gate A untouched.
+
+STATUS TABLE (as of this commit; every row's authority named):
+
+| Surface | State | Authority that could change it |
+| --- | --- | --- |
+| §D wait-first rule | **ADOPTED AS DESIGN** (qualitative; §21 + proposal adjudication) | owner-signed acceptance for contract text; implementation adoption is separate product work with its own evidence |
+| Shipped product default | **UNCHANGED count-only rule** — the wait exists ONLY as the harness-supplied prototype option (stallAckFloorMs, unset = byte-identical count-only); THE GAP between design and default is OPEN, not hidden | implementation adoption decision + GA-11-informed values |
+| GA-5b row precision / GA-12 S+A split | **ENDORSED, consistent with ADR-0003; acceptance OUTSIDE the recorded delegation — owner signature required** (gate-text change excluded from delegation) | owner's Accepted/Rejected disposition on the proposal |
+| W = 400 ms | **LOCAL PROTOTYPE ONLY** — labelled in every event; adopted nowhere | GA-11 (§19/§15B) representative-deployment nomination |
+| GA-12 activation | **DISABLED as shipped**; PE-1…PE-5 intact and cumulative; positive activation proof remains BLOCKED, scoped to the optional feature; no-future-enabling reading clause stands | PE-1…PE-5 evidence + delegated review per owner instruction 4 — never Gate A itself |
+| Gate A | **NOT-PASS overall; NOT RUN for acceptance**; no row's pass status moved here | the §12/§13 workflow over a formal candidate + GA-11 |
+| Provisional numerics (G, 500 ms deadline vs the 891.2 ms formula, 4000 ms episode, backoffs, 1000 ms floor proposal) | **ALL PROVISIONAL UNDER GA-11** | GA-11 owner-executed matrix ONLY |
+
+PHRASE CORRECTIONS, NAMED IN PLACE (history kept; these words were mine and overstated):
+(1) FOLLOW-UP 3's "fires exactly when the age says lost" — the aged wait NEVER says "lost": it says
+the oldest outstanding input has exceeded a MEASURED OPPORTUNITY ENVELOPE, under which true losses
+may exist and earlier acks may exist (proposal §D/§19 wording is the correct one); the sentence
+now reads accordingly. (2) "PROVEN ENVIRONMENT-CLASS" for the local GA-5l timing rows — what the
+bytes show is a RETAINED NAMED CONTROL (the pre-instrumentation 7af95d4 spec re-run in this
+container, going red on the same rows): strong LOCAL evidence of environment/fixture pacing, NOT
+an exhaustive proof; the pinned CI remains the green authority. Same softening applied to the
+fixed-N protocol §5a "proven pre-diff".
+
+TESTED-vs-DOCS HEAD RECONCILIATION (FOLLOW-UP 3 said "local checks on 5efaddf" while CI ran
+ee64d6c — exact, named): functional code was last changed at **5efaddf** (Fix A); every local
+check (tsc, eslint, 661 units, the six full-window dispatches, the ga-scenarios family) ran at
+5efaddf; **0ae1741 and ee64d6c are docs-only commits** (Fix B's message records the check fix that
+was itself contained in 0ae1741's spec edit — the spec edit makes 0ae1741 code+docs; the gafloor
+retry ran on 0ae1741 and is retained), so the pushed head ee64d6c that CI 44864497357 graded
+carries IDENTICAL functional bytes to 5efaddf plus doc wording — green CI and local checks
+describe the same behaviour. For THIS slice the seams and docs land together: local checks re-run
+at the new head and are reported against it.
+
+GA-11 STAGING HANDOFF (new, this slice): `UDG-SPIKE-001-ga11-staging-handoff.md` — the smallest
+runnable staging path for a FUTURE owner-nominated private endpoint, with the portable test-only
+connect-RTT seam (`tools/load-test/src/staging-probe.ts`, unit-verified 7/7 independently of any
+endpoint, localhost smoke retained at `dpa9g-staging-smoke/`), what can vs cannot be measured
+today, reproduction/validation/reset commands, access limitation and evidence capture/retirement.
+No external host was provisioned, accessed or probed; no secret exists to protect; the probe was
+NEVER pointed anywhere but 127.0.0.1.

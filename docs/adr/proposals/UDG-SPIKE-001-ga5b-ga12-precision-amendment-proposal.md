@@ -8,6 +8,52 @@ amendments (§15A of the [formalization plan](../assignments/UDG-SPIKE-001-gate-
 and the AR-flavoured phrasing around them) which a slice-16 review found inaccurate; the earlier
 wording stays on the record, superseded rather than deleted, per the history rules.
 
+### Adjudication 2026-11-21 — delegated reviewer / integration approver (Codex)
+
+Signed **as the delegated reviewer/integration approver** under the owner's in-chat delegation of
+2026-11-19 as recorded in [UDG-SPIKE-001.md "Delegation and roles"](../contracts/UDG-SPIKE-001.md)
+— never as, and not impersonating, `TomBResearch`; the completion record separates the
+implementation (Pi) from this acceptance decision, per `docs/contracts/ownership.md`.
+
+- **§D (wait-first) — ADOPTED AS DESIGN.** The qualitative rule is adopted as the DESIGN direction
+  (clause list below); this changes NO contract text: §3.2's accepted count-only rule remains the
+  shipped product default until and unless an implementation adoption lands with its own evidence,
+  and **no numeric is adopted anywhere** — the 400 ms W existed only as a harness-supplied LOCAL
+  PROTOTYPE value (labelled as such in every ledger event and in plan §20/§20A). Design clauses as
+  adopted: (i) the delivery COUNT alone is INSUFFICIENT — a trigger may be considered only on the
+  PAIRED epoch/count/disposition condition AND the age of the OLDEST ACTUAL outstanding same-epoch
+  input; (ii) the wait is a MEASURED CONSERVATIVE ENVELOPE — explicitly NEITHER a causal lower
+  bound for every acknowledgement NOR a proof that any specific input is lost; (iii) healthy
+  progress, epoch change or empty pending RESET the condition, and obsolete entries never hold it;
+  (iv) the snapshot deadline, episode deadline and rolling rejoin cap remain INDEPENDENT timers
+  owning truly-missing deliveries; (v) a recovery/allowed budget may be admitted only when it
+  covers the measured DETECTION-PLUS-RECOVERY interval under the ACTUAL intended clock origin (the
+  dpa8i non-recovery and the §20/§20A budget findings are why this clause is load-bearing);
+  (vi) implementation and GA-11 readiness remain OUTSTANDING — adoption-as-design ratifies the
+  shape, not a shipping default. Supporting evidence retained at plan §19–§20A (+ FOLLOW-UPs) and
+  the dpa9c2/dpa9d2 fixed-N family + gafloor legs (`dpa9e-facility`, protocol
+  `UDG-SPIKE-001-gate-a-local-poor-seed-fixed-n-plan.md`).
+- **§§1–2 (GA-5b row / GA-12 S+A split) — REVIEWED CONSISTENT, ENDORSED; ACCEPTANCE OUTSIDE THIS
+  DELEGATION — OWNER SIGNATURE REQUIRED.** Consistency check against the formal authority, recorded:
+  §§1–2 weaken nothing in ADR-0003 — GA-5b keeps "inability to name the cause is the requirement,
+  not a failure of it" and adds only evidence-shaped audits (false attribution absent, wrong-epoch
+  acceptance absent, duplicate movement absent); GA-12-S keeps the UNCONDITIONAL ban on any closure
+  on an unvalidated `STRAND_SUSPECTED` plus the recovery-remains-intact witness; GA-12-A keeps
+  PE-1…PE-5 untouched, cumulative and literal, "deliberately" intact. BUT editing the
+  authoritative GA rows is a change to GATE TEXT, and the recorded delegation states it "does not
+  … change any gate text" (UDG-SPIKE-001.md §Delegation and roles), while the ADR procedure
+  reserves contract alteration to an Accepted decision and forbids an agent authoring approval on
+  the owner's behalf (docs/adr/README.md). The exact text requiring the owner's own signature is
+  therefore: the disposition line for this proposal ("Accepted/Rejected with rationale" per ADR
+  README §20.1) and any commit moving ADR-0003 §5's GA-5b/GA-12 rows plus their `checksums.json`
+  entries. WHAT IS LANDED HERE needs no such signature because it changes no row: activation
+  remains DISABLED exactly as shipped (`dedupeClosureEnabled: false`), PE-1…PE-5 stand exactly as
+  written, every mandatory safety AND recovery criterion remains required, and NO pass status of
+  any gate moved. The positive proof of the activation row stays BLOCKED, scoped to that separately
+  listed optional feature, with the explicit no-future-enabling-reading clause unchanged.
+- History: this adjudication supersedes NOTHING on the page — every prior line above and in §D
+  stands as written history; statuses moved in place, per the repo's naming-correction convention.
+
 ## 0. What the earlier draft got wrong (superseded, with the record preserved)
 
 §15A described GA-5b's "original criterion" as promising a client-visible expectation whose
@@ -103,8 +149,10 @@ Adoption path: reviewer markup on this file → owner/delegated decision → (if
 docs commit moving the authoritative GA rows with this proposal recorded as the basis; the
 accepted-ADR digests move only in that commit, never here.
 
-## §D (added slice 24, still PROPOSED — this file remains NOT accepted; the accepted ADR is
-## unchanged): the stalled-ack rule as WAIT-FIRST, with the wait's epistemic status stated
+## §D (added slice 24; STATUS 2026-11-21: the RULE SHAPE ADOPTED AS DESIGN by the delegated
+## reviewer — see the adjudication above; CONTRACT text and the shipped count-only default are
+## UNCHANGED, no numeric is adopted, and this file otherwise remains a proposal for §§1–2 until the
+## owner signs its acceptance): the stalled-ack rule as WAIT-FIRST, with the wait's epistemic status stated
 Current §3.2 text admits a trigger on the delivery-count condition alone. The ack-window
 diagnostic (plan §19) evidences that at RTT-bearing envelopes the count can COMPLETE before any
 acknowledgement is causally possible. Proposed wording (for review only): a trigger may be

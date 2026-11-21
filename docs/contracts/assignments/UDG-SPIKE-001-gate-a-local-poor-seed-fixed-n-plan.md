@@ -137,7 +137,9 @@ control).
   the recovered DOMAIN epoch; the attempt stands red (`dpa9e-facility/ga-floor.*` — it in fact
   recorded recovery in 303.1 ms), the correction is named in its commit message, and the retry
   `ga-floor-retry` is separately labelled, not a replacement.
-- **Local GA-5l timing lines are FLAKY IN THIS CONTAINER, proven pre-diff.** `GA-5l suppression`
+- **Local GA-5l timing lines are FLAKY IN THIS CONTAINER — strong local control evidence, pre-diff
+  included** (wording corrected per plan §21: this read "proven pre-diff", which overstated a
+  local control). `GA-5l suppression`
   (mover-wire quiet-window breach) and `GA-5l CONTROL benign-in-flight` (release/poll race) went
   red in local runs of the CURRENT code AND of the PRE-INSTRUMENTATION spec (`7af95d4` file
   swapped in as a named control, `dpa9e-facility/ga-prediff-spec.*`) — so they are an
