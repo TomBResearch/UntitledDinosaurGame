@@ -933,3 +933,102 @@ FOR RTT-BEARING HOPS (this close-out's finding is that a rejoin can be admitted 
 by nothing while the budget alone terminates the episode). The wait-first wording remains a PROPOSAL
 DRAFT for ADR review. NOTHING IN §20A ADOPTS IT, CHANGES A DEFAULT OR BUDGET, CLOSES A GA ROW, ROLLS AN
 ATTEMPT, OR TOUCHES MAIN / THE ACCEPTED ADR / P06 / WORKFLOWS.
+
+### §20A FOLLOW-UP (slice 26 close-out, part 2) — composed tree, the three capture defects NAMED and repaired, the closed-direction review, and ONE bounded attribution per previously-red poor seed
+
+REFS RECONCILED FIRST (an earlier narrative contradicted itself about pushes). Measured from the
+repository and the remote, in this order: PR #7's branch (codex/udg-spike-001-dpa2-impairment)
+stands at cd992779d6bfa2564e264c5ddd4146a3be223159 on origin; b5e68eb, 2b56acc and 7d46bff were
+LOCAL-ONLY (dpa8t's "nothing was pushed" is the true side; any push claim was wrong). The protected
+STAGED attribution blob 07e7e2db52ee17250f40a17aa1fdbe48f0503459 (tests/e2e/netcode.spec.ts over
+b5e68eb, the slice-25 captures) was verified untouched in its original dirty worktree before and
+after this work; that worktree was never edited.
+COMPOSITION (reviewer instruction, honored exactly): a NEW clean branch/worktree at 7d46bff; the
+staged index diff (git diff --cached over its base) applied with `git apply -3`. The two conflicts
+were PURELY ADDITIVE (RunResult field list; the res literal) and resolved by keeping BOTH the
+slice-26 timeline fields and the slice-25 captures. Composition + repairs commit
+10c2f55691f5e11bf0031257a13bf01a20933cc6; both e2e dispatches below recorded commit=10c2f55…,
+dirty=false — exact clean-HEAD diagnostics.
+THE THREE dpa8x-NAMED DEFECTS — ROOT CAUSES NAMED FROM THE SOURCES, NOT RETRIED:
+(1) eqeqeq (`rr.call(…) != null`): explicit !== null / !== undefined. (2) roomView NULL in every
+run: the capture reached the room's PRIVATE `#seats` map through a cast (RegionRoom.ts:172 defines
+`#seats`; `roomG.seats.keys()` is undefined, the whole literal threw, the catch swallowed it). It
+now reads ONLY published surface — the public readonly joinRefusals/closeObservations arrays
+(RegionRoom.ts:178/180) and evidence().seats per-seat {entityId, epoch, resolvedThrough}, which
+also delivers the SERVER-SIDE ack watermark the attribution needed. A capture failure now names
+itself in notes, and a loss-run hard expectation makes silently-null roomView RED. (3) controlJoin
+`ok:false, error:""` in every run: the leg passed `presentation: {}`, which the room's OWN hash
+gate screenJoin refuses BY DESIGN (onJoin → joinRefusals push + 1008 close), and the pinned SDK
+surfaces that refusal as an Error whose message is EMPTY — the leg attributed nothing. The
+legitimate seats all pass fixture.presentation {protocolVersion, configHash, manifestHash}
+(joinGaSeat); the control now passes the SAME and exercises the ADMITTED path. EXPECTED (asserted,
+with the room's own refusal delta `newJoinRefusals` in the message): ok, measured msToRoomId,
+issued epoch, first OWN row with rowEpoch === issuedEpoch (same-epoch guard — foreign rows count as
+staleEpochRowsRejected, never accepted), IMMEDIATE PREFIRE CHECK (row tested before the first
+sleep — both seeds measured msToFirstOwnRow = 0) and IMMEDIATE EXPIRY CHECK (deadline tested
+before sleeping). Nothing was manufactured: every read is published socket/room/SDK surface;
+dpa8m's 772 ms matched control is the expectation basis.
+CLOSED-DIRECTION REVIEW AFTER b5e68eb (reviewer item): a new unit case exercises the NONEMPTY
+reverse response for a closed direction — client FINs while its request is still in the tube, the
+hop propagates the FIN after draining, the target answers with a NONEMPTY body: measured Node
+semantics (probed directly BEFORE writing the case) show an accepted socket with the default
+allowHalfOpen:false is DESTROYED the moment its peer FINs, so the hop CANNOT hand such bytes to a
+half-closed client; the honest, asserted outcome is received-at-hop, counted LOST AT DESTINATION
+exactly once, attributed firstFin 'client' with NO error, pair RETIRES — and the test times out if
+anything hangs (the dpa8o failure mode). NO REGRESSION found. Consumers re-reviewed: the only
+tracked closed-stats equalities (netcode.spec.ts:3064/3235) stayed green on this tree
+(counter-consumer cell, 1 passed, exit 0, 24.2 s); run-spike/proxy-host consume the new fields
+additively.
+ONE BOUNDED LOCAL ATTRIBUTION PER PREVIOUSLY-RED POOR SEED (existing approved F-batch setup;
+`UDG_ACK_FLOOR=1`, W = 400 ms PROTOTYPE wait — product default UNCHANGED count-only; new isolated
+knob UDG_ACK_SEED selects ONLY this env-gated cell's impairment RNG seed, default 1001 unchanged,
+no CI route; CI=1, bounded overlay config navigation 60 s / action 30 s; private loopback ports;
+ONE dispatch each, FIRST attempt green both seeds, so no repeat was permitted or made):
+• poor-1001 (dpa8y, also the clean-HEAD diagnostic): F4 fired — 2 floor-held events, then
+  `input-ack-stalled at PROTOTYPE stalled-ack floor`, input age 462.9 ms, pending 1; ledger:
+  stop-sending → discard-pending 1 → quarantine → rejoin-scheduled 250 → rejoin-attempt +252 ms →
+  rejoin-COMPLETE +1051 ms (epoch 5) → snapshot-recovered +1052 ms; ONE monotonic page-observed
+  timeline fire→tracking 1063.5 ms (budget 4 300, lateStart false, stale rows 0); ROOM view
+  (public seam, measured): joinRefusals [], closeObservationCount 1, mover resolvedThrough 232
+  while the client sent 233 — the server's own record of the ONE terminally withheld input;
+  suspension null; sendsAfterFinal 0, pendingAtEnd 0, droppedFrames 1; control join ok
+  (msToRoomId 598.6, epoch 5, own row 0 ms, same-epoch, newJoinRefusals []). F1/F2/F3 no-fire.
+• poor-1002 (dpa8z, UDG_ACK_SEED=1002): identical shape — fire at age 469 ms; rejoin-attempt
+  +252 ms → rejoin-complete +1119 ms → recovered epoch 5; fire→tracking 1147.4 ms (within budget,
+  stale 0, pendingAfter 0, recovered true); resolvedThrough 232 vs 233; joinRefusals []; control
+  join ok (641.3 ms, epoch 5, row 0 ms); probe n 30 p50 198.9–210.7 ms p95 ≤ 237.4 aborted null.
+  F1/F2/F3 no-fire.
+FOUR-CLASS DISTINCTION, BOTH SEEDS, FROM THESE BYTES: ACTUAL NO PROGRESS — ABSENT on this tree:
+the rejoin attempt SETTLES every time (+252→+1051/+1119 ms); dpa8m's never-settled attempt is now
+attributable to the keep-alive-FIN fixture fault repaired at b5e68eb (the client's NEXT request
+was written into a socket whose peer was gone — no response, no failure). NORMAL TRANSIT EXCEEDING
+THE TIMER — the healthy case does NOT fire (three no-fire phases; acks arrive inside the window
+while transit is normal); the only fire is the TERMINALLY WITHHELD input outliving the declared
+wait, which is the rule firing CORRECTLY. EARLY FIXTURE DISPOSAL — absent: recovery lands well
+before teardown, probe ran to completion (aborted null), pending 0. UNCERTAINTY — none for the
+recovery interval (page-observed single-clock timeline with named provenance). LIMITS (stated, not
+hidden): n = 1 per seed — shape attribution, not a population; the 400 ms wait is the labelled
+PROTOTYPE harness setting, the adopted product rule remains count-only; hosted poor-1001/1002
+reds STAND AT THEIR OWN BYTES (44791166883, 44771876137) — this is forward attribution on the
+repaired fixture, no rehash; GA-11's §19 EXACT OPEN NEED (nominated production-like deployment)
+is unchanged and still decides every provisional value; Gate A remains NOT-PASS overall and NOT
+RUN for acceptance.
+LOCAL CHECKS ON THE TESTED HEAD 10c2f55691f5e11bf0031257a13bf01a20933cc6 (receipts retained in
+dpa8y/verification/): tsc root AND e2e exit 0; eslint (whole repo) exit 0; tests/unit/udg-spike-001
+198/198 (the 197 + the new closed-direction case); tests/unit 661 passed / 3 skipped; contract
+UDG-SPIKE-001 green; fixtures green; boundaries green.
+RETAINED DIGESTS (bundles at artifacts/.local/spike-001/, NOT tracked, sha256-manifested; no raw
+secrets — session ids are ephemeral harness handles): dpa8y artefact
+0822651e52b096e7253f550d55ac0297cffba7e969e2fdf2cf2e3d82c4b4a9aa, run log
+f5e8397ecc4642de1a882a57a8b5574e800f5b1f0d4ba48e7b92982075abbf38, counter-consumer log
+f14b036d1660dc0cd0bac438f20e2b912c1a1b43af3c52bb8de7303516112416; dpa8z artefact
+8d1f8fd140e3023ea7587376e0610cec0f0d22cb3cf849d7e7269ef6d2565c22, run log
+e2652c7ce6670a11d2d3a04fe65cfd7aed9ac364c79e27559c82219bd35d2985; composed spec file
+d91287acbc684392d0016a46c27d90f7347e130d0494152428f6b051e20524af; composed unit file
+1ec970267974c1336ac729fe09d526e67a95e319554034284c11f7e3dd58d3e9.
+PUSH (reviewer-authorized, minimal): FAST-FORWARD of PR #7's existing branch only — cd99277 →
+b5e68eb → 2b56acc → 7d46bff → 10c2f55 → this docs commit; no force, no merge, no workflow change,
+no hosted grid dispatched; the routine CI on the exact pushed head is verified and reported
+separately from this file. NOTHING HERE ADOPTS the wait-first wording, changes a default,
+threshold, profile or status, closes a GA row, or touches main / the accepted ADR / P06 /
+workflows.
