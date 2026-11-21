@@ -4575,8 +4575,9 @@ interface GaBoundary {
  * gap/retired, the stalled-ack streak, the pending journal, the send audit length, and the full
  * recovery ledger — everything the INPUT_ACK_STALLED claim must stand on, from public adapter
  * surface only. */
-const readGaBoundary = (page: Page): Promise<GaBoundary> =>
+const readGaBoundary = (page: Page): Promise<GaBoundary & { atPageMs: number }> =>
   page.evaluate(async () => {
+    const atPageMs = performance.now(); // ONE clock basis for the recovery timeline (slice 26)
     const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
     if (holder === undefined) throw new Error('the ga seat is not joined');
     const p = holder.predictor;
@@ -4584,6 +4585,7 @@ const readGaBoundary = (page: Page): Promise<GaBoundary> =>
     const last = rows.length > 0 ? rows[rows.length - 1] : undefined;
     const d = last?.delivery;
     return {
+      atPageMs,
       deliveries: rows.length,
       ack: d?.ack ?? -1,
       resolvedThrough: d?.resolvedThrough ?? -1,
@@ -7713,6 +7715,220 @@ const pctileOf = (xs: readonly number[], p: number): number | null => {
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))] ?? null;
 };
 
+/**
+ * ONE MONOTONIC RECOVERY TIMELINE (slice 26 — corrects how slice 24 MEASURED recovery; the
+ * product, the budgets and the profiles are untouched).
+ *
+ * What slice 24 did, and why its number could not be trusted: the fixture read `epochBefore`
+ * from the ORIGINAL transport handle and started its own wall clock (`tFire = Date.now()`) only
+ * AFTER the RTT probe (~3 s) and a fixed 1 500 ms quiet window — roughly 4.5 s after the
+ * predictor had already fired and, on the poor profile, already recovered. The first poll then
+ * saw a settled state and reported `tFireToTrackingMs: 2`: a number that measured the POLL, not
+ * the recovery, produced from a state that was already true before the measurement began, and
+ * indistinguishable from a PREVIOUS episode's recovery having settled. dpa8s retained exactly
+ * that signature (`tFireToTrackingMs: 2` with `epochBefore 1` read from a handle the rejoin had
+ * already replaced).
+ *
+ * What this replaces it with:
+ *  · ONE clock — the page's `performance.now()`, the same basis the adapter's own ledgers stamp
+ *    (`clock.nowMs()`), so the fire row and the tracking sample are directly comparable;
+ *  · anchored at the ACTUAL fire (`trigger` / `input-ack-stalled` ledger row), sampled from the
+ *    one-shot send ONWARD, i.e. BEFORE the fire, so the transition can be WITNESSED;
+ *  · closed at the FIRST same-episode `tracking` on a NEW epoch — either observed inside the
+ *    window (`timestampSource: 'page-observed'`, preceded by a sample that was not yet
+ *    recovered) or, when the window began after the transition, taken from the predictor's own
+ *    `snapshot-recovered` row (`timestampSource: 'predictor-ledger'`, `lateStart: true`);
+ *  · REFUSES to manufacture a number: a new-epoch `tracking` that was already true when sampling
+ *    began, with no same-episode ledger row, is reported as `late-start-without-ledger` with
+ *    `fireToTrackingMs: null` — never as a ~0 ms recovery;
+ *  · rejects ledger rows that PRECEDE the fire (a previous episode's recovery), counted in
+ *    `staleRecoveryRowsRejected`, and rejects a `snapshot-recovered` row whose epoch equals the
+ *    pre-fire epoch;
+ *  · enforces the SAME budget (`RECOVERY_EPISODE_BUDGET_MS`) from the ACTUAL fire.
+ */
+const RECOVERY_EPISODE_BUDGET_MS = 4_000 + 300;
+
+interface RecoveryTimelineSample {
+  readonly atPageMs: number;
+  readonly state: string;
+  readonly epoch: number;
+  readonly deliveries: number;
+  readonly ack: number;
+  readonly pending: number;
+}
+interface RecoveryLedgerRow { readonly atPageMs: number; readonly detail: string }
+interface RecoveryTimelineInput {
+  readonly fire: RecoveryLedgerRow | null;
+  readonly recoveredRows: readonly RecoveryLedgerRow[];
+  readonly expiredRows: readonly RecoveryLedgerRow[];
+  readonly samples: readonly RecoveryTimelineSample[];
+  readonly budgetMs: number;
+}
+type RecoveryTimelineReason =
+  | 'recovered'
+  | 'no-fire'
+  | 'no-samples'
+  | 'episode-expired'
+  | 'deadline'
+  | 'late-start-without-ledger'
+  | 'ledger-epoch-not-new'
+  | 'negative-interval-rejected';
+interface RecoveryTimeline {
+  readonly recovered: boolean;
+  readonly reason: RecoveryTimelineReason;
+  readonly timestampSource: 'page-observed' | 'predictor-ledger' | 'none';
+  readonly fireAtPageMs: number | null;
+  readonly trackingAtPageMs: number | null;
+  readonly fireToTrackingMs: number | null;
+  readonly withinBudget: boolean;
+  readonly lateStart: boolean;
+  readonly staleRecoveryRowsRejected: number;
+  readonly ledgerRowDetail: string | null;
+  readonly epochAtFire: number | null;
+  readonly stateAtFire: string | null;
+  readonly epochAfter: number | null;
+  readonly sampleCount: number;
+  readonly samplesBeforeFire: number;
+  readonly recoveredSample: RecoveryTimelineSample | null;
+  readonly finalSample: RecoveryTimelineSample | null;
+}
+
+/** The NEW domain's epoch, straight out of the product's own `snapshot-recovered` detail. */
+const epochFromRecoveryDetail = (detail: string): number | null => {
+  const m = /epoch\s+(\d+)/.exec(detail);
+  return m === null ? null : Number(m[1]);
+};
+
+/** PURE classifier (no I/O, deterministic): the synthetic legs in the floor batch below are the
+ * regression cover for every branch, including the late-start regression that made slice 24's
+ * `tFireToTrackingMs: 2` meaningless. */
+const classifyRecoveryTimeline = (input: RecoveryTimelineInput): RecoveryTimeline => {
+  const samples = input.samples;
+  const fire = input.fire;
+  const finalSample = samples.length > 0 ? (samples[samples.length - 1] ?? null) : null;
+  const staleRows = fire === null ? input.recoveredRows : input.recoveredRows.filter((r) => r.atPageMs <= fire.atPageMs);
+  const freshRows = fire === null ? [] : input.recoveredRows.filter((r) => r.atPageMs > fire.atPageMs).sort((a, b) => a.atPageMs - b.atPageMs);
+  const expiredRows = fire === null ? [] : input.expiredRows.filter((r) => r.atPageMs > fire.atPageMs).sort((a, b) => a.atPageMs - b.atPageMs);
+  const blank = (reason: RecoveryTimelineReason, over: Partial<RecoveryTimeline> = {}): RecoveryTimeline => ({
+    recovered: false,
+    reason,
+    timestampSource: 'none',
+    fireAtPageMs: fire?.atPageMs ?? null,
+    trackingAtPageMs: null,
+    fireToTrackingMs: null,
+    withinBudget: false,
+    lateStart: false,
+    staleRecoveryRowsRejected: staleRows.length,
+    ledgerRowDetail: null,
+    epochAtFire: null,
+    stateAtFire: null,
+    epochAfter: null,
+    sampleCount: samples.length,
+    samplesBeforeFire: 0,
+    recoveredSample: null,
+    finalSample,
+    ...over,
+  });
+  if (fire === null) return blank('no-fire');
+  if (samples.length === 0) return blank('no-samples');
+  const atFire = [...samples].reverse().find((s) => s.atPageMs <= fire.atPageMs) ?? null;
+  const epochAtFire = atFire?.epoch ?? null;
+  const stateAtFire = atFire?.state ?? null;
+  const postFire = samples.filter((s) => s.atPageMs >= fire.atPageMs);
+  const freshRow = freshRows[0] ?? null;
+  const isNewEpoch = (s: RecoveryTimelineSample): boolean => {
+    if (s.state !== 'tracking') return false;
+    if (epochAtFire !== null) return s.epoch > epochAtFire;
+    // Late start: no sample at or before the fire, so the pre-fire epoch is unobserved. The
+    // product's own same-episode `snapshot-recovered` row is then the authority that this epoch
+    // is a fresh domain — and only that.
+    return freshRow !== null && epochFromRecoveryDetail(freshRow.detail) === s.epoch;
+  };
+  const firstNew = postFire.find(isNewEpoch) ?? null;
+  const firstNewIndex = firstNew === null ? -1 : postFire.indexOf(firstNew);
+  const prevSample = firstNewIndex <= 0
+    ? (postFire.length < samples.length && firstNewIndex === 0 ? samples[samples.length - postFire.length - 1] : undefined)
+    : postFire[firstNewIndex - 1];
+  const witnessed = prevSample !== undefined && !isNewEpoch(prevSample);
+  const carried = blank('deadline', {
+    epochAtFire,
+    stateAtFire,
+    samplesBeforeFire: samples.length - postFire.length,
+    epochAfter: firstNew?.epoch ?? finalSample?.epoch ?? null,
+  });
+  const accepted = (trackingAtPageMs: number, source: 'page-observed' | 'predictor-ledger', sample: RecoveryTimelineSample, epochAfter: number, lateStart: boolean, ledgerRowDetail: string | null): RecoveryTimeline => {
+    const interval = trackingAtPageMs - fire.atPageMs;
+    if (!Number.isFinite(interval) || interval < 0) {
+      return { ...carried, reason: 'negative-interval-rejected', lateStart, ledgerRowDetail };
+    }
+    return {
+      ...carried,
+      recovered: true,
+      reason: 'recovered',
+      timestampSource: source,
+      trackingAtPageMs,
+      fireToTrackingMs: interval,
+      withinBudget: interval <= input.budgetMs,
+      lateStart,
+      ledgerRowDetail,
+      epochAfter,
+      recoveredSample: sample,
+    };
+  };
+  if (firstNew !== null && witnessed) {
+    return accepted(firstNew.atPageMs, 'page-observed', firstNew, firstNew.epoch, false, null);
+  }
+  if (firstNew !== null && !witnessed) {
+    if (freshRow === null) return { ...carried, reason: 'late-start-without-ledger', recoveredSample: firstNew, epochAfter: firstNew.epoch };
+    if (epochAtFire !== null && epochFromRecoveryDetail(freshRow.detail) === epochAtFire) {
+      return { ...carried, reason: 'ledger-epoch-not-new', ledgerRowDetail: freshRow.detail };
+    }
+    return accepted(freshRow.atPageMs, 'predictor-ledger', firstNew, firstNew.epoch, true, freshRow.detail);
+  }
+  if (freshRow !== null && finalSample !== null && finalSample.state === 'tracking') {
+    const rowEpoch = epochFromRecoveryDetail(freshRow.detail);
+    if (epochAtFire !== null && rowEpoch === epochAtFire) {
+      return { ...carried, reason: 'ledger-epoch-not-new', ledgerRowDetail: freshRow.detail };
+    }
+    return accepted(freshRow.atPageMs, 'predictor-ledger', finalSample, rowEpoch ?? finalSample.epoch, true, freshRow.detail);
+  }
+  if (expiredRows.length > 0) return { ...carried, reason: 'episode-expired' };
+  return carried;
+};
+
+/**
+ * The collector: one boundary read per poll on the page clock, starting BEFORE the fire. It
+ * stops at the first accepted recovery, at an `episode-expired` row, or at a ceiling measured
+ * from the ACTUAL fire (never from whenever the harness happened to notice).
+ */
+const collectRecoveryTimeline = async (page: Page, opts: { pollMs: number; giveUpMs: number; ceilingMs: number; budgetMs: number }): Promise<{ timeline: RecoveryTimeline; fire: RecoveryLedgerRow | null; lastBoundary: GaBoundary }> => {
+  const samples: RecoveryTimelineSample[] = [];
+  let fire: RecoveryLedgerRow | null = null;
+  const wallStart = Date.now();
+  for (;;) {
+    const b = await readGaBoundary(page);
+    const sample: RecoveryTimelineSample = { atPageMs: b.atPageMs, state: b.state, epoch: b.epoch, deliveries: b.deliveries, ack: b.ack, pending: b.pending };
+    const previousSample = samples[samples.length - 1];
+    if (previousSample === undefined || sample.atPageMs > previousSample.atPageMs) samples.push(sample);
+    if (fire === null) {
+      const trig = b.events.find((e) => e.event === 'trigger' && e.detail.includes('input-ack-stalled'));
+      if (trig !== undefined) fire = { atPageMs: trig.atMs, detail: trig.detail };
+    }
+    const timeline = classifyRecoveryTimeline({
+      fire,
+      recoveredRows: b.events.filter((e) => e.event === 'snapshot-recovered').map((e) => ({ atPageMs: e.atMs, detail: e.detail })),
+      expiredRows: b.events.filter((e) => e.event === 'episode-expired').map((e) => ({ atPageMs: e.atMs, detail: e.detail })),
+      samples,
+      budgetMs: opts.budgetMs,
+    });
+    const last = samples[samples.length - 1] ?? sample;
+    if (timeline.recovered || timeline.reason === 'episode-expired') return { timeline, fire, lastBoundary: b };
+    if (fire !== null && last.atPageMs - fire.atPageMs > opts.ceilingMs) return { timeline, fire, lastBoundary: b };
+    if (fire === null && Date.now() - wallStart > opts.giveUpMs) return { timeline, fire, lastBoundary: b };
+    await new Promise((resolve) => setTimeout(resolve, opts.pollMs));
+  }
+};
+
 test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 stalled-ack window on the poor profile (DIAGNOSTIC ONLY: isolated harness overrides, NOT Gate A, NOT a workload change)', async () => {
   test.skip(process.env['UDG_ACK_WINDOW_DIAG'] !== '1' && process.env['UDG_ACK_FLOOR'] !== '1', 'dispatched only by UDG_ACK_WINDOW_DIAG=1 (slice 23) or UDG_ACK_FLOOR=1 (slice 24 floor batch); no formal lane touches it)');
   test.setTimeout(900_000);
@@ -7755,6 +7971,8 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
     probe: { n: number; p50: number | null; p95: number | null; min: number | null; max: number | null; aborted: string | null };
     floorHeldCount: number;
     recovery: { recovered: boolean; epochBefore: number; epochAfter: number | null; tFireToTrackingMs: number | null; deliveriesAfter: number; ackAfter: number; pendingAfter: number } | null;
+    /** Slice 26: the monotonic timeline `recovery` is derived from (null on non-loss runs). */
+    timeline: RecoveryTimeline | null;
     notes: string[];
   }
 
@@ -7841,6 +8059,7 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
         }
       });
     void pageSends; void pageRecvs; // bonus bridge channel; the window arrays are the read target
+    let timeline: RecoveryTimeline | null = null;
     let handleClosed = false;
     try {
       GA_STALL_G = cfg.g ?? undefined; // ISOLATED harness override inside THIS cell only
@@ -7868,7 +8087,7 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
       const pumpPromise = gaPump(pageM, 12_000);
       void pumpPromise.catch(() => undefined); // the pump ends via __udgCellStop; its rejection (if any) is recorded by the boundary, never swallowed silently into the void
       let fired: { detail: string; atMsPage: number } | null = null;
-      let lastBoundary = await readGaBoundary(pageM);
+      let lastBoundary: GaBoundary = await readGaBoundary(pageM);
       const watchUntil = Date.now() + 15_000;
       while (Date.now() < watchUntil) {
         lastBoundary = await readGaBoundary(pageM);
@@ -7895,13 +8114,17 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
         const oneShot = await gaOneShot(pageM, 1, 0);
         notes.push(`oneShot=${JSON.stringify(oneShot)}`);
         fired = null;
-        const lossWatch = Date.now() + 20_000;
-        while (Date.now() < lossWatch) {
-          const b = await readGaBoundary(pageM);
-          const trig = b.events.find((e) => e.event === 'trigger' && e.detail.includes('input-ack-stalled'));
-          if (trig !== undefined) { fired = { detail: trig.detail, atMsPage: trig.atMs }; lastBoundary = b; break; }
-          await wait(100);
-        }
+        // ONE MONOTONIC TIMELINE (slice 26): sampling starts at the one-shot send — BEFORE the
+        // fire — on the page clock, and every number below comes from this one observation
+        // window. The old 20 s "poll until a trigger row appears" loop is gone: it noticed the
+        // fire and then started a SECOND clock, which is where the meaningless timings came from.
+        const collected = await collectRecoveryTimeline(pageM, {
+          pollMs: 50, giveUpMs: 20_000, ceilingMs: 8_000, budgetMs: RECOVERY_EPISODE_BUDGET_MS,
+        });
+        timeline = collected.timeline;
+        lastBoundary = collected.lastBoundary;
+        if (collected.fire !== null) fired = { detail: collected.fire.detail, atMsPage: collected.fire.atPageMs };
+        notes.push(`timeline=${JSON.stringify({ reason: timeline.reason, source: timeline.timestampSource, fireToTrackingMs: timeline.fireToTrackingMs, lateStart: timeline.lateStart, staleRejected: timeline.staleRecoveryRowsRejected, samplesBeforeFire: timeline.samplesBeforeFire })}`);
       }
       // REAL MATCHED PINGS on the poor stream (the accepted slot-reservation state machine on the
       // probe seat's own socket) — the envelope this diagnostic stands on.
@@ -7924,24 +8147,21 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
       const floorHeldCount = finalBoundary.events.filter((e) => e.event === 'stall-floor-held').length;
       // FLOOR BATCH ONLY: a terminal loss must STILL RECOVER — fresh matched snapshot on a new
       // epoch, tracking again, no reissue (sends stay frozen until the new domain verifies).
+      // Slice 26: these numbers are DERIVED FROM THE TIMELINE ONLY. `epochBefore` is the epoch
+      // the delivery ledger carried AT the fire (not a later read of the replaced transport
+      // handle), and `tFireToTrackingMs` is the page-clock interval from the actual fire row to
+      // the first same-episode new-epoch `tracking` — with its provenance in `timeline`.
       let recovery: RunResult['recovery'] = null;
-      if (cfg.loss && (cfg.floorMs ?? null) !== null && fired !== null) {
-        const epochBefore = await pageM.evaluate(async () => {
-          const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
-          return holder === undefined ? -1 : holder.transport.issuedEpoch();
-        });
-        const tFire = Date.now();
-        let rec: { recovered: boolean; epochAfter: number | null; tFireToTrackingMs: number | null; deliveriesAfter: number; ackAfter: number; pendingAfter: number } = { recovered: false, epochAfter: null, tFireToTrackingMs: null, deliveriesAfter: -1, ackAfter: -1, pendingAfter: -1 };
-        for (;;) {
-          const b = await readGaBoundary(pageM);
-          if (b.state === 'tracking' && b.epoch > epochBefore) {
-            rec = { recovered: true, epochAfter: b.epoch, tFireToTrackingMs: Date.now() - tFire, deliveriesAfter: b.deliveries, ackAfter: b.ack, pendingAfter: b.pending };
-            break;
-          }
-          if (Date.now() - tFire > 8_000) { rec = { ...rec, epochAfter: b.epoch, deliveriesAfter: b.deliveries, ackAfter: b.ack, pendingAfter: b.pending }; break; }
-          await wait(100);
-        }
-        recovery = { ...rec, epochBefore };
+      if (cfg.loss && (cfg.floorMs ?? null) !== null && timeline !== null) {
+        recovery = {
+          recovered: timeline.recovered,
+          epochBefore: timeline.epochAtFire ?? -1,
+          epochAfter: timeline.epochAfter,
+          tFireToTrackingMs: timeline.fireToTrackingMs,
+          deliveriesAfter: (timeline.recoveredSample ?? timeline.finalSample)?.deliveries ?? -1,
+          ackAfter: (timeline.recoveredSample ?? timeline.finalSample)?.ack ?? -1,
+          pendingAfter: (timeline.recoveredSample ?? timeline.finalSample)?.pending ?? -1,
+        };
       }
 
       // Snapshot stats BEFORE closing: mover connections = the ones that carried pump traffic
@@ -7997,7 +8217,7 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
         moverConns,
         safety: { sendsAfterFinal: sendsAfter - sendsBefore, sendsGrewQuiet: sendsAfter > sendsBefore, pendingAtEnd: finalBoundary.pending, stateAtEnd: finalBoundary.state, droppedFrames },
         probe: { n: rttsSorted.length, p50: pctileOf(rttsSorted, 0.5), p95: pctileOf(rttsSorted, 0.95), min: rttsSorted[0] ?? null, max: rttsSorted.length > 0 ? rttsSorted[rttsSorted.length - 1] ?? null : null, aborted: probe.abortedReason },
-        floorHeldCount, recovery,
+        floorHeldCount, recovery, timeline,
         notes,
       };
       // Hard safety invariants — these are the ONLY hard expectations in this diagnostic:
@@ -8046,13 +8266,62 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
     check('ack-floor: every IN-ENVELOPE phase (all three, none suppressed) stayed unfired with the wait armed (held events recorded, never silent)',
       floorRuns.slice(0, 3).every((r) => r.fired === null),
       floorRuns.slice(0, 3).map((r) => ({ id: r.cfg.id, fired: r.fired, floorHeldEvents: r.floorHeldCount })));
-    check('ack-floor: the TERMINAL loss still fires — AFTER the declared wait — and RECOVERS on a fresh matched snapshot (new epoch, tracking again, bounded rejoin) with NO reissue; added latency measured',
+    check('ack-floor: the TERMINAL loss still fires — AFTER the declared wait — and RECOVERS on a fresh matched snapshot (new epoch, tracking again, bounded rejoin) with NO reissue; the interval is measured on ONE monotonic timeline from the ACTUAL fire and carries its provenance',
       f4 !== undefined && f4.fired !== null && f4.fired.detail.includes('PROTOTYPE stalled-ack floor')
       && (f4.inputAgeAtTriggerMs.pageBasis ?? 0) > W
       && f4.recovery !== null && f4.recovery.recovered === true
-      && (f4.recovery.tFireToTrackingMs ?? Number.POSITIVE_INFINITY) <= 4_000 + 300
+      && f4.timeline !== null && f4.timeline.recovered === true
+      && f4.timeline.timestampSource !== 'none'
+      && f4.timeline.staleRecoveryRowsRejected === 0
+      && f4.timeline.samplesBeforeFire > 0
+      && f4.timeline.fireAtPageMs === f4.fired.atMsPage
+      && (f4.recovery.tFireToTrackingMs ?? Number.POSITIVE_INFINITY) <= RECOVERY_EPISODE_BUDGET_MS
+      && f4.timeline.withinBudget === true
       && f4.safety.sendsGrewQuiet === false,
-      f4 === undefined ? null : { fired: f4.fired, inputAgeMs: f4.inputAgeAtTriggerMs, recovery: f4.recovery, addedLatencyVsCountOnlyMs: (f4.inputAgeAtTriggerMs.pageBasis ?? 0) - 259.3, countOnlyBaselineRef: 'R6 at dpa8h fired at age 259.3 ms (retained)' });
+      f4 === undefined ? null : { fired: f4.fired, inputAgeMs: f4.inputAgeAtTriggerMs, recovery: f4.recovery, timeline: f4.timeline, addedLatencyVsCountOnlyMs: (f4.inputAgeAtTriggerMs.pageBasis ?? 0) - 259.3, countOnlyBaselineRef: 'R6 at dpa8h fired at age 259.3 ms (retained)' });
+
+    // THE TIMELINE'S OWN REGRESSION LEG (synthetic, deterministic, no I/O): the branches the
+    // measurement can take, including the one slice 24 actually hit — a window that started
+    // AFTER the recovery had already completed. A late start may only borrow the product's own
+    // ledger row; it may never report a ~0 ms recovery, and a row that predates the fire is
+    // stale evidence from an earlier episode, never this one's recovery.
+    const s = (atPageMs: number, state: string, epoch: number): RecoveryTimelineSample => ({ atPageMs, state, epoch, deliveries: 10, ack: 9, pending: 1 });
+    const syntheticFire: RecoveryLedgerRow = { atPageMs: 1_000, detail: 'input-ack-stalled at PROTOTYPE stalled-ack floor' };
+    const row = (atPageMs: number, epoch: number): RecoveryLedgerRow => ({ atPageMs, detail: `revision 7 epoch ${String(epoch)}` });
+    const syntheticSamples = [s(800, 'tracking', 1), s(900, 'tracking', 1), s(1_100, 'recovering', 1), s(1_400, 'recovering', 1), s(1_900, 'tracking', 2), s(2_400, 'tracking', 2)];
+    const tl = (samples: readonly RecoveryTimelineSample[], recoveredRows: readonly RecoveryLedgerRow[] = [], expiredRows: readonly RecoveryLedgerRow[] = [], fire: RecoveryLedgerRow | null = syntheticFire): RecoveryTimeline =>
+      classifyRecoveryTimeline({ fire, recoveredRows, expiredRows, samples, budgetMs: RECOVERY_EPISODE_BUDGET_MS });
+    const normal = tl(syntheticSamples, [row(1_850, 2)]);
+    const lateStartWithLedger = tl(syntheticSamples.slice(4), [row(1_812, 2)]);
+    const lateStartNoLedger = tl(syntheticSamples.slice(4));
+    const staleRowBeforeFire = tl(syntheticSamples.slice(4), [row(900, 2)]);
+    const witnessedWithoutLedgerRow = tl(syntheticSamples);
+    const expiredRun = tl([s(900, 'tracking', 1), s(1_200, 'recovering', 1), s(5_400, 'suspended', 1)], [], [{ atPageMs: 5_300, detail: 'recovery-episode-expired' }]);
+    const overBudget = tl([s(900, 'tracking', 1), s(1_200, 'recovering', 1), s(6_000, 'tracking', 2)], [row(5_950, 2)]);
+    const sameEpochLedgerRow = tl([s(1_200, 'recovering', 1), s(2_000, 'tracking', 1)], [row(1_500, 1)]);
+    const noFire = tl(syntheticSamples, [row(1_850, 2)], [], null);
+    const timelineRegressions = [
+      { leg: 'normal-witnessed-transition', expected: 'recovered 900 ms page-observed', got: { recovered: normal.recovered, ms: normal.fireToTrackingMs, source: normal.timestampSource, lateStart: normal.lateStart, withinBudget: normal.withinBudget, staleRejected: normal.staleRecoveryRowsRejected, samplesBeforeFire: normal.samplesBeforeFire } },
+      { leg: 'LATE-START-with-ledger-row (the slice-24 signature: window began after the transition)', expected: 'recovered 812 ms predictor-ledger, lateStart true, never 0', got: { recovered: lateStartWithLedger.recovered, ms: lateStartWithLedger.fireToTrackingMs, source: lateStartWithLedger.timestampSource, lateStart: lateStartWithLedger.lateStart } },
+      { leg: 'late-start WITHOUT a same-episode ledger row', expected: 'refused, fireToTrackingMs null', got: { recovered: lateStartNoLedger.recovered, reason: lateStartNoLedger.reason, ms: lateStartNoLedger.fireToTrackingMs, source: lateStartNoLedger.timestampSource } },
+      { leg: 'stale ledger row predating the fire', expected: 'rejected as stale, not this episode', got: { recovered: staleRowBeforeFire.recovered, reason: staleRowBeforeFire.reason, staleRejected: staleRowBeforeFire.staleRecoveryRowsRejected, ms: staleRowBeforeFire.fireToTrackingMs } },
+      { leg: 'witnessed transition with no ledger row retained', expected: 'accepted page-observed', got: { recovered: witnessedWithoutLedgerRow.recovered, ms: witnessedWithoutLedgerRow.fireToTrackingMs, source: witnessedWithoutLedgerRow.timestampSource } },
+      { leg: 'episode-expired before any tracking', expected: 'not recovered, episode-expired', got: { recovered: expiredRun.recovered, reason: expiredRun.reason, ms: expiredRun.fireToTrackingMs } },
+      { leg: 'recovery beyond the budget', expected: 'measured, withinBudget false', got: { recovered: overBudget.recovered, ms: overBudget.fireToTrackingMs, withinBudget: overBudget.withinBudget } },
+      { leg: 'ledger row whose epoch equals the pre-fire epoch', expected: 'refused (ledger-epoch-not-new)', got: { recovered: sameEpochLedgerRow.recovered, reason: sameEpochLedgerRow.reason } },
+      { leg: 'no fire at all', expected: 'no-fire, no numbers', got: { recovered: noFire.recovered, reason: noFire.reason, ms: noFire.fireToTrackingMs, staleRejected: noFire.staleRecoveryRowsRejected } },
+    ];
+    check('recovery-timeline regressions (synthetic, deterministic): a witnessed transition is page-observed; a LATE START may only borrow the product ledger row and is never reported as ~0 ms; a row predating the fire is stale evidence and is counted; expiry, over-budget, same-epoch and no-fire legs carry no manufactured interval',
+      normal.recovered && normal.fireToTrackingMs === 900 && normal.timestampSource === 'page-observed' && normal.samplesBeforeFire === 3 && normal.staleRecoveryRowsRejected === 0
+      && lateStartWithLedger.recovered && lateStartWithLedger.fireToTrackingMs === 812 && lateStartWithLedger.timestampSource === 'predictor-ledger' && lateStartWithLedger.lateStart === true
+      && lateStartNoLedger.recovered === false && lateStartNoLedger.reason === 'late-start-without-ledger' && lateStartNoLedger.fireToTrackingMs === null
+      && staleRowBeforeFire.recovered === false && staleRowBeforeFire.staleRecoveryRowsRejected === 1 && staleRowBeforeFire.fireToTrackingMs === null
+      && witnessedWithoutLedgerRow.recovered && witnessedWithoutLedgerRow.fireToTrackingMs === 900
+      && expiredRun.recovered === false && expiredRun.reason === 'episode-expired'
+      && overBudget.recovered === true && overBudget.withinBudget === false && overBudget.fireToTrackingMs === 5_000
+      && sameEpochLedgerRow.recovered === false && sameEpochLedgerRow.reason === 'ledger-epoch-not-new'
+      && noFire.recovered === false && noFire.reason === 'no-fire' && noFire.fireToTrackingMs === null,
+      timelineRegressions);
     const floorArtifact = {
       kind: 'DIAGNOSTIC-NOT-GATE-A', slice: 24,
       generatedAt: new Date().toISOString(), commit: headSha(), dirty: workingTreeDirty(),
@@ -8061,6 +8330,12 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
         W_ms: W,
         components: { declaredRttEnvelopeMs: 240, dequeuePairAllowanceMs: 108, serviceAllowanceMs: 5, sumMs: 353, sloRoundingMs: 'up to the next 50 ms authority patch cycle' },
         meaning: 'MEASURED CONSERVATIVE WAIT/ENVELOPE from retained named measurements — explicitly NOT a mathematical lower bound for every acknowledgement; no live pings feed it; snapshot/episode timers and the rolling cap are untouched and still own truly-missing deliveries; NO timed activity is required from the server',
+      },
+      recoveryTimeline: {
+        contract: 'ONE monotonic page-clock timeline anchored at the actual trigger row; the first same-episode new-epoch tracking is either WITNESSED inside the window (page-observed) or taken from the product snapshot-recovered row (predictor-ledger, lateStart); no interval is ever measured from a clock started after the fact, and no interval is manufactured when neither source exists',
+        budgetMs: RECOVERY_EPISODE_BUDGET_MS,
+        supersedes: 'slice-24 fixture timing, which read epochBefore from the replaced transport handle and started Date.now() after the probe + a fixed 1 500 ms window (dpa8s retained tFireToTrackingMs 2 — the poll, not the recovery)',
+        regressions: timelineRegressions,
       },
       runs: floorRuns,
     };
