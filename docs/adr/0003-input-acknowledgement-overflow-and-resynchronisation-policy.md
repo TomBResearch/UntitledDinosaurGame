@@ -273,7 +273,12 @@ here as adopted; not yet applied** — see §6.
 > termination of its own session; an unresolvable state revision; a retired request identity with no disposition; a stalled
 > acknowledgement defined solely from client-observable quantities as a non-empty pending set in which neither the
 > acknowledgement nor the authoritative record advances across the declared number of consecutive state deliveries while the
-> session epoch is unchanged; or **expiry of its own snapshot deadline, which runs from the last accepted state delivery and
+> session epoch is unchanged — **a condition that is NECESSARY but, since ADR-0005 (2026-11-21), ALONE INSUFFICIENT as the design criterion: the adopted design additionally requires the oldest ACTUAL
+> outstanding same-epoch input to have aged past a declared acknowledgement-opportunity WAIT (a measured conservative
+> envelope, neither a causal lower bound nor a proof of loss; progress, epoch change or an empty pending set reset the
+> condition; the snapshot deadline, episode deadline and rolling rejoin allowance remain independent); the shipped
+> product default implements the count-only rule until a separate implementation adoption**; or **expiry of its own
+> snapshot deadline, which runs from the last accepted state delivery and
 > expires whether or not any delivery arrives**. On any such trigger the client stops sending, discards pending prediction,
 > and proceeds to bounded rejoin and snapshot recovery within the declared retry budget; when no fresh snapshot is
 > available it remains stopped and, on budget exhaustion, surfaces a connection error rather than resuming. Because the

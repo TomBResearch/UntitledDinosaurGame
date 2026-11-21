@@ -1305,3 +1305,15 @@ contracts:checksums sync, UDG-001 records suite) run at the FINAL head; the exac
 grading both is reported at landing. Scope locks: PR #7 stays draft; no product default, no gate
 verdict, no numeric, no deployment, no merge; staging/production deploy restrictions unchanged;
 no external endpoint provisioned, accessed or probed.
+
+CORRECTION NAMED (first-attempt CI red, retained, not retried away): run 44870833053 at 985fa6e
+failed the server lane — UDG-003's W-1 byte-bind test (Phase 2, D-P2-2) compares the applied
+movement-authority clause against ADR-0003 §4's canonical blockquote AFTER markdown flattening,
+and the slice's first proviso (a) edited only ONE of the two byte-bound copies and (b) embedded a
+markdown link whose target differs between the two files' locations. The correction moves BOTH
+copies together, with the reference rendered as plain text "ADR-0005 (2026-11-21)" in both, so the
+flatten-equality the mechanism demands is restored; UDG-003 passes 105/105 locally at the corrected
+head, and the byte-bind mechanism itself is untouched — it did exactly its job: a contract-surface
+amendment that forgot its second copy failed loudly. The lesson is part of the record: the
+movement-authority clause is TWO-COPY BYTE-BOUND text; any future amendment edits §4 and §5.1 in
+the same commit.
