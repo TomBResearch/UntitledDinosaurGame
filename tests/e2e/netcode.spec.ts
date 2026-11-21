@@ -760,6 +760,9 @@ interface PredTransportSurface {
   };
   /** Optional public pass-through to the SDK protocol ping on the joined socket (slice 6c). */
   pingLatency?(callback: (ms: number) => void): void;
+  /** Public last-validated-row read (used by the slice-25 control join's fresh-snapshot wait).
+   * The raw delivery row carries `epoch` — the control leg needs it for the same-epoch guard. */
+  readRow?(): { epoch: number; inputResolvedThrough: number } | null;
   close(): Promise<void>;
 }
 
@@ -948,6 +951,11 @@ interface GatedRoom {
   }[];
   evidence(): Record<string, unknown>;
   journal(): { rows: readonly Record<string, unknown>[]; chain: readonly { tick: number; atMs: number }[]; dropped: number };
+  /** PUBLIC readonly arrays on RegionRoom (RegionRoom.ts:178/180) — the room's own join-gate and
+   * close observations. The slice-25 roomView reads ONLY these and evidence().seats, never the
+   * private #seats map (the dpa8x silent-null defect came from reaching for it through a cast). */
+  readonly joinRefusals: readonly { reason: string; detail: string; atMs: number }[];
+  readonly closeObservations: readonly Record<string, unknown>[];
 }
 
 const gatedRoom = (roomId: string): GatedRoom => {
@@ -7956,7 +7964,12 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
   test.setTimeout(900_000);
   expect(fixture, 'the room fixture booted').toBeDefined();
   const roomPort = Number(new URL(fixture?.endpoint ?? 'http://127.0.0.1:0').port);
-  const seed = 1001;
+  // ISOLATED DIAGNOSTIC KNOB (slice 26 attribution, same class as UDG_ACK_FLOOR/UDG_ACK_WINDOW_DIAG):
+  // the impairment RNG seed for THIS env-gated cell only, so the previously-red poor coordinates
+  // 1001 and 1002 can each be attributed once on the existing approved setup. NO default changes
+  // (unset = 1001, byte-identical to every prior dispatch), no CI route, no spike-CLI cell, no
+  // product default/pin/spec anywhere near it.
+  const seed = Number(process.env['UDG_ACK_SEED'] ?? '1001');
   const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
   const outDir = process.env['UDG_ACK_WINDOW_OUT'] ?? join(ROOT, 'artifacts', '.local', 'spike-001', process.env['UDG_ACK_FLOOR'] === '1' ? 'dpa8i' : 'dpa8h');
   mkdirSync(outDir, { recursive: true });
@@ -7976,7 +7989,7 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
   const POOR = { name: 'poor-ackdiag', oneWayMs: 100, jitterBudgetMs: 40, seed };
 
   type Phase = 'immediate' | 'postDelivery' | 'midInterval';
-  interface RunCfg { id: string; g: number | null; phase: Phase; loss: boolean; floorMs?: number | null }
+  interface RunCfg { id: string; g: number | null; phase: Phase; loss: boolean; floorMs?: number | null; controlJoin?: boolean }
   interface RunResult {
     cfg: RunCfg; wallMs: number;
     fired: { detail: string; atMsPage: number } | null;
@@ -7995,6 +8008,11 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
     recovery: { recovered: boolean; epochBefore: number; epochAfter: number | null; tFireToTrackingMs: number | null; deliveriesAfter: number; ackAfter: number; pendingAfter: number } | null;
     /** Slice 26: the monotonic timeline `recovery` is derived from (null on non-loss runs). */
     timeline: RecoveryTimeline | null;
+    episodeLedger: { event: string; detail: string; atMs: number }[] | null;
+    suspensionReason: string | null;
+    roomView: { joinRefusals: unknown[]; closeObservationCount: number; seats: { entityId: string; epoch: number; resolvedThrough: number }[] } | null;
+    controlJoin: { ok: boolean; msToRoomId: number | null; issuedEpoch: number | null; msToFirstOwnRow: number | null; rowEpoch: number | null; staleEpochRowsRejected: number; newJoinRefusals: unknown[] | null; error: string | null; msToClose: number | null } | null;
+    proxyConnLogTail: unknown;
     notes: string[];
   }
 
@@ -8186,6 +8204,116 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
         };
       }
 
+      // SLICE 25 ATTRIBUTION CAPTURES (loss runs): the FULL episode ledger verbatim, the
+      // suspension's OWN identity (rolling-window vs episode-expired vs no-route), and the
+      // ROOM's own join-gate observations — none of these were persisted in the first batch,
+      // which is exactly why the cause could not be attributed from retained bytes.
+      let episodeLedger: { event: string; detail: string; atMs: number }[] | null = null;
+      let suspensionReason: string | null = null;
+      let roomView: RunResult['roomView'] = null;
+      // dpa8x fix #1 (NAMED, not retried): the earlier capture reached for the room's PRIVATE
+      // `#seats` map through a cast (`roomG.seats.keys()` — a property that does not exist), so the
+      // whole object literal threw and roomView was silently null in EVERY run. The room's PUBLISHED
+      // surface is used now: the public readonly joinRefusals/closeObservations arrays and the
+      // per-seat {entityId, epoch, resolvedThrough} rows that evidence() exposes (the server's own
+      // observation of each seat's acknowledgement watermark). A capture failure names itself in
+      // notes — it never disappears silently again.
+      const errorText = (error: unknown): string => {
+        const e = error as { name?: unknown; message?: unknown; cause?: unknown; stack?: unknown } | undefined;
+        const cause = e?.cause === undefined ? '' : ` cause=${String(e.cause)}`;
+        const stack = typeof e?.stack === 'string' ? ` @${e.stack.split('\n')[1]?.trim().slice(0, 110) ?? ''}` : '';
+        return `${error instanceof Error ? String(e?.name ?? 'Error') : typeof error}: ${JSON.stringify(String(e?.message ?? ''))}${cause}${stack}`.slice(0, 300);
+      };
+      if (cfg.loss) {
+        const snap = await gaRecovery(pageM);
+        episodeLedger = snap.events as unknown as { event: string; detail: string; atMs: number }[];
+        suspensionReason = snap.suspensionReason;
+        try {
+          const roomG = gatedRoom(roomId);
+          const ev = roomG.evidence();
+          const seatRows = Array.isArray(ev['seats']) ? ev['seats'] as { entityId?: unknown; epoch?: number; resolvedThrough?: number }[] : [];
+          roomView = {
+            joinRefusals: [...roomG.joinRefusals],
+            closeObservationCount: roomG.closeObservations.length,
+            seats: seatRows.map((s) => ({ entityId: String(s['entityId'] ?? 'unnamed'), epoch: s['epoch'] ?? -1, resolvedThrough: s['resolvedThrough'] ?? -1 })),
+          };
+        } catch (error) {
+          roomView = null;
+          notes.push(`${cfg.id}: roomView capture FAILED (named, was silently-null before dpa8x): ${errorText(error)}`);
+        }
+      }
+      // MATCHED CONTROL (one run only): the IDENTICAL fresh joinById/socket path WITHOUT loss,
+      // mid-stream through the same poor proxy — matchmaker response, socket, issued epoch,
+      // first own row, close. If this path works while the rejoin's join fails, the difference
+      // is the episode context, not the join machinery. No tokens, no identity secrets recorded.
+      // dpa8x fix #2 (NAMED, not retried): the earlier leg passed `presentation: {}`, which the
+      // room's OWN hash gate (screenJoin — the accepted §protocol admission rule) refuses by
+      // design: the refusal leaves the socket with 1008 and the SDK surfaces an Error whose message
+      // is EMPTY, so the leg attributed nothing (ok:false, error:"") in every run. The legitimate
+      // seats (joinGaSeat) pass fixture.presentation {protocolVersion, configHash, manifestHash};
+      // the control passes the SAME, so it exercises the ADMITTED path. EXPECTED outcome: ok true,
+      // non-null msToRoomId, an issued epoch and a first OWN row whose epoch EQUALS the issued one
+      // (dpa8m measured the same join admitted in 772 ms through a healthy room). UNEXPECTED: the
+      // error's full identity (name/message/cause/stack top) plus the ROOM's own joinRefusals
+      // recorded during this window ride in the artefact, and the leg is red, named — never empty.
+      let controlJoin: RunResult['controlJoin'] = null;
+      if (cfg.controlJoin === true) {
+        const refusalsBefore = (): number | null => {
+          try { return gatedRoom(roomId).joinRefusals.length; } catch { return null; }
+        };
+        const nBefore = refusalsBefore();
+        const cjBase = await pageP.evaluate(async (args) => {
+          const adapter = (await import(/* @vite-ignore */ args.adapterUrl)) as PredModuleSurface;
+          const describeError = (error: unknown): string => {
+            const e = error as { name?: unknown; message?: unknown; cause?: unknown; stack?: unknown } | undefined;
+            const cause = e?.cause === undefined ? '' : ` cause=${String(e.cause)}`;
+            const stack = typeof e?.stack === 'string' ? ` @${e.stack.split('\n')[1]?.trim().slice(0, 110) ?? ''}` : '';
+            return `${error instanceof Error ? String(e?.name ?? 'Error') : typeof error}: ${JSON.stringify(String(e?.message ?? ''))}${cause}${stack}`.slice(0, 300);
+          };
+          const t0 = performance.now();
+          try {
+            const joined = await adapter.createSdkSeatTransport({
+              endpoint: args.endpoint, join: { mode: 'byId', roomId: args.roomId },
+              presentation: args.presentation, epochTimeoutMs: 15_000,
+            });
+            const msToRoomId = performance.now() - t0;
+            const epoch = joined.transport.issuedEpoch();
+            let msToFirstRow: number | null = null;
+            let rowEpoch: number | null = null;
+            let staleEpochRows = 0;
+            const rowWait = performance.now();
+            const rr = joined.transport.readRow;
+            for (;;) {
+              // IMMEDIATE PREFIRE CHECK: the resolving join state may ALREADY carry the row — the
+              // loop tests it before its first sleep, so an already-arrived row is never missed.
+              const row = rr !== undefined ? rr.call(joined.transport) : null;
+              if (row !== null && row !== undefined) {
+                // SAME-EPOCH GUARD: a row from another epoch is not this connection's first row;
+                // it is counted as rejected, never accepted as evidence (no manufactured arrival).
+                if (row.epoch === epoch) { msToFirstRow = performance.now() - rowWait; rowEpoch = row.epoch; break; }
+                staleEpochRows += 1;
+              }
+              // IMMEDIATE EXPIRY CHECK: the deadline is tested BEFORE sleeping, so a wait that has
+              // already expired ends at once instead of drifting another 50 ms past 8 s.
+              if (performance.now() - rowWait > 8_000) break;
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+            const tc = performance.now();
+            await joined.transport.close();
+            return { ok: true as const, msToRoomId, issuedEpoch: epoch, msToFirstOwnRow: msToFirstRow, rowEpoch, staleEpochRowsRejected: staleEpochRows, error: null as string | null, msToClose: performance.now() - tc };
+          } catch (error) {
+            return { ok: false as const, msToRoomId: performance.now() - t0, issuedEpoch: null, msToFirstOwnRow: null, rowEpoch: null, staleEpochRowsRejected: 0, error: describeError(error), msToClose: null };
+          }
+        }, { adapterUrl: ADAPTER_URL, endpoint: proxyUrl, roomId, presentation: fixture?.presentation ?? {} });
+        // The ROOM's own gate view for THIS window: refusals recorded between the two reads are
+        // the server's testimony about the control join (expected: none when ok:true).
+        let newJoinRefusals: unknown[] | null = null;
+        try {
+          const after = gatedRoom(roomId).joinRefusals;
+          newJoinRefusals = nBefore === null ? [...after] : [...after].slice(nBefore);
+        } catch { newJoinRefusals = null; }
+        controlJoin = { ...cjBase, newJoinRefusals };
+      }
       // Snapshot stats BEFORE closing: mover connections = the ones that carried pump traffic
       // (>= 3 c2s chunks; quiet/probe seats only ever sent their join frames by now).
       const st = await host.request({ op: 'stats', handle });
@@ -8240,6 +8368,8 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
         safety: { sendsAfterFinal: sendsAfter - sendsBefore, sendsGrewQuiet: sendsAfter > sendsBefore, pendingAtEnd: finalBoundary.pending, stateAtEnd: finalBoundary.state, droppedFrames },
         probe: { n: rttsSorted.length, p50: pctileOf(rttsSorted, 0.5), p95: pctileOf(rttsSorted, 0.95), min: rttsSorted[0] ?? null, max: rttsSorted.length > 0 ? rttsSorted[rttsSorted.length - 1] ?? null : null, aborted: probe.abortedReason },
         floorHeldCount, recovery, timeline,
+        episodeLedger, suspensionReason, roomView, controlJoin,
+        proxyConnLogTail: stats.connLog.slice(-6),
         notes,
       };
       // Hard safety invariants — these are the ONLY hard expectations in this diagnostic:
@@ -8258,6 +8388,22 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
       expect(recvs.length, `${cfg.id}: NAMED GAP — the WS instrument captured no receives`).toBeGreaterThan(0);
       expect(res.safety.sendsGrewQuiet, `${cfg.id}: the page emitted sends while the seat should have been silent (re-issue?)`).toBe(false);
       if (cfg.loss) expect(res.safety.droppedFrames, `${cfg.id}: the wire-drop seam did not drop exactly the armed frame`).toBe(1);
+      // dpa8x follow-up (reviewer-required): the attribution captures must MEASURE, never
+      // silently-absent. EXPECTED here: the room's public evidence surface reads (roomView non-null
+      // on loss runs) and the presentation-matched control join is ADMITTED with its own fresh
+      // epoch and a same-epoch first row. UNEXPECTED outcomes stay red with the captured identity
+      // in the message — they are never laundered and never retried into a pass.
+      if (cfg.loss) expect(res.roomView !== null, `${cfg.id}: roomView capture failed — public-surface introspection must measure (notes: ${JSON.stringify(res.notes.filter((n) => n.includes('roomView')))})`).toBe(true);
+      if (cfg.controlJoin === true) {
+        const cj = res.controlJoin;
+        expect(cj !== null, `${cfg.id}: controlJoin capture missing — the control must be MEASURED (non-null)`).toBe(true);
+        if (cj !== null) {
+          expect(cj.ok, `${cfg.id}: controlJoin EXPECTED the admitted path (presentation-matched joinById, dpa8m measured 772 ms); UNEXPECTED: error=${cj.error ?? 'n/a'} newJoinRefusals=${JSON.stringify(cj.newJoinRefusals)}`).toBe(true);
+          expect(cj.msToRoomId !== null, `${cfg.id}: controlJoin admitted without a measured msToRoomId (impossible-by-construction — name it)`).toBe(true);
+          expect(cj.msToFirstOwnRow !== null, `${cfg.id}: controlJoin never saw its OWN same-epoch row within 8 s (rowEpoch=${String(cj.rowEpoch)}, staleEpochRowsRejected=${String(cj.staleEpochRowsRejected)})`).toBe(true);
+          expect(cj.rowEpoch === cj.issuedEpoch, `${cfg.id}: controlJoin first-row epoch ${String(cj.rowEpoch)} must EQUAL the issued epoch ${String(cj.issuedEpoch)} (same-epoch guard)`).toBe(true);
+        }
+      }
       GA_STALL_G = undefined; // the overrides NEVER leak past this run
       GA_STALL_FLOOR_MS = null;
       return res;
@@ -8280,7 +8426,7 @@ test('ack-window diagnostic — earliest causal ack opportunity vs the §3.2 sta
     const W = 400;
     const floorRuns: RunResult[] = [
       await runOnce({ id: 'F1-floor400-G3-immediate', g: null, phase: 'immediate', loss: false, floorMs: W }),
-      await runOnce({ id: 'F2-floor400-G3-postDelivery', g: null, phase: 'postDelivery', loss: false, floorMs: W }),
+      await runOnce({ id: 'F2-floor400-G3-postDelivery+controlJoin', g: null, phase: 'postDelivery', loss: false, floorMs: W, controlJoin: true }),
       await runOnce({ id: 'F3-floor400-G3-midInterval', g: null, phase: 'midInterval', loss: false, floorMs: W }),
       await runOnce({ id: 'F4-floor400-G3-terminalLost', g: null, phase: 'postDelivery', loss: true, floorMs: W }),
     ];
