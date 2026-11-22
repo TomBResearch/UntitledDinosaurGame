@@ -1,0 +1,97 @@
+{
+  "protocolVersion": "udg-m0-1.0.0",
+  "region": {
+    "worldId": "world-001",
+    "regionId": "region-greybox-001",
+    "bounds": {
+      "x": {
+        "min": -50,
+        "max": 50
+      },
+      "y": {
+        "min": -5,
+        "max": 20
+      },
+      "z": {
+        "min": -50,
+        "max": 50
+      }
+    }
+  },
+  "movement": {
+    "speed": 4,
+    "capsuleRadius": 0.35,
+    "capsuleHeight": 1.8,
+    "arrivalTolerance": 0.2,
+    "gravity": -9.81,
+    "maxSlopeRadians": 0.7853981633974483,
+    "maxStepHeight": 0.3
+  },
+  "controller": {
+    "controllerOffset": 0.01,
+    "groundSnapDistance": 0.1,
+    "minStepTopWidth": 0.35,
+    "staticOnlyAutostep": true,
+    "allowDynamicImpulses": false,
+    "slopeSlideRadians": 0.7853981633974483,
+    "restCentreY": 0.91
+  },
+  "network": {
+    "tickRate": 20,
+    "simulationStepSeconds": 0.05,
+    "physicsSubsteps": 1,
+    "statePatchIntervalMs": 100,
+    "reconnectWindowSeconds": 30,
+    "generationGapLimit": 64
+  },
+  "input": {
+    "inputRatePerTick": 1,
+    "bufferPressureMargin": 8,
+    "jitterAllowanceFrames": 2,
+    "bufferMaxSize": 32,
+    "closureWindowMs": 250,
+    "closureMaxMs": 1000,
+    "stallDetectionDeliveries": 3,
+    "clientSnapshotDeadlineMs": 500,
+    "clientRecoveryDeadlineMs": 4000,
+    "rejoinWindowSeconds": 60,
+    "rejoinWindowAllowance": 2,
+    "rejoinBackoffMs": [
+      250,
+      500,
+      1000
+    ],
+    "closeCodes": {
+      "INPUT_RETIRED_UNREPRESENTED": 4100,
+      "INPUT_RATE_CEILING": 4101,
+      "INPUT_RECOVERY": 4102
+    },
+    "rateCeilingMessagesPerSecond": 40,
+    "dedupeClosureEnabled": false
+  },
+  "limits": {
+    "uint32Min": 0,
+    "uint32Max": 4294967295,
+    "epochMin": 1,
+    "epochMax": 4294967295,
+    "generationMin": 0,
+    "generationMax": 4294967294,
+    "minRequestIdLength": 1,
+    "maxRequestIdLength": 64,
+    "maxIdentifierLength": 64,
+    "maxVersionLength": 32,
+    "hashLength": 64,
+    "maxGenerationForwardGap": 64,
+    "terminalRequestCacheSize": 128,
+    "terminalRequestTtlSeconds": 30,
+    "routeAbsentRevision": 0,
+    "routeAbsentIndex": 0,
+    "yawMin": -3.141592653589793,
+    "yawMax": 3.141592653589793,
+    "movementMode": {
+      "idle": 0,
+      "direct": 1,
+      "path": 2
+    }
+  }
+}
