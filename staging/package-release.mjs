@@ -34,7 +34,7 @@ import { createHash } from 'node:crypto';
 import {
   chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -43,7 +43,6 @@ const arg = (name, fallback) => {
   const at = process.argv.indexOf(`--${name}`);
   return at >= 0 && process.argv[at + 1] !== undefined ? process.argv[at + 1] : fallback;
 };
-const flag = (name) => process.argv.includes(`--${name}`);
 
 const OUT = resolve(arg('out', '/workspace/udg-staging-transfer'));
 const NAME = arg('name', 'udg-room.tar.gz');

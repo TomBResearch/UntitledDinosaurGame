@@ -43,4 +43,22 @@ export default tseslint.config(
       sourceType: 'module',
     },
   },
+  {
+    // staging/*.mjs are Node-run release-integration scripts (launcher, smoke CLI, packager).
+    // They are not workspace packages and import no workspace TypeScript; the boundary checker
+    // does not scan them. They need the Node ambient globals the repo's tsconfig projects
+    // normally supply through `types: ["node"]` — declared here explicitly, scoped to this
+    // one directory, so lint sees exactly the runtime surface these files can touch.
+    files: ['staging/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'module',
+      globals: {
+        process: 'readonly',
+        performance: 'readonly',
+        URL: 'readonly',
+        setTimeout: 'readonly',
+      },
+    },
+  },
 );

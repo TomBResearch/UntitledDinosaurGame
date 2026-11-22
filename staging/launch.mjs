@@ -82,12 +82,10 @@ if (load.loaded.config.region.bounds === null) {
 // The validated document travels to the ROOM as operator `config` overrides — exactly the
 // `roomOptions.config` channel `startRegionServer` uses. A room built with `{}` would boot on the
 // bounds-less defaults and then refuse every join at the authority (`region-bounds-missing`): the
-// deployment must reach `RegionRoom.onCreate`, and nothing else is handed to it.
-const {
-  limits: _neverOverridesLimits, // limits are re-issued by the validator; never an override
-  ...deploymentConfig
-} = load.loaded.config;
-const rooms = { region: defineOperatorRegionRoom({ config: deploymentConfig }) };
+// deployment must reach `RegionRoom.onCreate`, and nothing else is handed to it. `limits` is
+// deliberately absent: the validator re-issues it and it is never an override.
+const { protocolVersion, region, movement, controller, network, input } = load.loaded.config;
+const rooms = { region: defineOperatorRegionRoom({ config: { protocolVersion, region, movement, controller, network, input } }) };
 const httpServer = createServer();
 const transport = new WebSocketTransport({ server: httpServer });
 const server = defineServer({
