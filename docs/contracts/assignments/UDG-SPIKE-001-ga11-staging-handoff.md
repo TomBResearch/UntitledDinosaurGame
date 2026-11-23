@@ -45,6 +45,21 @@ measurement needs one small, reviewed harness mode (endpoint injection into `joi
 origins + proxy bypass or labelled on-path impairment) which is deliberately NOT built here —
 building it before a deployment exists would invite measuring nothing.
 
+> **STATUS NOTE (slice 30, 2026-11-23) — the gap above is now BUILT, as a candidate for review.**
+> The paragraph stood "until a nomination exists"; an owner-nominated real path now exists (the
+> private-staging origin of the TRIAL record), so the labelled endpoint-injection mode is
+> implemented on this PR head: an env-gated `ga11-session` cell (no CI route, no spike-CLI cell —
+> the slice-23/24 dispatch shape) joins TWO real seats into one room on the nominated origin's own
+> HTTPS/WSS Basic-auth path through context-scoped `httpCredentials` and a netrc read from STDIN
+> in the existing host's machine-line format; no credential crosses argv or a file; the endpoint
+> VALUE still never enters a record (same digest, same §4 caveat). It is validated ONLY on a
+> loopback facsimile (unit 16/16 + two full facsimile cell runs, artifacts re-scanned secret-free);
+> NOTHING here has touched the nominated origin — the live runs belong to the owner/Codex per the
+> [endpoint-injection runbook](UDG-SPIKE-001-ga11-endpoint-injection-runbook.md), and GA-11's
+> §15B(1)–(5) verdicts, the official 4×3 matrix and this document's own posture above are
+> unchanged. The connect PROBE of §1 and its loopback guard remain the shipped connect-phase seam;
+> this mode neither replaces nor touches them.
+
 ## 3. Reproduce · validate · reset (all local, all independent of any endpoint)
 
 ```

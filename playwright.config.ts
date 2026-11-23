@@ -64,6 +64,15 @@ const reporters = (): ReporterDescription[] => {
 
 export default defineConfig({
   testDir: './tests/e2e',
+  /**
+   * UDG-SPIKE-001 slice 30: the GA-11 stdin-netrc relay (tests/support/ga11-stdin-setup.mjs).
+   * It is INERT unless UDG_GA11_SESSION=1 (every ordinary suite, CI lane and cell runs through a
+   * no-op); when that explicit gate is on, it reads the dispatched command's piped stdin in this
+   * MAIN process — a test worker never inherits stdin — and relays it to the gated cell in the
+   * child environment only (no argv, no file; the cell deletes it on decode). This exists so the
+   * operator's credential can arrive by pipe alone, as the GA-11 endpoint-injection seam requires.
+   */
+  globalSetup: './tests/support/ga11-stdin-setup.mjs',
   fullyParallel: false,
   workers: 1,
   retries: 0,
