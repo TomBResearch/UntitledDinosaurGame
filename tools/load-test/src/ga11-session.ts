@@ -26,9 +26,11 @@
  *   - the fixed bounded first-path population constants (plan §15B-B session shape + the adopted
  *     warm-up; NO regime/profile is claimed — the natural path earns a regime only through the
  *     §15B(4) characterisation that is exactly what these sessions feed);
- *   - the loopback FACSIMILE hop: a Basic-auth-gated raw byte relay bound to 127.0.0.1 that lets
- *     the WHOLE authed-session path (HTTP join + authenticated WebSocket upgrade + RTT seam +
- *     byte counting) be validated against the local fixture room before anyone dials anything.
+ *   - the loopback FACSIMILE hop: a TLS-TERMINATING Basic-auth reverse hop bound to 127.0.0.1
+ *     (HTTPS parity with the actual vhost, on an ephemeral locally-owned untrusted test
+ *     certificate), which lets the WHOLE authed-session path (2xx authenticated document + HTTP
+ *     join + authenticated WSS upgrade + RTT seam + post-TLS byte counting) be validated against
+ *     the local fixture room before anyone dials anything.
  *
  * What this file NEVER does: dials any endpoint itself (the browser cell composes the session;
  * this module only decides admission and honesty rules); records an endpoint value, a login or a
@@ -39,7 +41,13 @@
  */
 
 import { createHash } from 'node:crypto';
-import { connect as netConnect, createServer, type Server, type Socket } from 'node:net';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmdirSync, unlinkSync } from 'node:fs';
+import { request as httpRequest, type IncomingHttpHeaders, type ServerResponse } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
+import { connect as netConnect, type Socket } from 'node:net';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 /* ------------------------------------------------------------------ fixed first-path population
  * PRE-REGISTERED constants (plan §15B-B session shape; the adopted 20 s warm-up from
@@ -87,7 +95,7 @@ export interface Ga11EndpointOk {
   /** sha256(lowercased host:port) — redaction only, never access control (handoff §4). */
   readonly digest: string;
   readonly loopback: boolean;
-  readonly tls: 'runtime-default-verification' | 'plain-not-private';
+  readonly tls: 'runtime-default-verification' | 'plain-not-private' | 'loopback-test-cert-untrusted';
 }
 
 export interface Ga11EndpointFail {
@@ -105,7 +113,7 @@ const LOOPBACK_HOSTS: readonly string[] = ['127.0.0.1', 'localhost', '[::1]', ':
  */
 export const ga11EndpointGuard = (
   raw: string,
-  options: { allowLoopbackInsecure?: boolean } = {},
+  options: { allowLoopbackInsecure?: boolean; loopbackTlsUntrusted?: boolean } = {},
 ): Ga11EndpointOk | Ga11EndpointFail => {
   if (raw === '') return { ok: false, error: 'no endpoint supplied — the nominated origin is explicit env only, nothing is guessed or defaulted' };
   let url: URL;
@@ -129,6 +137,11 @@ export const ga11EndpointGuard = (
   }
   const port = url.port !== '' ? Number(url.port) : secure ? 443 : 80;
   if (!Number.isInteger(port) || port <= 0 || port > 65_535) return { ok: false, error: 'endpoint port is out of range' };
+  // A locally-owned facsimile may present an UNTRUSTED ephemeral test certificate. The label is
+  // explicit, and ONLY the loopback facsimile can ever carry it — a real nominated endpoint is
+  // always `runtime-default-verification` and no harness context is ever allowed to relax TLS
+  // verification for it (ga11SeatContextTlsOptions pins that split).
+  const untrustedTestTls = secure && loopback && options.loopbackTlsUntrusted === true;
   const hostPort = `${host}:${String(port)}`;
   return {
     ok: true,
@@ -138,7 +151,7 @@ export const ga11EndpointGuard = (
     port,
     digest: createHash('sha256').update(hostPort).digest('hex'),
     loopback,
-    tls: secure ? 'runtime-default-verification' : 'plain-not-private',
+    tls: !secure ? 'plain-not-private' : untrustedTestTls ? 'loopback-test-cert-untrusted' : 'runtime-default-verification',
   };
 };
 
@@ -267,11 +280,19 @@ export const rttEligibility = (rawSamples: readonly number[], nearestRankFn: (sa
  * see the cell). The only cross-served things are the harness's own compiled client/netcode
  * modules and the pinned-SDK chunks the shipped Vite pipeline produces for them; the browser
  * asks for them at the page's own origin, so exactly those KNOWN local module-asset path shapes
- * are rewritten to the loopback Vite server. The allowlist is a PREFIX LIST OF MODULE ASSETS
- * ONLY: the SDK's matchmake routes ('/matchmake/…' and anything else the pinned client really
- * calls) and the WebSocket (never interceptable by page.route in the first place) are NOT on
- * the list and always travel the real network. Nothing is proxied; no secret can cross this
- * rewrite — its target is a localhost dev-asset server.
+ * are SERVED FROM THE LOCAL LOOPBACK VITE PIPELINE by the Node side of the harness: the route
+ * handler runs a FRESH Node fetch against the loopback asset server and fulfils the browser from
+ * the buffer. (The slice-30 `route.fallback({url})` rewrite is REMOVED: Playwright requires a
+ * fallback URL to carry the SAME protocol as the intercepted request, so rewriting an
+ * https://page-origin asset to the http://127.0.0.1 asset server throws on the real HTTPS path —
+ * the HTTP-only facsimile could never see that. Serving via fetch+fulfil is protocol-independent
+ * and strictly narrower: no request headers, cookies or Authorization ever leave the browser —
+ * the asset fetch is a brand-new, headerless request to a loopback URL.)
+ * The allowlist is a PREFIX LIST OF MODULE ASSETS ONLY: the SDK's matchmake routes
+ * ('/matchmake/…' and anything else the pinned client really calls) and the WebSocket (never
+ * interceptable by page.route in the first place) are NOT on the list and always travel the real
+ * network. The fetch target is pinned to a LITERAL LOOPBACK http origin, so no asset request can
+ * ever be forwarded toward the nominated (EC2) host by this path.
  */
 export const GA11_MODULE_PATH_PREFIXES = [
   '/src/network/',       // the two entry modules the harness imports
@@ -281,31 +302,121 @@ export const GA11_MODULE_PATH_PREFIXES = [
   '/@vite/',             // Vite client/env module URLs
 ] as const;
 
-/** Rewrite ONLY a same-origin-as-nominated module-asset URL to the local Vite origin; anything
- * else (matchmake, unknown paths, other origins) returns null and is NEVER intercepted. */
-export const ga11ModuleUrlRewrite = (rawUrl: string, webOrigin: string, viteOrigin: string): string | null => {
+/** Bound every local asset fetch; a stuck Vite dev server ends the route call, never the run. */
+export const GA11_ASSET_TIMEOUT_MS = 8_000;
+
+/** Resolve ONLY a same-origin-as-nominated module-asset URL to the local loopback Vite fetch
+ * target; anything else (matchmake, unknown paths, other origins) returns null and is NEVER
+ * fetched or intercepted. A NON-loopback or non-http viteOrigin also returns null — this path
+ * structurally cannot forward anything to a real host. */
+export const ga11LocalAssetTarget = (rawUrl: string, webOrigin: string, viteOrigin: string): string | null => {
   let url: URL;
+  let base: URL;
+  let vite: URL;
   try {
     url = new URL(rawUrl);
-  } catch {
-    return null;
-  }
-  let base: URL;
-  try {
     base = new URL(webOrigin);
+    vite = new URL(viteOrigin);
   } catch {
     return null;
   }
+  if (vite.protocol !== 'http:' || !LOOPBACK_HOSTS.includes(vite.hostname.toLowerCase())) return null;
   if (url.origin !== base.origin) return null;
   if (!GA11_MODULE_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix))) return null;
   return `${viteOrigin}${url.pathname}${url.search}`;
 };
+
+export interface Ga11AssetFetched {
+  readonly ok: true;
+  readonly status: number;
+  readonly body: Buffer;
+  readonly contentType: string;
+}
+
+export interface Ga11AssetFailed {
+  readonly ok: false;
+  /** Named reason; never contains a credential (none was sent) and never a remote host value. */
+  readonly reason: string;
+}
+
+const mimeForPath = (pathname: string): string => {
+  if (/\.(js|mjs|ts|mts)$/.test(pathname)) return 'text/javascript; charset=utf-8';
+  if (pathname.endsWith('.json')) return 'application/json';
+  if (pathname.endsWith('.css')) return 'text/css';
+  if (/\.(wasm|glb|png|jpg|jpeg|webp|bin)$/.test(pathname)) return 'application/octet-stream';
+  return 'text/plain; charset=utf-8';
+};
+
+/**
+ * Fetch ONE allowlisted local module asset for route fulfilment. A FRESH request with NO copied
+ * headers (no cookies, no Authorization, nothing from the browser's request — `headers: {}`),
+ * `redirect: 'error'` (a redirect away from the pinned loopback target is refused, not followed),
+ * and a hard `AbortSignal.timeout` so a wedged dev server ends BOUNDED. 2xx only; a non-2xx or a
+ * failure is a named refusal with no body carried.
+ */
+export const fetchGa11LocalAsset = async (
+  rawUrl: string,
+  webOrigin: string,
+  viteOrigin: string,
+  timeoutMs: number = GA11_ASSET_TIMEOUT_MS,
+): Promise<Ga11AssetFetched | Ga11AssetFailed> => {
+  const target = ga11LocalAssetTarget(rawUrl, webOrigin, viteOrigin);
+  if (target === null) return { ok: false, reason: 'not an allowlisted local module-asset URL — never fetched (matchmake/document/other origins are never proxied by this path)' };
+  try {
+    const res = await fetch(target, { method: 'GET', redirect: 'error', headers: {}, signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) {
+      try { await res.body?.cancel(); } catch { /* the refusal stands */ }
+      return { ok: false, reason: `the local asset server answered ${String(res.status)} (only 2xx is fulfilled)` };
+    }
+    const body = Buffer.from(await res.arrayBuffer());
+    const headerType = res.headers.get('content-type');
+    const contentType = headerType !== null && headerType !== '' ? headerType : mimeForPath(new URL(target).pathname);
+    return { ok: true, status: res.status, body, contentType };
+  } catch (error) {
+    const name = error instanceof Error ? error.name : 'fetch-failed';
+    return { ok: false, reason: name === 'TimeoutError' || name === 'AbortError'
+      ? `the local asset fetch timed out in ${String(timeoutMs)} ms (bounded — no hang survives a wedged dev server)`
+      : `the local asset fetch failed (${name}; redirects are refused by design)` };
+  }
+};
+
+/* ------------------------------------------------------------------ TLS verification split
+ * The ONLY place TLS relaxation may ever exist: the loopback facsimile's OWN context, against
+ * the locally-owned untrusted test certificate, and ONLY when the guard itself labelled the
+ * endpoint `loopback-test-cert-untrusted`. A real nominated endpoint always navigates under
+ * runtime-default verification — the option is literally never passed for it.
+ */
+export const ga11SeatContextTlsOptions = (
+  endpoint: Ga11EndpointOk,
+  facsimile: boolean,
+): { ignoreHTTPSErrors: boolean } => ({
+  ignoreHTTPSErrors: facsimile === true && endpoint.loopback === true && endpoint.tls === 'loopback-test-cert-untrusted',
+});
 
 /* ------------------------------------------------------------------ WS payload-byte semantics */
 
 /** The semantics label that MUST travel with every frame-length number (and with their absence). */
 export const GA11_WS_FRAME_SEMANTICS =
   'client-visible WebSocket DATA frames via the Playwright page API (framesent/framereceived payload byte lengths only; TLS records, WS headers/framing and control frames are invisible to the page, and heartbeat-vs-patch classification is NOT identifiable at this seam, so NO patch-byte or heartbeat claim is made; lengths are payload-only)';
+
+/** The SCOPE label that MUST travel with every frame count (slice-30r2 review): only the exact
+ * gameplay socket counts, and only while the measurement window is open. A page lives before and
+ * after the window, so the population is deliberately INCOMPLETE and labelled so. */
+export const GA11_WS_FRAME_SCOPE =
+  'window-only and gameplay-socket-only: frames are counted ONLY while the measurement window is open, and ONLY on sockets whose origin EXACTLY matches the nominated gameplay endpoint host:port (the Vite HMR ws and any other socket are excluded at discovery and counted as ignored); pages live before and after the window, so this population is deliberately incomplete — labelled, never silently partial';
+
+/** EXACT gameplay-socket match on the endpoint's host and port (scheme ws/wss). Used to EXCLUDE
+ * every other socket a page may hold — the Vite HMR ws is the known one on the facsimile. */
+export const ga11IsGameplaySocket = (rawUrl: string, endpoint: Ga11EndpointOk): boolean => {
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== 'wss:' && u.protocol !== 'ws:') return false;
+    const port = u.port !== '' ? Number(u.port) : u.protocol === 'wss:' ? 443 : 80;
+    return u.hostname.toLowerCase() === endpoint.host && port === endpoint.port;
+  } catch {
+    return false;
+  }
+};
 
 export interface Ga11FrameSummary {
   readonly frames: number;
@@ -344,77 +455,157 @@ export const ga11LogFilterValues = (endpoint: Ga11EndpointOk): readonly string[]
   endpoint.host,
 ];
 
+/* ------------------------------------------------------------------ locally-owned test certificate
+ * The facsimile reproduces the ACTUAL ingress over TLS, which needs a certificate. It is an
+ * EPHEMERAL, locally-owned, explicitly-UNTRUSTED test certificate generated by the harness on
+ * every hop start (1 day, CN/SAN 127.0.0.1) — it authenticates NOTHING outside the facsimile and
+ * proves no trust to anyone. The private key files are unlinked the instant they are read into
+ * memory (no secret at rest); the material dies with the process. Real-path TLS verification is
+ * untouched: relaxation exists only where ga11SeatContextTlsOptions admits this exact label.
+ */
+export const GA11_TEST_CERT_NOTE =
+  'locally-owned ephemeral self-signed TEST certificate (openssl, 1 day, CN/SAN 127.0.0.1); untrusted by design — the private key file was unlinked immediately after read and never left this process; it authenticates nothing outside the loopback facsimile and real-path TLS verification is unchanged (runtime default)';
+
+export interface Ga11TestCertificate {
+  readonly cert: Buffer;
+  readonly key: Buffer;
+  readonly note: string;
+}
+
+export const makeGa11EphemeralTestCertificate = (): Ga11TestCertificate => {
+  const dir = mkdtempSync(join(tmpdir(), 'ga11-test-cert-'));
+  const keyPath = join(dir, 'key.pem');
+  const certPath = join(dir, 'cert.pem');
+  try {
+    execFileSync('openssl', [
+      'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+      '-subj', '/CN=127.0.0.1', '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost',
+      '-keyout', keyPath, '-out', certPath,
+    ], { stdio: 'pipe' });
+    return { cert: readFileSync(certPath), key: readFileSync(keyPath), note: GA11_TEST_CERT_NOTE };
+  } finally {
+    try { unlinkSync(keyPath); } catch { /* already gone */ }
+    try { unlinkSync(certPath); } catch { /* already gone */ }
+    try { rmdirSync(dir); } catch { /* already gone */ }
+  }
+};
+
 /* ------------------------------------------------------------------ loopback facsimile hop */
 
 export interface Ga11FacsimileHop {
   readonly port: number;
+  /** POST-TLS cleartext byte totals as the hop sees them after terminating the (test) TLS — the
+   * facsimile's own view, labelled as such; wire-level bytes are a different quantity. */
   bytes(): { c2s: number; s2c: number; connections: number; authed: number; refused: number };
   stop(): Promise<void>;
 }
 
 /**
- * A Basic-auth-gated RAW relay bound to 127.0.0.1 on an ephemeral port, for the loopback
- * facsimile ONLY. It inspects the first request header block of each connection and requires the
- * exact `Basic base64(login:password)` the run was given for EVERY method — OPTIONS included —
- * answering 401 with a challenge otherwise. (The slice-30 review corrected this seam to match the
- * ACTUAL vhost, which challenges every method including preflights; the earlier OPTIONS bypass
- * was exactly the fiction the harness must not breed.) A cross-origin page therefore CANNOT join
- * such a host — which is why the session pages navigate the protected origin itself (same-origin:
- * no preflight exists at all, and the credentials the context was given answer the document's own
- * 401). On success the relay pipes bytes both ways to the fixture room while counting them
- * (hop-level byte totals exist ONLY in the facsimile; the real path measures WS payload lengths
- * client-side instead). It models ingress auth posture only — no delay, no loss, no regime — and
- * it never binds outside 127.0.0.1.
+ * A TLS-TERMINATING, Basic-auth-gated reverse hop bound to 127.0.0.1 on an ephemeral port, for
+ * the loopback facsimile ONLY — the HTTPS parity the HTTP-only relay could never exercise.
+ * Behaviour mirrors the ACTUAL vhost: Basic auth is required on EVERY method including OPTIONS
+ * (401 + challenge otherwise), the WSS upgrade carries the same rule, and authenticated traffic
+ * is forwarded to the loopback fixture (HTTP proxy + raw upgrade tunnel). It serves ONE
+ * facsimile-owned same-origin document at `/` with 200 — the cell requires a 2xx protected page,
+ * and on the real path the service's OWN document must satisfy that (a named failure otherwise);
+ * every other path proxies to the fixture. Byte counters tally post-TLS cleartext bytes, which
+ * exist only in the facsimile. No delay, no loss, no regime — auth posture and TLS shape only —
+ * and it never binds outside 127.0.0.1.
  */
 export const startGa11FacsimileHop = async (options: {
   login: string;
   password: string;
   targetPort: number;
+  tls: { cert: Buffer; key: Buffer };
 }): Promise<Ga11FacsimileHop> => {
   const expected = `Basic ${Buffer.from(`${options.login}:${options.password}`).toString('base64')}`;
   const counts = { c2s: 0, s2c: 0, connections: 0, authed: 0, refused: 0 };
   const sockets = new Set<Socket>();
-  const server: Server = createServer();
-  server.on('connection', (client) => {
+  const track = (s: Socket): void => {
+    sockets.add(s);
+    s.on('error', () => sockets.delete(s));
+    s.on('close', () => sockets.delete(s));
+  };
+  const forwardedHeaders = (headers: IncomingHttpHeaders): Record<string, string | string[]> => {
+    const out: Record<string, string | string[]> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      if (value === undefined) continue;
+      const k = key.toLowerCase();
+      // The fixture is unauthenticated loopback: the client's credentials STOP at the hop —
+      // exactly what the real vhost does not do, and the honest difference is labelled here.
+      if (k === 'authorization' || k === 'host' || k === 'cookie' || k === 'proxy-authorization' || k === 'connection') continue;
+      out[key] = value;
+    }
+    out['host'] = `127.0.0.1:${String(options.targetPort)}`;
+    return out;
+  };
+  const server = createHttpsServer({ cert: options.tls.cert, key: options.tls.key }, (req, res: ServerResponse) => {
     counts.connections += 1;
-    sockets.add(client);
-    client.on('error', () => sockets.delete(client));
-    client.on('close', () => sockets.delete(client));
-    const head: Buffer[] = [];
-    let seen = 0;
-    const onData = (chunk: Buffer): void => {
-      head.push(chunk);
-      seen += chunk.length;
-      const text = Buffer.concat(head).subarray(0, Math.min(seen, 65_536)).toString('latin1');
-      const end = text.indexOf('\r\n\r\n');
-      if (end === -1) {
-        if (seen > 65_536) { client.destroy(); sockets.delete(client); }
-        return; // keep buffering until the header block completes
-      }
-      const headerBlock = text.slice(0, end);
-      const auth = /^authorization:\s*(.+)$/im.exec(headerBlock)?.[1]?.trim();
-      client.removeListener('data', onData);
-      if (auth !== expected) {
-        // EVERY method demands auth — OPTIONS included: the actual vhost's posture (see above).
-        counts.refused += 1;
-        client.write('HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="udg-ga11-facsimile"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
-        client.destroy();
-        sockets.delete(client);
-        return;
-      }
-      counts.authed += 1;
-      const upstream = netConnect(options.targetPort, '127.0.0.1');
-      sockets.add(upstream);
-      upstream.on('error', () => { sockets.delete(upstream); client.destroy(); });
-      upstream.on('close', () => sockets.delete(upstream));
-      for (const buf of head) counts.c2s += buf.length;
-      upstream.write(Buffer.concat(head));
-      client.pipe(upstream);
-      upstream.pipe(client);
-      client.on('data', (b: Buffer) => { counts.c2s += b.length; });
-      upstream.on('data', (b: Buffer) => { counts.s2c += b.length; });
-    };
-    client.on('data', onData);
+    track(req.socket);
+    if (req.headers.authorization !== expected) {
+      // EVERY method demands auth — OPTIONS included: the actual vhost's posture.
+      counts.refused += 1;
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="udg-ga11-facsimile"', 'Content-Length': '0' });
+      res.end();
+      return;
+    }
+    counts.authed += 1;
+    const url = req.url ?? '/';
+    if ((req.method === 'GET' || req.method === 'HEAD') && (url === '/' || url === '/index.html')) {
+      // The facsimile's OWN same-origin document (the real path serves the service's own page;
+      // the cell enforces 2xx either way — a 404 document is a named admission failure).
+      const body = Buffer.from('<!doctype html><html><head><title>udg ga11 facsimile (local fixture, not the service)</title></head><body></body></html>');
+      counts.s2c += body.length;
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': String(body.length) });
+      res.end(req.method === 'HEAD' ? undefined : body);
+      return;
+    }
+    const upstream = httpRequest({ host: '127.0.0.1', port: options.targetPort, method: req.method, path: url, headers: forwardedHeaders(req.headers) }, (upRes) => {
+      res.writeHead(upRes.statusCode ?? 502, upRes.headers);
+      upRes.on('data', (chunk: Buffer) => { counts.s2c += chunk.length; });
+      upRes.pipe(res);
+      upRes.on('error', () => res.destroy());
+    });
+    upstream.on('error', () => {
+      if (!res.headersSent) res.writeHead(502, { 'Content-Length': '0' });
+      res.end();
+    });
+    req.pipe(upstream);
+  });
+  // INBOUND counting is at the DECRYPTED socket level (every byte the hop actually received in
+  // cleartext, headers included); OUTBOUND is application payload level (bodies/tunnel chunks,
+  // headers and TLS overhead excluded) — both are the hop's own post-TLS view, never wire bytes.
+  server.on('secureConnection', (tlsSocket) => {
+    track(tlsSocket);
+    tlsSocket.on('data', (chunk: Buffer) => { counts.c2s += chunk.length; });
+  });
+  server.on('upgrade', (req, rawSocket, head) => {
+    counts.connections += 1;
+    const socket = rawSocket as Socket;
+    if (req.headers.authorization !== expected) {
+      counts.refused += 1;
+      socket.write('HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="udg-ga11-facsimile"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    counts.authed += 1;
+    const upstream = netConnect(options.targetPort, '127.0.0.1');
+    track(socket);
+    track(upstream);
+    const lines = [`${req.method} ${req.url ?? '/'} HTTP/1.1`];
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      const key = req.rawHeaders[i] ?? '';
+      const value = req.rawHeaders[i + 1] ?? '';
+      const k = key.toLowerCase();
+      if (k === 'authorization' || k === 'host' || k === 'proxy-authorization') continue;
+      lines.push(`${key}: ${value}`);
+    }
+    lines.push(`Host: 127.0.0.1:${String(options.targetPort)}`);
+    upstream.write(`${lines.join('\r\n')}\r\n\r\n`);
+    if (head.length > 0) upstream.write(head); // already counted as inbound at the socket level
+    upstream.on('data', (chunk: Buffer) => { counts.s2c += chunk.length; });
+    socket.pipe(upstream);
+    upstream.pipe(socket);
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();

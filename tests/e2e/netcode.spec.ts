@@ -52,7 +52,7 @@ import { MIN_ELIGIBLE_ACKS_PER_RUN, nearestRank, networkValidity, summarizeCorre
 import { auditMotion, type AckLedgerReport } from '../../tools/load-test/src/ack-ledger.ts';
 import { auditGa5Transcript, naiveVsJoined, type Ga5Transcript } from '../../tools/load-test/src/ga5-transcript.ts';
 import { captureEnvironmentRecord, impairmentSourceRecord, planSpikeRun } from '../../tools/load-test/src/run-spike.ts';
-import { GA11_FIXED_POPULATION, GA11_WS_FRAME_SEMANTICS, ga11EndpointGuard, ga11ModuleUrlRewrite, makeGa11Redactor, parseGa11Netrc, rttEligibility, startGa11FacsimileHop, summarizeFrameLengths, type Ga11EndpointOk } from '../../tools/load-test/src/ga11-session.ts';
+import { GA11_FIXED_POPULATION, GA11_TEST_CERT_NOTE, GA11_WS_FRAME_SCOPE, GA11_WS_FRAME_SEMANTICS, fetchGa11LocalAsset, ga11EndpointGuard, ga11IsGameplaySocket, ga11LocalAssetTarget, ga11SeatContextTlsOptions, makeGa11EphemeralTestCertificate, makeGa11Redactor, parseGa11Netrc, rttEligibility, startGa11FacsimileHop, summarizeFrameLengths, type Ga11EndpointOk } from '../../tools/load-test/src/ga11-session.ts';
 import { createTraceWriter, readTrace } from '../../tools/load-test/src/trace-writer.ts';
 import type { ProxyStats } from '../../tools/load-test/src/ws-delay-proxy.ts';
 
@@ -7232,13 +7232,23 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
   const runId = process.env['UDG_RUN_ID'] ?? `ga11-session-${new Date().toISOString().replace(/[:.]/g, '-')}`;
   const startedAtIso = new Date().toISOString();
   const ga11Wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  // Every open-ended operation in this cell rides a NAMED budget: a wedged navigation/join/probe
+  // ends as a bounded, named failure — never a hang the 1 500 s cell timeout discovers late.
+  const ga11Budget = <T,>(label: string, ms: number, work: Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const guard = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} exceeded its ${String(ms)} ms budget (bounded — nothing in this cell waits forever)`)), ms);
+    });
+    return Promise.race([work, guard]).finally(() => { if (timer !== undefined) clearTimeout(timer); }) as Promise<T>;
+  };
+  const is2xx = (status: number): boolean => status >= 200 && status < 300;
 
   // ---- admission: endpoint guard (explicit env only; facsimile replaces it with the loopback hop)
   const facsimile = process.env['UDG_GA11_FACSIMILE'] === '1';
   const rawEndpoint = process.env['UDG_GA11_ENDPOINT'] ?? '';
   const guardedReal = ga11EndpointGuard(rawEndpoint, {});
   const guard = facsimile ? null : guardedReal;
-  cellCheck('admission: the nominated endpoint is EXPLICIT env (UDG_GA11_ENDPOINT), guarded to an https:/wss: origin with no userinfo/path/query — nothing is guessed; the facsimile mode replaces it ONLY with an ephemeral 127.0.0.1 hop and is labelled plain-not-private',
+  cellCheck('admission: the nominated endpoint is EXPLICIT env (UDG_GA11_ENDPOINT), guarded to an https:/wss: origin with no userinfo/path/query — nothing is guessed; the facsimile mode replaces it ONLY with an ephemeral 127.0.0.1 HTTPS hop on a locally-owned untrusted test certificate, labelled loopback-test-cert-untrusted',
     facsimile || guard !== null && guard.ok === true,
     { facsimile, guardOk: guard !== null && guard.ok === true, guardError: guard !== null && guard.ok === false ? guard.error : null });
   if (!facsimile && (guard === null || guard.ok === false)) {
@@ -7330,8 +7340,12 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     }
     if (password === '' && credentialError === null) credentialError = 'facsimile credentials unresolved';
     if (credentialError === null) {
-      hop = await startGa11FacsimileHop({ login, password, targetPort: fixturePort });
-      guarded = ga11EndpointGuard(`ws://127.0.0.1:${String(hop.port)}`, { allowLoopbackInsecure: true }) as Ga11EndpointOk;
+      // HTTPS PARITY (slice-30r2): the facsimile TERMINATES TLS on an ephemeral, locally-owned,
+      // untrusted test certificate — the HTTP-only relay could never exercise the https:/wss:
+      // shape and thereby hid the route.fallback protocol rule that broke the real path.
+      const testCert = makeGa11EphemeralTestCertificate();
+      hop = await startGa11FacsimileHop({ login, password, targetPort: fixturePort, tls: { cert: testCert.cert, key: testCert.key } });
+      guarded = ga11EndpointGuard(`https://127.0.0.1:${String(hop.port)}`, { loopbackTlsUntrusted: true }) as Ga11EndpointOk;
     }
   }
   cellCheck('admission: credentials arrive ONLY as a stdin netrc in the existing host\'s machine-scoped format (root-owned on the runner; nothing on the command line, in a repo file, or left in the environment after decode); a `default` entry and a second matching entry both REFUSE',
@@ -7341,6 +7355,13 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
   const redact = makeGa11Redactor([login, password, guarded?.host ?? '']);
   const argvClean = [...process.argv, ...process.execArgv].every((a) => !a.includes(password) && !a.includes(login));
   cellCheck('admission: no credential appears in argv or execArgv (checked against both values after parsing)', argvClean && (facsimile || login !== ''), { argvCount: process.argv.length });
+
+  // SIDE-CAR ENV HYGIENE (slice-30r2): the SUITE browser launched in beforeAll predates this cell
+  // and could have inherited the credential relay env; every credentialed surface here therefore
+  // runs in a CELL-LOCAL browser launched only AFTER the relay env is deleted from this worker, so
+  // the launched Chromium sidecars never inherit credential material (avoid-at-rest, inherited).
+  let cellBrowser: Browser | null = null;
+  let relayEnvGoneBeforeSidecars = false;
 
   interface Ga11SessionRecord {
     session: number;
@@ -7384,67 +7405,89 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
   let negativeControl: { uncredentialedHttpStatus?: number; refused: boolean; errorName: string } = { refused: false, errorName: 'not-run' };
 
   if (credentialError === null && guarded !== null && presentation !== null && login !== '' && password !== '') {
+    relayEnvGoneBeforeSidecars = process.env['UDG_GA11_NETRC_B64'] === undefined;
+    cellBrowser = await chromium.launch({ headless: true });
     const httpCredentials = { origin: guarded.webOrigin, username: login, password };
 
-    // SAME-ORIGIN seat pages on the nominated origin itself (slice-30 reviewer correction — the
-    // vhost demands Basic on EVERY method including OPTIONS, so a cross-origin page cannot and
-    // must not be made to work; a same-origin page issues no preflight at all). The DOCUMENT
-    // navigation authenticates against the ACTUAL service through the context-scoped
-    // httpCredentials, and the HTTP STATUS IS ENFORCED: a 401 after supplied credentials is an
-    // admission failure recorded per seat, never silently accepted.
-    //
-    // The ONLY interception: known local module-asset paths on this origin (pure prefix allowlist
-    // GA11_MODULE_PATH_PREFIXES in tools/load-test/src/ga11-session.ts), rewritten to the repo's
-    // own loopback Vite pipeline via route.fallback. The SDK's matchmake routes and the gameplay
-    // WebSocket are NEVER intercepted (not on the list; page routing never touches WebSockets),
-    // nothing is proxied, and no secret can cross the rewrite (its target is a localhost dev
-    // asset server). WS DATA-FRAME payload lengths are counted in memory per seat via the
-    // Playwright page API and discarded — only count/size summaries enter the record, never raw
-    // lengths, payload contents or URLs.
+    // SAME-ORIGIN seat pages on the nominated origin itself (slice-30 reviewer corrections, plus
+    // the slice-30r2 structural fixes):
+    //  - the DOCUMENT navigation authenticates against the ACTUAL service through context-scoped
+    //    httpCredentials and the status is ENFORCED as 2xx (a 401 — or any non-2xx — after
+    //    credentials is a named admission failure per seat, never a session that limps on);
+    //  - the ONLY interception is the known local module-asset allowlist, and it is SERVED FROM
+    //    NODE (fresh headerless loopback fetch + route.fulfill) instead of route.fallback —
+    //    Playwright requires a fallback URL to share the intercepted protocol, so the earlier
+    //    https-page → http-assets rewrite could only ever work in the HTTP facsimile; fetch+fulfil
+    //    is protocol-independent and copies NO request headers, cookies or Authorization;
+    //  - a partial failure before this function returns closes its context (and the credentials
+    //    it carries) — no half-open seat leaks;
+    //  - WS frame counting attaches ONLY to the exact gameplay socket (origin == endpoint
+    //    host:port; the Vite HMR ws is excluded at discovery and counted) and collects ONLY while
+    //    the measurement window is open (window-only semantics, labelled).
     interface Ga11SeatSurfaces {
       page: Page;
       context: BrowserContext;
-      frames: { sent: number[]; received: number[]; sockets: number };
+      frames: { sent: number[]; received: number[]; gameplaySockets: number; ignoredSockets: number; active: boolean };
       navStatus: number;
     }
     const openAuthedSeatPage = async (label: string, creds: { origin: string; username: string; password: string } | null): Promise<Ga11SeatSurfaces> => {
-      const context = await browser!.newContext(creds !== null ? { httpCredentials: creds } : {});
-      await context.route(
-        (url) => ga11ModuleUrlRewrite(url.toString(), guarded!.webOrigin, CLIENT_ORIGIN) !== null,
-        async (route) => {
-          const rewritten = ga11ModuleUrlRewrite(route.request().url(), guarded!.webOrigin, CLIENT_ORIGIN);
-          return route.fallback(rewritten !== null ? { url: rewritten } : {}).catch(() => route.abort());
-        },
-      );
-      const page = await context.newPage();
-      const pageErrors: string[] = [];
-      pageErrorSinks.set(label, pageErrors);
-      page.on('pageerror', (error) => pageErrors.push(String(error)));
-      page.on('crash', () => pageErrors.push('PAGE CRASHED'));
-      page.on('console', (message) => {
-        if (message.type() !== 'error') return;
-        const text = message.text();
-        if (/WebSocket is closed|Failed to construct 'WebSocket'|net::ERR_INTERNET_DISCONNECTED|WebSocket connection to 'ws:\/\/127/.test(text)) return;
-        pageErrors.push(`console: ${text}`);
-      });
-      const frames: Ga11SeatSurfaces['frames'] = { sent: [], received: [], sockets: 0 };
-      // Payload BYTES only; the payload contents themselves are read for length and dropped.
-      // (The pinned typings carry only `payload`; `payloadLength` exists at runtime on some
-      // builds, so it is preferred when present and byte-counted from the payload otherwise.)
-      const frameBytes = (p: { payload: string | Buffer; payloadLength?: number }): number =>
-        typeof p.payloadLength === 'number' ? p.payloadLength : (Buffer.isBuffer(p.payload) ? p.payload.length : Buffer.byteLength(String(p.payload ?? ''), 'utf8'));
-      page.on('websocket', (ws) => {
-        frames.sockets += 1;
-        ws.on('framesent', (payload) => { frames.sent.push(frameBytes(payload)); });
-        ws.on('framereceived', (payload) => { frames.received.push(frameBytes(payload)); });
-      });
-      // The navigation IS the auth: same-origin document on the ACTUAL protected service.
-      const response = await page.goto(`${guarded!.webOrigin}/`, { waitUntil: 'load' });
-      const navStatus = response?.status() ?? 0;
-      // The shipped client modules through the same compiled pipeline (bounded retry posture
-      // inherited from the accepted primeClientModules; rewrites ride the module allowlist only).
-      await primeClientModules(page, label);
-      return { page, context, frames, navStatus };
+      const context = await cellBrowser!.newContext(creds !== null
+        ? { httpCredentials: creds, ...ga11SeatContextTlsOptions(guarded!, facsimile) }
+        : { ...ga11SeatContextTlsOptions(guarded!, facsimile) });
+      try {
+        await context.route(
+          (url) => ga11LocalAssetTarget(url.toString(), guarded!.webOrigin, CLIENT_ORIGIN) !== null,
+          async (route) => {
+            // Node-side fulfilment: pinned loopback target, headerless fresh request, redirects
+            // refused, bounded, 2xx-only. A failure answers 502 with the NAMED reason — the
+            // module simply fails to load and primeClientModules' bounded retry sees it.
+            const asset = await fetchGa11LocalAsset(route.request().url(), guarded!.webOrigin, CLIENT_ORIGIN);
+            if (asset.ok === true) {
+              return route.fulfill({ status: asset.status, body: asset.body, headers: { 'content-type': asset.contentType } });
+            }
+            return route.fulfill({ status: 502, body: Buffer.from(asset.reason), headers: { 'content-type': 'text/plain; charset=utf-8' } });
+          },
+        );
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        pageErrorSinks.set(label, pageErrors);
+        page.on('pageerror', (error) => pageErrors.push(String(error)));
+        page.on('crash', () => pageErrors.push('PAGE CRASHED'));
+        page.on('console', (message) => {
+          if (message.type() !== 'error') return;
+          const text = message.text();
+          if (/WebSocket is closed|Failed to construct 'WebSocket'|net::ERR_INTERNET_DISCONNECTED|WebSocket connection to 'wss?:\/\/127/.test(text)) return;
+          pageErrors.push(`console: ${text}`);
+        });
+        const frames: Ga11SeatSurfaces['frames'] = { sent: [], received: [], gameplaySockets: 0, ignoredSockets: 0, active: false };
+        // Payload BYTES only; the payload contents themselves are read for length and dropped.
+        // (The pinned typings carry only `payload`; `payloadLength` exists at runtime on some
+        // builds, so it is preferred when present and byte-counted from the payload otherwise.)
+        const frameBytes = (p: { payload: string | Buffer; payloadLength?: number }): number =>
+          typeof p.payloadLength === 'number' ? p.payloadLength : (Buffer.isBuffer(p.payload) ? p.payload.length : Buffer.byteLength(String(p.payload ?? ''), 'utf8'));
+        page.on('websocket', (ws) => {
+          if (!ga11IsGameplaySocket(ws.url(), guarded!)) {
+            // The Vite HMR socket and every other non-gameplay ws: EXCLUDED, counted as ignored.
+            frames.ignoredSockets += 1;
+            return;
+          }
+          frames.gameplaySockets += 1;
+          ws.on('framesent', (payload) => { if (frames.active) frames.sent.push(frameBytes(payload)); });
+          ws.on('framereceived', (payload) => { if (frames.active) frames.received.push(frameBytes(payload)); });
+        });
+        // The navigation IS the auth: same-origin document on the ACTUAL protected service.
+        const response = await page.goto(`${guarded!.webOrigin}/`, { waitUntil: 'load', timeout: 30_000 });
+        const navStatus = response?.status() ?? 0;
+        // The shipped client modules through the same compiled pipeline (bounded retry posture
+        // inherited from the accepted primeClientModules; assets ride the Node-side fulfilment).
+        await primeClientModules(page, label);
+        return { page, context, frames, navStatus };
+      } catch (error) {
+        // NOTHING half-open survives a failed open: the context (with its scoped credentials)
+        // closes before the error propagates, and the caller names the failure per seat.
+        await context.close().catch(() => undefined);
+        throw error;
+      }
     };
 
     for (let s = 1; s <= GA11_FIXED_POPULATION.sessions; s += 1) {
@@ -7466,17 +7509,18 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
       let surfacesO: Ga11SeatSurfaces | undefined;
       let pumpPromise: Promise<{ ended: true; iterations: number }> | null = null;
       try {
-        surfacesM = await openAuthedSeatPage(`${tag}-M`, httpCredentials);
-        surfacesO = await openAuthedSeatPage(`${tag}-O`, httpCredentials);
+        surfacesM = await ga11Budget(`seat ${tag}-M open+prime`, 180_000, openAuthedSeatPage(`${tag}-M`, httpCredentials));
+        surfacesO = await ga11Budget(`seat ${tag}-O open+prime`, 180_000, openAuthedSeatPage(`${tag}-O`, httpCredentials));
         pageM = surfacesM.page;
         pageO = surfacesO.page;
         contextM = surfacesM.context;
         contextO = surfacesO.context;
         session.navigation = { moverHttpStatus: surfacesM.navStatus, observerHttpStatus: surfacesO.navStatus };
-        // ENFORCED: the credentials must have answered the service's own challenge — a 401 here
-        // is an admission failure named per seat, never a session that limps on.
-        if (surfacesM.navStatus === 401 || surfacesO.navStatus === 401 || surfacesM.navStatus === 0 || surfacesO.navStatus === 0) {
-          session.failure = `credentials not accepted by the actual service (document statuses mover=${String(surfacesM.navStatus)} observer=${String(surfacesO.navStatus)}); no join attempted`;
+        // ENFORCED: the credentials must have earned a PROTECTED 2xx PAGE from the actual service
+        // — a 401 (or any non-2xx: a 404 document is NOT a page) is an admission failure named
+        // per seat, never a session that limps on.
+        if (!is2xx(surfacesM.navStatus) || !is2xx(surfacesO.navStatus)) {
+          session.failure = `credentials did not earn a 2xx protected document from the actual service (mover=${String(surfacesM.navStatus)} observer=${String(surfacesO.navStatus)}); no join attempted`;
           sessions.push(session);
           continue;
         }
@@ -7502,6 +7546,9 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         // read once, whole, after that — no pre-pump snapshot, no threshold heuristics, no
         // partial tail. Ledger capacity is read from the predictor's own configured limit and
         // TRUNCATION IS DETECTED (a capped ledger shrinks the population; it is named, not hidden).
+        // WINDOW-ONLY frame collection switches ON just before the window's start stamp.
+        surfacesM.frames.active = true;
+        surfacesO.frames.active = true;
         const windowStartMs = await pageM.evaluate(() => performance.now());
         const pump = gaPump(pageM, GA11_FIXED_POPULATION.windowMs);
         pumpPromise = pump;
@@ -7564,6 +7611,11 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
           // cannot reach it; if it ever does, truncation is DETECTED and recorded, not absorbed.
           return { startMs, endMs: performance.now(), limit: 20_000, rows };
         }, windowStartMs);
+        // The window has ENDED (ledger end stamped) — frame collection switches OFF at the same
+        // point: what a seat sent/received outside [windowStart, windowEnd] is deliberately NOT
+        // in these populations (incomplete by design, labelled window-only below).
+        surfacesM.frames.active = false;
+        surfacesO.frames.active = false;
         const after = await gaRecovery(pageM);
         session.moverEndState = {
           transportEpoch: after.transportEpoch,
@@ -7618,19 +7670,21 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         session.patchIntervalsMs = patchStats;
         session.arrivalStallMs = { source: 'client delivery-gap max over the full exact window (page clock; no harness proxy in route on this path)', maxMs: patchStats.max };
 
-        // WS payload bytes (slice-30 review): client-visible DATA-frame payload lengths via the
-        // Playwright page API — counts and nearest-rank size distributions per seat and direction,
-        // collected in memory and DISCARDED (raw arrays never enter the record); payload-only
-        // semantics travel with every number; heartbeat-vs-patch is NOT identifiable at this
-        // seam, so no patch-byte claim is made. The facsimile hop's own totals travel SEPARATELY
-        // and only exist in facsimile mode.
+        // WS payload bytes (slice-30r2 scope): client-visible DATA-frame payload lengths on the
+        // EXACT gameplay socket ONLY (the Vite HMR ws and any other socket are excluded at
+        // discovery and counted as ignored) and WINDOW-ONLY (the pages live before/after the
+        // window; those frames are deliberately excluded). Collected in memory and DISCARDED
+        // (raw arrays never enter the record); payload-only semantics and the window-only /
+        // gameplay-only scope travel with every number; heartbeat-vs-patch is NOT identifiable at
+        // this seam, so no patch-byte claim is made. The facsimile hop's own post-TLS totals
+        // travel SEPARATELY and only exist in facsimile mode.
         session.wsFrames = {
           semantics: GA11_WS_FRAME_SEMANTICS,
-          window: 'per seat, from page creation to page close (navigation and module assets are HTTP, not WS; no WS socket exists before the join)',
-          mover: { sockets: surfacesM.frames.sockets, sent: summarizeFrameLengths(surfacesM.frames.sent, nearestRank), received: summarizeFrameLengths(surfacesM.frames.received, nearestRank) },
-          observer: { sockets: surfacesO.frames.sockets, sent: summarizeFrameLengths(surfacesO.frames.sent, nearestRank), received: summarizeFrameLengths(surfacesO.frames.received, nearestRank) },
+          scope: GA11_WS_FRAME_SCOPE,
+          mover: { gameplaySockets: surfacesM.frames.gameplaySockets, ignoredNonGameplaySockets: surfacesM.frames.ignoredSockets, sent: summarizeFrameLengths(surfacesM.frames.sent, nearestRank), received: summarizeFrameLengths(surfacesM.frames.received, nearestRank) },
+          observer: { gameplaySockets: surfacesO.frames.gameplaySockets, ignoredNonGameplaySockets: surfacesO.frames.ignoredSockets, sent: summarizeFrameLengths(surfacesO.frames.sent, nearestRank), received: summarizeFrameLengths(surfacesO.frames.received, nearestRank) },
         };
-        if (hop !== null) session.hopBytes = { source: 'loopback facsimile hop totals (facsimile ONLY — the real path has no counting hop by design)', ...hop.bytes() };
+        if (hop !== null) session.hopBytes = { source: 'loopback facsimile hop totals — POST-TLS cleartext bytes at the terminating hop (facsimile ONLY — the real path has no counting hop by design; wire-level TLS bytes are a different quantity)', ...hop.bytes() };
 
         session.rtt = rttEligibility(rttRawMs, nearestRank);
         session.rttRawFiniteMs = rttRawMs.filter((ms) => Number.isFinite(ms));
@@ -7654,19 +7708,26 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
       sessions.push(session);
     }
 
-    // Negative control (slice-30 review hardened): an UNCREDENTIALED context must meet the
-    // ACTUAL service's 401 on the document itself, and the SDK join must then fail — proof the
-    // refusal comes from the real service, not from harness bookkeeping.
+    // Negative control (slice-30r2): an UNCREDENTIALED probe must observe the ACTUAL 401 WITHOUT
+    // ever navigating a bare document to it — encrypted Chromium page.goto against a Basic-401 can
+    // throw ERR_INVALID_AUTH_CREDENTIALS instead of returning a response, and a primed/empty
+    // document or an unbounded wait would fake or stall the outcome. The probe is therefore a
+    // clean, bounded Playwright APIRequestContext GET (separate context, no credentials, no
+    // redirects). The join refusal is then exercised on a page whose modules came from the LOCAL
+    // pipeline while the SDK really hits the protected origin — the vhost (Basic on every method,
+    // preflight included) refuses it for real, not the harness.
     let contextNC: BrowserContext | null = null;
     try {
-      contextNC = await browser!.newContext(); // no credentials, no module route: only the real service answers
+      contextNC = await cellBrowser!.newContext({ ...ga11SeatContextTlsOptions(guarded!, facsimile) }); // no credentials, no module route
+      const probe = await ga11Budget('negative-control 401 probe', 15_000, contextNC.request.get(`${guarded!.webOrigin}/`, { maxRedirects: 0, timeout: 10_000, failOnStatusCode: false }));
+      const uncredentialedHttpStatus = probe.status();
       const pageNC = await contextNC.newPage();
-      const response = await pageNC.goto(`${guarded!.webOrigin}/`, { waitUntil: 'load' }).catch(() => null);
-      const uncredentialedHttpStatus = response?.status() ?? 0;
+      await pageNC.goto(`${CLIENT_ORIGIN}/`, { waitUntil: 'load', timeout: 30_000 });
+      await primeClientModules(pageNC, 'ga11-NC');
       let negJoined = false;
       let negError = 'join unexpectedly succeeded';
       try {
-        const r = await joinGaSeat(pageNC, guarded!.webOrigin, { mode: 'create', roomName: ROOM_NAME }, undefined, presentation ?? undefined);
+        const r = await ga11Budget('negative-control join', 90_000, joinGaSeat(pageNC, guarded!.webOrigin, { mode: 'create', roomName: ROOM_NAME }, undefined, presentation ?? undefined));
         negJoined = r.ok === true;
         if (r.ok === false) negError = redact(String(r.error ?? 'refused')).slice(0, 200);
       } catch (error) {
@@ -7679,6 +7740,9 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     }
   }
 
+  // The cell-local browser retires BEFORE anything is summarised; its sidecars die with it.
+  await cellBrowser?.close().catch(() => undefined);
+
   const hopReceipt = hop !== null ? { bytes: hop.bytes(), stopped: (await hop.stop(), true) } : null;
 
   // ---- checks over everything the run could see (each names its own gaps instead of hiding them)
@@ -7688,13 +7752,13 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     sessions.length === GA11_FIXED_POPULATION.sessions,
     { sessions: sessions.length, declared: GA11_FIXED_POPULATION.sessions, failures: failedSessions.map((s) => s.failure) });
 
-  cellCheck('two real seats joined the SAME room (one roomId, two distinct sessionIds, server-issued epochs ≥ 1) through the nominated origin\'s own Basic-auth HTTPS/WSS path — SAME-ORIGIN pages whose DOCUMENT navigation the actual service authenticated (HTTP status enforced: no 401 after credentials) — and the room-replicated state witnessed both seats (reachability witnessed by the room\'s replication, §15B(3) shape, from the client side)',
+  cellCheck('two real seats joined the SAME room (one roomId, two distinct sessionIds, server-issued epochs ≥ 1) through the nominated origin\'s own Basic-auth HTTPS/WSS path — SAME-ORIGIN pages whose DOCUMENT navigation the actual service authenticated with a PROTECTED 2xx (status enforced; a 401 or a non-2xx document is a named admission failure) — and the room-replicated state witnessed both seats (reachability witnessed by the room\'s replication, §15B(3) shape, from the client side)',
     sessions.every((s) => {
       const jm = s.joinMover;
       const jo = s.joinObserver;
       const view = s.roomReplicatedView;
       const nav = s.navigation;
-      return nav !== undefined && nav.moverHttpStatus !== 401 && nav.observerHttpStatus !== 401
+      return nav !== undefined && is2xx(nav.moverHttpStatus) && is2xx(nav.observerHttpStatus)
         && jm?.ok === true && jo?.ok === true && jm.roomId === jo.roomId && (view?.peers.length ?? 0) >= 1 && (view?.selfKey ?? '') !== '';
     }) && sessions.length > 0,
     sessions.map((s) => ({ session: s.session, navigation: s.navigation ?? null, mover: s.joinMover, observer: s.joinObserver, peers: s.roomReplicatedView?.peers ?? null, failure: s.failure ?? null })));
@@ -7711,18 +7775,22 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     }),
     sessions.map((s) => ({ session: s.session, inputMatching: s.inputMatching ?? null, failure: s.failure ?? null })));
 
-  cellCheck('patch-interval and arrival-stall populations cover the FULL EXACT page-clock window (start stamped before the pump, end stamped after it, ledger read once in between — no pre-pump snapshot, no threshold), ledger capacity/truncation state is recorded, and WS payload-byte distributions carry their payload-only semantics (heartbeat-vs-patch NOT claimed); hop byte totals exist only in facsimile — never zero-filled anywhere',
+  cellCheck('patch-interval and arrival-stall populations cover the FULL EXACT page-clock window (start stamped before the pump, end stamped after it, ledger read once in between — no pre-pump snapshot, no threshold), ledger capacity/truncation state is recorded, and WS payload-byte distributions carry their payload-only semantics AND their window-only + exact-gameplay-socket scope (Vite HMR excluded, out-of-window frames excluded, incomplete-by-design labelled; heartbeat-vs-patch NOT claimed); hop byte totals (post-TLS cleartext, facsimile-only) never zero-fill anything',
     sessions.every((s) => {
       const p = s.patchIntervalsMs;
-      const w = s.wsFrames as { semantics?: string } | undefined;
+      const w = s.wsFrames as { semantics?: string; scope?: string } | undefined;
       if (p === undefined || s.arrivalStallMs === undefined || w === undefined) return s.failure !== undefined;
-      return p.windowEndMs > p.windowStartMs && typeof p.ledgerTruncated === 'boolean' && w.semantics === GA11_WS_FRAME_SEMANTICS;
+      return p.windowEndMs > p.windowStartMs && typeof p.ledgerTruncated === 'boolean' && w.semantics === GA11_WS_FRAME_SEMANTICS && w.scope === GA11_WS_FRAME_SCOPE;
     }),
     sessions.map((s) => ({ session: s.session, patch: s.patchIntervalsMs ?? null, stall: s.arrivalStallMs ?? null, wsFrames: s.wsFrames ?? null, hopBytes: s.hopBytes ?? null })));
 
-  cellCheck('the no-credentials negative control met the ACTUAL service\'s 401 on the document itself and the SDK join then failed — the refusal comes from the real vhost (Basic on every method), not from harness bookkeeping',
+  cellCheck('the no-credentials negative control: a clean bounded Playwright request probe (NOT a bare-document navigation — encrypted Chromium can throw ERR_INVALID_AUTH_CREDENTIALS instead of returning a 401 — and NOT a primed/empty document) met the ACTUAL service\'s 401, and the SDK join against the real origin then failed — the refusal comes from the real vhost (Basic on every method, preflight included), not from harness bookkeeping',
     negativeControl.refused === true && negativeControl.uncredentialedHttpStatus === 401,
     negativeControl);
+
+  cellCheck('sidecar/TLS hygiene (slice-30r2): the cell-local browser hosting every credentialed surface was launched AFTER the stdin relay env was deleted from this worker (Chromium sidecars never inherit credential material), and TLS verification is STRUCTURALLY runtime-default on the real path — ignoreHTTPSErrors is ever passed for the labelled loopback facsimile with its locally-owned untrusted test certificate',
+    relayEnvGoneBeforeSidecars && (guarded === null || ga11SeatContextTlsOptions(guarded, facsimile).ignoreHTTPSErrors === facsimile),
+    { facsimile, relayEnvGoneBeforeSidecars, ignoreHttpErrors: guarded !== null && ga11SeatContextTlsOptions(guarded, facsimile).ignoreHTTPSErrors, testCertNote: facsimile ? GA11_TEST_CERT_NOTE : null });
 
   cellCheck('the record carries NO endpoint value, NO login and NO password (endpoint appears ONLY as sha256(lowercased host:port) — redaction, not access control; guessability caveat of handoff §4 travels with it), and every pageError surface is additionally free of THIS session\'s room and session identifiers',
     (() => {
@@ -7755,7 +7823,12 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
       netrcSource,
       joinGateTriplePresented: presentation !== null ? { protocolVersion: (presentation as { protocolVersion: string }).protocolVersion, configHashHex64: hex64.test((presentation as { configHash: string }).configHash), manifestHashHex64: hex64.test((presentation as { manifestHash: string }).manifestHash) } : null,
       httpCredentialsScope: guarded !== null ? `origin-scoped to ${guarded.digest.slice(0, 12)}… — never wildcard` : null,
-      sameOriginDesign: 'seat documents are served by the nominated origin itself (navigation enforces the auth status); ONLY known local module-asset paths are rewritten to the loopback Vite pipeline (GA11_MODULE_PATH_PREFIXES); matchmake routes and the WebSocket are never intercepted and the vhost challenges every method including OPTIONS',
+      sameOriginDesign: 'seat documents are served by the nominated origin itself (navigation enforces a protected 2xx); ONLY known local module-asset paths are intercepted, and they are SERVED FROM NODE by a fresh headerless loopback fetch + route.fulfill (no route.fallback protocol rewrite; no copied request headers/cookies/Authorization; redirects refused; bounded; 2xx-only; loopback-pinned target); matchmake routes and the WebSocket are never intercepted and the vhost challenges every method including OPTIONS',
+      assetServing: 'Node-side fetchGa11LocalAsset: allowlist GA11_MODULE_PATH_PREFIXES, GET with headers:{} (nothing browser-derived is forwarded), redirect:\'error\', AbortSignal.timeout bound, 2xx-only fulfilment with the asset server\'s content-type',
+      tlsVerification: facsimile
+        ? `loopback facsimile ONLY: ephemeral locally-owned untrusted TEST certificate, tolerated only by this cell's isolated contexts — ${GA11_TEST_CERT_NOTE}`
+        : 'RUNTIME-DEFAULT on the real path — never relaxed (ga11SeatContextTlsOptions structurally returns ignoreHTTPSErrors:false outside the labelled loopback facsimile)',
+      sidecarEnvHygiene: 'cell-local browser launched after the stdin relay env is deleted; the shared suite browser never hosts this cell\'s credentialed pages; browser sidecars inherit no credential env',
     },
     population: GA11_FIXED_POPULATION,
     clamps: { maxRttSamples: 300, maxWindowMs: 120_000, cellTimeoutMs: 1_500_000 },

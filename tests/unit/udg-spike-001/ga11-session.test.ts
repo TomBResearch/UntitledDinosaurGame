@@ -14,21 +14,31 @@
  * shrink eligibility, never silently shrink N.
  */
 
-import { connect, createServer, type Socket } from 'node:net';
-import { describe, expect, it } from 'vitest';
+import { connect } from 'node:net';
+import { request as httpsRequest } from 'node:https';
+import { connect as tlsConnect } from 'node:tls';
+import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { nearestRank } from '../../../tools/load-test/src/statistics.ts';
 import {
   GA11_FIXED_POPULATION,
   GA11_MODULE_PATH_PREFIXES,
+  GA11_TEST_CERT_NOTE,
+  GA11_WS_FRAME_SCOPE,
+  fetchGa11LocalAsset,
   ga11EndpointGuard,
+  ga11IsGameplaySocket,
+  ga11LocalAssetTarget,
   ga11LogFilterValues,
-  ga11ModuleUrlRewrite,
+  ga11SeatContextTlsOptions,
+  makeGa11EphemeralTestCertificate,
   makeGa11Redactor,
   parseGa11Netrc,
   rttEligibility,
   startGa11FacsimileHop,
   summarizeFrameLengths,
+  type Ga11TestCertificate,
 } from '../../../tools/load-test/src/ga11-session.ts';
 
 const SECRET = 'synthetic-not-a-real-secret';
@@ -71,6 +81,28 @@ describe('ga11 endpoint guard', () => {
     expect(r.loopback).toBe(true);
     expect(r.webOrigin).toBe('http://127.0.0.1:9');
     expect(ga11EndpointGuard('ws://example.test', { allowLoopbackInsecure: true }).ok).toBe(false); // NOT loopback: refuses
+  });
+
+  it('the UNTRUSTED-TLS label exists ONLY for a loopback https endpoint under the named facsimile flag — a real host can never carry it', () => {
+    const facs = ga11EndpointGuard('https://127.0.0.1:9', { loopbackTlsUntrusted: true });
+    expect(facs.ok).toBe(true);
+    if (facs.ok !== true) return;
+    expect(facs.tls).toBe('loopback-test-cert-untrusted');
+    // Without the flag the same loopback endpoint is runtime-default verified…
+    const loopDefault = ga11EndpointGuard('https://127.0.0.1:9');
+    expect(loopDefault.ok && loopDefault.tls === 'loopback-test-cert-untrusted').toBe(false);
+    // …and the flag on a NON-loopback host changes nothing (it cannot be marked untrusted):
+    const real = ga11EndpointGuard('https://edge.example', { loopbackTlsUntrusted: true });
+    expect(real.ok && real.tls === 'runtime-default-verification').toBe(true);
+  });
+
+  it('the TLS relaxation split is STRUCTURAL: ignoreHTTPSErrors is true ONLY for the labelled loopback facsimile, never for a real endpoint', () => {
+    const real = ga11EndpointGuard('https://edge.example');
+    const facs = ga11EndpointGuard('https://127.0.0.1:9', { loopbackTlsUntrusted: true });
+    if (real.ok !== true || facs.ok !== true) throw new Error('guard expected ok');
+    expect(ga11SeatContextTlsOptions(real, false).ignoreHTTPSErrors).toBe(false); // the real path: runtime defaults, always
+    expect(ga11SeatContextTlsOptions(real, true).ignoreHTTPSErrors).toBe(false);  // real endpoint even under a facsimile flag: still never relaxed
+    expect(ga11SeatContextTlsOptions(facs, true).ignoreHTTPSErrors).toBe(true);   // the labelled loopback facsimile: its isolated context tolerates the test cert
   });
 });
 
@@ -176,28 +208,122 @@ describe('ga11 RTT eligibility (pre-registered fixed population)', () => {
   });
 });
 
-describe('ga11 same-origin module-asset allowlist (what may be rewritten to the local pipeline)', () => {
+describe('ga11 local module-asset serving (allowlist + headerless loopback fetch + gameplay-socket scope)', () => {
   const web = 'https://nominated.example:8443';
   const vite = 'http://127.0.0.1:5173';
 
-  it('rewrites ONLY known module-asset paths on the NOMINATED origin, preserving the query', () => {
-    expect(ga11ModuleUrlRewrite(`${web}/src/network/ColyseusPredictionAdapter.ts`, web, vite)).toBe(`${vite}/src/network/ColyseusPredictionAdapter.ts`);
-    expect(ga11ModuleUrlRewrite(`${web}/node_modules/.vite/deps/@colyseus_sdk.js?v=abc`, web, vite)).toBe(`${vite}/node_modules/.vite/deps/@colyseus_sdk.js?v=abc`);
-    expect(ga11ModuleUrlRewrite(`${web}/@fs/workspace/packages/protocol/dist/index.js`, web, vite)).toBe(`${vite}/@fs/workspace/packages/protocol/dist/index.js`);
+  interface AssetServer {
+    server: HttpServer;
+    port: number;
+    seen: { url: string; authorization: string | null; cookie: string | null; host: string | undefined }[];
+    stop: () => Promise<void>;
+  }
+  const startAssetServer = async (): Promise<AssetServer> => {
+    const seen: AssetServer['seen'] = [];
+    const server = createHttpServer((req, res) => {
+      seen.push({ url: req.url ?? '', authorization: req.headers.authorization ?? null, cookie: req.headers.cookie ?? null, host: req.headers.host });
+      const url = req.url ?? '';
+      if (url.startsWith('/src/network/good')) { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' }); res.end('export const ok = true;'); return; }
+      if (url.startsWith('/src/network/redir')) { res.writeHead(302, { location: `http://127.0.0.1:${String(port)}/src/network/evil` }); res.end(); return; }
+      if (url.startsWith('/src/network/evil')) { res.writeHead(200, { 'content-type': 'text/javascript' }); res.end('export const evil = true;'); return; }
+      if (url.startsWith('/src/network/slow')) { setTimeout(() => { try { res.writeHead(200); res.end('too late'); } catch { /* the bounded client left, as designed */ } }, 400).unref(); return; }
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      res.end('missing');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const port = typeof address === 'object' && address !== null ? (address as { port: number }).port : 0;
+    return { server, port, seen, stop: async () => new Promise<void>((done) => server.close(() => done())) };
+  };
+
+  it('the matcher resolves ONLY allowlisted module-asset paths on the NOMINATED origin to the loopback target, preserving the query', () => {
+    expect(ga11LocalAssetTarget(`${web}/src/network/ColyseusPredictionAdapter.ts`, web, vite)).toBe(`${vite}/src/network/ColyseusPredictionAdapter.ts`);
+    expect(ga11LocalAssetTarget(`${web}/node_modules/.vite/deps/@colyseus_sdk.js?v=abc`, web, vite)).toBe(`${vite}/node_modules/.vite/deps/@colyseus_sdk.js?v=abc`);
+    expect(ga11LocalAssetTarget(`${web}/@fs/workspace/packages/protocol/dist/index.js`, web, vite)).toBe(`${vite}/@fs/workspace/packages/protocol/dist/index.js`);
   });
 
-  it('NEVER rewrites the SDK matchmake routes, the document, or anything on another origin', () => {
-    expect(ga11ModuleUrlRewrite(`${web}/matchmake/join/region`, web, vite)).toBeNull();
-    expect(ga11ModuleUrlRewrite(`${web}/`, web, vite)).toBeNull();
-    expect(ga11ModuleUrlRewrite(`${web}/state/x`, web, vite)).toBeNull();
-    expect(ga11ModuleUrlRewrite(`${vite}/src/network/ColyseusPredictionAdapter.ts`, web, vite)).toBeNull();
-    expect(ga11ModuleUrlRewrite('https://elsewhere.test/src/network/x.ts', web, vite)).toBeNull();
-    expect(ga11ModuleUrlRewrite('not a url', web, vite)).toBeNull();
+  it('the matcher NEVER resolves the SDK matchmake routes, the document, another origin — or a NON-loopback asset origin (no forward path to any real host exists)', () => {
+    expect(ga11LocalAssetTarget(`${web}/matchmake/join/region`, web, vite)).toBeNull();
+    expect(ga11LocalAssetTarget(`${web}/`, web, vite)).toBeNull();
+    expect(ga11LocalAssetTarget(`${web}/state/x`, web, vite)).toBeNull();
+    expect(ga11LocalAssetTarget(`${vite}/src/network/ColyseusPredictionAdapter.ts`, web, vite)).toBeNull();
+    expect(ga11LocalAssetTarget('https://elsewhere.test/src/network/x.ts', web, vite)).toBeNull();
+    expect(ga11LocalAssetTarget('not a url', web, vite)).toBeNull();
+    // the structural rule the HTTPS breakage taught: the ASSET side is pinned to loopback http —
+    // an https or non-loopback "asset origin" resolves to NOTHING, so this path can never
+    // forward module traffic toward the nominated (remote) host:
+    expect(ga11LocalAssetTarget(`${web}/src/network/x.ts`, web, 'https://ec2.example.com')).toBeNull();
+    expect(ga11LocalAssetTarget(`${web}/src/network/x.ts`, web, 'http://example.com')).toBeNull();
   });
 
   it('the allowlist itself contains ONLY module-asset prefixes (no matchmake-shaped entry can sneak in)', () => {
     expect(GA11_MODULE_PATH_PREFIXES.every((p) => !p.includes('matchmake'))).toBe(true);
     expect(GA11_MODULE_PATH_PREFIXES.every((p) => p.startsWith('/'))).toBe(true);
+  });
+
+  it('fetchGa11LocalAsset fulfils 2xx with the server content-type and sends a FRESH HEADERLESS request (no Authorization/cookie from anywhere)', async () => {
+    const assets = await startAssetServer();
+    try {
+      const viteOrigin = `http://127.0.0.1:${String(assets.port)}`;
+      const r = await fetchGa11LocalAsset(`${web}/src/network/good.ts`, web, viteOrigin);
+      expect(r.ok).toBe(true);
+      if (r.ok !== true) return;
+      expect(r.status).toBe(200);
+      expect(r.body.toString()).toContain('export const ok');
+      expect(r.contentType).toContain('text/javascript');
+      expect(assets.seen).toHaveLength(1);
+      const sent = assets.seen[0]!;
+      expect(sent.authorization).toBeNull();   // nothing browser-derived is ever forwarded
+      expect(sent.cookie).toBeNull();
+      expect(sent.host).toBe(`127.0.0.1:${String(assets.port)}`); // the target is loopback, period
+    } finally {
+      await assets.stop();
+    }
+  });
+
+  it('non-2xx refuses, REDIRECTS REFUSE (redirect:error — never followed away from the pin), timeouts are BOUNDED and named', async () => {
+    const assets = await startAssetServer();
+    try {
+      const viteOrigin = `http://127.0.0.1:${String(assets.port)}`;
+      const missing = await fetchGa11LocalAsset(`${web}/src/network/missing.ts`, web, viteOrigin);
+      expect(missing.ok).toBe(false);
+      if (missing.ok === true) return;
+      expect(missing.reason).toContain('404');
+
+      const redirected = await fetchGa11LocalAsset(`${web}/src/network/redir`, web, viteOrigin);
+      expect(redirected.ok).toBe(false);
+      if (redirected.ok === true) return;
+      expect(redirected.reason.toLowerCase()).toContain('redirect');
+      expect(assets.seen.some((s) => s.url.includes('evil'))).toBe(false); // the redirect was refused, not followed
+
+      const slow = await fetchGa11LocalAsset(`${web}/src/network/slow`, web, viteOrigin, 80);
+      expect(slow.ok).toBe(false);
+      if (slow.ok === true) return;
+      expect(slow.reason).toContain('timed out');
+
+      const offList = await fetchGa11LocalAsset(`${web}/matchmake/join/region`, web, viteOrigin);
+      expect(offList.ok).toBe(false);
+      if (offList.ok === true) return;
+      expect(offList.reason).toContain('never fetched');
+      expect(assets.seen.some((s) => s.url.includes('matchmake'))).toBe(false);
+    } finally {
+      await assets.stop();
+    }
+  });
+
+  it('gameplay-socket scope: EXACT endpoint host:port matches; the Vite HMR ws and every other socket are excluded', () => {
+    const g = ga11EndpointGuard('https://edge.example:8443');
+    if (g.ok !== true) throw new Error('guard expected ok');
+    expect(ga11IsGameplaySocket('wss://edge.example:8443/?sec=token', g)).toBe(true);
+    expect(ga11IsGameplaySocket('wss://edge.example:8443', g)).toBe(true);
+    expect(ga11IsGameplaySocket('ws://127.0.0.1:5173/?token=abc', g)).toBe(false); // the Vite HMR socket
+    expect(ga11IsGameplaySocket('wss://edge.example:9999', g)).toBe(false);         // same host, wrong port
+    expect(ga11IsGameplaySocket('wss://evil.example/', g)).toBe(false);
+    expect(ga11IsGameplaySocket('https://edge.example:8443/', g)).toBe(false);      // not a ws scheme
+    expect(ga11IsGameplaySocket('not a url', g)).toBe(false);
+    // the window-only scope label is a fixed, non-empty string the cell pins equality against:
+    expect(GA11_WS_FRAME_SCOPE).toContain('window-only');
+    expect(GA11_WS_FRAME_SCOPE).toContain('gameplay');
   });
 });
 
@@ -223,79 +349,119 @@ describe('ga11 WS payload-length summaries and log-filter values', () => {
   });
 });
 
-describe('ga11 loopback facsimile hop (auth posture + byte counting, 127.0.0.1 only)', () => {
-  const echo = async (): Promise<{ port: number; stop: () => Promise<void> }> => {
-    const sockets = new Set<Socket>();
-    const server = createServer((socket) => {
-      sockets.add(socket);
-      socket.on('data', (chunk) => socket.write(Buffer.from(chunk)));
-      socket.on('close', () => sockets.delete(socket));
-      socket.on('error', () => sockets.delete(socket));
+describe('ga11 loopback facsimile hop — HTTPS PARITY (TLS-terminating Basic-auth hop, auth on every method incl. OPTIONS and the WSS upgrade, 127.0.0.1 only)', () => {
+  const good = Buffer.from(`u:${SECRET}`).toString('base64');
+  let cert: Ga11TestCertificate | null = null;
+
+  beforeAll(() => {
+    // The ephemeral locally-owned TEST certificate (openssl) — the same generator the cell uses;
+    // its private-key files are unlinked on creation, the material lives only here.
+    try { cert = makeGa11EphemeralTestCertificate(); } catch { cert = null; }
+  });
+
+  interface FixtureTarget { port: number; seen: { method: string; url: string; authorization: string | null; cookie: string | null; upgradeAuth: string | null }[]; stop: () => Promise<void> }
+  const startTarget = async (): Promise<FixtureTarget> => {
+    const seen: FixtureTarget['seen'] = [];
+    const server = createHttpServer((req, res) => {
+      seen.push({ method: req.method ?? '', url: req.url ?? '', authorization: req.headers.authorization ?? null, cookie: req.headers.cookie ?? null, upgradeAuth: null });
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end(`ECHO ${req.method} ${req.url} END`);
+    });
+    server.on('upgrade', (req, socket) => {
+      seen.push({ method: req.method ?? '', url: req.url ?? '', authorization: null, cookie: null, upgradeAuth: req.headers.authorization ?? null });
+      socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nWELCOME-END');
+      socket.end();
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
-    const port = typeof address === 'object' && address !== null ? address.port : 0;
-    return {
-      port,
-      stop: async () => {
-        for (const s of sockets) s.destroy();
-        await new Promise<void>((done) => server.close(() => done()));
-      },
-    };
+    const port = typeof address === 'object' && address !== null ? (address as { port: number }).port : 0;
+    return { port, seen, stop: async () => new Promise<void>((done) => server.close(() => done())) };
   };
 
-  const sendRaw = (port: number, bytes: string): Promise<{ head: string; body: number }> =>
+  const httpsProbe = (port: number, path: string, method: string, auth: string | null): Promise<{ status: number; wwwAuth: string | null; body: string }> =>
     new Promise((resolve, reject) => {
-      const chunks: Buffer[] = [];
-      const socket = connect(port, '127.0.0.1', () => socket.write(Buffer.from(bytes, 'latin1')));
-      socket.on('data', (chunk) => chunks.push(chunk));
-      socket.on('close', () => {
-        const all = Buffer.concat(chunks);
-        resolve({ head: all.subarray(0, all.indexOf('\r\n\r\n') + 1).toString('latin1'), body: all.length });
+      const req = httpsRequest({
+        host: '127.0.0.1', port, path, method,
+        rejectUnauthorized: false, // the TEST cert only — this unit never points at a real host
+        headers: auth !== null ? { authorization: `Basic ${auth}` } : {},
+      }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, wwwAuth: res.headers['www-authenticate'] ?? null, body: Buffer.concat(chunks).toString('utf8') }));
       });
-      socket.on('error', reject);
-      setTimeout(() => socket.destroy(), 750); // bounded: the echo never closes by itself
+      req.on('error', reject);
+      setTimeout(() => req.destroy(), 3_000).unref();
+      req.end();
     });
 
-  it('refuses an unauthenticated request with a 401 challenge and forwards an authenticated one, counting bytes', async () => {
-    const target = await echo();
-    const hop = await startGa11FacsimileHop({ login: 'u', password: SECRET, targetPort: target.port });
+  const upgradeProbe = (port: number, auth: string | null): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      const socket = tlsConnect({ host: '127.0.0.1', port, rejectUnauthorized: false }, () => {
+        socket.write([
+          'GET /colyseus.001.000 HTTP/1.1',
+          'Host: 127.0.0.1',
+          'Upgrade: websocket',
+          'Connection: Upgrade',
+          ...(auth !== null ? [`Authorization: Basic ${auth}`] : []),
+          '', '',
+        ].join('\r\n'));
+      });
+      socket.on('data', (chunk: Buffer) => chunks.push(chunk));
+      socket.on('close', () => resolve(Buffer.concat(chunks).toString('latin1')));
+      socket.on('error', reject);
+      setTimeout(() => socket.destroy(), 2_000).unref();
+    });
+
+  it('challenges EVERY unauthenticated method over TLS (GET, OPTIONS) with a 401 + challenge, and REFUSES an unauthenticated WSS upgrade', async () => {
+    if (cert === null) throw new Error('openssl test certificate unavailable — the HTTPS facsimile cannot be pinned');
+    const target = await startTarget();
+    const hop = await startGa11FacsimileHop({ login: 'u', password: SECRET, targetPort: target.port, tls: { cert: cert.cert, key: cert.key } });
     try {
-      const denied = await sendRaw(hop.port, `GET /matchmake/join/region HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n`);
-      expect(denied.head).toContain('401 Unauthorized');
-      expect(denied.head).toContain('WWW-Authenticate: Basic');
-
-      const good = Buffer.from(`u:${SECRET}`).toString('base64');
-      const allowed = await sendRaw(hop.port, `GET /matchmake/join/region HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Basic ${good}\r\n\r\n`);
-      expect(allowed.head).not.toContain('401');
-      expect(allowed.head).toContain('GET /matchmake/join/region HTTP/1.1'); // the echo echoed the forwarded request line back
-
-      const wrong = Buffer.from(`u:nope`).toString('base64');
-      const refused = await sendRaw(hop.port, `GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Basic ${wrong}\r\n\r\n`);
-      expect(refused.head).toContain('401');
-
-      const counts = hop.bytes();
-      expect(counts.refused).toBe(2);
-      expect(counts.authed).toBe(1);
-      expect(counts.c2s).toBeGreaterThan(0);
-      expect(counts.s2c).toBeGreaterThan(0);
+      const denied = await httpsProbe(hop.port, '/matchmake/join/region', 'GET', null);
+      expect(denied.status).toBe(401);
+      expect(denied.wwwAuth).toContain('Basic');
+      const preDenied = await httpsProbe(hop.port, '/matchmake/join/region', 'OPTIONS', null);
+      expect(preDenied.status).toBe(401); // the ACTUAL vhost posture: OPTIONS challenged like everything else
+      const wrongAuth = await httpsProbe(hop.port, '/', 'GET', Buffer.from('u:nope').toString('base64'));
+      expect(wrongAuth.status).toBe(401);
+      const upgradeDenied = await upgradeProbe(hop.port, null);
+      expect(upgradeDenied).toContain('401 Unauthorized');
+      expect(target.seen).toHaveLength(0); // nothing unauthenticated ever reached the fixture
     } finally {
       await hop.stop();
       await target.stop();
     }
   });
 
-  it('challenges EVERY method including OPTIONS (the actual vhost challenges every method — a cross-origin page cannot smuggle a preflight past auth)', async () => {
-    const target = await echo();
-    const hop = await startGa11FacsimileHop({ login: 'u', password: SECRET, targetPort: target.port });
+  it('authenticated: 2xx facsimile document, proxied matchmake (credentials STOP at the hop), tunneled WSS upgrade; bytes counted; stop() retires the port', async () => {
+    if (cert === null) throw new Error('openssl test certificate unavailable — the HTTPS facsimile cannot be pinned');
+    const target = await startTarget();
+    const hop = await startGa11FacsimileHop({ login: 'u', password: SECRET, targetPort: target.port, tls: { cert: cert.cert, key: cert.key } });
     try {
-      const preDenied = await sendRaw(hop.port, `OPTIONS /matchmake/join/region HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://127.0.0.1:5173\r\n\r\n`);
-      expect(preDenied.head).toContain('401'); // the REAL posture: OPTIONS is challenged like everything else
-      const good = Buffer.from(`u:${SECRET}`).toString('base64');
-      const preOk = await sendRaw(hop.port, `OPTIONS /matchmake/join/region HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://127.0.0.1:5173\r\nAuthorization: Basic ${good}\r\n\r\n`);
-      expect(preOk.head).not.toContain('401'); // authed, forwarded to the target (echoed)
-      expect(hop.bytes().refused).toBe(1);
-      expect(hop.bytes().authed).toBe(1);
+      const doc = await httpsProbe(hop.port, '/', 'GET', good);
+      expect(doc.status).toBe(200); // the cell requires a 2xx protected document; the fixture provides its own
+      expect(doc.body).toContain('local fixture, not the service');
+
+      const matchmake = await httpsProbe(hop.port, '/matchmake/join/region', 'GET', good);
+      expect(matchmake.status).toBe(200);
+      expect(matchmake.body).toContain('ECHO GET /matchmake/join/region END');
+      const proxied = target.seen.find((s) => s.url === '/matchmake/join/region');
+      expect(proxied?.authorization).toBeNull(); // the fixture never sees the client credential — and this is labelled in the hop docs
+
+      const upgraded = await upgradeProbe(hop.port, good);
+      expect(upgraded).toContain('101 Switching Protocols');
+      expect(upgraded).toContain('WELCOME-END');
+      const tunneled = target.seen.find((s) => s.upgradeAuth !== null || s.url.includes('colyseus'));
+      expect(tunneled?.upgradeAuth).toBeNull(); // same rule on the upgrade path
+
+      const counts = hop.bytes();
+      expect(counts.authed).toBeGreaterThanOrEqual(3);
+      expect(counts.refused).toBe(0);
+      expect(counts.c2s).toBeGreaterThan(0);
+      expect(counts.s2c).toBeGreaterThan(0); // post-TLS cleartext bytes — labelled as the hop's own view
+
+      expect(GA11_TEST_CERT_NOTE).toContain('untrusted');
     } finally {
       await hop.stop();
       await target.stop();
@@ -303,8 +469,9 @@ describe('ga11 loopback facsimile hop (auth posture + byte counting, 127.0.0.1 o
   });
 
   it('stops finitely: after stop() nothing listens any more (port retired)', async () => {
-    const target = await echo();
-    const hop = await startGa11FacsimileHop({ login: 'u', password: SECRET, targetPort: target.port });
+    if (cert === null) throw new Error('openssl test certificate unavailable — the HTTPS facsimile cannot be pinned');
+    const target = await startTarget();
+    const hop = await startGa11FacsimileHop({ login: 'u', password: SECRET, targetPort: target.port, tls: { cert: cert.cert, key: cert.key } });
     const port = hop.port;
     await hop.stop();
     await new Promise<void>((resolve) => {

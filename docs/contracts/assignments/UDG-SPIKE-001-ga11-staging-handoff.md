@@ -95,6 +95,53 @@ building it before a deployment exists would invite measuring nothing.
 > Codex:** re-review the new head, routine CI, then execute runbook §4 steps 0–3 (§15B(1) nominated
 > path first). GA-11's verdict, Gate A's rows and every provisional value remain exactly where the
 > accepted records put them.
+>
+> **Structural HTTPS corrections (slice-30r2, bound before further live dispatches).** The live
+> dispatcher confirmed the real breakage: `route.fallback({url})` cannot change protocol, so the
+> https-page → http-asset-server rewrite thrown out on the actual HTTPS path (the HTTP-only
+> facsimile could never see it). Corrections, all validated on a NEW locally-owned **HTTPS**
+> facsimile (a TLS-terminating Basic-auth hop on an ephemeral, untrusted, locally-generated test
+> certificate whose key files are unlinked on creation — no secret at rest; TLS relaxation exists
+> ONLY for that labelled loopback label, and a real nominated endpoint structurally always runs
+> runtime-default verification):
+>
+> 1. allowlisted local module assets are now SERVED FROM NODE — a fresh, headerless loopback
+>    fetch (`headers: {}` — no browser request headers, cookies or Authorization copied),
+>    `redirect: 'error'`, hard `AbortSignal.timeout`, 2xx-only, fulfilled via `route.fulfill`
+>    with the asset server's content-type; the fetch TARGET is pinned to literal-loopback http,
+>    so no forward path to the nominated host exists at this seam; gameplay and the document are
+>    never rewritten or proxied;
+> 2. the facsimile hop terminates TLS and challenges EVERY method including OPTIONS **and the
+>    WSS upgrade** — matching the actual vhost over the real protocol shape;
+> 3. contexts hardened: every open/join/probe rides a named bounded budget; a failed seat open
+>    closes its context (with its scoped credentials) before propagating; the protected document
+>    must be **2xx** (a 404 is not a page) or the session names the failure;
+> 4. the negative control observes the real 401 with a clean bounded Playwright REQUEST probe —
+>    never a bare-document navigation (encrypted Chromium can throw ERR_INVALID_AUTH_CREDENTIALS
+>    instead of answering) and never a primed/empty document — then the SDK join against the
+>    real origin must still fail;
+> 5. WSS frame counters scope to the EXACT gameplay socket (origin == endpoint host:port; the
+>    Vite HMR ws excluded at discovery and counted as ignored) and to the measurement WINDOW
+>    only — deliberately incomplete and labelled so;
+> 6. sidecar env hygiene: every credentialed surface runs in a CELL-LOCAL browser launched only
+>    AFTER the stdin relay env is deleted from the worker, so Chromium sidecars inherit no
+>    credential material (the suite browser predates the deletion and is never used here);
+> 7. EC2 untouched, attempts preserved: these changes live in an isolated worktree; the running
+>    live dispatch was not modified.
+>
+> Verification of slice-30r2, loopback only: unit **26/26** (new pins: untrusted-label scope,
+> structural TLS split, matcher loopback-pinning incl. refusing a non-loopback asset origin,
+> headerless/redirect-refused/timeout-bounded asset fetch, gameplay-socket scope, TLS hop auth on
+> GET/OPTIONS/upgrade with credentials stopping at the hop, 2xx facsimile document, port
+> retirement), and the full cell green OVER TLS under the strict posture (3/3 sessions 120/120
+> finite RTT; documents 200 per seat; window-only gameplay-only frame populations; negative
+> control 401-then-refused; 11/11 cell checks; artifacts secret- and identity-free; netrc piped
+> through the relay). **Guidance for an already-successful live attempt:** if a run reached real
+> same-origin room replication and produced artifact rows, those numbers stand as evidence of
+> REACHABILITY on their head and need no rerun for the structural concerns (the broken fallback
+> call simply never fired if the run passed); but any numbers destined for the §15B(4)
+> characterisation should come from slice-30r2-or-later heads, because the WS-byte scope
+> (window-only, gameplay-only) and the 2xx/401-probe semantics changed field definitions there.
 
 ## 3. Reproduce · validate · reset (all local, all independent of any endpoint)
 

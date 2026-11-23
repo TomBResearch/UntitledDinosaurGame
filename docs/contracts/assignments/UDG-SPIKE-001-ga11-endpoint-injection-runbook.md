@@ -46,13 +46,16 @@ whose public ingress posture this session now measures THROUGH).
   never argv, never a file), and the cell deletes the variable the instant it decodes it. The
   setup is COMPLETELY INERT unless `UDG_GA11_SESSION=1`; the UDG-004 config pins (serial, one
   chromium project, `pnpm dev` webServer) hold and their contract test passes.
-- Verification already done OFF-HOST, loopback only: unit 21/21
+- Verification already done OFF-HOST, loopback only: unit 26/26
   (`tests/unit/udg-spike-001/ga11-session.test.ts`), and full facsimile runs of the real cell
-  green UNDER THE STRICT POSTURE (Basic on every method including OPTIONS; 3/3 sessions,
-  120/120 finite RTT samples per session, same-origin document navigations authenticated with
-  the status enforced, resolved-prefix match under the tightened rule, WS frame distributions
-  non-trivial and summary-only, negative control met a real 401, zero failing checks, artifacts
-  re-scanned secret- and identity-free — with the netrc actually PIPED through the relay). The
+  green UNDER THE STRICT POSTURE OVER TLS (Basic on every method including OPTIONS and the WSS
+  upgrade, on the locally-owned untrusted test certificate; 3/3 sessions, 120/120 finite RTT
+  samples per session, protected documents authenticated with a 2xx recorded and enforced,
+  WINDOW-ONLY + GAMEPLAY-ONLY WS frame populations (one gameplay socket per seat, HMR excluded
+  and counted, ~1 290 sent / ~708 received frames per mover in-window), resolved-prefix match
+  under the tightened rule, negative control 401 via the clean request probe + refused join,
+  zero failing checks, artifacts re-scanned secret- and identity-free — with the netrc actually
+  PIPED through the relay). The
   routine suite's red/green set is byte-identical to `d69a7287` in this environment (pre-existing
   environment reds only: the container runs Node 24.22.3 against the 24.22.2 pin).
 
