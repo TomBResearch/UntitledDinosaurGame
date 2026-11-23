@@ -142,11 +142,22 @@ export const ga11EndpointGuard = (
   // always `runtime-default-verification` and no harness context is ever allowed to relax TLS
   // verification for it (ga11SeatContextTlsOptions pins that split).
   const untrustedTestTls = secure && loopback && options.loopbackTlsUntrusted === true;
+  // CANONICAL ORIGINS (slice-30r3, root cause PROVEN live against the actual service by two
+  // controlled document requests with identical credentials in verified Chromium): Chromium
+  // matches httpCredentials.origin against the CANONICAL origin, so an explicit default port
+  // (`https://host:443`) never matches the request origin (`https://host`) — the credential
+  // silently never applies and the service correctly answers 401. webOrigin/socketOrigin are
+  // therefore WHATWG-URL.origin-canonical (default ports omitted, IPv6 brackets preserved);
+  // the DIGEST stays the explicit host:effective-port string, exactly as before.
+  const httpLike = new URL(url);
+  httpLike.protocol = secure ? 'https:' : 'http:';
+  const wsLike = new URL(url);
+  wsLike.protocol = secure ? 'wss:' : 'ws:';
   const hostPort = `${host}:${String(port)}`;
   return {
     ok: true,
-    webOrigin: `${secure ? 'https' : 'http'}://${hostPort}`,
-    socketOrigin: `${secure ? 'wss' : 'ws'}://${hostPort}`,
+    webOrigin: httpLike.origin,
+    socketOrigin: wsLike.origin,
     host,
     port,
     digest: createHash('sha256').update(hostPort).digest('hex'),
@@ -189,7 +200,9 @@ export const parseGa11Netrc = (text: string, host: string): Ga11Credentials | Ga
     if (line.startsWith('default')) return { ok: false, error: `netrc line ${String(index + 1)} uses a \`default\` entry — refused: a GA-11 session credential is scoped to the nominated machine, never to a default` };
     const tokens = line.split(/\s+/);
     if ((tokens[0] ?? '') !== 'machine') {
-      return { ok: false, error: `netrc line ${String(index + 1)} starts with "${tokens[0]}" — only "machine <host> login <l> password <p>" entries are understood (the existing host format)` };
+      // NO caller-supplied material is echoed — not the leading token, not a value: only the
+      // line number and the shape that IS understood (slice-30r3 hardening).
+      return { ok: false, error: `netrc line ${String(index + 1)} does not start with the machine keyword — only "machine <host> login <l> password <p>" entries are understood (the existing host format); the offending token is NOT echoed` };
     }
     const machine = tokens[1] ?? '';
     let login: string | undefined;
@@ -199,7 +212,7 @@ export const parseGa11Netrc = (text: string, host: string): Ga11Credentials | Ga
       const value = tokens[t + 1] ?? '';
       if (key === 'login') login = value;
       else if (key === 'password') password = value;
-      else return { ok: false, error: `netrc line ${String(index + 1)} carries unknown token "${key}" at position ${String(t)} (line truncated; value not echoed)` };
+      else return { ok: false, error: `netrc line ${String(index + 1)} carries an unknown token at position ${String(t)} (only login/password follow the machine entry); the token and its value are NOT echoed` };
     }
     if (machine.toLowerCase() === want) matches.push({ line: index + 1, machine, login, password });
   }
@@ -405,14 +418,15 @@ export const GA11_WS_FRAME_SEMANTICS =
 export const GA11_WS_FRAME_SCOPE =
   'window-only and gameplay-socket-only: frames are counted ONLY while the measurement window is open, and ONLY on sockets whose origin EXACTLY matches the nominated gameplay endpoint host:port (the Vite HMR ws and any other socket are excluded at discovery and counted as ignored); pages live before and after the window, so this population is deliberately incomplete — labelled, never silently partial';
 
-/** EXACT gameplay-socket match on the endpoint's host and port (scheme ws/wss). Used to EXCLUDE
- * every other socket a page may hold — the Vite HMR ws is the known one on the facsimile. */
+/** EXACT gameplay-socket match against the CANONICAL socket origin (slice-30r3:
+ * `url.origin === endpoint.socketOrigin` — both sides WHATWG-canonical, so an explicit default
+ * port on either side (`wss://host:443`) matches the canonical form; the Vite HMR ws and any
+ * other socket do not). Used to EXCLUDE every other socket a page may hold. */
 export const ga11IsGameplaySocket = (rawUrl: string, endpoint: Ga11EndpointOk): boolean => {
   try {
     const u = new URL(rawUrl);
     if (u.protocol !== 'wss:' && u.protocol !== 'ws:') return false;
-    const port = u.port !== '' ? Number(u.port) : u.protocol === 'wss:' ? 443 : 80;
-    return u.hostname.toLowerCase() === endpoint.host && port === endpoint.port;
+    return u.origin === endpoint.socketOrigin;
   } catch {
     return false;
   }

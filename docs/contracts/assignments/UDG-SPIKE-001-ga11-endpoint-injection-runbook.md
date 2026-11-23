@@ -21,32 +21,50 @@ whose public ingress posture this session now measures THROUGH).
   `machine <host> login <l> password <p>` (exact machine match, `default` refused, duplicates
   refused, parse errors name line+token and NEVER a value); the redactor (login, password and
   endpoint host erased from every string the seam persists); the RTT eligibility rule against the
-  PRE-REGISTERED fixed population; and the loopback Basic-auth facsimile hop (127.0.0.1 only)
-  that validates the whole authed path under the ACTUAL strict posture described in §3.
+  PRE-REGISTERED fixed population; and the loopback facsimile hop (127.0.0.1 only) that
+  validates the whole authed path UNDER THE ACTUAL POSTURE described in §3 — since slice-30r2 a
+  TLS-TERMINATING HTTPS hop (Basic on every method including OPTIONS AND on the WSS upgrade) on
+  an ephemeral, locally-owned, explicitly-UNTRUSTED test certificate (openssl per hop, key files
+  unlinked on creation, no secret at rest), labelled `loopback-test-cert-untrusted`; TLS
+  relaxation exists ONLY for that label — a real endpoint always navigates under runtime-default
+  verification (`ga11SeatContextTlsOptions` pins the split structurally). Since slice-30r3 the
+  guard's `webOrigin`/`socketOrigin` are WHATWG-CANONICAL (default ports omitted — Chromium
+  matches `httpCredentials.origin` canonically, so an explicit `:443` would silently disable the
+  credential; proven live); the digest stays the explicit host:effective-port pair.
 - `tests/e2e/netcode.spec.ts` → env-gated cell `ga11-session` (`UDG_GA11_SESSION=1`; **no CI
   route, no spike-CLI cell** — the accepted slice-23/24 dispatch shape): TWO real seats in the
   pinned Chromium join the SAME room on the nominated origin over its own HTTPS/WSS Basic-auth
   path. Slice-30 review correction, binding: the actual vhost challenges EVERY method including
   OPTIONS, so the seat pages are SAME-ORIGIN — the DOCUMENT navigation itself authenticates the
   protected `/` through context-scoped `httpCredentials` (`origin` = the nominated origin, never
-  a wildcard) and the HTTP STATUS IS ENFORCED per seat (a 401 after credentials is a named
-  admission failure; the earlier cross-origin-localhost priming design is removed). The ONLY
+  a wildcard) and the HTTP STATUS IS ENFORCED per seat as a PROTECTED 2xx (a 401 — or any
+  non-2xx: a 404 is not a page — after credentials is a named admission failure). The ONLY
   interception is the known local module-asset allowlist (`GA11_MODULE_PATH_PREFIXES`: the two
-  harness entry modules + Vite's compiled-asset shapes), rewritten via `route.fallback` to the
-  loopback Vite pipeline; the SDK's matchmake routes and the WebSocket are NEVER intercepted and
-  nothing is proxied. WS payload-byte distributions (per seat, per direction) are collected in
-  memory via the Playwright page API and discarded — only counts and nearest-rank size summaries
-  enter the record, with payload-only semantics and NO heartbeat-vs-patch claim. Shipped
-  `joinPredictionSeat`/`createSdkSeatTransport`/`DirectMotionPredictor` and the accepted
-  `pingLatency → Room.ping` seam are reused unchanged. A no-credentials negative control must
-  meet the ACTUAL service's 401 on the document and then fail to join.
+  harness entry modules + Vite's compiled-asset shapes); those assets are SERVED FROM NODE — a
+  fresh, HEADERLESS loopback fetch (`headers: {}`; no browser request headers, cookies or
+  Authorization copied; `redirect: 'error'`; hard timeout; 2xx-only) fulfilled via
+  `route.fulfill` (`route.fallback({url})` is REMOVED — Playwright forbids a protocol change in
+  fallbacks, which broke the real HTTPS path). The fetch target is pinned to literal-loopback
+  http — no forward path to the nominated host exists at this seam; the SDK's matchmake routes
+  and the WebSocket are NEVER intercepted. WS payload-byte distributions (per seat, per
+  direction) are counted WINDOW-ONLY on the EXACT gameplay socket (canonical-origin match; the
+  Vite HMR ws excluded at discovery and counted), collected in memory and discarded — only
+  counts and nearest-rank summaries enter the record, with payload-only semantics, the scope
+  label, and NO heartbeat-vs-patch claim. Every open/join/probe rides a named budget; a failed
+  seat open closes its credential-carrying context before propagating; the negative control
+  observes the real 401 with a clean bounded Playwright REQUEST probe (never a bare-document
+  navigation — encrypted Chromium can throw ERR_INVALID_AUTH_CREDENTIALS) and then must fail to
+  join; credentialed surfaces run in a CELL-LOCAL browser launched after the stdin relay env is
+  deleted. Shipped `joinPredictionSeat`/`createSdkSeatTransport`/`DirectMotionPredictor` and the
+  accepted `pingLatency → Room.ping` seam are reused unchanged.
 - `tests/support/ga11-stdin-setup.mjs` + one `globalSetup` line in `playwright.config.ts` — the
   credential RELAY: a Playwright worker never inherits the dispatched stdin, so the MAIN process
   reads the piped netrc and passes it through the child environment (base64, in-process only —
   never argv, never a file), and the cell deletes the variable the instant it decodes it. The
   setup is COMPLETELY INERT unless `UDG_GA11_SESSION=1`; the UDG-004 config pins (serial, one
   chromium project, `pnpm dev` webServer) hold and their contract test passes.
-- Verification already done OFF-HOST, loopback only: unit 26/26
+- Verification already done OFF-HOST, loopback only: unit 30/30 (canonical-origin and netrc
+  non-echo pins included since slice-30r3)
   (`tests/unit/udg-spike-001/ga11-session.test.ts`), and full facsimile runs of the real cell
   green UNDER THE STRICT POSTURE OVER TLS (Basic on every method including OPTIONS and the WSS
   upgrade, on the locally-owned untrusted test certificate; 3/3 sessions, 120/120 finite RTT
@@ -91,14 +109,18 @@ exist only in the facsimile.
 
 The ACTUAL vhost posture is the measured one and this harness conforms to it rather than asking
 for exceptions: **Basic auth on every method including OPTIONS**, TLS on the one nominated host
-serving both the matchmake HTTP and the WSS upgrade. Because the seat documents are SAME-ORIGIN
-with the service (the navigation authenticates; the module assets arrive through the local
-allowlist rewrite), the session issues no cross-origin requests and no preflight ever needs to
-pass unauthenticated. No new endpoint, no health check, no debug route, no CORS or auth
-relaxation — the session uses ONLY the routes the pinned SDK already uses. The facsimile hop
-reproduces exactly this posture (OPTIONS included), and the facsimile runs above are the proof
-the path works UNDER it. One consequence, stated honestly: the page byte observations are
-WS payload lengths client-side; hop-level byte totals exist only in the facsimile.
+serving both the matchmake HTTP and the WSS upgrade, and a **2xx document at `/`** (the seat
+navigation requires a protected PAGE — a 404 `/` names the failure on every session; serving the
+built app at `/` is the ordinary posture). Because the seat documents are SAME-ORIGIN with the
+service (the navigation authenticates; the module assets arrive through Node-side fulfilment),
+the session issues no cross-origin requests and no preflight ever needs to pass unauthenticated.
+No new endpoint, no health check, no debug route, no CORS or auth relaxation — the session uses
+ONLY the routes the pinned SDK already uses. The facsimile hop reproduces exactly this posture
+OVER TLS — Basic on every method including OPTIONS and the upgrade, on its own locally-owned
+untrusted test certificate — and the HTTPS facsimile runs are the proof the path works UNDER it.
+One consequence, stated honestly: the page byte observations are WS payload lengths client-side
+(window-only, gameplay socket only); hop-level byte totals (post-TLS cleartext, the hop's own
+view) exist only in the facsimile.
 
 ## 4. Exact commands (Codex, inside container `603049da76e5`, pinned toolchain per repo pins)
 
@@ -123,36 +145,43 @@ pnpm install --frozen-lockfile
 pnpm build:libraries && pnpm --filter @udg/client build && pnpm --filter @udg/server build
 npx tsc -p tools/load-test/tsconfig.json      # the seam + the fail-closed run.log filter
 
-# 1) pure-seam unit tests (no browser, no endpoint, no credentials — must be 21/21):
+# 1) pure-seam unit tests (no browser, no endpoint, no credentials — must be 30/30):
 pnpm vitest run tests/unit/udg-spike-001/ga11-session.test.ts
 
 # 2) loopback FACSIMILE rehearsal of the EXACT dispatched command UNDER THE ACTUAL AUTH POSTURE
-#    (Basic on every method including OPTIONS; fake local credentials piped; 127.0.0.1 ephemeral
-#    only; trace/screenshot retention off; artifact isolated under UDG_SPIKE_OUT):
+#    (HTTPS hop: Basic on every method including OPTIONS and the upgrade; fake local credentials
+#    piped; 127.0.0.1 ephemeral only; trace/screenshot retention off; artifact isolated under
+#    UDG_SPIKE_OUT). STDIN SHAPE IS DISPATCHER-PROVEN INSIDE THIS CONTAINER: `pnpm …` swallows
+#    the piped stdin, so pipe the shell-BUILTIN printf directly into ./node_modules/.bin/playwright
+#    (no pnpm in the stdin pipeline; the gated globalSetup still relays the bytes to the worker):
 printf 'machine 127.0.0.1 login rehearsal password %s\n' "$(openssl rand -base64 18)" | \
   env UDG_GA11_SESSION=1 UDG_GA11_FACSIMILE=1 UDG_E2E_TRACE=off \
       UDG_SPIKE_OUT=artifacts/.local/spike-001/ga11-facsimile-$(date -u +%Y%m%dT%H%M%SZ) \
       UDG_E2E_JUNIT=none UDG_E2E_RESULTS=none \
-  pnpm exec playwright test netcode.spec.ts -g "ga11-session"
+  ./node_modules/.bin/playwright test netcode.spec.ts -g "ga11-session"
 
-# 3) THE REAL FIRST PATH. Credentials: the root-owned netrc (existing host format, one
-#    `machine <nominated-host> login <l> password <p>` line) piped on STDIN ONLY — never argv,
-#    never a file this repository reads, never echoed. The endpoint and the deployed build's own
-#    join-gate triple travel via env (the accepted staging-probe posture: env is the only
-#    ingress). stdout passes through the FAIL-CLOSED host-redaction filter before tee; trace,
-#    screenshots, JUnit and the JSON reporter are all off, so no retained surface can carry an
-#    endpoint value, credential or session identity (and the cell re-scans its own record).
+# 3) THE REAL PATH. Credentials: the deployment's PROJECT-SPECIFIC netrc file for this project
+#    (NOT /root/.netrc — the existing host keeps its `machine <nominated-host> login <l>
+#    password <p>` line in the project's own root-owned file; the operator names the path, the
+#    VALUE never appears in any command line, log, or this document). Read it with the shell-
+#    builtin BLOCKING loop (`IFS= read -r`) piping builtin printf straight into
+#    ./node_modules/.bin/playwright — again no pnpm in the stdin pipeline (pnpm swallows stdin
+#    here; dispatcher-proven). The endpoint and the deployed build's own join-gate triple travel
+#    via env (env is the only ingress). stdout passes through the FAIL-CLOSED host-redaction
+#    filter before tee; trace, screenshots, JUnit and the JSON reporter are all off (and the
+#    cell re-scans its own record).
 export UDG_GA11_ENDPOINT=https://<nominated-origin>           # explicit; nothing is guessed
+GA11_NETRC_FILE=<the project's own root-owned netrc path>     # project-specific; never committed
 BUNDLE=<bundleId>
 mkdir -p "artifacts/.local/spike-001/$BUNDLE"
-sudo cat /root/.netrc | \
+{ while IFS= read -r line; do printf '%s\n' "$line"; done < "$GA11_NETRC_FILE"; } | \
   env UDG_GA11_SESSION=1 UDG_GA11_ENDPOINT="$UDG_GA11_ENDPOINT" \
       UDG_GA11_PROTOCOL='<protocolVersion of the deployed build>' \
       UDG_GA11_CONFIG_HASH='<hex64 from the server ready line / RELEASE.json>' \
       UDG_GA11_MANIFEST_HASH='<hex64 from the server ready line / RELEASE.json>' \
       UDG_RUN_ID="$BUNDLE" UDG_SPIKE_OUT="artifacts/.local/spike-001/$BUNDLE" \
       UDG_E2E_TRACE=off UDG_E2E_JUNIT=none UDG_E2E_RESULTS=none \
-  pnpm exec playwright test netcode.spec.ts -g "ga11-session" 2>&1 | \
+  ./node_modules/.bin/playwright test netcode.spec.ts -g "ga11-session" 2>&1 | \
   node tools/load-test/dist/ga11-log-filter.js | \
   tee "artifacts/.local/spike-001/$BUNDLE/run.log"
 ```
@@ -208,18 +237,22 @@ input matching:                  resolved prefix must be POSITIVE (zero resolves
                                  accepted send in the predictor's own audit, sentTotal > 0), and
                                  resolve on the CURRENT transport epoch; pending entries same-epoch
 byte evidence:                   WS DATA-frame payload-byte distributions per seat and direction
-                                 (Playwright page API; payload-only semantics; heartbeat-vs-patch
-                                 NOT identifiable at this seam so NO patch-byte claim; raw lengths
-                                 discarded, no URLs persisted); hop-level totals exist ONLY in the
-                                 facsimile
+                                 (Playwright page API; WINDOW-ONLY and EXACT-gameplay-socket-only
+                                 by CANONICAL-origin match — HMR and other sockets excluded at
+                                 discovery and counted, out-of-window frames deliberately
+                                 excluded, incomplete-by-design labelled; payload-only
+                                 semantics; heartbeat-vs-patch NOT identifiable so NO patch-byte
+                                 claim; raw lengths discarded, no URLs persisted); hop-level
+                                 totals (post-TLS cleartext) exist ONLY in the facsimile
 impairment source:               none injected — natural path only (label travels: regime
                                  NOT CLAIMED until §15B(4) characterisation exists)
 validity floors before any use:  reachability witnessed by the room's own replication; each seat's
-                                 same-origin document authenticated by the ACTUAL service (status
-                                 enforced, no 401 after credentials); per-session eligibility as
-                                 above; the negative control met a real 401 and failed to join;
-                                 artifacts secret- and identity-free on page-error surfaces (all
-                                 are cell checks that fail the run if false)
+                                 same-origin document authenticated by the ACTUAL service with a
+                                 PROTECTED 2xx (status enforced; 401 or non-2xx names the
+                                 failure); per-session eligibility as above; the negative
+                                 control's clean request probe met a real 401 and the SDK join
+                                 then failed; artifacts secret- and identity-free on page-error
+                                 surfaces (all are cell checks that fail the run if false)
 decisions this population feeds: the §15B(4) per-path characterisation and, through it, the two
                                  ADR-0003 §5 inequalities under GA-11's provisional values —
                                  nothing else; NO Gate A row is decided by it

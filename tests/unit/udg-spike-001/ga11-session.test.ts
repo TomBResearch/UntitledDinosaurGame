@@ -14,6 +14,7 @@
  * shrink eligibility, never silently shrink N.
  */
 
+import { createHash } from 'node:crypto';
 import { connect } from 'node:net';
 import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
@@ -104,6 +105,72 @@ describe('ga11 endpoint guard', () => {
     expect(ga11SeatContextTlsOptions(real, true).ignoreHTTPSErrors).toBe(false);  // real endpoint even under a facsimile flag: still never relaxed
     expect(ga11SeatContextTlsOptions(facs, true).ignoreHTTPSErrors).toBe(true);   // the labelled loopback facsimile: its isolated context tolerates the test cert
   });
+
+  it('CANONICAL ORIGINS (the live a3 root cause): explicit default ports are omitted from webOrigin/socketOrigin exactly as Chromium canonicalizes them', () => {
+    // https: bare == explicit :443, canonically;
+    const a = ga11EndpointGuard('https://edge.example');
+    const b = ga11EndpointGuard('https://edge.example:443');
+    if (a.ok !== true || b.ok !== true) throw new Error('guard expected ok');
+    expect(a.webOrigin).toBe('https://edge.example');
+    expect(b.webOrigin).toBe('https://edge.example'); // NOT 'https://edge.example:443' — that never matches httpCredentials.origin
+    expect(a.socketOrigin).toBe('wss://edge.example');
+    expect(b.socketOrigin).toBe('wss://edge.example');
+    // the DIGEST stays the explicit host:effective-port pair, IDENTICAL across the two spellings:
+    expect(a.digest).toBe(b.digest);
+
+    // wss input canonicalizes the same way, and the http sibling follows:
+    const w = ga11EndpointGuard('wss://edge.example:443');
+    if (w.ok !== true) throw new Error('guard expected ok');
+    expect(w.socketOrigin).toBe('wss://edge.example');
+    expect(w.webOrigin).toBe('https://edge.example');
+
+    // http/ws default port (loopback, named flag):
+    const h = ga11EndpointGuard('http://127.0.0.1:80', { allowLoopbackInsecure: true });
+    if (h.ok !== true) throw new Error('guard expected ok');
+    expect(h.webOrigin).toBe('http://127.0.0.1');
+    expect(h.socketOrigin).toBe('ws://127.0.0.1');
+    const lw = ga11EndpointGuard('ws://127.0.0.1:80', { allowLoopbackInsecure: true });
+    if (lw.ok !== true) throw new Error('guard expected ok');
+    expect(lw.webOrigin).toBe('http://127.0.0.1');
+    expect(lw.socketOrigin).toBe('ws://127.0.0.1');
+    expect(h.digest).toBe(createHash('sha256').update('127.0.0.1:80').digest('hex')); // digest stays the EXPLICIT host:effective-port pair
+  });
+
+  it('NON-DEFAULT ports regress exactly: kept in the canonical origins and in the digest (facsimile shape unchanged)', () => {
+    const r = ga11EndpointGuard('https://edge.example:8443');
+    if (r.ok !== true) throw new Error('guard expected ok');
+    expect(r.webOrigin).toBe('https://edge.example:8443');
+    expect(r.socketOrigin).toBe('wss://edge.example:8443');
+    const facsimileShaped = ga11EndpointGuard('https://127.0.0.1:41337', { loopbackTlsUntrusted: true });
+    if (facsimileShaped.ok !== true) throw new Error('guard expected ok');
+    expect(facsimileShaped.webOrigin).toBe('https://127.0.0.1:41337'); // the hop fixture keeps its port — behavior identical to slice-30r2
+  });
+
+  it('IPv6 origins keep their brackets canonically (digest carries host:effective-port identically)', () => {
+    const a = ga11EndpointGuard('https://[::1]:443');
+    const b = ga11EndpointGuard('https://[::1]');
+    if (a.ok !== true || b.ok !== true) throw new Error('guard expected ok');
+    expect(a.webOrigin).toBe('https://[::1]');
+    expect(a.socketOrigin).toBe('wss://[::1]');
+    expect(a.digest).toBe(b.digest);
+    const c = ga11EndpointGuard('https://[::1]:8443');
+    if (c.ok !== true) throw new Error('guard expected ok');
+    expect(c.webOrigin).toBe('https://[::1]:8443');
+    expect(c.digest).not.toBe(b.digest); // explicit non-default port: the digest pair differs, as designed
+    expect(c.digest).toBe(createHash('sha256').update('[::1]:8443').digest('hex')); // brackets included, identically to the guard's own rule
+  });
+
+  it('gameplay-socket comparison is CANONICAL-ORIGIN equality on both sides (explicit default port matches; other origins/ports do not)', () => {
+    const bare = ga11EndpointGuard('https://edge.example');
+    const explicit = ga11EndpointGuard('https://edge.example:8443');
+    if (bare.ok !== true || explicit.ok !== true) throw new Error('guard expected ok');
+    expect(ga11IsGameplaySocket('wss://edge.example/?token=x', bare)).toBe(true);
+    expect(ga11IsGameplaySocket('wss://edge.example:443/?token=x', bare)).toBe(true); // explicit default port on the SOCKET side canonicalizes away
+    expect(ga11IsGameplaySocket('wss://edge.example:8443', bare)).toBe(false);        // a real different port does not match
+    expect(ga11IsGameplaySocket('wss://edge.example:8443/x', explicit)).toBe(true);
+    expect(ga11IsGameplaySocket('wss://edge.example', explicit)).toBe(false);         // and NOT vice versa either
+    expect(ga11IsGameplaySocket('ws://127.0.0.1:5173/?token=abc', bare)).toBe(false); // Vite HMR stays excluded
+  });
 });
 
 describe('ga11 netrc (machine-scoped, existing host format)', () => {
@@ -145,6 +212,21 @@ describe('ga11 netrc (machine-scoped, existing host format)', () => {
     if (malformed.ok === true) return;
     expect(malformed.error).toContain('line 1');
     expect(malformed.error).not.toContain(SECRET);
+
+    // slice-30r3 hardening: NO error path echoes arbitrary caller-supplied token material —
+    // the errors name line and POSITION only (netrc bytes are input this seam never trusts):
+    const head = parseGa11Netrc(`evilleadingword machine ${host} login a password b`, host);
+    expect(head.ok).toBe(false);
+    if (head.ok === true) return;
+    expect(head.error).toContain('line 1');
+    expect(head.error).not.toContain('evilleadingword');
+
+    const unknownToken = parseGa11Netrc(`machine ${host} login a password b smuggledtokenvalue`, host);
+    expect(unknownToken.ok).toBe(false);
+    if (unknownToken.ok === true) return;
+    expect(unknownToken.error).toContain('line 1');
+    expect(unknownToken.error).toContain('position 6');
+    expect(unknownToken.error).not.toContain('smuggledtokenvalue');
 
     const emptyPw = parseGa11Netrc(`machine ${host} login a password`, host);
     expect(emptyPw.ok).toBe(false);

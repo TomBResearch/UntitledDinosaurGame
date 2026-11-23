@@ -142,6 +142,27 @@ building it before a deployment exists would invite measuring nothing.
 > call simply never fired if the run passed); but any numbers destined for the §15B(4)
 > characterisation should come from slice-30r2-or-later heads, because the WS-byte scope
 > (window-only, gameplay-only) and the 2xx/401-probe semantics changed field definitions there.
+>
+> **Canonical-origin correction (slice-30r3, root cause of the first real-path attempt's three
+> auth refusals on `46bfb16`, PROVEN by two controlled document requests with identical
+> credentials in verified Chromium).** `httpCredentials.origin` is matched CANONICALLY by
+> Chromium: the guard's explicit-port spelling `https://host:443` never matches the request
+> origin `https://host`, so the credential silently never applied and the actual service 401-ed
+> correctly-configured clients (the negative control's 401 "passing" was therefore meaningless —
+> everyone got 401). Fixes, all unit-pinned (now **30/30**): `webOrigin`/`socketOrigin` go
+> through WHATWG `URL.origin` canonicalization (default ports omitted for http/https/ws/wss, IPv6
+> brackets preserved; explicit-default and non-default regressions pinned for all four schemes;
+> the DIGEST stays the explicit host:effective-port string, identical across spellings);
+> `ga11IsGameplaySocket` compares canonical WebSocket origins on both sides. Also hardened: netrc
+> error strings no longer echo ANY caller-supplied token material (line + position only). The
+> runbook §4 invocation is corrected to the dispatcher-PROVEN container shape: pnpm swallows the
+> piped stdin, so the shell-builtin blocking read (`IFS= read -r` loop) + builtin `printf` pipe
+> straight into `./node_modules/.bin/playwright`, and the credential file is the deployment's
+> PROJECT-SPECIFIC root-owned netrc path (NOT `/root/.netrc`; values never named here). No full
+> facsimile rerun was required for this change (the fixture hop uses a NON-default port, whose
+> canonical form is byte-identical to its old serialization — pinned by the regression test);
+> focused units + lint + typechecks gate it. EC2 remains untouched; the failed attempt's artifacts
+> and head stand as recorded — no re-run of any old head is implied.
 
 ## 3. Reproduce · validate · reset (all local, all independent of any endpoint)
 
