@@ -207,21 +207,45 @@ single-ISP-labelled paths, distinguished only by what the operator CONFIRMS abou
    `route -n get default` interface change is the only verification performed).
 2. Attach the phone via USB tethering (or share cellular to the Mac over Wi-Fi while the
    home Wi-Fi is off), and confirm the default route moved to the tether interface.
-3. Run the wrapper (it handles the stdin shape, filter, trace-off, artifact isolation and the
-   per-bundle checksum file):
-   `UDG_GA11_ENDPOINT=… GA11_NETRC_FILE=<project netrc path> UDG_GA11_PROTOCOL=… \
-    UDG_GA11_CONFIG_HASH=… UDG_GA11_MANIFEST_HASH=… UDG_GA11_SERVER_SHA=<deployed sha> \
-    UDG_RUN_ID=ga11-second-path-<utc>-cellular ./docs/contracts/assignments/UDG-SPIKE-001-ga11-second-path.sh`
-   (`--dry-run` preflights env/paths and prints the host DIGEST only).
-4. Compare bundle identities: same endpoint digest, same triple, same client head — the ONLY
-   intended variable is the egress path. Record the two bundle ids side by side; artefacts and
-   their sha256s stay local.
+3. Run the wrapper. Credentials travel ONLY as a stream on the wrapper's stdin through the
+   proven SSH → `docker exec -i` pipeline — no netrc file is ever stored in the container, and
+   no value is ever echoed (paths in, digest out):
 
-Credentials NEVER appear in chat, argv or logs: the operator's own netrc file on the runner is
-the only carrier, and the Pi-side harness has NO route to the nominated origin by design (Pi
-validates loopback only). Live dispatches run on the operator/Codex machine that holds the
-route; remote assistance rides the EXISTING SSH path with the operator's own key — nothing here
- ever asks for a password to be pasted anywhere.
+   ```sh
+   # operator-side (values stay on the operator's machine; <alias> = the EXISTING SSH config):
+   ssh <alias> 'docker exec -i 603049da76e5 bash -lc \
+     "cd /workspace/UntitledDinosaurGame && \
+      UDG_GA11_ENDPOINT=https://<nominated-origin> UDG_GA11_PROTOCOL=<...> \
+      UDG_GA11_CONFIG_HASH=<...> UDG_GA11_MANIFEST_HASH=<...> \
+      UDG_GA11_SERVER_SHA=<deployed sha> UDG_RUN_ID=ga11-second-path-<utc>-cellular \
+      ./docs/contracts/assignments/UDG-SPIKE-001-ga11-second-path.sh"' \
+     < <(the operator supplies the netrc bytes here, locally)
+   ```
+
+   Inside the container directly, the equivalent is `GA11_NETRC_FILE=<pre-existing project
+   path>` OR piping the same bytes on stdin. `--dry-run` preflights env/paths and prints the
+   host DIGEST only. The wrapper: validates the runId as a safe single path component; creates
+   the bundle CREATE-ONLY (a repeat id is REFUSED — attempts are never overwritten); compiles
+   with the PINNED LOCAL `./node_modules/.bin/tsc` (no npx network fallback); writes
+   `CHECKSUMS.txt` (including `run.log`, excluding itself) on PASS **and** on a red measurement;
+   and preserves the measurement's exit code as its own.
+4. Compare bundle identities: same endpoint digest, same triple, same client head — the ONLY
+   intended variables are the egress path and the run id. Artefacts and their sha256s stay
+   local.
+
+**Division of labour on the Mac (documented so nobody improvises):** CODEX runs every command
+(inspect, dispatch, checksum, review). The HUMAN does exactly two things: (a) changes which
+network is active on the Mac (home Wi-Fi ⇄ phone tether/cellular), and (b) identifies the
+provider/plan for each — nothing else is asked of a person, and no credential is ever pasted
+into chat.
+
+**Network/tunnel notes:** running the ALREADY-BUILT harness needs NO Pi inference tunnel — the
+cell executes entirely on the dispatch machine; the Pi tunnel exists only for the Pi agent's own
+model traffic, which is irrelevant to a dispatch. If the cloud SSH endpoint is IP-restricted,
+DO NOT broaden the allowlist when the Mac changes networks: reach the runner through the
+existing allowed path (e.g. from whatever host is already permitted) or run the dispatch
+locally on the allowed machine — narrowing stays operator-owned, and this runbook never
+requests rule changes.
 
 ## 5. Artifacts, logs, retention
 
