@@ -59,6 +59,42 @@ building it before a deployment exists would invite measuring nothing.
 > §15B(1)–(5) verdicts, the official 4×3 matrix and this document's own posture above are
 > unchanged. The connect PROBE of §1 and its loopback guard remain the shipped connect-phase seam;
 > this mode neither replaces nor touches them.
+>
+> **Same-day review corrections (the FF commit after `dce5a39`, bound before any live execution).**
+> Codex's review named the ACTUAL vhost posture — Basic auth on EVERY method including OPTIONS —
+> and rejected the earlier cross-origin-localhost seat-page design. Corrections applied and
+> re-validated on loopback only: (1) the facsimile hop now challenges ALL methods (OPTIONS
+> included, unit-pinned), so uncorrected client code is refused exactly as the service refuses it;
+> (2) seat pages are SAME-ORIGIN with the service — the document navigation authenticates the
+> protected `/` through context-scoped `httpCredentials` and the HTTP STATUS IS ENFORCED per seat
+> (no 401-after-credentials; the negative control asserts the 401 THEN the refused join); (3) the
+> ONLY interception is the known local module-asset allowlist (harness entries + Vite compiled-
+> asset shapes) rewritten by `route.fallback` to the loopback Vite pipeline — matchmake routes and
+> the WebSocket are never intercepted, nothing is proxied, and a unit test pins that non-
+> allowlisted paths (matchmake, room, document) are never rewritten; (4) the window is the FULL
+> EXACT page-clock window (start before the pump, end after, ledger read once between; no
+> threshold heuristic) with ledger capacity recorded and truncation detected; (5) prefix semantics
+> tightened — positive (>0), only-known-sent-seqs (audited count > 0), same-epoch for resolved AND
+> pending; (6) WSS frame sizes measured via the Playwright page WebSocket API into in-memory
+> arrays, summarized per seat/direction as nearest-rank distributions, raw lengths discarded and NO
+> URL or payload persisted, with the honest limits recorded (payload-only; heartbeat-vs-patch not
+> separable here, so no patch-byte claim); (7) retained surfaces carry no identities — trace/
+> screenshot retention off for the dispatch (`UDG_E2E_TRACE=off`), JUnit/JSON reporters disabled
+> by the runbook commands, pageErrors redacted for room/session identifiers too (cell check
+> asserts identity-freeness), and a FAIL-CLOSED stdout filter (`ga11-log-filter`, exit 2 without
+> the endpoint env) redacts the host from `run.log` before tee; (8) no workflow changed — the cell
+> stays env-gated with no CI route, routine CI runs the PR head itself, and the runbook requires
+> `git rev-parse HEAD` to equal the candidate before executing; (9) runbook §4 now states the
+> working dir, shell flags, toolchain-evidence commands, pinned-browser rule, filter + trace-off
+> invocation and exact artifact paths; (10) EC2 was touched by nobody here — validation remains
+> loopback facsimile only. Verification of the corrections: unit **21/21**, and full facsimile
+> cell runs green under the strict posture (documents authenticated with status recorded; window
+> 60.0 s / 589 deliveries / truncation false; `resolvedThroughEnd == sentTotal == 1168` with the
+> positives; per-seat WS frame distributions non-trivial; negative control 401-then-refused; 10/10
+> cell checks; artifacts re-scanned secret- and identity-free; filter smoke-tested). **OPEN for
+> Codex:** re-review the new head, routine CI, then execute runbook §4 steps 0–3 (§15B(1) nominated
+> path first). GA-11's verdict, Gate A's rows and every provisional value remain exactly where the
+> accepted records put them.
 
 ## 3. Reproduce · validate · reset (all local, all independent of any endpoint)
 

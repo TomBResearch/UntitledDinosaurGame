@@ -262,27 +262,109 @@ export const rttEligibility = (rawSamples: readonly number[], nearestRankFn: (sa
   };
 };
 
+/* ------------------------------------------------------------------ same-origin module assets
+ * The seat documents are served by the NOMINATED origin itself (the navigation authenticates —
+ * see the cell). The only cross-served things are the harness's own compiled client/netcode
+ * modules and the pinned-SDK chunks the shipped Vite pipeline produces for them; the browser
+ * asks for them at the page's own origin, so exactly those KNOWN local module-asset path shapes
+ * are rewritten to the loopback Vite server. The allowlist is a PREFIX LIST OF MODULE ASSETS
+ * ONLY: the SDK's matchmake routes ('/matchmake/…' and anything else the pinned client really
+ * calls) and the WebSocket (never interceptable by page.route in the first place) are NOT on
+ * the list and always travel the real network. Nothing is proxied; no secret can cross this
+ * rewrite — its target is a localhost dev-asset server.
+ */
+export const GA11_MODULE_PATH_PREFIXES = [
+  '/src/network/',       // the two entry modules the harness imports
+  '/node_modules/',      // Vite's pre-bundled dependency chunks (incl. the pinned SDK)
+  '/@fs/',               // Vite's file-system-served module URLs (workspace links)
+  '/@id/',               // Vite's resolved-id module URLs
+  '/@vite/',             // Vite client/env module URLs
+] as const;
+
+/** Rewrite ONLY a same-origin-as-nominated module-asset URL to the local Vite origin; anything
+ * else (matchmake, unknown paths, other origins) returns null and is NEVER intercepted. */
+export const ga11ModuleUrlRewrite = (rawUrl: string, webOrigin: string, viteOrigin: string): string | null => {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  let base: URL;
+  try {
+    base = new URL(webOrigin);
+  } catch {
+    return null;
+  }
+  if (url.origin !== base.origin) return null;
+  if (!GA11_MODULE_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix))) return null;
+  return `${viteOrigin}${url.pathname}${url.search}`;
+};
+
+/* ------------------------------------------------------------------ WS payload-byte semantics */
+
+/** The semantics label that MUST travel with every frame-length number (and with their absence). */
+export const GA11_WS_FRAME_SEMANTICS =
+  'client-visible WebSocket DATA frames via the Playwright page API (framesent/framereceived payload byte lengths only; TLS records, WS headers/framing and control frames are invisible to the page, and heartbeat-vs-patch classification is NOT identifiable at this seam, so NO patch-byte or heartbeat claim is made; lengths are payload-only)';
+
+export interface Ga11FrameSummary {
+  readonly frames: number;
+  readonly totalBytes: number;
+  readonly p50: number | null;
+  readonly p95: number | null;
+  readonly max: number | null;
+}
+
+/** Distribution over collected payload lengths. Raw arrays live in memory only; the RECORD
+ * carries these summaries (plus counts), never the arrays, never a URL. */
+export const summarizeFrameLengths = (
+  lengths: readonly number[],
+  nearestRankFn: (samples: readonly number[], p: number) => number,
+): Ga11FrameSummary => {
+  const finite = lengths.filter((v) => Number.isFinite(v) && v >= 0);
+  return {
+    frames: lengths.length,
+    totalBytes: finite.reduce((sum, v) => sum + v, 0),
+    p50: finite.length > 0 ? nearestRankFn(finite, 0.5) : null,
+    p95: finite.length > 0 ? nearestRankFn(finite, 0.95) : null,
+    max: finite.length > 0 ? nearestRankFn(finite, 1) : null,
+  };
+};
+
+/* ------------------------------------------------------------------ run.log host redaction */
+
+/** The strings a run's stdout may innocently echo (SDK console noise names the socket URL) and
+ * which the log filter MUST erase. Ordered longest-first so origins are replaced before bare
+ * hostnames; passwords never enter stdout at all, so they are not this filter's job. */
+export const ga11LogFilterValues = (endpoint: Ga11EndpointOk): readonly string[] => [
+  endpoint.socketOrigin,
+  endpoint.webOrigin,
+  `${endpoint.host}:${String(endpoint.port)}`,
+  `//${endpoint.host}`,
+  endpoint.host,
+];
+
 /* ------------------------------------------------------------------ loopback facsimile hop */
 
 export interface Ga11FacsimileHop {
   readonly port: number;
-  bytes(): { c2s: number; s2c: number; connections: number; authed: number; refused: number; preflightBypassed: number };
+  bytes(): { c2s: number; s2c: number; connections: number; authed: number; refused: number };
   stop(): Promise<void>;
 }
 
 /**
  * A Basic-auth-gated RAW relay bound to 127.0.0.1 on an ephemeral port, for the loopback
- * facsimile ONLY. It inspects the first request header block of each connection (HTTP join and
- * WebSocket upgrade alike), requires the exact `Basic base64(login:password)` the run was given,
- * answers 401 with a challenge otherwise, and on success pipes bytes both ways to the fixture
- * room while counting them (the byte-size populations the real natural path CANNOT see from the
- * browser are visible HERE, which is why the facsimile records them and the real run marks them
- * explicitly missing). It models ingress auth posture only — it adds no delay, no loss, no
- * regime, and it never binds outside 127.0.0.1. CORS preflights (OPTIONS) pass WITHOUT an auth
- * check, mirroring the posture any Basic-auth CORS ingress must have — a browser never attaches
- * credentials to a preflight, so an auth-challenged OPTIONS kills every cross-origin join. That
- * is not a convenience: the facsimile deliberately reproduces this so nobody meets it for the
- * first time on the real host (the runbook states the same requirement for the Nginx vhost).
+ * facsimile ONLY. It inspects the first request header block of each connection and requires the
+ * exact `Basic base64(login:password)` the run was given for EVERY method — OPTIONS included —
+ * answering 401 with a challenge otherwise. (The slice-30 review corrected this seam to match the
+ * ACTUAL vhost, which challenges every method including preflights; the earlier OPTIONS bypass
+ * was exactly the fiction the harness must not breed.) A cross-origin page therefore CANNOT join
+ * such a host — which is why the session pages navigate the protected origin itself (same-origin:
+ * no preflight exists at all, and the credentials the context was given answer the document's own
+ * 401). On success the relay pipes bytes both ways to the fixture room while counting them
+ * (hop-level byte totals exist ONLY in the facsimile; the real path measures WS payload lengths
+ * client-side instead). It models ingress auth posture only — no delay, no loss, no regime — and
+ * it never binds outside 127.0.0.1.
  */
 export const startGa11FacsimileHop = async (options: {
   login: string;
@@ -290,7 +372,7 @@ export const startGa11FacsimileHop = async (options: {
   targetPort: number;
 }): Promise<Ga11FacsimileHop> => {
   const expected = `Basic ${Buffer.from(`${options.login}:${options.password}`).toString('base64')}`;
-  const counts = { c2s: 0, s2c: 0, connections: 0, authed: 0, refused: 0, preflightBypassed: 0 };
+  const counts = { c2s: 0, s2c: 0, connections: 0, authed: 0, refused: 0 };
   const sockets = new Set<Socket>();
   const server: Server = createServer();
   server.on('connection', (client) => {
@@ -310,22 +392,17 @@ export const startGa11FacsimileHop = async (options: {
         return; // keep buffering until the header block completes
       }
       const headerBlock = text.slice(0, end);
-      const requestLine = headerBlock.split('\r\n')[0] ?? '';
       const auth = /^authorization:\s*(.+)$/im.exec(headerBlock)?.[1]?.trim();
       client.removeListener('data', onData);
-      let passedAuth = true;
-      if (/^OPTIONS\s/i.test(requestLine)) {
-        // CORS preflight: forwarded WITHOUT an auth demand (see the doc comment); bytes still counted.
-        counts.preflightBypassed += 1;
-        passedAuth = false;
-      } else if (auth !== expected) {
+      if (auth !== expected) {
+        // EVERY method demands auth — OPTIONS included: the actual vhost's posture (see above).
         counts.refused += 1;
         client.write('HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="udg-ga11-facsimile"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
         client.destroy();
         sockets.delete(client);
         return;
       }
-      if (passedAuth) counts.authed += 1;
+      counts.authed += 1;
       const upstream = netConnect(options.targetPort, '127.0.0.1');
       sockets.add(upstream);
       upstream.on('error', () => { sockets.delete(upstream); client.destroy(); });

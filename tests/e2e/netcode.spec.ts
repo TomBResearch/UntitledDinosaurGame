@@ -46,13 +46,13 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { chromium, expect, test, type Browser, type Page } from '@playwright/test';
+import { chromium, expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 
 import { MIN_ELIGIBLE_ACKS_PER_RUN, nearestRank, networkValidity, summarizeCorrections, summarizeDelays } from '../../tools/load-test/src/statistics.ts';
 import { auditMotion, type AckLedgerReport } from '../../tools/load-test/src/ack-ledger.ts';
 import { auditGa5Transcript, naiveVsJoined, type Ga5Transcript } from '../../tools/load-test/src/ga5-transcript.ts';
 import { captureEnvironmentRecord, impairmentSourceRecord, planSpikeRun } from '../../tools/load-test/src/run-spike.ts';
-import { GA11_FIXED_POPULATION, ga11EndpointGuard, makeGa11Redactor, parseGa11Netrc, rttEligibility, startGa11FacsimileHop, type Ga11EndpointOk } from '../../tools/load-test/src/ga11-session.ts';
+import { GA11_FIXED_POPULATION, GA11_WS_FRAME_SEMANTICS, ga11EndpointGuard, ga11ModuleUrlRewrite, makeGa11Redactor, parseGa11Netrc, rttEligibility, startGa11FacsimileHop, summarizeFrameLengths, type Ga11EndpointOk } from '../../tools/load-test/src/ga11-session.ts';
 import { createTraceWriter, readTrace } from '../../tools/load-test/src/trace-writer.ts';
 import type { ProxyStats } from '../../tools/load-test/src/ws-delay-proxy.ts';
 
@@ -320,8 +320,8 @@ const pageErrorSinks = new Map<string, string[]>();
  * fifth tab crashed the renderer. A seat that only runs network modules does not need a scene, and the
  * pipeline still serves its modules to that document exactly as it does to the app.
  */
-const openSeatPage = async (label: string, options: { bare?: boolean; httpCredentials?: { origin: string; username: string; password: string } } = {}): Promise<Page> => {
-  const context = await browser?.newContext(options.httpCredentials !== undefined ? { httpCredentials: options.httpCredentials } : {});
+const openSeatPage = async (label: string, options: { bare?: boolean } = {}): Promise<Page> => {
+  const context = await browser?.newContext();
   expect(context, 'a browser context must open').toBeDefined();
   const page = await context?.newPage();
   expect(page, 'a page must open in the context').toBeDefined();
@@ -7188,11 +7188,15 @@ test('spike cell: ga11-calibration — the two §GA-11 inequalities evaluated on
  * This is the labelled endpoint-injection mode the GA-11 staging handoff §2 names as the only
  * in-repo engineering gap: TWO real seats (this pinned Chromium, the real client modules over the
  * real SDK, the shipped prediction adapter) join the SAME room on an EXPLICITLY NOMINATED origin
- * over that origin's OWN HTTPS/WSS path behind its own Basic-auth ingress, authenticating ONLY
- * through context-scoped `httpCredentials` (origin = the nominated origin, never a wildcard) and
- * a netrc read from STDIN in the existing host's `machine <host> login … password …` shape.
- * No credential ever crosses argv or the environment; the endpoint VALUE never enters the record
- * (sha256(host:port) only — redaction, not access control, handoff §4).
+ * over that origin's OWN HTTPS/WSS path behind its own Basic-auth ingress (which challenges EVERY
+ * method including OPTIONS — so the seat pages are SAME-ORIGIN: the document navigation itself
+ * authenticates via context-scoped `httpCredentials`, origin = the nominated origin, never a
+ * wildcard, HTTP status enforced; only known local module-asset paths are rewritten to the
+ * loopback Vite pipeline, never the SDK's matchmake routes and never the WebSocket). Credentials
+ * arrive ONLY as a netrc piped on STDIN in the existing host's `machine <host> login … password …`
+ * shape — never argv, never a repo file; the main-process relay into the gated worker is
+ * in-process env, deleted on decode. The endpoint VALUE never enters the record (sha256(host:port)
+ * only — redaction, not access control, handoff §4).
  *
  * What this is NOT, stated before any number exists: NOT a Gate A row, NOT an official 4×3
  * matrix coordinate and NOT a source for one (handoff §6 — the two evidence sets stay separate);
@@ -7206,10 +7210,12 @@ test('spike cell: ga11-calibration — the two §GA-11 inequalities evaluated on
  * probe-loss ≤ 2 % floor): 3 sequential two-seat sessions; per session a fixed 120 Room.ping
  * samples on the MOVER's own gameplay socket at 100 ms cadence (≥ 99 finite to be ELIGIBLE —
  * otherwise the session is named INVALID-BY-ITS-OWN-FLOOR, never quietly shrunk); patch-interval
- * p50/p95/max and arrival-stall max from the mover's own delivery ledger; byte sizes where the
- * seam can see them (facsimile hop only — the real browser path cannot see frame bytes and says
- * so explicitly). A no-credentials negative control must be refused. Admission, bounds and
- * teardown are pinned by the cell checks; artifacts are secret-free by construction and checked.
+ * p50/p95/max and arrival-stall max over the FULL EXACT page-clock window (start before the pump,
+ * end after it, ledger read once, truncation detected); WS payload-byte distributions per seat
+ * and direction via the Playwright page API (payload-only semantics; heartbeat-vs-patch NOT
+ * claimed; raw lengths discarded, URLs never recorded). A no-credentials negative control must
+ * meet the actual service's 401 and fail to join. Admission, bounds and teardown are pinned by
+ * the cell checks; artifacts are secret-free by construction and checked.
  */
 // eslint-disable-next-line no-empty-pattern -- Playwright requires the destructured args object even when the cell uses only testInfo.
 test('spike cell: ga11-session — two real seats through the nominated origin\'s own HTTPS/WSS Basic auth (stdin netrc, context-scoped httpCredentials): fixed bounded first-path populations with per-session eligibility, redacted secret-free artifacts (GA-11 endpoint injection — NOT a Gate A row, NOT a 4×3 coordinate, regime NOT claimed)', async ({}, testInfo) => {
@@ -7342,43 +7348,104 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     tls: string;
     evidenceClass: string;
     clockOrigin: string;
-    priming?: { mover: string; observer: string };
+    navigation?: { moverHttpStatus: number; observerHttpStatus: number };
     joinMover?: GaSeatSetup;
     joinObserver?: { ok: boolean; roomId: string; sessionId: string };
     failure?: string;
     flow?: { deliveriesBeforeWindow: number };
     roomReplicatedView?: { selfKey: string | null; selfEpoch: number | null; peers: { key: string; epoch: number }[]; issues: readonly string[]; serverTick: number };
     moverEndState?: Record<string, unknown>;
-    inputMatching?: Record<string, unknown>;
-    patchIntervalsMs?: { deliveries: number; accepted: number; p50: number | null; p95: number | null; max: number | null };
+    inputMatching?: {
+      joinEpoch: number | null;
+      transportEpochEnd: number;
+      epochChangedMidWindow: boolean;
+      sameEpochDeliveries: number;
+      sentTotal: number;
+      sentGenerations: number;
+      sentMonotonic: boolean;
+      sendRefusals: number;
+      resolvedThroughEnd: number | null;
+      prefixResolvedPositive: boolean;
+      prefixOnlyKnownSeqs: boolean;
+      resolvedSameEpoch: boolean;
+      pendingSameEpoch: boolean;
+      note: string;
+    };
+    patchIntervalsMs?: { deliveries: number; accepted: number; p50: number | null; p95: number | null; max: number | null; windowStartMs: number; windowEndMs: number; ledgerRowsTotal: number; ledgerTruncated: boolean };
     arrivalStallMs?: { source: string; maxMs: number | null };
-    payloadBytes?:
-      | { available: true; source: string; c2s: number; s2c: number; connections: number; authed: number; refused: number; preflightBypassed: number }
-      | { available: false; reason: string };
+    wsFrames?: Record<string, unknown>;
+    hopBytes?: Record<string, unknown>;
     rtt?: ReturnType<typeof rttEligibility>;
     rttRawFiniteMs?: readonly number[];
     rttTimeoutSampleCount?: number;
     pageErrors?: { mover: string; observer: string };
   }
   const sessions: Ga11SessionRecord[] = [];
-  let negativeControl: { refused: boolean; errorName: string } = { refused: false, errorName: 'not-run' };
+  let negativeControl: { uncredentialedHttpStatus?: number; refused: boolean; errorName: string } = { refused: false, errorName: 'not-run' };
 
   if (credentialError === null && guarded !== null && presentation !== null && login !== '' && password !== '') {
     const httpCredentials = { origin: guarded.webOrigin, username: login, password };
 
-    // Origin priming: one bounded GET per page so Chromium's network stack negotiates the Basic
-    // challenge for the ORIGIN before the WebSocket upgrade rides the same cached credentials.
-    // Any response (including 404 — the deployment ships NO health endpoint and none is added)
-    // is fine; the fetch is opaque and its outcome is recorded as a name only.
-    const primeOrigin = async (page: Page): Promise<string> =>
-      page.evaluate(async (origin) => {
-        try {
-          await fetch(`${origin}/`, { mode: 'no-cors', cache: 'no-store' });
-          return 'fetch-settled(opaque; auth negotiated at network layer)';
-        } catch {
-          return 'fetch-threw(opaque; auth may still have been answered at network layer)';
-        }
-      }, guarded.webOrigin);
+    // SAME-ORIGIN seat pages on the nominated origin itself (slice-30 reviewer correction — the
+    // vhost demands Basic on EVERY method including OPTIONS, so a cross-origin page cannot and
+    // must not be made to work; a same-origin page issues no preflight at all). The DOCUMENT
+    // navigation authenticates against the ACTUAL service through the context-scoped
+    // httpCredentials, and the HTTP STATUS IS ENFORCED: a 401 after supplied credentials is an
+    // admission failure recorded per seat, never silently accepted.
+    //
+    // The ONLY interception: known local module-asset paths on this origin (pure prefix allowlist
+    // GA11_MODULE_PATH_PREFIXES in tools/load-test/src/ga11-session.ts), rewritten to the repo's
+    // own loopback Vite pipeline via route.fallback. The SDK's matchmake routes and the gameplay
+    // WebSocket are NEVER intercepted (not on the list; page routing never touches WebSockets),
+    // nothing is proxied, and no secret can cross the rewrite (its target is a localhost dev
+    // asset server). WS DATA-FRAME payload lengths are counted in memory per seat via the
+    // Playwright page API and discarded — only count/size summaries enter the record, never raw
+    // lengths, payload contents or URLs.
+    interface Ga11SeatSurfaces {
+      page: Page;
+      context: BrowserContext;
+      frames: { sent: number[]; received: number[]; sockets: number };
+      navStatus: number;
+    }
+    const openAuthedSeatPage = async (label: string, creds: { origin: string; username: string; password: string } | null): Promise<Ga11SeatSurfaces> => {
+      const context = await browser!.newContext(creds !== null ? { httpCredentials: creds } : {});
+      await context.route(
+        (url) => ga11ModuleUrlRewrite(url.toString(), guarded!.webOrigin, CLIENT_ORIGIN) !== null,
+        async (route) => {
+          const rewritten = ga11ModuleUrlRewrite(route.request().url(), guarded!.webOrigin, CLIENT_ORIGIN);
+          return route.fallback(rewritten !== null ? { url: rewritten } : {}).catch(() => route.abort());
+        },
+      );
+      const page = await context.newPage();
+      const pageErrors: string[] = [];
+      pageErrorSinks.set(label, pageErrors);
+      page.on('pageerror', (error) => pageErrors.push(String(error)));
+      page.on('crash', () => pageErrors.push('PAGE CRASHED'));
+      page.on('console', (message) => {
+        if (message.type() !== 'error') return;
+        const text = message.text();
+        if (/WebSocket is closed|Failed to construct 'WebSocket'|net::ERR_INTERNET_DISCONNECTED|WebSocket connection to 'ws:\/\/127/.test(text)) return;
+        pageErrors.push(`console: ${text}`);
+      });
+      const frames: Ga11SeatSurfaces['frames'] = { sent: [], received: [], sockets: 0 };
+      // Payload BYTES only; the payload contents themselves are read for length and dropped.
+      // (The pinned typings carry only `payload`; `payloadLength` exists at runtime on some
+      // builds, so it is preferred when present and byte-counted from the payload otherwise.)
+      const frameBytes = (p: { payload: string | Buffer; payloadLength?: number }): number =>
+        typeof p.payloadLength === 'number' ? p.payloadLength : (Buffer.isBuffer(p.payload) ? p.payload.length : Buffer.byteLength(String(p.payload ?? ''), 'utf8'));
+      page.on('websocket', (ws) => {
+        frames.sockets += 1;
+        ws.on('framesent', (payload) => { frames.sent.push(frameBytes(payload)); });
+        ws.on('framereceived', (payload) => { frames.received.push(frameBytes(payload)); });
+      });
+      // The navigation IS the auth: same-origin document on the ACTUAL protected service.
+      const response = await page.goto(`${guarded!.webOrigin}/`, { waitUntil: 'load' });
+      const navStatus = response?.status() ?? 0;
+      // The shipped client modules through the same compiled pipeline (bounded retry posture
+      // inherited from the accepted primeClientModules; rewrites ride the module allowlist only).
+      await primeClientModules(page, label);
+      return { page, context, frames, navStatus };
+    };
 
     for (let s = 1; s <= GA11_FIXED_POPULATION.sessions; s += 1) {
       const tag = `ga11-s${String(s)}`;
@@ -7393,11 +7460,26 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
       };
       let pageM: Page | null = null;
       let pageO: Page | null = null;
+      let contextM: BrowserContext | null = null;
+      let contextO: BrowserContext | null = null;
+      let surfacesM: Ga11SeatSurfaces | undefined;
+      let surfacesO: Ga11SeatSurfaces | undefined;
       let pumpPromise: Promise<{ ended: true; iterations: number }> | null = null;
       try {
-        pageM = await openSeatPage(`${tag}-M`, { bare: true, httpCredentials });
-        pageO = await openSeatPage(`${tag}-O`, { bare: true, httpCredentials });
-        session.priming = { mover: await primeOrigin(pageM), observer: await primeOrigin(pageO) };
+        surfacesM = await openAuthedSeatPage(`${tag}-M`, httpCredentials);
+        surfacesO = await openAuthedSeatPage(`${tag}-O`, httpCredentials);
+        pageM = surfacesM.page;
+        pageO = surfacesO.page;
+        contextM = surfacesM.context;
+        contextO = surfacesO.context;
+        session.navigation = { moverHttpStatus: surfacesM.navStatus, observerHttpStatus: surfacesO.navStatus };
+        // ENFORCED: the credentials must have answered the service's own challenge — a 401 here
+        // is an admission failure named per seat, never a session that limps on.
+        if (surfacesM.navStatus === 401 || surfacesO.navStatus === 401 || surfacesM.navStatus === 0 || surfacesO.navStatus === 0) {
+          session.failure = `credentials not accepted by the actual service (document statuses mover=${String(surfacesM.navStatus)} observer=${String(surfacesO.navStatus)}); no join attempted`;
+          sessions.push(session);
+          continue;
+        }
         const joinM = await joinGaSeat(pageM, guarded.webOrigin, { mode: 'create', roomName: ROOM_NAME }, undefined, presentation ?? undefined);
         session.joinMover = joinM;
         if (joinM.ok !== true || joinM.roomId === undefined) {
@@ -7415,6 +7497,12 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         }
 
         await ga11Wait(GA11_FIXED_POPULATION.warmupMs);
+        // FULL EXACT WINDOW on the mover page's own monotonic clock: the start stamp is taken
+        // BEFORE the pump starts, the end stamp AFTER the pump has finished, and the ledger is
+        // read once, whole, after that — no pre-pump snapshot, no threshold heuristics, no
+        // partial tail. Ledger capacity is read from the predictor's own configured limit and
+        // TRUNCATION IS DETECTED (a capped ledger shrinks the population; it is named, not hidden).
+        const windowStartMs = await pageM.evaluate(() => performance.now());
         const pump = gaPump(pageM, GA11_FIXED_POPULATION.windowMs);
         pumpPromise = pump;
         await ga11Wait(1_000);
@@ -7442,17 +7530,6 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
           return samples;
         }, { count: GA11_FIXED_POPULATION.rttSamplesPerSession, cadenceMs: GA11_FIXED_POPULATION.rttCadenceMs, timeoutMs: GA11_FIXED_POPULATION.rttProbeTimeoutMs });
 
-        const ledgerRows = await pageM.evaluate(async () => {
-          const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
-          if (holder === undefined) throw new Error('no imp seat on this page');
-          return holder.predictor.deliveryLedger().map((row) => ({
-            atMs: row.delivery.atMs,
-            accepted: row.accepted,
-            epoch: row.delivery.epoch,
-            resolvedThrough: row.delivery.resolvedThrough,
-          }));
-        });
-
         // Room-replicated presence, read from the OBSERVER seat's own validated snapshot: the
         // authority's row set, not the harness's guess. Two seats in one room must both appear.
         const viewO = await pageO.evaluate(() => {
@@ -7472,6 +7549,21 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
 
         await pump;
         pumpPromise = null;
+        // The ledger is read ONCE, AFTER the pump finished — the window's full delivery record,
+        // stamped on the same page clock as windowStartMs, with the capacity/truncation read.
+        const ledger = await pageM.evaluate((startMs) => {
+          const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+          if (holder === undefined) throw new Error('no imp seat on this page');
+          const rows = holder.predictor.deliveryLedger().map((row) => ({
+            atMs: row.delivery.atMs,
+            accepted: row.accepted,
+            epoch: row.delivery.epoch,
+            resolvedThrough: row.delivery.resolvedThrough,
+          }));
+          // joinGaSeat configures ledgerLimit 20 000 — at ~10 Hz deliveries the bounded window
+          // cannot reach it; if it ever does, truncation is DETECTED and recorded, not absorbed.
+          return { startMs, endMs: performance.now(), limit: 20_000, rows };
+        }, windowStartMs);
         const after = await gaRecovery(pageM);
         session.moverEndState = {
           transportEpoch: after.transportEpoch,
@@ -7488,48 +7580,67 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         };
 
         // Explicit client inputs matched to the SERVER-ISSUED epoch and the room-replicated
-        // resolved prefix: every send was authored while the seat's transport carried the join
-        // epoch (or a recorded rejoin), and the resolved prefix the ROOM published back
-        // (inputResolvedThrough on the seat's own replicated row) covers exactly `resolvedThrough`
-        // of the seat's own sequence. Pending entries carry their epoch — same-epoch proof.
+        // resolved prefix (slice-30 review tightened): the prefix must be POSITIVE (a zero
+        // watermark resolves nothing and cannot count as a match), can only cover KNOWN sent
+        // seqs (one seq per accepted send in the predictor's own audit), and the resolving
+        // delivery must carry the transport's CURRENT epoch. Pending entries carry their epoch.
         const joinEpoch = joinM.epoch ?? null;
-        const sameEpochDeliveries = ledgerRows.filter((row) => row.epoch === joinEpoch).length;
+        const sameEpochDeliveries = ledger.rows.filter((row) => row.epoch === joinEpoch).length;
         const resolvedThroughEnd = after.lastDelivery?.resolvedThrough ?? null;
+        const sentTotal = after.sentLen; // predictor send audit: one issued seq per accepted send
         session.inputMatching = {
           joinEpoch,
           transportEpochEnd: after.transportEpoch,
           epochChangedMidWindow: after.joins.length > 1,
           sameEpochDeliveries,
+          sentTotal,
           sentGenerations: after.sentGensLen,
+          sentMonotonic: after.sentMonotonic,
+          sendRefusals: after.refusals,
           resolvedThroughEnd,
-          resolvedPrefixMatchesRoomReplication: resolvedThroughEnd !== null && resolvedThroughEnd <= (after.sentGensLen || 0),
+          prefixResolvedPositive: resolvedThroughEnd !== null && resolvedThroughEnd > 0,
+          prefixOnlyKnownSeqs: resolvedThroughEnd !== null && resolvedThroughEnd <= sentTotal && sentTotal > 0,
+          resolvedSameEpoch: (after.lastDelivery?.epoch ?? Number.NaN) === after.transportEpoch,
           pendingSameEpoch: after.pendingEntries.every((entry) => entry.epoch === after.transportEpoch),
           note: 'client-observed: the resolved prefix is what the ROOM published into this seat\'s replicated row; the room\'s own internal ledger is NOT reachable through the nominated endpoint and is NOT claimed',
         };
 
-        // Patch-interval population and arrival-stall max over the measurement window, on the
-        // mover page's monotonic clock (window = deliveries after the settle read).
-        const windowRows = ledgerRows.filter((row) => row.atMs >= (flowing.pageNowMs ?? 0) - 5_000);
+        // Patch-interval population and arrival-stall max over the FULL EXACT window [start,end]
+        // on the mover page's monotonic clock — every in-window delivery and gap counted once,
+        // with truncation state recorded beside the counts.
+        const windowRows = ledger.rows.filter((row) => row.atMs >= ledger.startMs && row.atMs <= ledger.endMs);
         const gaps: number[] = [];
         for (let i = 1; i < windowRows.length; i += 1) gaps.push(Math.trunc((windowRows[i]!.atMs - windowRows[i - 1]!.atMs) * 100) / 100);
+        const windowMeta = { windowStartMs: Math.trunc(ledger.startMs * 100) / 100, windowEndMs: Math.trunc(ledger.endMs * 100) / 100, ledgerRowsTotal: ledger.rows.length, ledgerTruncated: ledger.rows.length >= ledger.limit };
         const patchStats = gaps.length > 0
-          ? { deliveries: windowRows.length, accepted: windowRows.filter((r) => r.accepted).length, p50: nearestRank(gaps, 0.5), p95: nearestRank(gaps, 0.95), max: nearestRank(gaps, 1) }
-          : { deliveries: windowRows.length, accepted: 0, p50: null, p95: null, max: null };
+          ? { deliveries: windowRows.length, accepted: windowRows.filter((r) => r.accepted).length, p50: nearestRank(gaps, 0.5), p95: nearestRank(gaps, 0.95), max: nearestRank(gaps, 1), ...windowMeta }
+          : { deliveries: windowRows.length, accepted: 0, p50: null, p95: null, max: null, ...windowMeta };
         session.patchIntervalsMs = patchStats;
-        session.arrivalStallMs = { source: 'client delivery-gap max (page clock; no harness proxy in route on this path)', maxMs: patchStats.max };
+        session.arrivalStallMs = { source: 'client delivery-gap max over the full exact window (page clock; no harness proxy in route on this path)', maxMs: patchStats.max };
 
-        // Byte sizes: the browser seam sees NO frame sizes and there is deliberately no proxy to
-        // count at; the facsimile hop DOES count. Missing values are explicit, never zero-filled.
-        session.payloadBytes = hop !== null
-          ? { available: true, source: 'loopback facsimile hop byte counter (facsimile only — NOT available on the real natural path)', ...hop.bytes() }
-          : { available: false, reason: 'the browser netcode seam exposes no per-message byte sizes and the natural path has no counting hop by design; a future real-run byte population needs an OWNER-RUN on-path counter, never a harness proxy' };
+        // WS payload bytes (slice-30 review): client-visible DATA-frame payload lengths via the
+        // Playwright page API — counts and nearest-rank size distributions per seat and direction,
+        // collected in memory and DISCARDED (raw arrays never enter the record); payload-only
+        // semantics travel with every number; heartbeat-vs-patch is NOT identifiable at this
+        // seam, so no patch-byte claim is made. The facsimile hop's own totals travel SEPARATELY
+        // and only exist in facsimile mode.
+        session.wsFrames = {
+          semantics: GA11_WS_FRAME_SEMANTICS,
+          window: 'per seat, from page creation to page close (navigation and module assets are HTTP, not WS; no WS socket exists before the join)',
+          mover: { sockets: surfacesM.frames.sockets, sent: summarizeFrameLengths(surfacesM.frames.sent, nearestRank), received: summarizeFrameLengths(surfacesM.frames.received, nearestRank) },
+          observer: { sockets: surfacesO.frames.sockets, sent: summarizeFrameLengths(surfacesO.frames.sent, nearestRank), received: summarizeFrameLengths(surfacesO.frames.received, nearestRank) },
+        };
+        if (hop !== null) session.hopBytes = { source: 'loopback facsimile hop totals (facsimile ONLY — the real path has no counting hop by design)', ...hop.bytes() };
 
         session.rtt = rttEligibility(rttRawMs, nearestRank);
         session.rttRawFiniteMs = rttRawMs.filter((ms) => Number.isFinite(ms));
         session.rttTimeoutSampleCount = rttRawMs.filter((ms) => !Number.isFinite(ms)).length;
+        // Page-error surfaces carry NO credential, NO endpoint host and NO room/session identity
+        // (slice-30 review): the identity values of THIS session join the redactor's value list.
+        const idRedact = makeGa11Redactor([login, password, guarded.host, joinM.roomId ?? '', joinM.sessionId ?? '', joinO.sessionId]);
         session.pageErrors = {
-          mover: redact((pageErrorSinks.get(`${tag}-M`) ?? []).slice(pageErrorsBeforeM).join('\n')),
-          observer: redact((pageErrorSinks.get(`${tag}-O`) ?? []).slice(pageErrorsBeforeO).join('\n')),
+          mover: idRedact((pageErrorSinks.get(`${tag}-M`) ?? []).slice(pageErrorsBeforeM).join('\n')),
+          observer: idRedact((pageErrorSinks.get(`${tag}-O`) ?? []).slice(pageErrorsBeforeO).join('\n')),
         };
       } catch (error) {
         session.failure = `session ${String(s)} named failure: ${redact(error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 300)}`;
@@ -7537,15 +7648,21 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         if (pumpPromise !== null) await gaStopPump(pageM!).catch(() => undefined);
         await pageM?.close().catch(() => undefined);
         await pageO?.close().catch(() => undefined);
+        await contextM?.close().catch(() => undefined);
+        await contextO?.close().catch(() => undefined);
       }
       sessions.push(session);
     }
 
-    // Negative control: the SAME join from a context WITHOUT credentials must be refused.
-    // (Proves the origin's auth posture actually gates the session path, not just our bookkeeping.)
-    let pageNC: Page | null = null;
+    // Negative control (slice-30 review hardened): an UNCREDENTIALED context must meet the
+    // ACTUAL service's 401 on the document itself, and the SDK join must then fail — proof the
+    // refusal comes from the real service, not from harness bookkeeping.
+    let contextNC: BrowserContext | null = null;
     try {
-      pageNC = await openSeatPage('ga11-NC', { bare: true });
+      contextNC = await browser!.newContext(); // no credentials, no module route: only the real service answers
+      const pageNC = await contextNC.newPage();
+      const response = await pageNC.goto(`${guarded!.webOrigin}/`, { waitUntil: 'load' }).catch(() => null);
+      const uncredentialedHttpStatus = response?.status() ?? 0;
       let negJoined = false;
       let negError = 'join unexpectedly succeeded';
       try {
@@ -7556,9 +7673,9 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         negJoined = false;
         negError = redact(error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 200);
       }
-      negativeControl = { refused: !negJoined, errorName: negError };
+      negativeControl = { uncredentialedHttpStatus, refused: uncredentialedHttpStatus === 401 && !negJoined, errorName: negError };
     } finally {
-      await pageNC?.close().catch(() => undefined);
+      await contextNC?.close().catch(() => undefined);
     }
   }
 
@@ -7571,35 +7688,52 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     sessions.length === GA11_FIXED_POPULATION.sessions,
     { sessions: sessions.length, declared: GA11_FIXED_POPULATION.sessions, failures: failedSessions.map((s) => s.failure) });
 
-  cellCheck('two real seats joined the SAME room (one roomId, two distinct sessionIds, server-issued epochs ≥ 1) through the nominated origin\'s own Basic-auth HTTPS/WSS path — the room-replicated state witnessed both seats (reachability witnessed by the room\'s replication, §15B(3) shape, from the client side)',
+  cellCheck('two real seats joined the SAME room (one roomId, two distinct sessionIds, server-issued epochs ≥ 1) through the nominated origin\'s own Basic-auth HTTPS/WSS path — SAME-ORIGIN pages whose DOCUMENT navigation the actual service authenticated (HTTP status enforced: no 401 after credentials) — and the room-replicated state witnessed both seats (reachability witnessed by the room\'s replication, §15B(3) shape, from the client side)',
     sessions.every((s) => {
       const jm = s.joinMover;
       const jo = s.joinObserver;
       const view = s.roomReplicatedView;
-      return jm?.ok === true && jo?.ok === true && jm.roomId === jo.roomId && (view?.peers.length ?? 0) >= 1 && (view?.selfKey ?? '') !== '';
+      const nav = s.navigation;
+      return nav !== undefined && nav.moverHttpStatus !== 401 && nav.observerHttpStatus !== 401
+        && jm?.ok === true && jo?.ok === true && jm.roomId === jo.roomId && (view?.peers.length ?? 0) >= 1 && (view?.selfKey ?? '') !== '';
     }) && sessions.length > 0,
-    sessions.map((s) => ({ session: s.session, mover: s.joinMover, observer: s.joinObserver, peers: s.roomReplicatedView?.peers ?? null, failure: s.failure ?? null })));
+    sessions.map((s) => ({ session: s.session, navigation: s.navigation ?? null, mover: s.joinMover, observer: s.joinObserver, peers: s.roomReplicatedView?.peers ?? null, failure: s.failure ?? null })));
 
   cellCheck('RTT eligibility per session was DECIDED against the pre-registered fixed population (120 declared samples; ≥ 99 finite; probe loss ≤ 2 %) and recorded as eligible or INVALID-BY-ITS-OWN-FLOOR with named reasons — never re-scoped to whatever arrived',
     sessions.every((s) => s.rtt !== undefined || s.failure !== undefined),
     sessions.map((s) => ({ session: s.session, rtt: s.rtt ?? null, failure: s.failure ?? null })));
 
-  cellCheck('explicit client inputs are matched to the server-issued epoch and the room-replicated resolved prefix, with the honest distinction recorded: this is CLIENT-OBSERVED room replication, NOT room-internal evidence',
-    sessions.every((s) => s.inputMatching !== undefined || s.failure !== undefined),
-    sessions.map((s) => ({ session: s.session, inputMatching: s.inputMatching ?? null })));
+  cellCheck('explicit client inputs matched to the server-issued epoch and the room-replicated resolved prefix under the TIGHTENED rule — the prefix is POSITIVE (a zero watermark resolves NOTHING and never counts), covers ONLY KNOWN sent seqs (one seq per accepted send in the predictor\'s own audit), resolves on the CURRENT epoch, pending entries stay same-epoch, and the honest distinction (client-observed room replication, NOT room-internal evidence) is recorded',
+    sessions.every((s) => {
+      const im = s.inputMatching;
+      if (im === undefined) return s.failure !== undefined;
+      return im.sentTotal > 0 && im.prefixResolvedPositive && im.prefixOnlyKnownSeqs && im.resolvedSameEpoch && im.pendingSameEpoch;
+    }),
+    sessions.map((s) => ({ session: s.session, inputMatching: s.inputMatching ?? null, failure: s.failure ?? null })));
 
-  cellCheck('patch-interval and arrival-stall populations carry their source label (client page clock; no harness proxy in route), byte sizes are either counted by the facsimile hop or EXPLICITLY missing with the reason — never zero-filled',
-    sessions.every((s) => (s.patchIntervalsMs !== undefined && s.arrivalStallMs !== undefined && s.payloadBytes !== undefined) || s.failure !== undefined),
-    sessions.map((s) => ({ session: s.session, patch: s.patchIntervalsMs ?? null, stall: s.arrivalStallMs ?? null, bytes: s.payloadBytes ?? null })));
+  cellCheck('patch-interval and arrival-stall populations cover the FULL EXACT page-clock window (start stamped before the pump, end stamped after it, ledger read once in between — no pre-pump snapshot, no threshold), ledger capacity/truncation state is recorded, and WS payload-byte distributions carry their payload-only semantics (heartbeat-vs-patch NOT claimed); hop byte totals exist only in facsimile — never zero-filled anywhere',
+    sessions.every((s) => {
+      const p = s.patchIntervalsMs;
+      const w = s.wsFrames as { semantics?: string } | undefined;
+      if (p === undefined || s.arrivalStallMs === undefined || w === undefined) return s.failure !== undefined;
+      return p.windowEndMs > p.windowStartMs && typeof p.ledgerTruncated === 'boolean' && w.semantics === GA11_WS_FRAME_SEMANTICS;
+    }),
+    sessions.map((s) => ({ session: s.session, patch: s.patchIntervalsMs ?? null, stall: s.arrivalStallMs ?? null, wsFrames: s.wsFrames ?? null, hopBytes: s.hopBytes ?? null })));
 
-  cellCheck('the no-credentials negative control was REFUSED (the origin\'s Basic auth actually gates the session path; a context without httpCredentials cannot join)',
-    negativeControl.refused === true,
+  cellCheck('the no-credentials negative control met the ACTUAL service\'s 401 on the document itself and the SDK join then failed — the refusal comes from the real vhost (Basic on every method), not from harness bookkeeping',
+    negativeControl.refused === true && negativeControl.uncredentialedHttpStatus === 401,
     negativeControl);
 
-  cellCheck('the record carries NO endpoint value, NO login and NO password (endpoint appears ONLY as sha256(lowercased host:port) — redaction, not access control; guessability caveat of handoff §4 travels with it)',
+  cellCheck('the record carries NO endpoint value, NO login and NO password (endpoint appears ONLY as sha256(lowercased host:port) — redaction, not access control; guessability caveat of handoff §4 travels with it), and every pageError surface is additionally free of THIS session\'s room and session identifiers',
     (() => {
       const serialized = JSON.stringify({ sessions, negativeControl, hopReceipt });
-      return (guarded === null || !serialized.includes(guarded.host)) && (password === '' || !serialized.includes(password)) && (login === '' || !serialized.includes(login));
+      const secretFree = (guarded === null || !serialized.includes(guarded.host)) && (password === '' || !serialized.includes(password)) && (login === '' || !serialized.includes(login));
+      const idsFree = sessions.every((s) => {
+        const ids = [s.joinMover?.roomId ?? '', s.joinMover?.sessionId ?? '', s.joinObserver?.sessionId ?? ''].filter((v) => v !== '');
+        const errs = `${s.pageErrors?.mover ?? ''}\n${s.pageErrors?.observer ?? ''}`;
+        return ids.every((id) => !errs.includes(id));
+      });
+      return secretFree && idsFree;
     })(),
     { digest: guarded?.digest ?? null, note: 'this detail is written BEFORE the record; the check above re-scans the exact serialized content of sessions/negativeControl/hopReceipt' });
 
@@ -7621,6 +7755,7 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
       netrcSource,
       joinGateTriplePresented: presentation !== null ? { protocolVersion: (presentation as { protocolVersion: string }).protocolVersion, configHashHex64: hex64.test((presentation as { configHash: string }).configHash), manifestHashHex64: hex64.test((presentation as { manifestHash: string }).manifestHash) } : null,
       httpCredentialsScope: guarded !== null ? `origin-scoped to ${guarded.digest.slice(0, 12)}… — never wildcard` : null,
+      sameOriginDesign: 'seat documents are served by the nominated origin itself (navigation enforces the auth status); ONLY known local module-asset paths are rewritten to the loopback Vite pipeline (GA11_MODULE_PATH_PREFIXES); matchmake routes and the WebSocket are never intercepted and the vhost challenges every method including OPTIONS',
     },
     population: GA11_FIXED_POPULATION,
     clamps: { maxRttSamples: 300, maxWindowMs: 120_000, cellTimeoutMs: 1_500_000 },

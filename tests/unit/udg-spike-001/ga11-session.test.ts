@@ -20,11 +20,15 @@ import { describe, expect, it } from 'vitest';
 import { nearestRank } from '../../../tools/load-test/src/statistics.ts';
 import {
   GA11_FIXED_POPULATION,
+  GA11_MODULE_PATH_PREFIXES,
   ga11EndpointGuard,
+  ga11LogFilterValues,
+  ga11ModuleUrlRewrite,
   makeGa11Redactor,
   parseGa11Netrc,
   rttEligibility,
   startGa11FacsimileHop,
+  summarizeFrameLengths,
 } from '../../../tools/load-test/src/ga11-session.ts';
 
 const SECRET = 'synthetic-not-a-real-secret';
@@ -172,6 +176,53 @@ describe('ga11 RTT eligibility (pre-registered fixed population)', () => {
   });
 });
 
+describe('ga11 same-origin module-asset allowlist (what may be rewritten to the local pipeline)', () => {
+  const web = 'https://nominated.example:8443';
+  const vite = 'http://127.0.0.1:5173';
+
+  it('rewrites ONLY known module-asset paths on the NOMINATED origin, preserving the query', () => {
+    expect(ga11ModuleUrlRewrite(`${web}/src/network/ColyseusPredictionAdapter.ts`, web, vite)).toBe(`${vite}/src/network/ColyseusPredictionAdapter.ts`);
+    expect(ga11ModuleUrlRewrite(`${web}/node_modules/.vite/deps/@colyseus_sdk.js?v=abc`, web, vite)).toBe(`${vite}/node_modules/.vite/deps/@colyseus_sdk.js?v=abc`);
+    expect(ga11ModuleUrlRewrite(`${web}/@fs/workspace/packages/protocol/dist/index.js`, web, vite)).toBe(`${vite}/@fs/workspace/packages/protocol/dist/index.js`);
+  });
+
+  it('NEVER rewrites the SDK matchmake routes, the document, or anything on another origin', () => {
+    expect(ga11ModuleUrlRewrite(`${web}/matchmake/join/region`, web, vite)).toBeNull();
+    expect(ga11ModuleUrlRewrite(`${web}/`, web, vite)).toBeNull();
+    expect(ga11ModuleUrlRewrite(`${web}/state/x`, web, vite)).toBeNull();
+    expect(ga11ModuleUrlRewrite(`${vite}/src/network/ColyseusPredictionAdapter.ts`, web, vite)).toBeNull();
+    expect(ga11ModuleUrlRewrite('https://elsewhere.test/src/network/x.ts', web, vite)).toBeNull();
+    expect(ga11ModuleUrlRewrite('not a url', web, vite)).toBeNull();
+  });
+
+  it('the allowlist itself contains ONLY module-asset prefixes (no matchmake-shaped entry can sneak in)', () => {
+    expect(GA11_MODULE_PATH_PREFIXES.every((p) => !p.includes('matchmake'))).toBe(true);
+    expect(GA11_MODULE_PATH_PREFIXES.every((p) => p.startsWith('/'))).toBe(true);
+  });
+});
+
+describe('ga11 WS payload-length summaries and log-filter values', () => {
+  it('summarizes payload lengths with nearest-rank percentiles; empty stays null/zero, never invented', () => {
+    const s = summarizeFrameLengths([10, 20, 30, 40, 50], nearestRank);
+    expect(s).toEqual({ frames: 5, totalBytes: 150, p50: 30, p95: 50, max: 50 });
+    const e = summarizeFrameLengths([], nearestRank);
+    expect(e).toEqual({ frames: 0, totalBytes: 0, p50: null, p95: null, max: null });
+    const dirty = summarizeFrameLengths([5, Number.NaN, -1, 7], nearestRank);
+    expect(dirty.frames).toBe(4); // counts what arrived…
+    expect(dirty.totalBytes).toBe(12); // …but non-finite/negative never enter sums or percentiles
+  });
+
+  it('log filter erases every endpoint spelling (origins longest-first) and keeps passwords out of scope', () => {
+    const g = ga11EndpointGuard('https://edge.example:8443');
+    if (g.ok !== true) throw new Error('guard expected ok');
+    const redact = makeGa11Redactor(ga11LogFilterValues(g));
+    const noisy = `connect failed wss://edge.example:8443 https://edge.example:8443 //edge.example edge.example still logging passwordless-ok`;
+    const out = redact(noisy);
+    expect(out).not.toContain('edge.example');
+    expect(out).toContain('[REDACTED]');
+  });
+});
+
 describe('ga11 loopback facsimile hop (auth posture + byte counting, 127.0.0.1 only)', () => {
   const echo = async (): Promise<{ port: number; stop: () => Promise<void> }> => {
     const sockets = new Set<Socket>();
@@ -234,14 +285,17 @@ describe('ga11 loopback facsimile hop (auth posture + byte counting, 127.0.0.1 o
     }
   });
 
-  it('passes an OPTIONS preflight WITHOUT demanding auth (a browser never attaches credentials to a preflight) and counts it separately', async () => {
+  it('challenges EVERY method including OPTIONS (the actual vhost challenges every method — a cross-origin page cannot smuggle a preflight past auth)', async () => {
     const target = await echo();
     const hop = await startGa11FacsimileHop({ login: 'u', password: SECRET, targetPort: target.port });
     try {
-      const pre = await sendRaw(hop.port, `OPTIONS /matchmake/join/region HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://127.0.0.1:5173\r\n\r\n`);
-      expect(pre.head).not.toContain('401'); // echoed by the target — forwarded without a challenge
-      expect(hop.bytes().preflightBypassed).toBe(1);
-      expect(hop.bytes().authed).toBe(0);
+      const preDenied = await sendRaw(hop.port, `OPTIONS /matchmake/join/region HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://127.0.0.1:5173\r\n\r\n`);
+      expect(preDenied.head).toContain('401'); // the REAL posture: OPTIONS is challenged like everything else
+      const good = Buffer.from(`u:${SECRET}`).toString('base64');
+      const preOk = await sendRaw(hop.port, `OPTIONS /matchmake/join/region HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://127.0.0.1:5173\r\nAuthorization: Basic ${good}\r\n\r\n`);
+      expect(preOk.head).not.toContain('401'); // authed, forwarded to the target (echoed)
+      expect(hop.bytes().refused).toBe(1);
+      expect(hop.bytes().authed).toBe(1);
     } finally {
       await hop.stop();
       await target.stop();

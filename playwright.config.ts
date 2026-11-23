@@ -82,8 +82,12 @@ export default defineConfig({
   reporter: reporters(),
   use: {
     baseURL: clientUrl,
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
+    // Slice-30 review: the GA-11 endpoint-injection dispatch runs with UDG_E2E_TRACE=off — a
+    // retained trace/screenshot can carry request URLs and headers, and that session's discipline
+    // is that no endpoint value, credential or session identity ever reaches a retained surface.
+    // Every other run keeps the accepted retention posture unchanged.
+    trace: process.env['UDG_E2E_TRACE'] === 'off' ? 'off' : 'retain-on-failure',
+    screenshot: process.env['UDG_E2E_TRACE'] === 'off' ? 'off' : 'only-on-failure',
     video: 'off',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
