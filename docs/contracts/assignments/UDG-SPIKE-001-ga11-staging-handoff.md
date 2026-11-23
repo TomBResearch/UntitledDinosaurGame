@@ -203,6 +203,30 @@ building it before a deployment exists would invite measuring nothing.
 > host, a posh page) responded 200; the ISP name remains operator-unconfirmed and NO external IP
 > lookup was performed by anyone. GA-11's §15B(1)–(5) verdicts, Gate A and every provisional
 > value remain exactly where the accepted records put them.
+>
+> **EE attempt (runId `ga11-EE-20261123-1795431641353`, base draft #7 `1362d82`) — a HARNESS
+> failure, NOT a network statement; preserved, never replaced.** The bundle is checksum-verified
+> (`CHECKSUMS.txt` verifies) but contains NO session record: the run log shows the local Vite
+> dev server re-optimizing dependencies ("dependency optimized: @colyseus/sdk" → "optimized
+> dependencies changed. reloading") while a credentialed seat sat mid-window; the full-reload
+> command reloaded the locally served document and the in-flight mover pump evaluate rejected
+> ("Target page, context or browser has been closed", `netcode.spec.ts:7592`, pump created at
+> line 4680, ≈ 1.8 min in). An unhandled async rejection then ended the worker before the
+> single end-of-cell record write — hence checksums without a record. **No ISP/regime/provider
+> inference is drawn from this attempt or its timing; none is admissible from it.** Provider
+> identification for the EE egress was USER-CONFIRMED at dispatch (names held by the owner; not
+> restated here, per the no-provider-claim rule until §15B(4)). Slice-30r6 root-caused and fixed
+> the harness side, in a fresh isolated worktree on draft #7: pump/RTT/polls carry rejection
+> handling from creation with causes and sample counts preserved; budget losers are recorded,
+> never unhandled; cleanup order is stop → settle → persist → close; per-phase evidence lands
+> ATOMICALLY and scrubbed (identity- and secret-free, PARTIAL-labelled — partial data is never
+> labelled valid) BEFORE any resource closes; the Vite re-optimisation reload was verified real
+> on locally served modules and is reproducibly absorbed by an uncredentialed loopback optimizer
+> warm-up before credentialed seats open (owned paths/ports only — the repository Vite config is
+> unchanged); a new env-gated `ga11-teardown-proof` cell proves the forced mid-window browser
+> close and slow-socket cases with zero unhandled rejections, and the full loopback HTTPS
+> facsimile reruns green on the fixed head. The EE bundle stays exactly as recorded (attempt
+> retention); the next first-path dispatch runs on the fixed head and produces a fresh runId.
 
 ## 3. Reproduce · validate · reset (all local, all independent of any endpoint)
 

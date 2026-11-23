@@ -42,7 +42,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmdirSync, unlinkSync } from 'node:fs';
+import { closeSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeSync } from 'node:fs';
 import { request as httpRequest, type IncomingHttpHeaders, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { connect as netConnect, type Socket } from 'node:net';
@@ -241,6 +241,60 @@ export const makeGa11Redactor = (secrets: readonly string[]): ((text: string) =>
   };
 };
 
+/* ------------------------------------------------------------------ atomic evidence persistence
+ * Slice-30r6 (the EE-attempt teardown lesson): the EE run lost its ENTIRE session record because
+ * an unhandled async failure killed the worker before the single end-of-cell write, and the run
+ * left only a run.log behind. Evidence therefore lands ATOMICALLY at every durable phase
+ * (admission, window open, each completed session, final record): bytes go to a sibling temp
+ * file, are fsynced, then renamed over the target, so a reader (or a dying worker) never sees a
+ * half-written record and every retained file is parseable and checksum-able. The optional
+ * redactor runs over the SERIALIZED text BEFORE anything touches disk; if redaction would
+ * corrupt the JSON the file is NOT written — an unscrubbed record never reaches the bundle.
+ * A PARTIAL progress document is labelled as such by its writer and is never a valid record.
+ */
+
+export interface Ga11EvidenceWriteReceipt {
+  readonly ok: boolean;
+  readonly path: string;
+  readonly bytes: number;
+  readonly error: string | null;
+}
+
+export const writeGa11EvidenceAtomic = (
+  outDir: string,
+  fileName: string,
+  document: unknown,
+  redact?: (text: string) => string,
+): Ga11EvidenceWriteReceipt => {
+  const target = join(outDir, fileName);
+  const tmp = `${target}.tmp-${String(process.pid)}-${String(Date.now())}`;
+  try {
+    const raw = JSON.stringify(document, null, 2);
+    if (typeof raw !== 'string') return { ok: false, path: target, bytes: 0, error: 'unserializable-document' };
+    const serialized = redact === undefined ? raw : redact(raw);
+    if (redact !== undefined) {
+      // Redaction must not silently mangle the document: an exact-value replacement inside a
+      // JSON string value is structure-preserving; anything else REFUSES the write rather than
+      // persisting an unscrubbed or corrupt file.
+      try { JSON.parse(serialized); }
+      catch { return { ok: false, path: target, bytes: 0, error: 'redaction-invalidated-json — refused, nothing written' }; }
+    }
+    mkdirSync(outDir, { recursive: true });
+    const fd = openSync(tmp, 'w', 0o600);
+    try {
+      writeSync(fd, `${serialized}\n`, 0, 'utf8');
+      fsyncSync(fd);
+    }
+    finally { closeSync(fd); }
+    renameSync(tmp, target);
+    return { ok: true, path: target, bytes: Buffer.byteLength(serialized) + 1, error: null };
+  }
+  catch (error) {
+    try { unlinkSync(tmp); } catch { /* the temp file may never have existed */ }
+    return { ok: false, path: target, bytes: 0, error: String(error instanceof Error ? `${error.name}: ${error.message}` : error).slice(0, 240) };
+  }
+};
+
 /* ------------------------------------------------------------------ RTT eligibility (natural path) */
 
 export interface Ga11RttEligibility {
@@ -255,6 +309,11 @@ export interface Ga11RttEligibility {
   readonly p50: number | null;
   readonly p95: number | null;
   readonly p99: number | null;
+  /** False when the collection itself was INTERRUPTED (target closed, budget expired): a partial
+   * collection can never be a valid fixed population, whatever count it did reach (slice-30r6). */
+  readonly collectionComplete: boolean;
+  /** Named cause of an interrupted collection, preserved verbatim (truncated); null when complete. */
+  readonly collectionCause: string | null;
 }
 
 /**
@@ -263,16 +322,26 @@ export interface Ga11RttEligibility {
  * Floors come from GA11_FIXED_POPULATION and plan §15B-B (probe loss ≤ 2 %); the outcome is
  * labelled, never narrated around. `percentiles` from statistics.ts rejects non-finite input, so
  * the finite-only split here is the ONLY place a sample is set aside — and it is fully counted.
+ * `collection` (slice-30r6): an INTERRUPTED collection is never valid even if the arrived samples
+ * would otherwise satisfy the floors; the named cause travels with the verdict, and the arrived
+ * count stays in the raw exactly as measured (partial data is labelled, never relabelled valid).
  */
-export const rttEligibility = (rawSamples: readonly number[], nearestRankFn: (samples: readonly number[], p: number) => number): Ga11RttEligibility => {
+export const rttEligibility = (
+  rawSamples: readonly number[],
+  nearestRankFn: (samples: readonly number[], p: number) => number,
+  collection?: { readonly complete: boolean; readonly cause?: string | null },
+): Ga11RttEligibility => {
   const declared = rawSamples.length;
   const finite = rawSamples.filter((v) => Number.isFinite(v));
   const timeouts = declared - finite.length;
   const loss = declared === 0 ? 1 : timeouts / declared;
   const reasons: string[] = [];
+  const collectionComplete = collection === undefined || collection.complete === true;
+  const collectionCause = collectionComplete ? null : String(collection?.cause ?? 'interrupted — cause not reported').slice(0, 300);
   if (declared !== GA11_FIXED_POPULATION.rttSamplesPerSession) reasons.push(`declared-count-deviation:${String(declared)}!=${String(GA11_FIXED_POPULATION.rttSamplesPerSession)}`);
   if (finite.length < GA11_FIXED_POPULATION.minEligibleRttSamples) reasons.push(`below-min-eligible:${String(finite.length)}<${String(GA11_FIXED_POPULATION.minEligibleRttSamples)}`);
   if (loss > GA11_FIXED_POPULATION.maxProbeLossFraction) reasons.push(`probe-loss-over-floor:${(loss * 100).toFixed(2)}%>${String(GA11_FIXED_POPULATION.maxProbeLossFraction * 100)}%`);
+  if (!collectionComplete) reasons.push(`partial-collection-interrupted (${collectionCause ?? 'no cause reported'}) — a PARTIAL population is never a valid fixed population`);
   const eligible = reasons.length === 0;
   return {
     declaredSamples: declared,
@@ -285,6 +354,8 @@ export const rttEligibility = (rawSamples: readonly number[], nearestRankFn: (sa
     p50: finite.length > 0 ? nearestRankFn(finite, 0.5) : null,
     p95: finite.length > 0 ? nearestRankFn(finite, 0.95) : null,
     p99: finite.length > 0 ? nearestRankFn(finite, 0.99) : null,
+    collectionComplete,
+    collectionCause,
   };
 };
 

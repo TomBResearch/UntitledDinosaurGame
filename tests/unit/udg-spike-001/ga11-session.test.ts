@@ -19,6 +19,9 @@ import { connect } from 'node:net';
 import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { nearestRank } from '../../../tools/load-test/src/statistics.ts';
@@ -43,6 +46,7 @@ import {
   sanitizeGa11Detail,
   startGa11FacsimileHop,
   summarizeFrameLengths,
+  writeGa11EvidenceAtomic,
   type Ga11TestCertificate,
 } from '../../../tools/load-test/src/ga11-session.ts';
 
@@ -679,5 +683,74 @@ describe('ga11 epoch-aware sequence audit + run classification (slice-30r4; dete
     expect(out).toContain('rejoin-complete');
     expect(out).not.toContain('P6qi3oNHL');
     expect(out).toContain('[ID]');
+  });
+});
+
+/* ------------------------------------------------------------------ slice-30r6: the EE-attempt rules
+ * (1) a PARTIAL (interrupted) RTT collection is never valid, whatever count arrived, with the
+ *     cause preserved beside the verdict — partial data is labelled, never relabelled valid;
+ * (2) evidence lands ATOMICALLY (tmp → fsync → rename): a reader never sees half a file, the
+ *     redactor erases secrets before the bytes touch disk, and a redaction that would corrupt
+ *     the JSON REFUSES the write — an unscrubbed record never reaches the bundle.
+ */
+describe('ga11 slice-30r6: interrupted collections and atomic scrubbed evidence', () => {
+  it('an interrupted collection is INELIGIBLE even with 120/120 finite arrived samples; the cause and the arrived count are both preserved', () => {
+    const samples = Array.from({ length: 120 }, (_v, i) => 40 + i); // complete, this would be eligible
+    const r = rttEligibility(samples, nearestRank, { complete: false, cause: 'Target page, context or browser has been closed' });
+    expect(r.eligible).toBe(false);
+    expect(r.collectionComplete).toBe(false);
+    expect(r.collectionCause).toContain('Target page');
+    expect(r.reasons.some((x) => x.startsWith('partial-collection-interrupted'))).toBe(true);
+    expect(r.declaredSamples).toBe(120); // arrived count kept EXACTLY, never zero-filled
+    expect(r.finiteSamples).toBe(120);
+    const complete = rttEligibility(samples, nearestRank, { complete: true });
+    expect(complete.eligible).toBe(true);
+    expect(complete.collectionComplete).toBe(true);
+    expect(complete.collectionCause).toBeNull();
+    const legacy = rttEligibility(samples, nearestRank); // old call sites default to complete — no regression
+    expect(legacy.collectionComplete).toBe(true);
+    expect(legacy.eligible).toBe(true);
+  });
+
+  it('atomic write: the target appears only with complete, byte-identical, parseable bytes and no temp file survives', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ga11-evidence-'));
+    try {
+      const doc = { phase: 'session-1-window-open', complete: false, list: [1, 2, 3] };
+      const r = writeGa11EvidenceAtomic(dir, 'progress.json', doc);
+      expect(r.ok).toBe(true);
+      expect(r.bytes).toBe(Buffer.byteLength(`${JSON.stringify(doc, null, 2)}\n`));
+      const text = readFileSync(join(dir, 'progress.json'), 'utf8');
+      expect(text).toBe(`${JSON.stringify(doc, null, 2)}\n`);
+      expect(readdirSync(dir).filter((f) => f.includes('.tmp'))).toEqual([]);
+    }
+    finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('the redactor erases every listed secret BEFORE bytes land; a repeat write replaces atomically, never appends', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ga11-evidence-'));
+    try {
+      const secret = 'synthetic-machine-secret';
+      const r1 = writeGa11EvidenceAtomic(dir, 'progress.json', { note: `for ${secret} only` }, makeGa11Redactor([secret]));
+      expect(r1.ok).toBe(true);
+      const text = readFileSync(join(dir, 'progress.json'), 'utf8');
+      expect(text).not.toContain(secret);
+      expect(text).toContain('[REDACTED]');
+      const r2 = writeGa11EvidenceAtomic(dir, 'progress.json', { phase: 'later' });
+      expect(r2.ok).toBe(true);
+      expect(readFileSync(join(dir, 'progress.json'), 'utf8')).not.toContain('REDACTED'); // replaced, not appended
+    }
+    finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('negative control: a redaction that would invalidate the JSON REFUSES the write — no unscrubbed or corrupt file reaches disk', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ga11-evidence-'));
+    try {
+      const bad = writeGa11EvidenceAtomic(dir, 'never.json', { v: `value with ${SECRET} inside` }, (t) => t.replace(/"/gu, ''));
+      expect(bad.ok).toBe(false);
+      expect(bad.error).toContain('refused');
+      expect(existsSync(join(dir, 'never.json'))).toBe(false);
+      expect(readdirSync(dir)).toEqual([]); // nothing partial survives either
+    }
+    finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

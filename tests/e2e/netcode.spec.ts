@@ -52,7 +52,7 @@ import { MIN_ELIGIBLE_ACKS_PER_RUN, nearestRank, networkValidity, summarizeCorre
 import { auditMotion, type AckLedgerReport } from '../../tools/load-test/src/ack-ledger.ts';
 import { auditGa5Transcript, naiveVsJoined, type Ga5Transcript } from '../../tools/load-test/src/ga5-transcript.ts';
 import { captureEnvironmentRecord, impairmentSourceRecord, planSpikeRun } from '../../tools/load-test/src/run-spike.ts';
-import { GA11_FIXED_POPULATION, GA11_EPOCH_AUDIT_NOTE, GA11_TEST_CERT_NOTE, GA11_WS_FRAME_SCOPE, GA11_WS_FRAME_SEMANTICS, classifyGa11Run, fetchGa11LocalAsset, ga11EndpointGuard, ga11EpochSequenceAudit, ga11IsGameplaySocket, ga11LocalAssetTarget, ga11SeatContextTlsOptions, makeGa11EphemeralTestCertificate, makeGa11Redactor, parseGa11Netrc, rttEligibility, sanitizeGa11Detail, startGa11FacsimileHop, summarizeFrameLengths, type Ga11EndpointOk, type Ga11EpochAudit } from '../../tools/load-test/src/ga11-session.ts';
+import { GA11_FIXED_POPULATION, GA11_EPOCH_AUDIT_NOTE, GA11_TEST_CERT_NOTE, GA11_WS_FRAME_SCOPE, GA11_WS_FRAME_SEMANTICS, classifyGa11Run, fetchGa11LocalAsset, ga11EndpointGuard, ga11EpochSequenceAudit, ga11IsGameplaySocket, ga11LocalAssetTarget, ga11SeatContextTlsOptions, makeGa11EphemeralTestCertificate, makeGa11Redactor, parseGa11Netrc, rttEligibility, sanitizeGa11Detail, startGa11FacsimileHop, summarizeFrameLengths, writeGa11EvidenceAtomic, type Ga11EndpointOk, type Ga11EpochAudit } from '../../tools/load-test/src/ga11-session.ts';
 import { createTraceWriter, readTrace } from '../../tools/load-test/src/trace-writer.ts';
 import type { ProxyStats } from '../../tools/load-test/src/ws-delay-proxy.ts';
 
@@ -360,6 +360,12 @@ const openSeatPage = async (label: string, options: { bare?: boolean } = {}): Pr
  */
 const primeClientModules = async (page: Page, label: string): Promise<void> => {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
+    // A navigation DURING priming — the Vite optimiser's "optimized dependencies changed.
+    // reloading" full-reload is the documented instance (owner-verified in the EE run.log and
+    // reproduced in the slice-30r6 selftest) — destroys the in-flight evaluate and REJECTS it,
+    // which the retry loop below already treats as a retryable load failure rather than letting
+    // the rejection escape the accepted retry posture (owner-verified in the EE run.log: reload
+    // lands while a page carries in-flight evaluates; the seat pages must survive the priming one).
     const loaded = await page.evaluate(async (urls) => {
       try {
         const adapter = await import(/* @vite-ignore */ urls.adapterUrl);
@@ -368,11 +374,20 @@ const primeClientModules = async (page: Page, label: string): Promise<void> => {
       } catch {
         return false;
       }
-    }, { adapterUrl: ADAPTER_URL, remoteUrl: REMOTE_URL });
+    }, { adapterUrl: ADAPTER_URL, remoteUrl: REMOTE_URL }).catch(() => false);
     observations[`modulePriming:${label}`] = { attempt, loaded };
     if (loaded) return;
-    await page.reload({ waitUntil: 'load' });
-    await page.waitForTimeout(500);
+    // The retry must survive the pipeline's OWN full-reload racing it (proven in the slice-30r6
+    // selftest: a Vite reload mid-retry once threw "Not attached to an active page" and once
+    // re-evaluated against a still-navigating blank document — both are retryable, neither may
+    // escape as a rejection or masquerade as a failed import).
+    try {
+      await page.reload({ waitUntil: 'load', timeout: 15_000 });
+    }
+    catch {
+      await page.waitForLoadState('load', { timeout: 15_000 }).catch(() => undefined);
+    }
+    await page.waitForTimeout(1_000); // let a late full-reload land BEFORE the next evaluate
   }
   throw new Error(`the client pipeline never served ${ADAPTER_URL} to seat ${label} in three attempts`);
 };
@@ -4674,16 +4689,29 @@ const gaRecovery = (page: Page, opts: { sinceIndex?: number; oldEpoch?: number; 
 /**
  * The mover pump for GA scenarios: turns every 4 s of travel so the canonical bounds can never
  * clamp it (the clamped-route lesson stands), counts every send refusal the §3.2 stop-sending
- * produces, and NEVER rejects — a refusal ends and is reported, it cannot kill the cell.
+ * produces, and — since the EE-attempt lesson (slice-30r6) — the promise produced HERE CANNOT
+ * REJECT, from the moment it exists. A page reload (the Vite optimiser's full-reload command is
+ * a real property of the local pipeline) or a browser close mid-evaluate rejects the raw
+ * `page.evaluate`; unhandled, that rejection used to kill the worker before any evidence landed.
+ * Here the rejection handler is attached in the SAME statement that creates the promise, and a
+ * lost target becomes a NAMED interruption carrying the ORIGINAL CAUSE and the pump's iteration
+ * (sample) count — mirrored into a page global every iteration precisely so the count survives
+ * the loss of the return channel. A refusal inside the page still ends and is reported; nothing
+ * in this pump can kill a cell.
  */
-const gaPump = (page: Page, limitMs = 60_000): Promise<{ ended: true; iterations: number }> =>
-  page.evaluate(async (args) => {
+export type GaPumpOutcome =
+  | { ended: true; iterations: number }
+  | { ended: false; iterations: number; cause: string };
+
+const gaPump = (page: Page, limitMs = 60_000): Promise<GaPumpOutcome> => {
+  const work = page.evaluate(async (args) => {
     const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
     if (holder === undefined) throw new Error('no seat');
-    const g = globalThis as unknown as { __udgCellStop?: boolean; __udgGaRefusals?: number; __udgGaSentGens?: number[] };
+    const g = globalThis as unknown as { __udgCellStop?: boolean; __udgGaRefusals?: number; __udgGaSentGens?: number[]; __udgGaPumpIterations?: number };
     g.__udgCellStop = false;
     g.__udgGaRefusals = 0;
     g.__udgGaSentGens = [];
+    g.__udgGaPumpIterations = 0;
     const stopped = (): boolean => (globalThis as unknown as { __udgCellStop?: boolean }).__udgCellStop === true;
     const startedAt = performance.now();
     let i = 0;
@@ -4696,13 +4724,73 @@ const gaPump = (page: Page, limitMs = 60_000): Promise<{ ended: true; iterations
       }
       catch { g.__udgGaRefusals = (g.__udgGaRefusals ?? 0) + 1; }
       i += 1;
+      g.__udgGaPumpIterations = i; // mirrored EVERY iteration: the count survives a lost return channel
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     return { ended: true as const, iterations: i };
   }, { limitMs });
+  return work.then(
+    (ok) => ok,
+    async (error: unknown): Promise<GaPumpOutcome> => {
+      const cause = String(error instanceof Error ? `${error.name}: ${error.message}` : error).slice(0, 300);
+      let iterations = -1; // -1 = NAMED unrecoverable, never a disguised 0
+      try {
+        iterations = await page.evaluate(() => (globalThis as unknown as { __udgGaPumpIterations?: number }).__udgGaPumpIterations ?? -1);
+      }
+      catch { /* the target is entirely gone: the count is unrecoverable and is RECORDED as -1 beside the cause */ }
+      return { ended: false, iterations, cause };
+    },
+  );
+};
 
+/** Signal the pump to end. NEVER rejects: stopping a page that is already gone is not an error —
+ * the pump died with its page and the pump guard already named the cause. A rejection here once
+ * wrecked the cleanup ORDER mid-teardown (slice-30r6). */
 const gaStopPump = (page: Page): Promise<void> =>
-  page.evaluate(() => { (globalThis as unknown as { __udgCellStop?: boolean }).__udgCellStop = true; });
+  page.evaluate(() => { (globalThis as unknown as { __udgCellStop?: boolean }).__udgCellStop = true; }).catch(() => undefined);
+
+/**
+ * The fixed RTT population on a joined seat's OWN gameplay socket (shared by the GA-11 session
+ * cell and the teardown-proof cell, slice-30r6). Transport-caused loss NEVER rejects here: the
+ * in-page loop mirrors every sample into a page global as it is taken, so an evaluate that loses
+ * its target still yields the samples already collected (bounded best-effort read) beside a
+ * NAMED incomplete-collection cause — and rttEligibility forces an interrupted collection
+ * INELIGIBLE. The declared sample count and every arrived sample are preserved either way;
+ * partial data is labelled, never counted valid.
+ */
+const gaRttPopulation = async (page: Page, args: { count: number; cadenceMs: number; timeoutMs: number }): Promise<{ samples: number[]; collectionComplete: boolean; cause: string | null }> => {
+  const work = page.evaluate(async (a) => {
+    const g = globalThis as unknown as { __udgGaRttSamples?: number[] };
+    const samples: number[] = [];
+    g.__udgGaRttSamples = samples; // same array mutated in place — the mirror stays live for a partial read
+    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+    if (holder === undefined || typeof holder.transport.pingLatency !== 'function') throw new Error('no pingLatency pass-through on the seat transport');
+    for (let i = 0; i < a.count; i += 1) {
+      const ms = await new Promise<number>((resolve) => {
+        const timer = setTimeout(() => resolve(Number.POSITIVE_INFINITY), a.timeoutMs);
+        holder.transport.pingLatency!((echo) => {
+          clearTimeout(timer);
+          resolve(echo);
+        });
+      });
+      samples.push(ms);
+      await new Promise((r) => setTimeout(r, a.cadenceMs));
+    }
+    return samples.slice();
+  }, args);
+  try {
+    return { samples: await work, collectionComplete: true, cause: null };
+  }
+  catch (error) {
+    const cause = String(error instanceof Error ? `${error.name}: ${error.message}` : error).slice(0, 300);
+    let partial: number[] = [];
+    try {
+      partial = await page.evaluate(() => (globalThis as unknown as { __udgGaRttSamples?: number[] }).__udgGaRttSamples?.slice() ?? []);
+    }
+    catch { /* target fully gone: the arrived count is 0 and is RECORDED as such beside the cause */ }
+    return { samples: partial, collectionComplete: false, cause };
+  }
+};
 
 /** One PRODUCER send on the ga seat: generation CONTINUES, stamp = sentCount + 1 by the adapter,
  * direct intent — an admissible input the invariant never declines (the ga5l suppressed input). */
@@ -7234,10 +7322,20 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
   const ga11Wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
   // Every open-ended operation in this cell rides a NAMED budget: a wedged navigation/join/probe
   // ends as a bounded, named failure — never a hang the 1 500 s cell timeout discovers late.
+  // Slice-30r6 (the EE-attempt lesson): the LOSER of the race may never leave an unhandled
+  // rejection behind. A budget that fires while the underlying work is still pending used to
+  // strand that work's eventual rejection with no handler — one more worker-killing path. The
+  // mirrored handler records the late cause beside the run (cause preserved, nothing swallowed),
+  // and the budget's OWN timeout error remains the named, bounded failure it always was.
+  const budgetLateRejections: { label: string; cause: string; afterBudgetHadFired: boolean }[] = [];
   const ga11Budget = <T,>(label: string, ms: number, work: Promise<T>): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let budgetFired = false;
     const guard = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error(`${label} exceeded its ${String(ms)} ms budget (bounded — nothing in this cell waits forever)`)), ms);
+      timer = setTimeout(() => { budgetFired = true; reject(new Error(`${label} exceeded its ${String(ms)} ms budget (bounded — nothing in this cell waits forever)`)); }, ms);
+    });
+    work.then(() => undefined, (error: unknown) => {
+      budgetLateRejections.push({ label, cause: String(error instanceof Error ? `${error.name}: ${error.message}` : error).slice(0, 300), afterBudgetHadFired: budgetFired });
     });
     return Promise.race([work, guard]).finally(() => { if (timer !== undefined) clearTimeout(timer); }) as Promise<T>;
   };
@@ -7256,10 +7354,11 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     const admissionOnly = {
       kind: 'GA11-ENDPOINT-INJECTION-SESSION', formal: false, gateA: 'Not Run — this cell is not a Gate A row',
       officialMatrix: 'separate and untouched (handoff §6)', runId, startedAtIso, sha, dirty,
+      recordValidity: 'COMPLETE AS AN ATTEMPT — admission refused before any measurement; no session data exists and none is claimed',
       admission: { ok: false, error: guard !== null && guard.ok === false ? guard.error : 'no endpoint' },
     };
-    mkdirSync(OUT_DIR, { recursive: true });
-    writeFileSync(join(OUT_DIR, 'spike-cell-ga11-session.json'), `${JSON.stringify(admissionOnly, null, 2)}\n`);
+    const admissionWrite = writeGa11EvidenceAtomic(OUT_DIR, 'spike-cell-ga11-session.json', admissionOnly, makeGa11Redactor([rawEndpoint]));
+    observations[`ga11RecordWrite:admission-refused`] = { ok: admissionWrite.ok, bytes: admissionWrite.bytes, error: admissionWrite.error };
     const failed = cellChecks.filter((c) => !c.ok);
     expect(failed.map((c) => c.name), 'GA-11 session admission failed; the record names why').toEqual([]);
     return;
@@ -7353,6 +7452,40 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     { credentialsSource, netrcSource, credentialError, note: 'this detail carries no credential value — parse errors name the line and token only' });
 
   const redact = makeGa11Redactor([login, password, guarded?.host ?? '']);
+
+  // ---- ATOMIC SCRUBBED ATTEMPT PROGRESS (slice-30r6, the EE-attempt lesson): the EE dispatch
+  // lost its ENTIRE session record because an unhandled async failure ended the worker before the
+  // single end-of-cell write — the bundle kept only run.log. Every durable phase (admission, each
+  // join, window open, every completed session BEFORE its cleanup, the negative control) now
+  // lands atomically (tmp → fsync → rename, mode 0600) BEFORE resources close, so even a worker
+  // that dies mid-window leaves a parseable, checksum-able, scrubbed trail. The document is
+  // labelled PARTIAL — an incomplete attempt is NEVER presented as a valid record. Secrets
+  // (login/password/host) and every identity value this attempt has seen (room/session ids) are
+  // redacted from the serialized text before the bytes touch the disk; a redaction that would
+  // invalidate the JSON refuses the write instead of persisting an unscrubbed file.
+  const seenIdentityValues: string[] = [];
+  const progressWrites: { phase: string; ok: boolean; bytes: number; error: string | null }[] = [];
+  const persistGa11Progress = (phase: string, sessionsSoFar: readonly Ga11SessionRecord[], extra: Record<string, unknown> = {}): void => {
+    const scrub = makeGa11Redactor([login, password, guarded?.host ?? '', ...seenIdentityValues]);
+    const doc = {
+      kind: 'GA11-ATTEMPT-PROGRESS',
+      schemaVersion: 1,
+      complete: false,
+      recordValidity: 'PARTIAL — in-progress attempt trail: NOT a valid GA-11 record, not a Gate A row, and never a measurement source on its own; retained so an interrupted attempt still leaves scrubbed, checksum-able evidence beside run.log',
+      runId, startedAtIso, sha, dirty,
+      endpointDigest: guarded?.digest ?? null,
+      phase,
+      phaseAtIso: new Date().toISOString(),
+      sessionsCompleted: sessionsSoFar,
+      lateBudgetRejections: budgetLateRejections,
+      ...extra,
+    };
+    const written = writeGa11EvidenceAtomic(OUT_DIR, 'spike-cell-ga11-session.progress.json', doc, scrub);
+    progressWrites.push({ phase, ok: written.ok, bytes: written.bytes, error: written.error });
+    observations[`ga11ProgressWrite:${phase}`] = { ok: written.ok, bytes: written.bytes };
+  };
+  persistGa11Progress('admission-evaluated', []);
+
   const argvClean = [...process.argv, ...process.execArgv].every((a) => !a.includes(password) && !a.includes(login));
   cellCheck('admission: no credential appears in argv or execArgv (checked against both values after parsing)', argvClean && (facsimile || login !== ''), { argvCount: process.argv.length });
 
@@ -7362,6 +7495,7 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
   // the launched Chromium sidecars never inherit credential material (avoid-at-rest, inherited).
   let cellBrowser: Browser | null = null;
   let relayEnvGoneBeforeSidecars = false;
+  let optimizerWarmup: Record<string, unknown> = { ran: false };
 
   interface Ga11SessionRecord {
     session: number;
@@ -7401,6 +7535,8 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     rtt?: ReturnType<typeof rttEligibility>;
     rttRawFiniteMs?: readonly number[];
     rttTimeoutSampleCount?: number;
+    windowInterruption?: { where: string; cause: string; pumpIterations: number; unexpectedMainFrameNavigations: number };
+    unexpectedMainFrameNavigations?: { mover: number; observer: number };
     pageErrors?: { mover: string; observer: string };
   }
   const sessions: Ga11SessionRecord[] = [];
@@ -7410,6 +7546,36 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     relayEnvGoneBeforeSidecars = process.env['UDG_GA11_NETRC_B64'] === undefined;
     cellBrowser = await chromium.launch({ headless: true });
     const httpCredentials = { origin: guarded.webOrigin, username: login, password };
+
+    // VITE DEPENDENCY-OPTIMISER WARM-UP (slice-30r6, from the owner-verified EE attempt). CHECK,
+    // not assumption: the EE run.log shows `[vite] dependency optimized: @colyseus/sdk` followed
+    // by `optimized dependencies changed. reloading` while a credentialed seat sat in its window
+    // — so YES, re-optimisation DOES affect the locally served modules: every connected page
+    // receives the full-reload command, the locally served DOCUMENT reloads, the joined seat dies
+    // and any in-flight page.evaluate rejects with "Target page, context or browser has been
+    // closed" (the exact EE error at netcode.spec.ts:7592). REPRODUCIBLE MITIGATION, owned paths
+    // only: drive the optimiser to quiescence BEFORE any credentialed seat opens, with one
+    // uncredentialed throwaway page against the already-owned loopback dev server —
+    // primeClientModules' accepted reload-tolerant retry absorbs the discovery-triggered reload
+    // on a page that survives it, and the trailing wait lets any late full-reload arrive while no
+    // seat is connected. No repository config, no new ports, nothing beyond the loopback server
+    // this harness already owns. A seat that STILL navigates unexpectedly (watcher below) turns
+    // into a named interruption with partial data labelled — never a silent corruption.
+    {
+      const warmContext = await cellBrowser.newContext();
+      const warmPage = await warmContext.newPage();
+      let warmNavigations = 0;
+      warmPage.on('framenavigated', (frame) => { if (frame === warmPage.mainFrame()) warmNavigations += 1; });
+      try {
+        await ga11Budget('optimizer warm-up navigation', 30_000, warmPage.goto(`${CLIENT_ORIGIN}/`, { waitUntil: 'load', timeout: 20_000 }));
+        await ga11Budget('optimizer warm-up priming', 150_000, primeClientModules(warmPage, 'ga11-warm'));
+        await ga11Wait(1_500); // a trailing full-reload lands HERE, while nothing that matters is connected
+        optimizerWarmup = { ran: true, mainFrameNavigations: warmNavigations, reloadObservedDuringWarmup: warmNavigations > 1, note: 'optimiser quiescence established on a throwaway uncredentialed loopback page before any credentialed seat opened; a reload count > 1 means the discovery-triggered full-reload was absorbed by the warm-up, not by a seat mid-window' };
+      } finally {
+        await warmContext.close().catch(() => undefined);
+      }
+      persistGa11Progress('optimizer-warmup', [], { optimizerWarmup });
+    }
 
     // SAME-ORIGIN seat pages on the nominated origin itself (slice-30 reviewer corrections, plus
     // the slice-30r2 structural fixes):
@@ -7431,6 +7597,9 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
       context: BrowserContext;
       frames: { sent: number[]; received: number[]; gameplaySockets: number; ignoredSockets: number; active: boolean; rawGapsMs: number[]; lastRawFrameAt: number | null; socketCloses: number };
       navStatus: number;
+      /** Main-frame navigations seen AFTER priming completed. Any increment inside a measurement
+       * window is an interruption (a Vite-style full-reload signature) — named, never absorbed. */
+      unexpectedNavigations: { count: number };
     }
     const openAuthedSeatPage = async (label: string, creds: { origin: string; username: string; password: string } | null): Promise<Ga11SeatSurfaces> => {
       const context = await cellBrowser!.newContext(creds !== null
@@ -7493,7 +7662,12 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         // The shipped client modules through the same compiled pipeline (bounded retry posture
         // inherited from the accepted primeClientModules; assets ride the Node-side fulfilment).
         await primeClientModules(page, label);
-        return { page, context, frames, navStatus };
+        const unexpectedNavigations = { count: 0 };
+        // Registered AFTER priming: from here on, a main-frame navigation is NOT part of the
+        // harness's own plan — a full-reload reaching a seated page mid-session must surface as a
+        // named interruption (and a partial population labelled as such), never as silent loss.
+        page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) unexpectedNavigations.count += 1; });
+        return { page, context, frames, navStatus, unexpectedNavigations };
       } catch (error) {
         // NOTHING half-open survives a failed open: the context (with its scoped credentials)
         // closes before the error propagates, and the caller names the failure per seat.
@@ -7519,7 +7693,9 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
       let contextO: BrowserContext | null = null;
       let surfacesM: Ga11SeatSurfaces | undefined;
       let surfacesO: Ga11SeatSurfaces | undefined;
-      let pumpPromise: Promise<{ ended: true; iterations: number }> | null = null;
+      let pumpPromise: Promise<GaPumpOutcome> | null = null;
+      let pollerSettle: Promise<void> | null = null;
+      let requestPollerStop: (() => void) | null = null;
       try {
         surfacesM = await ga11Budget(`seat ${tag}-M open+prime`, 180_000, openAuthedSeatPage(`${tag}-M`, httpCredentials));
         surfacesO = await ga11Budget(`seat ${tag}-O open+prime`, 180_000, openAuthedSeatPage(`${tag}-O`, httpCredentials));
@@ -7551,6 +7727,13 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
           sessions.push(session);
           continue;
         }
+        // Room/session identity joins the PROGRESS redactor's value list from here on: the
+        // partial trail is identity-free end to end (the final record's identity handling is
+        // pinned by its own accepted check).
+        for (const id of [joinM.roomId, joinM.sessionId, joinO.sessionId]) {
+          if (typeof id === 'string' && id !== '') seenIdentityValues.push(id);
+        }
+        persistGa11Progress(`session-${String(s)}-joined`, sessions);
 
         await ga11Wait(GA11_FIXED_POPULATION.warmupMs);
         // FULL EXACT WINDOW on the mover page's own monotonic clock: the start stamp is taken
@@ -7568,6 +7751,7 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         const timelineStartMs = Date.now();
         const statePolls: { tRelMs: number; order: number; state: string; epoch: number | null; deliveries: number; refusals: number; pending: number }[] = [];
         let pollsStop = false;
+        requestPollerStop = () => { pollsStop = true; };
         const poller = (async () => {
           while (!pollsStop) {
             await ga11Wait(2_000);
@@ -7588,9 +7772,15 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
             } catch { pollsStop = true; }
           }
         })();
+        pollerSettle = poller;
         const windowStartMs = await pageM.evaluate(() => performance.now());
+        // The rejection handler rides INSIDE gaPump on the very statement that creates the pump:
+        // a browser close or page reload mid-window can leave nothing unhandled. The window-open
+        // phase lands atomically NOW (pump already pending), so a worker that dies inside this
+        // window still leaves a trail naming this phase and every earlier session.
         const pump = gaPump(pageM, GA11_FIXED_POPULATION.windowMs);
         pumpPromise = pump;
+        persistGa11Progress(`session-${String(s)}-window-open`, sessions);
         await ga11Wait(1_000);
         const flowing = await gaRecovery(pageM);
         session.flow = { deliveriesBeforeWindow: flowing.deliveries };
@@ -7598,23 +7788,21 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         // Fixed RTT population on the MOVER's own joined gameplay socket — the accepted seam
         // (pingLatency → Room.ping, protocol layer, no room code, no tick involvement). Timeout
         // samples stay in the raw as named non-finite entries and only REDUCE eligibility.
-        const rttRawMs = await pageM.evaluate(async (args) => {
-          const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
-          if (holder === undefined || typeof holder.transport.pingLatency !== 'function') throw new Error('no pingLatency pass-through on the seat transport');
-          const samples: number[] = [];
-          for (let i = 0; i < args.count; i += 1) {
-            const ms = await new Promise<number>((resolve) => {
-              const timer = setTimeout(() => resolve(Number.POSITIVE_INFINITY), args.timeoutMs);
-              holder.transport.pingLatency!((echo) => {
-                clearTimeout(timer);
-                resolve(echo);
-              });
-            });
-            samples.push(ms);
-            await new Promise((r) => setTimeout(r, args.cadenceMs));
-          }
-          return samples;
-        }, { count: GA11_FIXED_POPULATION.rttSamplesPerSession, cadenceMs: GA11_FIXED_POPULATION.rttCadenceMs, timeoutMs: GA11_FIXED_POPULATION.rttProbeTimeoutMs });
+        // Slice-30r6: the population rides a NAMED budget (bounded even on a stalled socket) and
+        // an interrupted collection yields the ARRIVED samples plus the PRESERVED cause —
+        // rttEligibility never counts a partial collection valid, and the arrived count is kept
+        // beside the cause, never zero-filled or quietly dropped.
+        const rttBudgetMs = GA11_FIXED_POPULATION.rttSamplesPerSession * (GA11_FIXED_POPULATION.rttProbeTimeoutMs + GA11_FIXED_POPULATION.rttCadenceMs) + 30_000;
+        let rttRawMs: number[];
+        let rttCollection: { complete: boolean; cause: string | null };
+        try {
+          const pop = await ga11Budget('rtt population (mover gameplay socket)', rttBudgetMs, gaRttPopulation(pageM, { count: GA11_FIXED_POPULATION.rttSamplesPerSession, cadenceMs: GA11_FIXED_POPULATION.rttCadenceMs, timeoutMs: GA11_FIXED_POPULATION.rttProbeTimeoutMs }));
+          rttRawMs = pop.samples;
+          rttCollection = { complete: pop.collectionComplete, cause: pop.cause };
+        } catch (error) {
+          rttRawMs = [];
+          rttCollection = { complete: false, cause: String(error instanceof Error ? `${error.name}: ${error.message}` : error).slice(0, 300) };
+        }
 
         // Room-replicated presence, read from the OBSERVER seat's own validated snapshot: the
         // authority's row set, not the harness's guess. Two seats in one room must both appear.
@@ -7633,8 +7821,23 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         });
         session.roomReplicatedView = viewO;
 
-        await pump;
+        const pumpOutcome = await pump; // CANNOT reject — an interruption is a NAMED outcome (slice-30r6)
         pumpPromise = null;
+        session.unexpectedMainFrameNavigations = { mover: surfacesM.unexpectedNavigations.count, observer: surfacesO.unexpectedNavigations.count };
+        if (pumpOutcome.ended === false) {
+          // The window LOST ITS PUMP mid-run (page reload, browser close, lost target). The
+          // original cause and the pump's own sample count are preserved; every partial
+          // population below is labelled and never counted valid, and the session is a NAMED
+          // failure — the same shape the EE attempt should have produced instead of dying.
+          session.windowInterruption = {
+            where: 'mover pump evaluate',
+            cause: pumpOutcome.cause,
+            pumpIterations: pumpOutcome.iterations,
+            unexpectedMainFrameNavigations: surfacesM.unexpectedNavigations.count,
+          };
+          session.failure = `session ${String(s)} window interrupted: pump lost its target (${pumpOutcome.cause}); partial-window populations are labelled and NOT valid`;
+          throw new Error('ga11-window-interrupted — remaining in-window reads skipped; the first named cause stands');
+        }
         // The ledger is read ONCE, AFTER the pump finished — the window's full delivery record,
         // stamped on the same page clock as windowStartMs, with the capacity/truncation read.
         const ledger = await pageM.evaluate((startMs) => {
@@ -7776,7 +7979,7 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         };
         if (hop !== null) session.hopBytes = { source: 'loopback facsimile hop totals — POST-TLS cleartext bytes at the terminating hop (facsimile ONLY — the real path has no counting hop by design; wire-level TLS bytes are a different quantity)', ...hop.bytes() };
 
-        session.rtt = rttEligibility(rttRawMs, nearestRank);
+        session.rtt = rttEligibility(rttRawMs, nearestRank, rttCollection);
         session.rttRawFiniteMs = rttRawMs.filter((ms) => Number.isFinite(ms));
         session.rttTimeoutSampleCount = rttRawMs.filter((ms) => !Number.isFinite(ms)).length;
         // Page-error surfaces carry NO credential, NO endpoint host and NO room/session identity
@@ -7787,9 +7990,27 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
           observer: idRedact((pageErrorSinks.get(`${tag}-O`) ?? []).slice(pageErrorsBeforeO).join('\n')),
         };
       } catch (error) {
-        session.failure = `session ${String(s)} named failure: ${redact(error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 300)}`;
+        // FIRST named cause stands: a pump interruption (above) must not be overwritten by the
+        // "target closed" noise of the read that merely noticed it first downstream.
+        session.failure ??= `session ${String(s)} named failure: ${redact(error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 300)}`;
       } finally {
-        if (pumpPromise !== null) await gaStopPump(pageM!).catch(() => undefined);
+        // ORDERED, rejection-safe teardown (slice-30r6 — the order IS the fix): stop signals →
+        // settle the pending pump and poller under named budgets → PERSIST the scrubbed
+        // per-session evidence BEFORE releasing any resource → close pages → close contexts.
+        requestPollerStop?.();
+        if (pageM !== null) await gaStopPump(pageM); // never rejects — stopping a gone page is not an error
+        if (pumpPromise !== null) {
+          try { await ga11Budget('pump settle after stop', 15_000, pumpPromise); }
+          catch { /* the pump guard already named the outcome; a settle budget cannot break the cleanup order */ }
+        }
+        if (pollerSettle !== null) {
+          try { await ga11Budget('state poller settle', 10_000, pollerSettle); }
+          catch { /* the poller names its own stop; cleanup continues */ }
+        }
+        persistGa11Progress(`session-${String(s)}-settled`, [...sessions, session], {
+          optimizerWarmup,
+          seatNavigations: { mover: surfacesM?.unexpectedNavigations.count ?? -1, observer: surfacesO?.unexpectedNavigations.count ?? -1 },
+        });
         await pageM?.close().catch(() => undefined);
         await pageO?.close().catch(() => undefined);
         await contextM?.close().catch(() => undefined);
@@ -7825,6 +8046,7 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         negError = redact(error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 200);
       }
       negativeControl = { uncredentialedHttpStatus, refused: uncredentialedHttpStatus === 401 && !negJoined, errorName: negError };
+      persistGa11Progress('negative-control-complete', sessions, { negativeControl });
     } finally {
       await contextNC?.close().catch(() => undefined);
     }
@@ -7933,6 +8155,27 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     })(),
     { digest: guarded?.digest ?? null, note: 'this detail is written BEFORE the record; the check above re-scans the exact serialized content of sessions/negativeControl/hopReceipt' });
 
+  // ---- slice-30r6 checks: the EE-attempt hygiene rules (no unhandled path, ordered cleanup,
+  // atomic scrubbed progress, named interruptions, optimiser quiescence before credentialed seats)
+  cellCheck('async/teardown hygiene (slice-30r6, the EE-attempt lesson): pump and RTT population attach rejection handling AT CREATION, every budget loser late rejection is RECORDED with its cause instead of dropped, and no budget fired without its named outcome being carried (the exact worker-killing class that left the EE bundle with no session record is structurally closed)',
+    budgetLateRejections.every((row) => row.cause !== ''),
+    { lateBudgetRejections: budgetLateRejections, rule: 'late rejections are recorded, never unhandled; a non-empty list is admissible ONLY with causes and only beside a named failure' });
+
+  cellCheck('attempt progress lands ATOMICALLY (tmp → fsync → rename, 0600) at every phase BEFORE cleanup — admission, optimiser warm-up, each join, every window-open, every settled session, negative control — so a worker dying mid-window leaves a parseable, scrubbed, PARTIAL-labelled trail beside run.log (never an empty bundle like the EE attempt); secrets AND the room/session identity values of this attempt are redacted from the trail, and a redaction that would invalidate the JSON REFUSES the write',
+    progressWrites.length >= 1 + sessions.length && sessions.length === GA11_FIXED_POPULATION.sessions && progressWrites.every((row) => row.ok === true),
+    { writes: progressWrites.map((row) => ({ phase: row.phase, ok: row.ok, bytes: row.bytes })), rule: 'at minimum one progress write per run plus one per session that ran (joined / window-open / settled); early refusals still persist through the settled write — every write that landed must be ok' });
+
+  cellCheck('window integrity: every session either completed its pump or carries a NAMED interruption (original cause + pump sample count PRESERVED, -1 only when genuinely unrecoverable); unexpected main-frame navigations (the full-reload signature) are counted per seat; and NO partial population is counted valid — an interrupted RTT collection is forced ineligible by rttEligibility with its cause recorded',
+    sessions.every((row) => {
+      if (row.windowInterruption !== undefined) return row.failure !== undefined && row.windowInterruption.cause !== '';
+      return row.rtt === undefined || row.rtt.collectionComplete === true;
+    }),
+    sessions.map((row) => ({ session: row.session, interruption: row.windowInterruption ?? null, navigations: row.unexpectedMainFrameNavigations ?? null, rttComplete: row.rtt?.collectionComplete ?? null })));
+
+  cellCheck('Vite optimiser quiescence was established BEFORE any credentialed seat opened (uncredentialed loopback warm-up page on the already-owned dev server — owned paths and ports only): the EE failure mode ("optimized dependencies changed. reloading" landing on a seated page mid-window and rejecting the in-flight page.evaluate) is reproducibly absorbed by the warm-up, and whether a reload was actually observed there is RECORDED, not assumed',
+    optimizerWarmup['ran'] === true,
+    optimizerWarmup);
+
   const record = {
     schemaVersion: 1,
     kind: 'GA11-ENDPOINT-INJECTION-SESSION',
@@ -7974,15 +8217,163 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     eligibleSessions: eligibleSessions.length,
     negativeControl,
     hopReceipt,
+    recordValidity: 'COMPLETE AS AN ATTEMPT — every dispatched session either produced its fixed populations or carries a NAMED failure; red checks live in `checks` and are never hidden. If the process had died before this line, spike-cell-ga11-session.progress.json (PARTIAL-labelled) would be the only trail — it is written atomically BEFORE cleanup at every phase.',
+    attemptProgress: { file: 'spike-cell-ga11-session.progress.json', writes: progressWrites, note: 'the atomic PARTIAL-labelled trail kept DURING this attempt; superseded by this record once written' },
+    optimizerWarmup,
+    lateBudgetRejections: budgetLateRejections,
     redaction: 'endpoint value, login and password never enter this record or its logs; sha256(host:port) is redaction ONLY (dictionary-guessable — handoff §4); artifacts stay local until the owner rules on publication',
     checks: cellChecks,
   };
-  mkdirSync(OUT_DIR, { recursive: true });
-  writeFileSync(join(OUT_DIR, 'spike-cell-ga11-session.json'), `${JSON.stringify(record, null, 2)}\n`);
+  const finalWrite = writeGa11EvidenceAtomic(OUT_DIR, 'spike-cell-ga11-session.json', record, makeGa11Redactor([login, password, guarded?.host ?? '']));
+  observations['ga11RecordWrite:final'] = { ok: finalWrite.ok, bytes: finalWrite.bytes, error: finalWrite.error };
+  expect(finalWrite.ok, `the final GA-11 record must land atomically (write receipt: ${String(finalWrite.error)})`).toBe(true);
   await testInfo.attach('spike-cell-ga11-session.json', { path: join(OUT_DIR, 'spike-cell-ga11-session.json'), contentType: 'application/json' });
 
   const anyFailure = checks.filter((record2) => !record2.ok);
   expect(anyFailure.map((record2) => record2.name), `failed ga11-session rows: ${JSON.stringify(anyFailure.map((r) => r.name))}`).toEqual([]);
+});
+
+/**
+ * UDG-SPIKE-001 slice 30r6 — TEARDOWN/ASYNC PROOF CELL for the GA-11 harness fix (the EE-attempt
+ * root cause), env-gated by UDG_GA11_TEARDOWN_PROOF=1; the ordinary suite never runs it and no CI
+ * route exists. Loopback ONLY: the local fixture room and the local dev server on their already-
+ * owned ephemeral/contract ports, no nominated origin, no credentials anywhere — the credential
+ * negative control uses a SYNTHETIC canary. What is proven, in the open:
+ *
+ *  (A) FORCED MID-WINDOW BROWSER CLOSE with the pump, the RTT pings and the node-clock polls all
+ *      pending: every pending operation settles with a NAMED cause (rejection handling attached
+ *      from start), settlement is bounded, the process observes ZERO unhandled rejections, and
+ *      the interrupted RTT collection reports its ARRIVED sample count plus the preserved cause
+ *      and is forced INELIGIBLE — partial data is never labelled valid;
+ *  (B) SLOW SOCKET (CDP network emulation on this cell's own page): the declared probe count is
+ *      PRESERVED with every stalled reply a named non-finite timeout sample, the collection
+ *      COMPLETES (an interruption and a stall are different named outcomes), and eligibility is
+ *      ineligible by the floor — the population is never shrunk to whatever arrived fast;
+ *  (C) the ATOMIC SCRUBBED evidence writer: PARTIAL-labelled documents land via tmp → fsync →
+ *      rename and re-read byte-identical, the canary is erased from every byte on disk, and a
+ *      redaction that would invalidate the JSON REFUSES the write, leaving no unscrubbed file.
+ */
+// eslint-disable-next-line no-empty-pattern -- Playwright requires the destructured args object even when the cell uses only testInfo.
+test('spike cell: ga11-teardown-proof — forced mid-window browser close + slow socket + atomic scrubbed evidence (slice-30r6 EE lessons, loopback facsimile of the failure modes — NOT a Gate A row)', async ({}, testInfo) => {
+  test.skip(process.env['UDG_GA11_TEARDOWN_PROOF'] !== '1', 'dispatched only by UDG_GA11_TEARDOWN_PROOF=1 (harness hygiene proof; the ordinary netcode suite never runs it)');
+  test.setTimeout(420_000);
+  expect(fixture, 'the room fixture booted').toBeDefined();
+
+  const checks: { name: string; ok: boolean; detail: unknown }[] = [];
+  const cellCheck = (name: string, ok: boolean, detail: unknown): void => { checks.push({ name, ok, detail }); };
+  const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  const unhandledRejections: string[] = [];
+  const onUnhandled = (reason: unknown): void => { unhandledRejections.push(String(reason instanceof Error ? `${reason.name}: ${reason.message}` : reason).slice(0, 300)); };
+  process.on('unhandledRejection', onUnhandled);
+  const startedAtMs = Date.now();
+  try {
+    // ---- (C) atomic evidence + redaction negative control (pure Node, no browser, synthetic canary)
+    const CANARY = 'synthetic-canary-secret-never-real-ga11-tp';
+    const good = writeGa11EvidenceAtomic(OUT_DIR, 'ga11-teardown-proof.json', { phase: 'proof', nested: { secret: CANARY }, recordValidity: 'PARTIAL — proof artifact, never a valid record' }, makeGa11Redactor([CANARY]));
+    const onDisk = good.ok === true ? readFileSync(join(OUT_DIR, 'ga11-teardown-proof.json'), 'utf8') : '';
+    const refused = writeGa11EvidenceAtomic(OUT_DIR, 'ga11-teardown-proof.refused.json', { value: `before ${CANARY} after` }, (text) => text.replace(/"/gu, ''));
+    cellCheck('atomic scrubbed evidence: a PARTIAL-labelled document lands via tmp → fsync → rename and re-reads as valid JSON with the secret canary ERASED from every byte; a redaction that would invalidate the JSON REFUSES the write and leaves no unscrubbed file on disk (negative control)',
+      good.ok === true && onDisk !== '' && !onDisk.includes(CANARY) && refused.ok === false && !existsSync(join(OUT_DIR, 'ga11-teardown-proof.refused.json')),
+      { goodOk: good.ok, goodBytes: good.bytes, refusedOk: refused.ok, refusedError: refused.error });
+
+    // ---- (A) FORCED MID-WINDOW BROWSER CLOSE with pump + pings + polls pending
+    const proofBrowser = await chromium.launch({ headless: true });
+    const ctxA = await proofBrowser.newContext();
+    const pageA = await ctxA.newPage();
+    await pageA.goto(`${CLIENT_ORIGIN}/`, { waitUntil: 'load', timeout: 30_000 });
+    await primeClientModules(pageA, 'ga11-tp-close');
+    const joinA = await joinGaSeat(pageA, fixture?.endpoint ?? '', { mode: 'create', roomName: ROOM_NAME });
+    cellCheck('the proof seat joined the local fixture room (loopback, fixture presentation; no credentials exist anywhere in this cell)', joinA.ok === true, { ok: joinA.ok === true, error: joinA.ok === true ? null : String(joinA.error ?? 'refused').slice(0, 200) });
+    await wait(500);
+    const pendingPump = gaPump(pageA, 30_000); // pump pending
+    const pendingRtt = gaRttPopulation(pageA, { count: 50, cadenceMs: 100, timeoutMs: 2_000 }); // pings pending
+    let pollsStop = false;
+    const polls: number[] = [];
+    const pendingPolls = (async () => {
+      while (!pollsStop) {
+        await wait(150);
+        if (pollsStop) break;
+        try { polls.push(await pageA.evaluate(() => (globalThis as unknown as { __udgGaPumpIterations?: number }).__udgGaPumpIterations ?? 0)); }
+        catch { pollsStop = true; }
+      }
+    })();
+    pendingPolls.catch(() => undefined);
+    await wait(1_500); // all three ride in flight — the exact EE-attempt moment
+    const closeStartedAt = Date.now();
+    await proofBrowser.close(); // FORCED mid-window close — what the EE attempt actually met
+    const [pumpOutcome, rttOutcome] = await Promise.all([pendingPump, pendingRtt]);
+    pollsStop = true;
+    await Promise.race([pendingPolls, wait(5_000)]);
+    const settleMs = Date.now() - closeStartedAt;
+    cellCheck('forced mid-window BROWSER CLOSE with pump + RTT pings + polls pending: every pending operation SETTLED with a named cause (rejection handling attached AT CREATION), settlement was BOUNDED, and the process observed ZERO unhandled rejections — the exact failure class that killed the EE worker mid-window is closed',
+      pumpOutcome.ended === false && pumpOutcome.cause !== '' && pumpOutcome.iterations >= -1
+        && rttOutcome.collectionComplete === false && rttOutcome.cause !== null
+        && settleMs < 30_000 && unhandledRejections.length === 0,
+      { pump: pumpOutcome, rttArrivedSamples: rttOutcome.samples.length, rttCause: rttOutcome.cause, settleMs, pollsObserved: polls.length, unhandledRejections });
+    const partialEligibility = rttEligibility(rttOutcome.samples, nearestRank, { complete: rttOutcome.collectionComplete, cause: rttOutcome.cause });
+    cellCheck('partial data is NEVER labelled valid: the interrupted RTT collection — whatever count it had reached — is forced INELIGIBLE by rttEligibility with the PRESERVED cause recorded, and the arrived sample count travels with the verdict (no zero-fill, no silent shrink)',
+      partialEligibility.eligible === false && partialEligibility.collectionComplete === false
+        && partialEligibility.collectionCause !== null
+        && partialEligibility.reasons.some((reason) => reason.startsWith('partial-collection-interrupted'))
+        && partialEligibility.declaredSamples === rttOutcome.samples.length,
+      partialEligibility);
+
+    // ---- (B) SLOW SOCKET through the repo's OWN loopback WS-delay-proxy seam (the accepted
+    // impairment source; the socket stays ALIVE but delayed — CDP latency emulation once starved
+    // the heartbeat into a CLOSED socket, which is a DIFFERENT named outcome, and CDP latency
+    // alone never touched the WS frames at all: checked, not assumed).
+    const roomPort = Number(new URL(fixture?.endpoint ?? 'http://127.0.0.1:0').port);
+    const proxyHost = await startProxyHost();
+    let proxyHandle = -1;
+    try {
+      const proofBrowser2 = await chromium.launch({ headless: true });
+      const ctxB = await proofBrowser2.newContext();
+      const pageB = await ctxB.newPage();
+      await pageB.goto(`${CLIENT_ORIGIN}/`, { waitUntil: 'load', timeout: 30_000 });
+      await primeClientModules(pageB, 'ga11-tp-slow');
+      const started = await proxyHost.request({ op: 'start', profile: { name: 'ga11-tp-slow', oneWayMs: 150, jitterBudgetMs: 0, seed: 1 }, targetHost: '127.0.0.1', targetPort: roomPort });
+      proxyHandle = started['handle'] as number;
+      const proxyEndpoint = `http://127.0.0.1:${String(started['port'] as number)}`;
+      const joinB = await joinGaSeat(pageB, proxyEndpoint, { mode: 'create', roomName: ROOM_NAME }, 2_000);
+      cellCheck('the slow-socket proof seat joined the local fixture room THROUGH the loopback delay proxy (150 ms declared one-way — ~300 ms round trip; socket ALIVE, replies merely late; the leg declares a 2 s snapshot-deadline headroom so a slow leg never masquerades as a stalled one)', joinB.ok === true, { ok: joinB.ok === true, error: joinB.ok === true ? null : String(joinB.error ?? 'refused').slice(0, 200) });
+      await wait(500);
+      // Probe FIRST, with no pump in flight: on a ~300 ms delayed leg the §3.2 ack-stall rule can
+      // legitimately suspend a seat that is actively sending (inputs outstanding longer than the
+      // rule counts deliveries) — that is a DIFFERENT named behaviour. This phase isolates the
+      // slow-socket semantics at the RTT seam: alive socket, late replies, bounded probes.
+      const slowRtt = await gaRttPopulation(pageB, { count: 5, cadenceMs: 100, timeoutMs: 100 });
+      const slowPumpOutcome = await gaPump(pageB, 3_000); // self-ending (limitMs), never rejects
+      await ctxB.close().catch(() => undefined);
+      await proofBrowser2.close().catch(() => undefined);
+      const slowEligibility = rttEligibility(slowRtt.samples, nearestRank, { complete: slowRtt.collectionComplete, cause: slowRtt.cause });
+      cellCheck('SLOW SOCKET (the accepted loopback WS-delay-proxy seam, ~300 ms round trip on a 100 ms probe budget): the declared probe count is PRESERVED (5 arrived; every late reply a NAMED non-finite timeout sample, ≥ 3 of them), the collection COMPLETED — an interruption and a stall are different named outcomes — eligibility is ineligible BY THE FLOOR, the pump ended with a named outcome, and still zero unhandled rejections',
+        slowRtt.collectionComplete === true && slowRtt.samples.length === 5
+          && slowEligibility.eligible === false && slowEligibility.timeoutSamples >= 3
+          && (slowPumpOutcome.ended === true || (slowPumpOutcome.ended === false && slowPumpOutcome.cause !== ''))
+          && unhandledRejections.length === 0,
+        { samples: slowRtt.samples.map((ms) => (Number.isFinite(ms) ? ms : 'INF')), eligibility: slowEligibility, pump: slowPumpOutcome, unhandledRejections });
+    }
+    finally {
+      if (proxyHandle >= 0) await proxyHost.request({ op: 'close', handle: proxyHandle }).catch(() => undefined);
+      await proxyHost.shutdown().catch(() => undefined);
+    }
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+
+  const proof = {
+    kind: 'GA11-TEARDOWN-PROOF', formal: false,
+    gateA: 'Not Run — a harness hygiene proof, not a Gate A row and not a 4×3 coordinate',
+    loopbackOnly: true, endpointsTouched: 'local fixture room + loopback dev server only (already-owned ports)',
+    elapsedMs: Date.now() - startedAtMs,
+    unhandledRejections,
+    checks,
+  };
+  const proofWrite = writeGa11EvidenceAtomic(OUT_DIR, 'ga11-teardown-proof.json', proof, makeGa11Redactor([]));
+  expect(proofWrite.ok, `the proof record must land atomically (${String(proofWrite.error)})`).toBe(true);
+  await testInfo.attach('ga11-teardown-proof.json', { path: join(OUT_DIR, 'ga11-teardown-proof.json'), contentType: 'application/json' });
+  expect(unhandledRejections, 'the proof cell must observe ZERO unhandled rejections').toEqual([]);
+  expect(checks.filter((row) => !row.ok).map((row) => row.name), `failed ga11-teardown-proof rows: ${JSON.stringify(checks.filter((row) => !row.ok).map((row) => row.name))}`).toEqual([]);
 });
 
 // ────────────────────────────────────────────────────── GA-9 / GA-13 (slice 8, Part B)

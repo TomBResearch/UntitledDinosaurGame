@@ -229,6 +229,13 @@ single-ISP-labelled paths, distinguished only by what the operator CONFIRMS abou
    with the PINNED LOCAL `./node_modules/.bin/tsc` (no npx network fallback); writes
    `CHECKSUMS.txt` (including `run.log`, excluding itself) on PASS **and** on a red measurement;
    and preserves the measurement's exit code as its own.
+   Since slice-30r6 the bundle also carries `spike-cell-ga11-session.progress.json`: an ATOMIC,
+   scrubbed (secret- and identity-free), PARTIAL-labelled attempt trail written BEFORE cleanup at
+   every phase (admission, optimizer warm-up, joins, window opens, each settled session, negative
+   control), so even a worker dying mid-window leaves a parseable, checksum-covered trail — the
+   EE bundle's "checksums but no record" shape cannot recur. The progress file is NEVER a record
+   and its partial populations are never valid measurements; the complete
+   `spike-cell-ga11-session.json`, when written, supersedes it.
 4. Compare bundle identities: same endpoint digest, same triple, same client head — the ONLY
    intended variables are the egress path and the run id. Artefacts and their sha256s stay
    local.
