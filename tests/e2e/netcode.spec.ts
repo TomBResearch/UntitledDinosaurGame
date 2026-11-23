@@ -52,7 +52,7 @@ import { MIN_ELIGIBLE_ACKS_PER_RUN, nearestRank, networkValidity, summarizeCorre
 import { auditMotion, type AckLedgerReport } from '../../tools/load-test/src/ack-ledger.ts';
 import { auditGa5Transcript, naiveVsJoined, type Ga5Transcript } from '../../tools/load-test/src/ga5-transcript.ts';
 import { captureEnvironmentRecord, impairmentSourceRecord, planSpikeRun } from '../../tools/load-test/src/run-spike.ts';
-import { GA11_FIXED_POPULATION, GA11_TEST_CERT_NOTE, GA11_WS_FRAME_SCOPE, GA11_WS_FRAME_SEMANTICS, fetchGa11LocalAsset, ga11EndpointGuard, ga11IsGameplaySocket, ga11LocalAssetTarget, ga11SeatContextTlsOptions, makeGa11EphemeralTestCertificate, makeGa11Redactor, parseGa11Netrc, rttEligibility, startGa11FacsimileHop, summarizeFrameLengths, type Ga11EndpointOk } from '../../tools/load-test/src/ga11-session.ts';
+import { GA11_FIXED_POPULATION, GA11_EPOCH_AUDIT_NOTE, GA11_TEST_CERT_NOTE, GA11_WS_FRAME_SCOPE, GA11_WS_FRAME_SEMANTICS, classifyGa11Run, fetchGa11LocalAsset, ga11EndpointGuard, ga11EpochSequenceAudit, ga11IsGameplaySocket, ga11LocalAssetTarget, ga11SeatContextTlsOptions, makeGa11EphemeralTestCertificate, makeGa11Redactor, parseGa11Netrc, rttEligibility, sanitizeGa11Detail, startGa11FacsimileHop, summarizeFrameLengths, type Ga11EndpointOk, type Ga11EpochAudit } from '../../tools/load-test/src/ga11-session.ts';
 import { createTraceWriter, readTrace } from '../../tools/load-test/src/trace-writer.ts';
 import type { ProxyStats } from '../../tools/load-test/src/ws-delay-proxy.ts';
 
@@ -7394,6 +7394,8 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     };
     patchIntervalsMs?: { deliveries: number; accepted: number; p50: number | null; p95: number | null; max: number | null; windowStartMs: number; windowEndMs: number; ledgerRowsTotal: number; ledgerTruncated: boolean };
     arrivalStallMs?: { source: string; maxMs: number | null };
+    epochAudit?: Ga11EpochAudit;
+    episodeTimeline?: Record<string, unknown>;
     wsFrames?: Record<string, unknown>;
     hopBytes?: Record<string, unknown>;
     rtt?: ReturnType<typeof rttEligibility>;
@@ -7427,7 +7429,7 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     interface Ga11SeatSurfaces {
       page: Page;
       context: BrowserContext;
-      frames: { sent: number[]; received: number[]; gameplaySockets: number; ignoredSockets: number; active: boolean };
+      frames: { sent: number[]; received: number[]; gameplaySockets: number; ignoredSockets: number; active: boolean; rawGapsMs: number[]; lastRawFrameAt: number | null; socketCloses: number };
       navStatus: number;
     }
     const openAuthedSeatPage = async (label: string, creds: { origin: string; username: string; password: string } | null): Promise<Ga11SeatSurfaces> => {
@@ -7459,7 +7461,7 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
           if (/WebSocket is closed|Failed to construct 'WebSocket'|net::ERR_INTERNET_DISCONNECTED|WebSocket connection to 'wss?:\/\/127/.test(text)) return;
           pageErrors.push(`console: ${text}`);
         });
-        const frames: Ga11SeatSurfaces['frames'] = { sent: [], received: [], gameplaySockets: 0, ignoredSockets: 0, active: false };
+        const frames: Ga11SeatSurfaces['frames'] = { sent: [], received: [], gameplaySockets: 0, ignoredSockets: 0, active: false, rawGapsMs: [], lastRawFrameAt: null, socketCloses: 0 };
         // Payload BYTES only; the payload contents themselves are read for length and dropped.
         // (The pinned typings carry only `payload`; `payloadLength` exists at runtime on some
         // builds, so it is preferred when present and byte-counted from the payload otherwise.)
@@ -7473,7 +7475,17 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
           }
           frames.gameplaySockets += 1;
           ws.on('framesent', (payload) => { if (frames.active) frames.sent.push(frameBytes(payload)); });
-          ws.on('framereceived', (payload) => { if (frames.active) frames.received.push(frameBytes(payload)); });
+          ws.on('framereceived', (payload) => {
+            if (!frames.active) return;
+            frames.received.push(frameBytes(payload));
+            // RAW received-frame arrival time (node clock) — a population DISTINCT from the
+            // accepted-patch ledger (page clock); order/local-time correlated, never arithmetic
+            // across clocks.
+            const now = Date.now();
+            if (frames.lastRawFrameAt !== null) frames.rawGapsMs.push(Math.min(now - frames.lastRawFrameAt, 65_535));
+            frames.lastRawFrameAt = now;
+          });
+          ws.on('close', () => { frames.socketCloses += 1; });
         });
         // The navigation IS the auth: same-origin document on the ACTUAL protected service.
         const response = await page.goto(`${guarded!.webOrigin}/`, { waitUntil: 'load', timeout: 30_000 });
@@ -7549,6 +7561,33 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         // WINDOW-ONLY frame collection switches ON just before the window's start stamp.
         surfacesM.frames.active = true;
         surfacesO.frames.active = true;
+        // SANITIZED EPISODE TIMELINE (slice-30r4, closes the a4 attribution gap): a 2 s mover-
+        // state poll on the NODE clock runs for the window's duration; the predictor's own
+        // recovery ledger (page clock, ids scrubbed) is read once after it. Order and LOCAL
+        // relative time correlate the populations — no arithmetic across clock origins.
+        const timelineStartMs = Date.now();
+        const statePolls: { tRelMs: number; order: number; state: string; epoch: number | null; deliveries: number; refusals: number; pending: number }[] = [];
+        let pollsStop = false;
+        const poller = (async () => {
+          while (!pollsStop) {
+            await ga11Wait(2_000);
+            if (pollsStop) break;
+            try {
+              const snap = await pageM.evaluate(() => {
+                const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+                if (holder === undefined) throw new Error('no seat on this page');
+                return {
+                  state: holder.predictor.stateName(),
+                  epoch: holder.transport.issuedEpoch(),
+                  deliveries: holder.predictor.deliveryLedger().length,
+                  refusals: (globalThis as unknown as { __udgGaRefusals?: number }).__udgGaRefusals ?? 0,
+                  pending: holder.predictor.pendingJournal().length,
+                };
+              });
+              statePolls.push({ tRelMs: Date.now() - timelineStartMs, order: statePolls.length, ...snap });
+            } catch { pollsStop = true; }
+          }
+        })();
         const windowStartMs = await pageM.evaluate(() => performance.now());
         const pump = gaPump(pageM, GA11_FIXED_POPULATION.windowMs);
         pumpPromise = pump;
@@ -7611,17 +7650,43 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
           // cannot reach it; if it ever does, truncation is DETECTED and recorded, not absorbed.
           return { startMs, endMs: performance.now(), limit: 20_000, rows };
         }, windowStartMs);
-        // The window has ENDED (ledger end stamped) — frame collection switches OFF at the same
-        // point: what a seat sent/received outside [windowStart, windowEnd] is deliberately NOT
-        // in these populations (incomplete by design, labelled window-only below).
+        // The window has ENDED (ledger end stamped) — frame collection and the state poller stop
+        // at the same point: what a seat sent/received outside [windowStart, windowEnd] is
+        // deliberately NOT in these populations (window-only semantics, labelled below).
         surfacesM.frames.active = false;
         surfacesO.frames.active = false;
+        pollsStop = true;
+        await poller.catch(() => undefined);
+        // Epoch-scoped EVIDENCE for the slice-30r4 audit: the send audit read ONCE, grouped by
+        // its own epoch field (proven issuance per epoch), plus the predictor's recovery ledger
+        // (session ids scrubbed) for the sanitized episode timeline.
+        const epochEvidence = await pageM.evaluate(() => {
+          const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+          if (holder === undefined) throw new Error('no imp seat on this page');
+          const sends = holder.predictor.sentAudit(); // {seq, epoch, atMs} — the audit CARRIES its epoch
+          const per: Record<string, number> = {};
+          for (const s of sends) per[String(s.epoch)] = (per[String(s.epoch)] ?? 0) + 1;
+          const recovery = holder.predictor.recoveryLedger().slice(-100).map((r, i) => ({
+            order: i,
+            event: String(r.event),
+            atMs: r.atMs,
+            detail: sanitizeGa11Detail(String((r as { detail?: unknown }).detail ?? '')),
+          }));
+          return {
+            perEpochSent: per,
+            sentAuditTotal: sends.length,
+            recoveryLedger: recovery,
+            stateEnd: holder.predictor.stateName(),
+            suspensionReason: holder.predictor.suspensionReason(),
+          };
+        });
         const after = await gaRecovery(pageM);
         session.moverEndState = {
           transportEpoch: after.transportEpoch,
           joins: after.joins,
           rejoins: after.rejoins,
           state: after.state,
+          suspensionReason: after.suspensionReason,
           deliveries: after.deliveries,
           refusals: after.refusals,
           sentAuditLength: after.sentLen,
@@ -7657,6 +7722,31 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
           note: 'client-observed: the resolved prefix is what the ROOM published into this seat\'s replicated row; the room\'s own internal ledger is NOT reachable through the nominated endpoint and is NOT claimed',
         };
 
+        // EPOCH-AWARE SEQUENCE AUDIT (slice-30r4): evaluate WITHIN each proven issuance epoch,
+        // preserve cross-epoch continuity, quarantine what cannot be attributed, red only real
+        // violations. The a4 diagnosis as a rule: the initial transport pointer is known-stale
+        // after a legitimate rejoin and the send audit is GLOBAL — neither may be equated with
+        // the active domain or with epoch-scoped issuance.
+        session.epochAudit = ga11EpochSequenceAudit({
+          joinEpoch,
+          rejoinEpochs: after.rejoins.map((r) => r.epoch),
+          initialPointerEpoch: after.transportEpoch,
+          perEpochSent: epochEvidence.perEpochSent,
+          sentAuditTotal: epochEvidence.sentAuditTotal,
+          sentMonotonicGeneration: after.sentMonotonic,
+          deliveries: ledger.rows.map((row) => ({ epoch: row.epoch, accepted: row.accepted, resolvedThrough: row.resolvedThrough })),
+          lastDelivery: { epoch: after.lastDelivery?.epoch ?? null, resolvedThrough: after.lastDelivery?.resolvedThrough ?? null },
+        });
+        session.episodeTimeline = {
+          note: 'sanitized episode timeline (slice-30r4): page-clock recovery-ledger events (identifier-shaped tokens scrubbed), node-clock mover-state polls (2 s cadence, window only) and node-clock raw WS frame arrivals — correlated by ORDER and local relative time ONLY; page and node clocks are never combined arithmetically (different origins); raw-received-frame lag and accepted-patch lag are DISTINCT populations by construction',
+          recoveryLedger: epochEvidence.recoveryLedger,
+          stateEnd: epochEvidence.stateEnd,
+          suspensionReason: epochEvidence.suspensionReason,
+          statePolls,
+          moverSocketCloses: surfacesM.frames.socketCloses,
+          observerSocketCloses: surfacesO.frames.socketCloses,
+        };
+
         // Patch-interval population and arrival-stall max over the FULL EXACT window [start,end]
         // on the mover page's monotonic clock — every in-window delivery and gap counted once,
         // with truncation state recorded beside the counts.
@@ -7681,8 +7771,8 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         session.wsFrames = {
           semantics: GA11_WS_FRAME_SEMANTICS,
           scope: GA11_WS_FRAME_SCOPE,
-          mover: { gameplaySockets: surfacesM.frames.gameplaySockets, ignoredNonGameplaySockets: surfacesM.frames.ignoredSockets, sent: summarizeFrameLengths(surfacesM.frames.sent, nearestRank), received: summarizeFrameLengths(surfacesM.frames.received, nearestRank) },
-          observer: { gameplaySockets: surfacesO.frames.gameplaySockets, ignoredNonGameplaySockets: surfacesO.frames.ignoredSockets, sent: summarizeFrameLengths(surfacesO.frames.sent, nearestRank), received: summarizeFrameLengths(surfacesO.frames.received, nearestRank) },
+          mover: { gameplaySockets: surfacesM.frames.gameplaySockets, ignoredNonGameplaySockets: surfacesM.frames.ignoredSockets, socketCloses: surfacesM.frames.socketCloses, sent: summarizeFrameLengths(surfacesM.frames.sent, nearestRank), received: summarizeFrameLengths(surfacesM.frames.received, nearestRank), rawReceivedFrameGapsMs: { ...summarizeFrameLengths(surfacesM.frames.rawGapsMs, nearestRank), semantics: 'node-clock inter-arrival gaps of RAW received WS frames while the window was open — a population DISTINCT from the accepted-patch ledger gaps (page clock); raw-received vs accepted-patch lag distinguished, no cross-clock arithmetic' } },
+          observer: { gameplaySockets: surfacesO.frames.gameplaySockets, ignoredNonGameplaySockets: surfacesO.frames.ignoredSockets, socketCloses: surfacesO.frames.socketCloses, sent: summarizeFrameLengths(surfacesO.frames.sent, nearestRank), received: summarizeFrameLengths(surfacesO.frames.received, nearestRank), rawReceivedFrameGapsMs: { ...summarizeFrameLengths(surfacesO.frames.rawGapsMs, nearestRank), semantics: 'same node-clock raw-arrival population for the observer seat' } },
         };
         if (hop !== null) session.hopBytes = { source: 'loopback facsimile hop totals — POST-TLS cleartext bytes at the terminating hop (facsimile ONLY — the real path has no counting hop by design; wire-level TLS bytes are a different quantity)', ...hop.bytes() };
 
@@ -7763,20 +7853,58 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     }) && sessions.length > 0,
     sessions.map((s) => ({ session: s.session, navigation: s.navigation ?? null, mover: s.joinMover, observer: s.joinObserver, peers: s.roomReplicatedView?.peers ?? null, failure: s.failure ?? null })));
 
-  cellCheck('RTT eligibility per session was DECIDED against the pre-registered fixed population (120 declared samples; ≥ 99 finite; probe loss ≤ 2 %) and recorded as eligible or INVALID-BY-ITS-OWN-FLOOR with named reasons — never re-scoped to whatever arrived',
-    sessions.every((s) => s.rtt !== undefined || s.failure !== undefined),
+  cellCheck('RTT eligibility per session was DECIDED against the pre-registered fixed population (120 declared samples; ≥ 99 finite; probe loss ≤ 2 %) and recorded as eligible or INVALID-BY-ITS-OWN-FLOOR with named reasons — never re-scoped to whatever arrived; NON-VACUOUS: the declared session count must have run (a4 review: an empty list must never pass an aggregate)',
+    sessions.length === GA11_FIXED_POPULATION.sessions && sessions.every((s) => s.rtt !== undefined || s.failure !== undefined),
     sessions.map((s) => ({ session: s.session, rtt: s.rtt ?? null, failure: s.failure ?? null })));
 
-  cellCheck('explicit client inputs matched to the server-issued epoch and the room-replicated resolved prefix under the TIGHTENED rule — the prefix is POSITIVE (a zero watermark resolves NOTHING and never counts), covers ONLY KNOWN sent seqs (one seq per accepted send in the predictor\'s own audit), resolves on the CURRENT epoch, pending entries stay same-epoch, and the honest distinction (client-observed room replication, NOT room-internal evidence) is recorded',
-    sessions.every((s) => {
-      const im = s.inputMatching;
-      if (im === undefined) return s.failure !== undefined;
-      return im.sentTotal > 0 && im.prefixResolvedPositive && im.prefixOnlyKnownSeqs && im.resolvedSameEpoch && im.pendingSameEpoch;
-    }),
-    sessions.map((s) => ({ session: s.session, inputMatching: s.inputMatching ?? null, failure: s.failure ?? null })));
+  cellCheck('explicit client inputs audited EPOCH-AWARE (slice-30r4 rule from the a4 diagnosis): every resolved watermark evaluated WITHIN its OWN proven issuance epoch against that epoch\'s send-audit bucket; cross-epoch continuity preserved (generation monotonic, server-issued epochs strictly increasing, per-epoch buckets ≤ the global audit); the KNOWN-STALE initial transport pointer is never the active domain; QUARANTINED is permitted but named, RED never passes, and zero sessions can never pass vacuously',
+    sessions.length === GA11_FIXED_POPULATION.sessions && sessions.every((s) => s.epochAudit !== undefined ? s.epochAudit.verdict !== 'RED' : s.failure !== undefined),
+    sessions.map((s) => ({ session: s.session, epochAudit: s.epochAudit ?? null, failure: s.failure ?? null })));
 
-  cellCheck('patch-interval and arrival-stall populations cover the FULL EXACT page-clock window (start stamped before the pump, end stamped after it, ledger read once in between — no pre-pump snapshot, no threshold), ledger capacity/truncation state is recorded, and WS payload-byte distributions carry their payload-only semantics AND their window-only + exact-gameplay-socket scope (Vite HMR excluded, out-of-window frames excluded, incomplete-by-design labelled; heartbeat-vs-patch NOT claimed); hop byte totals (post-TLS cleartext, facsimile-only) never zero-fill anything',
-    sessions.every((s) => {
+  // The legacy strict rule is kept as a DIAGNOSTIC ONLY — the a4 run showed it false-failing a
+  // legitimate epoch reset (global audit vs epoch-scoped watermark; stale pointer vs active
+  // domain). It is recorded beside the epoch-aware verdict, NEVER gating, and the a4 historical
+  // red under it is never relabelled.
+  const legacyRuleDiagnostics = sessions.filter((s) => s.inputMatching !== undefined).map((s) => ({
+    session: s.session,
+    legacyStrictRulePass: (s.inputMatching as NonNullable<Ga11SessionRecord['inputMatching']>).prefixResolvedPositive
+      && (s.inputMatching as NonNullable<Ga11SessionRecord['inputMatching']>).prefixOnlyKnownSeqs
+      && (s.inputMatching as NonNullable<Ga11SessionRecord['inputMatching']>).resolvedSameEpoch
+      && (s.inputMatching as NonNullable<Ga11SessionRecord['inputMatching']>).pendingSameEpoch,
+    note: 'DIAGNOSTIC ONLY (pre-30r4 rule; superseded by the epoch-aware audit) — recorded, never gating; historical reds under it stand unedited',
+  }));
+
+  // Outcome CLASSIFICATION (a4 review): reachability, RTT eligibility, epoch-audit verdict and
+  // behaviour findings are separate questions — a session can be all three at once (a4-s3 was
+  // eligible AND reachable AND churned). Findings are named, never waived (terminal suspension
+  // included); a zero-session run classifies NOT-RUN for every aggregate.
+  const classification = classifyGa11Run(GA11_FIXED_POPULATION.sessions, sessions.map((s) => {
+    const findings: string[] = [];
+    const me = (s.moverEndState ?? {}) as Record<string, unknown>;
+    if (typeof me['state'] === 'string' && me['state'] !== 'tracking') findings.push(`mover terminal state ${String(me['state'])} (named, never waived)${typeof me['suspensionReason'] === 'string' ? ` (reason ${String(me['suspensionReason'])})` : ''}`);
+    if (typeof me['refusals'] === 'number' && me['refusals'] > 0) findings.push(`send refusals ${String(me['refusals'])}`);
+    if (Array.isArray(me['rejoins']) && me['rejoins'].length > 0) findings.push(`server-issued rejoins ${String((me['rejoins'] as unknown[]).length)}`);
+    if (s.patchIntervalsMs !== undefined && (s.patchIntervalsMs.max ?? 0) > 500) findings.push(`max accepted-patch gap ${String(s.patchIntervalsMs.max)} ms`);
+    if (s.epochAudit !== undefined && s.epochAudit.verdict !== 'CLEAN') findings.push(`epoch audit ${s.epochAudit.verdict}: ${s.epochAudit.reasons.join('; ')}`);
+    return {
+      session: s.session,
+      reached: s.navigation !== undefined && is2xx(s.navigation.moverHttpStatus) && is2xx(s.navigation.observerHttpStatus) && s.joinMover?.ok === true && s.joinObserver?.ok === true && (s.roomReplicatedView?.peers.length ?? 0) >= 1,
+      rttEligible: s.rtt?.eligible === true,
+      epochAudit: s.epochAudit?.verdict ?? null,
+      findings,
+    };
+  }));
+  cellCheck('run outcomes are CLASSIFIED separately — reachability / RTT eligibility / epoch-audit verdict / behaviour findings are distinct questions (a4 proved one blended boolean hid "eligible AND reachable AND churning"); every behaviour finding is NAMED (terminal suspension, refusals, rejoins, large gaps, non-CLEAN audits) and never waived; a zero-session run is NOT-RUN for every aggregate, never a vacuous pass',
+    classification.notRun
+      ? classification.ranSessions === 0
+      : classification.ranSessions === classification.declaredSessions
+        && classification.reachability.reachable + classification.reachability.unreachable === classification.ranSessions
+        && classification.rttEligibility.eligible + classification.rttEligibility.ineligible === classification.ranSessions
+        && classification.epochAudits.CLEAN + classification.epochAudits.QUARANTINED + classification.epochAudits.RED + classification.epochAudits.absent === classification.ranSessions,
+    classification);
+
+  cellCheck('patch-interval and arrival-stall populations cover the FULL EXACT page-clock window (start stamped before the pump, end stamped after it, ledger read once in between — no pre-pump snapshot, no threshold), ledger capacity/truncation state is recorded, WS payload-byte distributions carry their payload-only semantics AND window-only + exact-gameplay-socket scope (raw-received-frame gaps recorded as a DISTINCT node-clock population beside the accepted-patch page-clock gaps), and hop byte totals (post-TLS cleartext, facsimile-only) never zero-fill anything; NON-VACUOUS: the declared session count must have run',
+    sessions.length === GA11_FIXED_POPULATION.sessions && sessions.every((s) => {
       const p = s.patchIntervalsMs;
       const w = s.wsFrames as { semantics?: string; scope?: string } | undefined;
       if (p === undefined || s.arrivalStallMs === undefined || w === undefined) return s.failure !== undefined;
@@ -7831,10 +7959,14 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
       sidecarEnvHygiene: 'cell-local browser launched after the stdin relay env is deleted; the shared suite browser never hosts this cell\'s credentialed pages; browser sidecars inherit no credential env',
     },
     population: GA11_FIXED_POPULATION,
+    epochSemantics: GA11_EPOCH_AUDIT_NOTE,
+    legacyStrictRuleDiagnostics: legacyRuleDiagnostics,
+    outcomes: classification,
     clamps: { maxRttSamples: 300, maxWindowMs: 120_000, cellTimeoutMs: 1_500_000 },
     environment: {
       ...captureEnvironmentRecord(),
       browser: 'chromium (playwright pinned, headless on this host)',
+      deployedBuildSha: process.env['UDG_GA11_SERVER_SHA'] ?? 'NOT-SUPPLIED (named gap: set UDG_GA11_SERVER_SHA to the deployed server build SHA so the record names the server it measured)',
       clientPipeline: `Vite dev server at ${CLIENT_ORIGIN}, serving apps/client/src/network/*.ts (the same shipped modules the accepted cells import)`,
       sdkNote: 'the pinned @colyseus/sdk@0.18.9 via the shipped prediction adapter; RTT seam = transport.pingLatency → Room.ping on the joined gameplay socket (protocol layer)',
     },

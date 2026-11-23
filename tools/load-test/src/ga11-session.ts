@@ -456,6 +456,183 @@ export const summarizeFrameLengths = (
   };
 };
 
+/* ------------------------------------------------------------------ epoch-aware sequence audit
+ * (slice-30r4; the a4 diagnosis expressed as a RULE, not a narration of one run.)
+ * The resolved-prefix watermark is EPOCH-SCOPED: the shipped adapter's protocol restarts `seq`
+ * with a new handle on a legitimate epoch reset while GENERATION continues. Two facts about the
+ * client the harness reads:
+ *   - `predictor.sentAudit()` is GLOBAL (one seq-audit across every epoch of the seat's life);
+ *   - `transport.issuedEpoch()` is the INITIAL join's latched pointer — it does NOT advance when
+ *     the adapter's own domain legitimately re-joins at a higher server-issued epoch.
+ * The first full real-path run (a4, session 3) proved what the old rule got wrong: it compared
+ * an epoch-scoped watermark (321) against the GLOBAL audit total (1 125) and the last delivery's
+ * epoch against the STALE initial pointer (1) while the active domain had legitimately advanced
+ * (server-issued epochs 1 → 3 → 4). A correct evaluation:
+ *   - derives the PROVEN ISSUANCE EPOCHS from the join plus the server-issued rejoin epochs
+ *     (never from the initial pointer — the pointer is known-stale after a reset);
+ *   - evaluates each watermark WITHIN its own epoch against that epoch's proven issuance (the
+ *     send audit grouped by its own epoch field — issuance not assumed, proven or quarantined);
+ *   - PRESERVES cross-epoch continuity: generation monotonicity, strictly increasing
+ *     server-issued epochs, per-epoch issuance buckets summing to no more than the global audit;
+ *   - QUARANTINES what it cannot attribute (rows in unproven epochs, missing issuance buckets,
+ *     unknown last-delivery epoch) — named, never assumed clean, never assumed red;
+ *   - REDS only real violations (a resolved seq its epoch never issued, a continuity break);
+ *   - NEVER relabels a historical red and NEVER waives a suspension — both stay named findings
+ *     in the run classification; only FUTURE captures evaluate under this rule.
+ */
+export const GA11_EPOCH_AUDIT_NOTE =
+  'epoch-scoped evaluation: resolved watermarks are checked against the proven issuance of THEIR OWN epoch (seq restarts per handle; generation carries cross-epoch continuity); the initial transport pointer is known-stale after a legitimate rejoin and is never the active domain; historical reds are never relabelled and suspensions are never waived';
+
+export interface Ga11EpochAuditInput {
+  readonly joinEpoch: number | null;
+  readonly rejoinEpochs: readonly number[];
+  readonly initialPointerEpoch: number | null;
+  readonly perEpochSent: Readonly<Record<string, number>>;
+  readonly sentAuditTotal: number;
+  readonly sentMonotonicGeneration: boolean;
+  readonly deliveries: readonly { readonly epoch: number; readonly accepted: boolean; readonly resolvedThrough: number | null }[];
+  readonly lastDelivery: { readonly epoch: number | null; readonly resolvedThrough: number | null };
+}
+
+export interface Ga11EpochAuditEpochRow {
+  readonly epoch: number;
+  readonly issued: number | null;
+  readonly deliveries: number;
+  readonly accepted: number;
+  readonly maxResolved: number | null;
+  readonly verdict: 'CLEAN' | 'QUARANTINED' | 'RED' | 'NO-TRAFFIC';
+  readonly reasons: readonly string[];
+}
+
+export interface Ga11EpochAudit {
+  readonly provenIssuanceEpochs: readonly number[];
+  readonly activeEpoch: number | null;
+  readonly initialPointerStale: boolean;
+  readonly perEpoch: readonly Ga11EpochAuditEpochRow[];
+  readonly continuityOk: boolean;
+  readonly continuityReasons: readonly string[];
+  readonly quarantinedRowsUnprovenEpoch: number;
+  readonly lastDeliveryOnActiveEpoch: boolean | null;
+  readonly verdict: 'CLEAN' | 'QUARANTINED' | 'RED';
+  readonly reasons: readonly string[];
+  readonly note: string;
+}
+
+export const ga11EpochSequenceAudit = (input: Ga11EpochAuditInput): Ga11EpochAudit => {
+  const proven: number[] = [];
+  if (input.joinEpoch !== null) proven.push(input.joinEpoch);
+  for (const e of input.rejoinEpochs) if (!proven.includes(e)) proven.push(e);
+  const activeEpoch = proven.length > 0 ? Math.max(...proven) : null;
+  const continuityReasons: string[] = [];
+  if (!input.sentMonotonicGeneration) continuityReasons.push('generation-continuity-broken: sends must carry one monotonic generation across epoch resets (protocol rule; never waivable)');
+  for (let i = 1; i < proven.length; i += 1) {
+    if ((proven[i] as number) <= (proven[i - 1] as number)) continuityReasons.push(`server-issued epochs not strictly increasing (${proven.join(', ')})`);
+  }
+  const bucketSum = Object.values(input.perEpochSent).reduce((sum, v) => sum + v, 0);
+  if (bucketSum > input.sentAuditTotal) continuityReasons.push(`per-epoch issuance buckets (${String(bucketSum)}) exceed the global send audit (${String(input.sentAuditTotal)}) — the two cannot both be true`);
+  const perEpoch: Ga11EpochAuditEpochRow[] = proven.map((epoch) => {
+    const rows = input.deliveries.filter((d) => d.epoch === epoch);
+    const issued = Object.prototype.hasOwnProperty.call(input.perEpochSent, String(epoch)) ? (input.perEpochSent[String(epoch)] as number) : null;
+    const acceptedRows = rows.filter((d) => d.accepted);
+    const resolved = acceptedRows.map((d) => d.resolvedThrough).filter((v): v is number => typeof v === 'number');
+    const maxResolved = resolved.length > 0 ? Math.max(...resolved) : null;
+    const reasons: string[] = [];
+    let verdict: Ga11EpochAuditEpochRow['verdict'] = 'CLEAN';
+    if (rows.length === 0) verdict = 'NO-TRAFFIC';
+    else if (issued === null) {
+      verdict = 'QUARANTINED';
+      reasons.push(`epoch ${String(epoch)}: issuance not proven (no send-audit bucket for it) — evaluation quarantined, never assumed`);
+    } else {
+      const beyondIssued = resolved.filter((v) => v > issued).length;
+      if (beyondIssued > 0) {
+        verdict = 'RED';
+        reasons.push(`epoch ${String(epoch)}: ${String(beyondIssued)} resolved watermark(s) exceed the ${String(issued)} seqs that epoch issued — the room resolved an input this seat never sent on that epoch`);
+      }
+      if (maxResolved !== null && maxResolved <= 0) reasons.push(`epoch ${String(epoch)}: resolved watermark non-positive (a zero watermark resolves nothing)`);
+    }
+    return { epoch, issued, deliveries: rows.length, accepted: acceptedRows.length, maxResolved, verdict, reasons };
+  });
+  const quarantinedRowsUnprovenEpoch = input.deliveries.filter((d) => !proven.includes(d.epoch)).length;
+  const lastDeliveryOnActiveEpoch = input.lastDelivery.epoch === null ? null : input.lastDelivery.epoch === activeEpoch;
+  const initialPointerStale = input.initialPointerEpoch !== null && activeEpoch !== null && input.initialPointerEpoch !== activeEpoch;
+  const reasons: string[] = [...continuityReasons, ...perEpoch.flatMap((p) => p.reasons)];
+  if (quarantinedRowsUnprovenEpoch > 0) reasons.push(`${String(quarantinedRowsUnprovenEpoch)} delivery row(s) carry an epoch OUTSIDE the proven issuance set — quarantined, not attributed`);
+  if (lastDeliveryOnActiveEpoch === false) reasons.push(`the last delivery carries epoch ${String(input.lastDelivery.epoch)}, not the active proven epoch ${String(activeEpoch)} — a watermark from a domain that is no longer active`);
+  if (lastDeliveryOnActiveEpoch === null) reasons.push('last-delivery epoch unknown — the end-of-window watermark cannot be attributed (quarantined, not assumed clean)');
+  const verdict: Ga11EpochAudit['verdict']
+    = continuityReasons.length > 0 || perEpoch.some((p) => p.verdict === 'RED') ? 'RED'
+      : perEpoch.some((p) => p.verdict === 'QUARANTINED') || quarantinedRowsUnprovenEpoch > 0 || lastDeliveryOnActiveEpoch !== true ? 'QUARANTINED'
+        : 'CLEAN';
+  return {
+    provenIssuanceEpochs: proven,
+    activeEpoch,
+    initialPointerStale,
+    perEpoch,
+    continuityOk: continuityReasons.length === 0,
+    continuityReasons,
+    quarantinedRowsUnprovenEpoch,
+    lastDeliveryOnActiveEpoch,
+    verdict,
+    reasons,
+    note: GA11_EPOCH_AUDIT_NOTE,
+  };
+};
+
+/* ------------------------------------------------------------------ run-outcome classification
+ * The a4 review requirement: RTT eligibility, REACHABILITY and BEHAVIOUR findings are three
+ * different questions and must be classified separately — a session may be RTT-eligible AND
+ * reachable AND carry behaviour findings (an epoch reset, a 1.3 s delivery gap, a terminal
+ * suspension) at once; folding them into one boolean hid exactly that in a4. A zero-session
+ * run classifies every aggregate as NOT-RUN — `every()` over an empty list must never read as
+ * a pass.
+ */
+export interface Ga11RunClassification {
+  readonly declaredSessions: number;
+  readonly ranSessions: number;
+  readonly notRun: boolean;
+  readonly reachability: { readonly reachable: number; readonly unreachable: number };
+  readonly rttEligibility: { readonly eligible: number; readonly ineligible: number };
+  readonly epochAudits: { readonly CLEAN: number; readonly QUARANTINED: number; readonly RED: number; readonly absent: number };
+  readonly behaviourFindings: readonly { readonly session: number; readonly findings: readonly string[] }[];
+  readonly note: string;
+}
+
+export const classifyGa11Run = (
+  declared: number,
+  sessions: readonly { readonly session: number; readonly reached: boolean; readonly rttEligible: boolean; readonly epochAudit: 'CLEAN' | 'QUARANTINED' | 'RED' | null; readonly findings: readonly string[] }[],
+): Ga11RunClassification => {
+  const notRun = sessions.length === 0;
+  return {
+    declaredSessions: declared,
+    ranSessions: sessions.length,
+    notRun,
+    reachability: {
+      reachable: sessions.filter((s) => s.reached).length,
+      unreachable: sessions.filter((s) => !s.reached).length,
+    },
+    rttEligibility: {
+      eligible: sessions.filter((s) => s.rttEligible).length,
+      ineligible: sessions.filter((s) => !s.rttEligible).length,
+    },
+    epochAudits: {
+      CLEAN: sessions.filter((s) => s.epochAudit === 'CLEAN').length,
+      QUARANTINED: sessions.filter((s) => s.epochAudit === 'QUARANTINED').length,
+      RED: sessions.filter((s) => s.epochAudit === 'RED').length,
+      absent: sessions.filter((s) => s.epochAudit === null).length,
+    },
+    behaviourFindings: sessions.filter((s) => s.findings.length > 0).map((s) => ({ session: s.session, findings: s.findings })),
+    note: 'classification only: reachability, RTT eligibility and behaviour findings are separate questions; a zero-session run is NOT-RUN for every aggregate (never a vacuous pass); findings are named, never waived',
+  };
+};
+
+/** Scrub session-identifier-shaped tokens (mixed case + digit, length ≥ 8) out of free-text
+ * evidence (e.g. the predictor's recovery-ledger detail lines) before a record stores it.
+ * Epoch numbers and ordinary words survive; opaque ids do not. */
+export const sanitizeGa11Detail = (raw: string): string =>
+  raw.split(/(\s+)/).map((token) =>
+    token.length >= 8 && token.length <= 24 && /[a-z]/.test(token) && /[A-Z]/.test(token) && /[0-9]/.test(token) ? '[ID]' : token,
+  ).join('');
+
 /* ------------------------------------------------------------------ run.log host redaction */
 
 /** The strings a run's stdout may innocently echo (SDK console noise names the socket URL) and

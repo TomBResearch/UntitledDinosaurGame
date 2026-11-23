@@ -56,15 +56,20 @@ whose public ingress posture this session now measures THROUGH).
   navigation — encrypted Chromium can throw ERR_INVALID_AUTH_CREDENTIALS) and then must fail to
   join; credentialed surfaces run in a CELL-LOCAL browser launched after the stdin relay env is
   deleted. Shipped `joinPredictionSeat`/`createSdkSeatTransport`/`DirectMotionPredictor` and the
-  accepted `pingLatency → Room.ping` seam are reused unchanged.
+  accepted `pingLatency → Room.ping` seam are reused unchanged. Slice-30r4 captures (from the
+  a4 diagnosis): the EPOCH-AWARE sequence audit (per-proven-epoch evaluation, cross-epoch
+  continuity, quarantine/negative), the separate outcome CLASSIFICATION (reachability / RTT
+  eligibility / epoch verdict / behaviour findings; NOT-RUN on zero sessions), the sanitized
+  episode timeline (scrubbed recovery ledger + node-clock state polls + raw-received-frame gap
+  population distinct from accepted-patch lag), and `UDG_GA11_SERVER_SHA` recorded beside the run.
 - `tests/support/ga11-stdin-setup.mjs` + one `globalSetup` line in `playwright.config.ts` — the
   credential RELAY: a Playwright worker never inherits the dispatched stdin, so the MAIN process
   reads the piped netrc and passes it through the child environment (base64, in-process only —
   never argv, never a file), and the cell deletes the variable the instant it decodes it. The
   setup is COMPLETELY INERT unless `UDG_GA11_SESSION=1`; the UDG-004 config pins (serial, one
   chromium project, `pnpm dev` webServer) hold and their contract test passes.
-- Verification already done OFF-HOST, loopback only: unit 30/30 (canonical-origin and netrc
-  non-echo pins included since slice-30r3)
+- Verification already done OFF-HOST, loopback only: unit 36/36 (epoch-audit regression and
+  classification pins included since slice-30r4)
   (`tests/unit/udg-spike-001/ga11-session.test.ts`), and full facsimile runs of the real cell
   green UNDER THE STRICT POSTURE OVER TLS (Basic on every method including OPTIONS and the WSS
   upgrade, on the locally-owned untrusted test certificate; 3/3 sessions, 120/120 finite RTT
@@ -145,7 +150,7 @@ pnpm install --frozen-lockfile
 pnpm build:libraries && pnpm --filter @udg/client build && pnpm --filter @udg/server build
 npx tsc -p tools/load-test/tsconfig.json      # the seam + the fail-closed run.log filter
 
-# 1) pure-seam unit tests (no browser, no endpoint, no credentials — must be 30/30):
+# 1) pure-seam unit tests (no browser, no endpoint, no credentials — must be 36/36):
 pnpm vitest run tests/unit/udg-spike-001/ga11-session.test.ts
 
 # 2) loopback FACSIMILE rehearsal of the EXACT dispatched command UNDER THE ACTUAL AUTH POSTURE
@@ -190,6 +195,33 @@ The join-gate triple MUST be the deployed build's own (a wrong triple is refused
 gate — an honest named failure, never to be "fixed" by guessing). The cell's own wall budget is
 1 500 s; a run that exceeds it fails loudly with nothing claimed. `ga11-log-filter` REFUSES
 (exit 2) when `UDG_GA11_ENDPOINT` is unset — an unredacted silent log is not an option.
+
+## 4B. Second path (§15B(2)-minimal): SAME Mac, cellular egress — exact procedure
+
+This is the smallest independent second egress: the same machine, the same client head, the
+same endpoint, a DIFFERENT network path. It earns no regime name by itself — two
+single-ISP-labelled paths, distinguished only by what the operator CONFIRMS about each.
+
+1. Operator confirms which ISP/plan each interface uses (ISP names stay operator-confirmed
+   facts, never guessed; NO external IP-lookup service is queried by anyone — a local
+   `route -n get default` interface change is the only verification performed).
+2. Attach the phone via USB tethering (or share cellular to the Mac over Wi-Fi while the
+   home Wi-Fi is off), and confirm the default route moved to the tether interface.
+3. Run the wrapper (it handles the stdin shape, filter, trace-off, artifact isolation and the
+   per-bundle checksum file):
+   `UDG_GA11_ENDPOINT=… GA11_NETRC_FILE=<project netrc path> UDG_GA11_PROTOCOL=… \
+    UDG_GA11_CONFIG_HASH=… UDG_GA11_MANIFEST_HASH=… UDG_GA11_SERVER_SHA=<deployed sha> \
+    UDG_RUN_ID=ga11-second-path-<utc>-cellular ./docs/contracts/assignments/UDG-SPIKE-001-ga11-second-path.sh`
+   (`--dry-run` preflights env/paths and prints the host DIGEST only).
+4. Compare bundle identities: same endpoint digest, same triple, same client head — the ONLY
+   intended variable is the egress path. Record the two bundle ids side by side; artefacts and
+   their sha256s stay local.
+
+Credentials NEVER appear in chat, argv or logs: the operator's own netrc file on the runner is
+the only carrier, and the Pi-side harness has NO route to the nominated origin by design (Pi
+validates loopback only). Live dispatches run on the operator/Codex machine that holds the
+route; remote assistance rides the EXISTING SSH path with the operator's own key — nothing here
+ ever asks for a password to be pasted anywhere.
 
 ## 5. Artifacts, logs, retention
 

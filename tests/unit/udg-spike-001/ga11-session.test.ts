@@ -24,11 +24,14 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { nearestRank } from '../../../tools/load-test/src/statistics.ts';
 import {
   GA11_FIXED_POPULATION,
+  GA11_EPOCH_AUDIT_NOTE,
   GA11_MODULE_PATH_PREFIXES,
   GA11_TEST_CERT_NOTE,
   GA11_WS_FRAME_SCOPE,
+  classifyGa11Run,
   fetchGa11LocalAsset,
   ga11EndpointGuard,
+  ga11EpochSequenceAudit,
   ga11IsGameplaySocket,
   ga11LocalAssetTarget,
   ga11LogFilterValues,
@@ -37,6 +40,7 @@ import {
   makeGa11Redactor,
   parseGa11Netrc,
   rttEligibility,
+  sanitizeGa11Detail,
   startGa11FacsimileHop,
   summarizeFrameLengths,
   type Ga11TestCertificate,
@@ -564,5 +568,116 @@ describe('ga11 loopback facsimile hop — HTTPS PARITY (TLS-terminating Basic-au
       socket.on('error', () => resolve()); // ECONNREFUSED: retired, exactly as claimed
     });
     await target.stop();
+  });
+});
+
+describe('ga11 epoch-aware sequence audit + run classification (slice-30r4; deterministic regression from the a4 evidence SHAPE)', () => {
+  // The a4 session-3 RETAINED SHAPE: legitimate server-issued epoch resets 1 → 3 → 4, the
+  // initial transport pointer retained at 1 (known-stale), a GLOBAL send audit of 1 125, and an
+  // EPOCH-SCOPED end watermark of 321 on the active epoch 4. Per-epoch issuance buckets are the
+  // SHAPE the future capture now records (the historical a4 record never stored them — that is
+  // the named gap this regression pins the RULE for); the historical red is not re-adjudicated.
+  const a4Shape = () => ({
+    joinEpoch: 1,
+    rejoinEpochs: [3, 4],
+    initialPointerEpoch: 1,
+    perEpochSent: { '1': '640', '3': '154', '4': '331' },
+    sentAuditTotal: 1125,
+    sentMonotonicGeneration: true,
+    deliveries: [
+      { epoch: 1, accepted: true, resolvedThrough: 640 },
+      { epoch: 3, accepted: true, resolvedThrough: 154 },
+      { epoch: 4, accepted: true, resolvedThrough: 190 },
+      { epoch: 4, accepted: true, resolvedThrough: 321 },
+    ],
+    lastDelivery: { epoch: 4, resolvedThrough: 321 },
+  });
+
+  it('the a4 shape audits CLEAN under the epoch-aware rule while the legacy strict rule false-fails it (the diagnosis, pinned)', () => {
+    const input = { ...a4Shape(), perEpochSent: { '1': 640, '3': 154, '4': 331 } };
+    const audit = ga11EpochSequenceAudit(input);
+    expect(audit.verdict).toBe('CLEAN');
+    expect(audit.activeEpoch).toBe(4);
+    expect(audit.initialPointerStale).toBe(true); // pointer 1 vs active domain 4 — NAMED, never used as the comparison basis
+    expect(audit.perEpoch.map((p) => p.verdict)).toEqual(['CLEAN', 'CLEAN', 'CLEAN']);
+    // the legacy rule, recomputed on the same shape, REDS it: last delivery epoch 4 against the
+    // stale pointer 1 — exactly the a4-s3 false failure. Pinned so it is never reintroduced.
+    const legacyResolvedSameEpoch = input.lastDelivery.epoch === input.initialPointerEpoch;
+    expect(legacyResolvedSameEpoch).toBe(false);
+    expect(GA11_EPOCH_AUDIT_NOTE).toContain('never relabelled');
+    expect(GA11_EPOCH_AUDIT_NOTE).toContain('never waived');
+  });
+
+  it('NEGATIVE: a watermark beyond what its own epoch issued is RED (a seq never sent on that epoch is a real violation)', () => {
+    const audit = ga11EpochSequenceAudit({
+      ...a4Shape(),
+      perEpochSent: { '1': 640, '3': 154, '4': 331 },
+      deliveries: [{ epoch: 4, accepted: true, resolvedThrough: 400 }], // epoch 4 issued 331
+      lastDelivery: { epoch: 4, resolvedThrough: 400 },
+    });
+    expect(audit.verdict).toBe('RED');
+    expect(audit.reasons.some((r) => r.includes('exceed the 331 seqs'))).toBe(true);
+  });
+
+  it('QUARANTINE: rows in unproven epochs, missing issuance buckets and an unknown last-delivery epoch are named and quarantined — never assumed clean, never assumed red', () => {
+    const stray = ga11EpochSequenceAudit({
+      ...a4Shape(),
+      perEpochSent: { '1': 640, '3': 154, '4': 331 },
+      deliveries: [...a4Shape().deliveries, { epoch: 7, accepted: true, resolvedThrough: 5 }],
+      lastDelivery: { epoch: 4, resolvedThrough: 321 },
+    });
+    expect(stray.verdict).toBe('QUARANTINED');
+    expect(stray.quarantinedRowsUnprovenEpoch).toBe(1);
+
+    const unproven = ga11EpochSequenceAudit({ ...a4Shape(), perEpochSent: {} });
+    expect(unproven.verdict).toBe('QUARANTINED');
+    expect(unproven.perEpoch.every((p) => p.verdict === 'QUARANTINED')).toBe(true);
+
+    const unknownLast = ga11EpochSequenceAudit({
+      ...a4Shape(),
+      perEpochSent: { '1': 640, '3': 154, '4': 331 },
+      lastDelivery: { epoch: null, resolvedThrough: null },
+    });
+    expect(unknownLast.verdict).toBe('QUARANTINED');
+    expect(unknownLast.lastDeliveryOnActiveEpoch).toBeNull();
+  });
+
+  it('CONTINUITY is preserved and enforced across epoch resets: generation monotonicity and increasing server-issued epochs are RED when broken (never waivable)', () => {
+    const brokenGen = ga11EpochSequenceAudit({ ...a4Shape(), perEpochSent: { '1': 640, '3': 154, '4': 331 }, sentMonotonicGeneration: false });
+    expect(brokenGen.verdict).toBe('RED');
+    expect(brokenGen.continuityOk).toBe(false);
+
+    const badEpochOrder = ga11EpochSequenceAudit({ ...a4Shape(), rejoinEpochs: [4, 3], perEpochSent: { '1': 640, '3': 154, '4': 331 } });
+    expect(badEpochOrder.verdict).toBe('RED');
+
+    const bucketOverflow = ga11EpochSequenceAudit({ ...a4Shape(), perEpochSent: { '1': 900, '3': 154, '4': 331 }, sentAuditTotal: 1125 });
+    expect(bucketOverflow.continuityOk).toBe(false);
+  });
+
+  it('classification separates reachability / RTT eligibility / epoch audits / behaviour findings, and a zero-session run is NOT-RUN (never vacuous)', () => {
+    const empty = classifyGa11Run(3, []);
+    expect(empty.notRun).toBe(true);
+    expect(empty.reachability.reachable).toBe(0);
+    expect(empty.rttEligibility.eligible).toBe(0);
+    expect(empty.epochAudits.CLEAN).toBe(0);
+
+    const mixed = classifyGa11Run(3, [
+      { session: 1, reached: true, rttEligible: true, epochAudit: 'CLEAN', findings: [] },
+      { session: 2, reached: true, rttEligible: true, epochAudit: 'CLEAN', findings: [] },
+      { session: 3, reached: true, rttEligible: true, epochAudit: 'QUARANTINED', findings: ['mover terminal state suspended (named, never waived)', 'max accepted-patch gap 1303.89 ms'] },
+    ]);
+    expect(mixed.notRun).toBe(false);
+    expect(mixed.reachability.reachable).toBe(3); // reachable AND churning: both stated, not blended
+    expect(mixed.rttEligibility.eligible).toBe(3);
+    expect(mixed.epochAudits.QUARANTINED).toBe(1);
+    expect(mixed.behaviourFindings.find((b) => b.session === 3)?.findings.length).toBe(2);
+  });
+
+  it('sanitizeGa11Detail scrubs session-identifier-shaped tokens while keeping epochs and protocol words', () => {
+    const out = sanitizeGa11Detail('rejoin-complete new domain epoch 3 for P6qi3oNHL awaiting snapshot');
+    expect(out).toContain('epoch 3');
+    expect(out).toContain('rejoin-complete');
+    expect(out).not.toContain('P6qi3oNHL');
+    expect(out).toContain('[ID]');
   });
 });

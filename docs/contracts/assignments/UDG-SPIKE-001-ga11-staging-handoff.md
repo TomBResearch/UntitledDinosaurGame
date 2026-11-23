@@ -163,6 +163,46 @@ building it before a deployment exists would invite measuring nothing.
 > canonical form is byte-identical to its old serialization — pinned by the regression test);
 > focused units + lint + typechecks gate it. EC2 remains untouched; the failed attempt's artifacts
 > and head stand as recorded — no re-run of any old head is implied.
+>
+> **First real-path evidence (2026-11-23, attempts a1–a4) — sanitized; verdicts unchanged.**
+> Attempt history: **a1** (`e6e0818`): the dispatcher's stdin never reached the cell (pnpm
+> swallows piped stdin in this container) — 0 sessions, admission named; run.log + smoke results
+> retained. **a2** (`e6e0818`): 25-min test timeout; browser closed before the negative control;
+> no session record (head predates the budgets/trace-off; superseded). **a3** (`46bfb16`): three
+> auth refusals before any join — root cause fixed in slice-30r3 (canonical-origin matching;
+> proven by the dispatcher's two controlled document requests). **a4** (`5e1bef2`, artifact
+> independently checksum-verified; per-bundle sha256s of ALL attempts incl. first ones retained
+> LOCALLY at `artifacts/.local/spike-001/CHECKSUMS-20261123.txt`): the first full real business
+> session population — pinned client `5e1bef2`, Node v24.22.2, pnpm 12.18.0, Playwright-pinned
+> Chromium, TLS runtime-default; the deployed build accepted its own gate triple (protocolVersion
+> in the local artifact; the deployed server SHA was NOT recorded in the artifact — named gap,
+> now closeable via `UDG_GA11_SERVER_SHA`). Results, classified: RTT eligibility 3/3 (120/120
+> finite per session; p50 ≈ 21 ms, p95 29–32 ms, p99 36–44 ms — single egress, ISP name
+> operator-unconfirmed, NOT §15B(2)); reachability 3/3 (documents 2xx, room replication
+> witnessed, negative control met the real 401); behaviour findings: sessions 1–2 clean;
+> session 3 churned legitimately and materially — server-issued epoch resets to 3 then 4, a
+> 1 303.89 ms max accepted-patch gap, 41 client send refusals, terminal state `suspended`
+> (suspension reason not captured — named gap). The retained evidence CANNOT attribute
+> chronologically (no event timestamps were recorded): the order of the rejoins vs the gap vs
+> the RTT samples is unknowable from a4 — stated, not guessed. The one RED check was DIAGNOSED
+> as a harness interpretation defect — an epoch-scoped resolved watermark compared against the
+> GLOBAL send audit, and the last delivery's epoch compared against the KNOWN-STALE initial
+> transport pointer — an overstrict/incorrect assumption about legitimate epoch resets, not a
+> product sequencing violation; the a4 record stands unedited (its red is never relabelled) and
+> the suspension is never waived. Slice-30r4 (this head) lands the epoch-aware sequence audit
+> (evaluate within each proven issuance epoch, preserve cross-epoch continuity, quarantine and
+> negative cases — deterministic unit regression replaying the a4 shape), separate outcome
+> CLASSIFICATION (reachability / RTT eligibility / epoch-audit verdict / behaviour findings; a
+> zero-session run classifies NOT-RUN, never vacuous), the sanitized episode timeline
+> (page-clock recovery ledger with ids scrubbed + node-clock 2 s state polls + raw-received-frame
+> gap population DISTINCT from accepted-patch lag, order/local-time correlated, no cross-clock
+> arithmetic) and `UDG_GA11_SERVER_SHA` in the record — validated by a full loopback HTTPS
+> facsimile run (12/12 checks) and unit 36/36. Desktop/service controls during the capture
+> window (operator-side): EC2 instance and Nginx active, NO service restarts, no cgroup memory
+> high/max limits, no OOM events; three game HTTP paths (a racing page, the operator's game
+> host, a posh page) responded 200; the ISP name remains operator-unconfirmed and NO external IP
+> lookup was performed by anyone. GA-11's §15B(1)–(5) verdicts, Gate A and every provisional
+> value remain exactly where the accepted records put them.
 
 ## 3. Reproduce · validate · reset (all local, all independent of any endpoint)
 
