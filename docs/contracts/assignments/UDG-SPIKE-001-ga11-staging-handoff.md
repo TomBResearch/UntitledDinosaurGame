@@ -227,6 +227,39 @@ building it before a deployment exists would invite measuring nothing.
 > close and slow-socket cases with zero unhandled rejections, and the full loopback HTTPS
 > facsimile reruns green on the fixed head. The EE bundle stays exactly as recorded (attempt
 > retention); the next first-path dispatch runs on the fixed head and produces a fresh runId.
+>
+> **EE RETRY on the fixed head (`ga11-ee-capture-1795436410228`, `0a8a7c1`) — 16/16 green, and
+> still only a PARTIAL measurement; slice-30r7 closed the remaining gaps.** S1/S2 are fully
+> valid remote-path populations (120/120 RTT; p50/p95/p99 65/99/184 and 75/104/112 ms; patch
+> p95 118.79/119.8 ms; epoch audit CLEAN; zero refusals). S3 died on a SECOND closure bug —
+> `sanitizeGa11Detail` referenced INSIDE a serialized `page.evaluate` (a ReferenceError that
+> fires ONLY on the nonempty recovery-ledger path, which S3 alone took): the record survived
+> thanks to the 30r6 resilience, but S3's metrics were assigned AFTER the failing evidence
+> read and were lost with it. Slice-30r7, all on the same head: (a) the epoch-evidence read is
+> now a SELF-CONTAINED evaluate with sanitization on the Node side, and a COMPILER-based guard
+> test (`tests/unit/udg-spike-001/evaluate-closure.test.ts`) statically rejects ANY inline
+> evaluate referencing a spec-module binding or Node-only global — the exact bug shape is
+> caught at unit time; (b) METRICS FIRST: every independent population is computed and lands
+> in an atomic progress receipt BEFORE the optional epoch/timeline block, which now fails
+> soft into a named `timelineFailure` — a timeline loss can no longer cost the run its RTT or
+> patch populations; (c) the MEASUREMENT GRADE (COMPLETE/PARTIAL/INCOMPLETE/NOT-RUN) is
+> computed INDEPENDENTLY of the diagnostic checks — in-record, as `MEASUREMENT-GRADE.json` in
+> the wrapper bundle before checksums (digests only; wrapper exit unchanged), and at rest by
+> `tools/load-test/src/ga11-grade.ts`, which grades the EE capture PARTIAL and the a4 capture
+> COMPLETE WITHOUT touching either bundle (old records are read as recorded: the absence of a
+> newer completeness label is not a partial label); a zero-session run grades NOT-RUN and the
+> wrapper's own trail survives a dead worker via the atomic progress file; (d) the teardown
+> proof cell gained phase (D): a DETERMINISTIC forced nonempty recovery/late-event episode in
+> the pinned Chromium (offline trigger → §3.2 → rejoin-complete → snapshot-recovered, 8/8
+> green) run through the fixed evidence read — count/order preserving, deterministic, and
+> identity-free on disk written WITHOUT the writer redactor, proving the sanitizer acts before
+> persistence; (e) `docs/contracts/assignments/UDG-SPIKE-001-ga11-evidence-comparison.md`
+> records the durable sanitized comparison of the two verified EE sessions against the Virgin
+> sessions with both GA-11 inequalities evaluated on the measured values (deadline inequality
+> fails on both EE sessions at 768/624 > 500 and passes Virgin by 12–28 ms; buffer inequality
+> holds everywhere clean, straddles the margin on the one churn episode — the stall term's
+> frame basis is named as an owner adjudication item), and answers the strict-need question:
+> one fixed-N remote capture WITH a forced-recovery variant is what remains.
 
 ## 3. Reproduce · validate · reset (all local, all independent of any endpoint)
 

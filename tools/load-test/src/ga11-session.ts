@@ -657,6 +657,72 @@ export const ga11EpochSequenceAudit = (input: Ga11EpochAuditInput): Ga11EpochAud
  * run classifies every aggregate as NOT-RUN — `every()` over an empty list must never read as
  * a pass.
  */
+/* ------------------------------------------------------------------ MEASUREMENT GRADE (slice-30r7)
+ * The EE capture proved the two questions can DISAGREE: every diagnostic check was GREEN and the
+ * harness exited 0 while only 2 of 3 promised sessions were eligible (session 3 died on a
+ * harness bug). A run is therefore GRADED separately from its checks:
+ *   COMPLETE    — every declared session reached the gameplay path, carries its promised fixed
+ *                 populations, and is eligible under the DECLARED floors (thresholds unchanged,
+ *                 §15B-B: 120 declared / ≥ 99 finite / probe loss ≤ 2 %);
+ *   PARTIAL     — something ran and carries usable recorded populations, but the fixed-N promise
+ *                 was not met (named failures, ineligible sessions, missing promised samples,
+ *                 or populations labelled partial/truncated);
+ *   INCOMPLETE  — sessions were dispatched but none reached the gameplay path with a recorded
+ *                 promised population;
+ *   NOT-RUN     — nothing ran (zero dispatched or zero recorded sessions — a zero-session run is
+ *                 NEVER success, and a session whose promised samples are missing from the
+ *                 record is never counted as an arrival).
+ * The grade NEVER re-scores eligibility and NEVER relabels history: it reads what the record
+ * says and names every reason. Old records (without a grade) stay exactly as recorded.
+ */
+
+export interface Ga11GradeSessionInput {
+  readonly session: number;
+  /** Both seats joined and the document path authenticated (the gameplay path actually ran). */
+  readonly joined: boolean;
+  /** The promised fixed RTT population is PRESENT in the record (eligible or not). */
+  readonly promisedSamplesPresent: boolean;
+  readonly rttEligible: boolean;
+  readonly namedFailure: boolean;
+  /** No partial/interrupted collection and no ledger truncation on this session. */
+  readonly populationComplete: boolean;
+}
+
+export interface Ga11MeasurementGrade {
+  readonly grade: 'COMPLETE' | 'PARTIAL' | 'INCOMPLETE' | 'NOT-RUN';
+  readonly reasons: readonly string[];
+  readonly declaredSessions: number;
+  readonly ranSessions: number;
+  readonly eligibleSessions: number;
+  readonly note: string;
+}
+
+export const ga11MeasurementGrade = (
+  declaredSessions: number,
+  sessions: readonly Ga11GradeSessionInput[],
+): Ga11MeasurementGrade => {
+  const note = 'measurement grade is INDEPENDENT of the diagnostic-check outcome: all checks may pass on a PARTIAL or INCOMPLETE measurement (a named failure is an honest outcome, never a success); COMPLETE means the pre-registered fixed-N population promise was met under the UNCHANGED declared floors (§15B-B); nothing here re-scores eligibility or relabels any historical record';
+  const eligible = sessions.filter((s) => s.rttEligible).length;
+  if (declaredSessions <= 0 || sessions.length === 0) {
+    return { grade: 'NOT-RUN', reasons: [`zero-sessions: declared=${String(declaredSessions)} recorded=${String(sessions.length)} — a zero-session run is never success`], declaredSessions, ranSessions: sessions.length, eligibleSessions: 0, note };
+  }
+  const reasons: string[] = [];
+  if (sessions.length < declaredSessions) reasons.push(`dispatched-shortfall:${String(sessions.length)}<${String(declaredSessions)} recorded sessions`);
+  for (const s of sessions) {
+    if (!s.joined) reasons.push(`session-${String(s.session)}: never reached the gameplay path (join refused or unevidenced)`);
+    if (!s.promisedSamplesPresent) reasons.push(`session-${String(s.session)}: promised fixed RTT population MISSING from the record — missing promised samples are never counted as an arrival`);
+    else if (!s.rttEligible) reasons.push(`session-${String(s.session)}: ran but NOT eligible under the declared floors`);
+    if (s.namedFailure) reasons.push(`session-${String(s.session)}: carries a named failure`);
+    if (!s.populationComplete) reasons.push(`session-${String(s.session)}: populations labelled partial/interrupted/truncated`);
+  }
+  if (sessions.length === declaredSessions && sessions.every((s) => s.joined && s.promisedSamplesPresent && s.rttEligible && !s.namedFailure && s.populationComplete)) {
+    return { grade: 'COMPLETE', reasons: [], declaredSessions, ranSessions: sessions.length, eligibleSessions: eligible, note };
+  }
+  const anyGameplayEvidence = sessions.some((s) => s.joined && s.promisedSamplesPresent);
+  const grade = anyGameplayEvidence ? 'PARTIAL' : 'INCOMPLETE';
+  return { grade, reasons, declaredSessions, ranSessions: sessions.length, eligibleSessions: eligible, note };
+};
+
 export interface Ga11RunClassification {
   readonly declaredSessions: number;
   readonly ranSessions: number;

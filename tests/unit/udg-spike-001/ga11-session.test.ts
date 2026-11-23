@@ -38,6 +38,7 @@ import {
   ga11IsGameplaySocket,
   ga11LocalAssetTarget,
   ga11LogFilterValues,
+  ga11MeasurementGrade,
   ga11SeatContextTlsOptions,
   makeGa11EphemeralTestCertificate,
   makeGa11Redactor,
@@ -752,5 +753,69 @@ describe('ga11 slice-30r6: interrupted collections and atomic scrubbed evidence'
       expect(readdirSync(dir)).toEqual([]); // nothing partial survives either
     }
     finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+/* ------------------------------------------------------------------ slice-30r7: MEASUREMENT GRADE
+ * The grade is computed SEPARATELY from the diagnostic checks (the EE capture was 16/16 GREEN
+ * yet only 2/3 promised sessions eligible). These pins replay that exact shape and every way
+ * "success" must not be manufactured: zero sessions, missing promised samples, partial labels.
+ */
+describe('ga11 slice-30r7: measurement grade is independent of checks and never manufactures success', () => {
+  const good = (session: number) => ({ session, joined: true, promisedSamplesPresent: true, rttEligible: true, namedFailure: false, populationComplete: true });
+
+  it('3 declared, 3 joined+eligible → COMPLETE with no reasons (thresholds unchanged — grade reads eligibility, never re-scores it)', () => {
+    const g = ga11MeasurementGrade(3, [good(1), good(2), good(3)]);
+    expect(g.grade).toBe('COMPLETE');
+    expect(g.reasons).toEqual([]);
+    expect(g.eligibleSessions).toBe(3);
+  });
+
+  it('THE EE-CAPTURE SHAPE: 3 dispatched, S1+S2 eligible, S3 named failure with MISSING promised samples → PARTIAL, never success, every reason named', () => {
+    const g = ga11MeasurementGrade(3, [
+      good(1),
+      good(2),
+      { session: 3, joined: true, promisedSamplesPresent: false, rttEligible: false, namedFailure: true, populationComplete: false },
+    ]);
+    expect(g.grade).toBe('PARTIAL');
+    expect(g.eligibleSessions).toBe(2);
+    expect(g.reasons.some((r) => r.includes('session-3') && r.includes('MISSING'))).toBe(true);
+    expect(g.reasons.some((r) => r.includes('named failure'))).toBe(true);
+    expect(g.note).toContain('INDEPENDENT');
+  });
+
+  it('a zero-session run is NOT-RUN — never an every() pass over an empty list', () => {
+    expect(ga11MeasurementGrade(3, []).grade).toBe('NOT-RUN');
+    expect(ga11MeasurementGrade(0, []).grade).toBe('NOT-RUN');
+    expect(ga11MeasurementGrade(3, [good(1), good(2)]).grade).toBe('PARTIAL'); // recorded shortfall named
+    expect(ga11MeasurementGrade(3, [good(1), good(2)]).reasons.some((r) => r.includes('dispatched-shortfall'))).toBe(true);
+  });
+
+  it('sessions dispatched but NONE reaching the gameplay path → INCOMPLETE; joined-but-ineligible stays PARTIAL with the ineligibility named', () => {
+    const none = ga11MeasurementGrade(3, [
+      { session: 1, joined: false, promisedSamplesPresent: false, rttEligible: false, namedFailure: true, populationComplete: false },
+      { session: 2, joined: false, promisedSamplesPresent: false, rttEligible: false, namedFailure: true, populationComplete: false },
+      { session: 3, joined: false, promisedSamplesPresent: false, rttEligible: false, namedFailure: true, populationComplete: false },
+    ]);
+    expect(none.grade).toBe('INCOMPLETE');
+    const ineligible = ga11MeasurementGrade(3, [
+      { session: 1, joined: true, promisedSamplesPresent: true, rttEligible: false, namedFailure: false, populationComplete: true },
+      { session: 2, joined: true, promisedSamplesPresent: true, rttEligible: false, namedFailure: false, populationComplete: true },
+      { session: 3, joined: true, promisedSamplesPresent: true, rttEligible: false, namedFailure: false, populationComplete: true },
+    ]);
+    expect(ineligible.grade).toBe('PARTIAL');
+    expect(ineligible.reasons.filter((r) => r.includes('NOT eligible'))).toHaveLength(3);
+  });
+
+  it('a partial-label or truncated population demotes an otherwise-eligible session; a timeline-only failure still names a failure', () => {
+    const truncated = ga11MeasurementGrade(3, [
+      { session: 1, joined: true, promisedSamplesPresent: true, rttEligible: true, namedFailure: false, populationComplete: false },
+      good(2), good(3),
+    ]);
+    expect(truncated.grade).toBe('PARTIAL');
+    expect(truncated.reasons.some((r) => r.includes('partial/interrupted/truncated'))).toBe(true);
+    const timeline = ga11MeasurementGrade(3, [good(1), good(2), { session: 3, joined: true, promisedSamplesPresent: true, rttEligible: true, namedFailure: true, populationComplete: true }]);
+    expect(timeline.grade).toBe('PARTIAL'); // the fixed-N promise includes an unclouded record — a named failure is honest, not success
+    expect(timeline.reasons.some((r) => r.includes('named failure'))).toBe(true);
   });
 });

@@ -14,6 +14,9 @@
 #   - the bundle directory is CREATE-ONLY (a repeat runId is REFUSED — nothing is overwritten);
 #   - CHECKSUMS.txt is written on PASS *and* on a red measurement, includes run.log, excludes
 #     itself, and the measurement's original exit code is preserved as the wrapper's own;
+#   - MEASUREMENT-GRADE.json (COMPLETE/PARTIAL/INCOMPLETE/NOT-RUN, digests only) is computed
+#     from the bundle separately from the checks and the exit code (slice-30r7): green checks
+#     on an unmet fixed-N promise are reported as an unmet promise, never as success;
 #   - the compiler is the PINNED LOCAL tsc (./node_modules/.bin/tsc) — no npx network fallback.
 set -uo pipefail
 
@@ -77,6 +80,7 @@ if [[ "$NETRC_SOURCE" == 'file' ]]; then
         UDG_GA11_ENDPOINT="$UDG_GA11_ENDPOINT" \
         UDG_GA11_PROTOCOL="$UDG_GA11_PROTOCOL" UDG_GA11_CONFIG_HASH="$UDG_GA11_CONFIG_HASH" \
         UDG_GA11_MANIFEST_HASH="$UDG_GA11_MANIFEST_HASH" UDG_GA11_SERVER_SHA="$UDG_GA11_SERVER_SHA" \
+        UDG_GA11_RECOVERY_EPISODE="${UDG_GA11_RECOVERY_EPISODE:-}" \
         UDG_RUN_ID="$UDG_RUN_ID" UDG_SPIKE_OUT="$OUT" \
         UDG_E2E_TRACE=off UDG_E2E_JUNIT=none UDG_E2E_RESULTS=none \
     ./node_modules/.bin/playwright test netcode.spec.ts -g "ga11-session" 2>&1 | \
@@ -86,6 +90,7 @@ else
       UDG_GA11_ENDPOINT="$UDG_GA11_ENDPOINT" \
       UDG_GA11_PROTOCOL="$UDG_GA11_PROTOCOL" UDG_GA11_CONFIG_HASH="$UDG_GA11_CONFIG_HASH" \
       UDG_GA11_MANIFEST_HASH="$UDG_GA11_MANIFEST_HASH" UDG_GA11_SERVER_SHA="$UDG_GA11_SERVER_SHA" \
+      UDG_GA11_RECOVERY_EPISODE="${UDG_GA11_RECOVERY_EPISODE:-}" \
       UDG_RUN_ID="$UDG_RUN_ID" UDG_SPIKE_OUT="$OUT" \
       UDG_E2E_TRACE=off UDG_E2E_JUNIT=none UDG_E2E_RESULTS=none \
     ./node_modules/.bin/playwright test netcode.spec.ts -g "ga11-session" 2>&1 | \
@@ -95,6 +100,23 @@ STATUS_CAPTURE=("${PIPESTATUS[@]}")
 STATUS=${STATUS_CAPTURE[0]:-$?}
 FILTER_STATUS=${STATUS_CAPTURE[1]:-0}
 [[ "$STATUS" -eq 0 && "$FILTER_STATUS" -ne 0 ]] && STATUS=$FILTER_STATUS
+
+# MEASUREMENT GRADE (slice-30r7, the EE-capture rule): computed from the bundle AT REST,
+# SEPARATELY from the diagnostic checks — green checks on an unmet fixed-N promise are NOT a
+# measurement success (the EE capture was 16/16 green with only 2 of 3 promised sessions
+# eligible). The grade lands as MEASUREMENT-GRADE.json BEFORE the checksums (so it is covered),
+# digests only, no raw ids; the wrapper's own exit stays the MEASUREMENT's exit unchanged — the
+# grade is reported beside it, never conflated with it.
+GRADE_NAME='GRADE-UNAVAILABLE'
+if GRADE_JSON="$(node tools/load-test/dist/ga11-grade.js "$OUT" 2>/dev/null)"; then GRADE_STATUS=0; else GRADE_STATUS=$?; fi
+case "$GRADE_STATUS" in
+  0) GRADE_NAME='COMPLETE' ;;
+  1) GRADE_NAME='PARTIAL' ;;
+  2) GRADE_NAME='INCOMPLETE' ;;
+  3) GRADE_NAME='NOT-RUN' ;;
+esac
+if [[ -n "${GRADE_JSON:-}" ]]; then printf '%s\n' "$GRADE_JSON" > "$OUT/MEASUREMENT-GRADE.json"; fi
+echo "ga11-second-path: MEASUREMENT GRADE: $GRADE_NAME (independent of the diagnostic checks and of this wrapper's exit; reasons and per-session detail in MEASUREMENT-GRADE.json)"
 
 # CHECKSUMS on PASS and on FAIL alike: every bundle file except this checksum file itself,
 # recorded with BUNDLE-RELATIVE paths so `cd <bundle> && sha256sum -c CHECKSUMS.txt` verifies.

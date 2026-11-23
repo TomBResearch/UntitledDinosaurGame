@@ -52,7 +52,7 @@ import { MIN_ELIGIBLE_ACKS_PER_RUN, nearestRank, networkValidity, summarizeCorre
 import { auditMotion, type AckLedgerReport } from '../../tools/load-test/src/ack-ledger.ts';
 import { auditGa5Transcript, naiveVsJoined, type Ga5Transcript } from '../../tools/load-test/src/ga5-transcript.ts';
 import { captureEnvironmentRecord, impairmentSourceRecord, planSpikeRun } from '../../tools/load-test/src/run-spike.ts';
-import { GA11_FIXED_POPULATION, GA11_EPOCH_AUDIT_NOTE, GA11_TEST_CERT_NOTE, GA11_WS_FRAME_SCOPE, GA11_WS_FRAME_SEMANTICS, classifyGa11Run, fetchGa11LocalAsset, ga11EndpointGuard, ga11EpochSequenceAudit, ga11IsGameplaySocket, ga11LocalAssetTarget, ga11SeatContextTlsOptions, makeGa11EphemeralTestCertificate, makeGa11Redactor, parseGa11Netrc, rttEligibility, sanitizeGa11Detail, startGa11FacsimileHop, summarizeFrameLengths, writeGa11EvidenceAtomic, type Ga11EndpointOk, type Ga11EpochAudit } from '../../tools/load-test/src/ga11-session.ts';
+import { GA11_FIXED_POPULATION, GA11_EPOCH_AUDIT_NOTE, GA11_TEST_CERT_NOTE, GA11_WS_FRAME_SCOPE, GA11_WS_FRAME_SEMANTICS, classifyGa11Run, fetchGa11LocalAsset, ga11EndpointGuard, ga11EpochSequenceAudit, ga11IsGameplaySocket, ga11LocalAssetTarget, ga11MeasurementGrade, ga11SeatContextTlsOptions, makeGa11EphemeralTestCertificate, makeGa11Redactor, parseGa11Netrc, rttEligibility, sanitizeGa11Detail, startGa11FacsimileHop, summarizeFrameLengths, writeGa11EvidenceAtomic, type Ga11EndpointOk, type Ga11EpochAudit } from '../../tools/load-test/src/ga11-session.ts';
 import { createTraceWriter, readTrace } from '../../tools/load-test/src/trace-writer.ts';
 import type { ProxyStats } from '../../tools/load-test/src/ws-delay-proxy.ts';
 
@@ -4792,6 +4792,61 @@ const gaRttPopulation = async (page: Page, args: { count: number; cadenceMs: num
   }
 };
 
+/**
+ * Slice-30r7 — the CROSS-CONTEXT CLOSURE rule, made structural: a `page.evaluate` callback is
+ * SERIALIZED to the browser, so it must be SELF-CONTAINED — any reference to an outer Node-side
+ * helper is a latent ReferenceError that fires ONLY when the JS path actually runs (the EE
+ * capture proved it on the nonempty recovery/late-event path: `sanitizeGa11Detail` inside the
+ * old epoch-evidence evaluate). This helper reads the epoch/audit evidence with a self-contained
+ * evaluate and applies the sanitizer on the NODE side before anything can persist — raw recovery
+ * detail strings exist only in this process's memory (privacy: no unsanitized detail is ever
+ * persisted), and the ledger counts/order are preserved exactly as read.
+ */
+interface GaEpochEvidence {
+  perEpochSent: Record<string, number>;
+  sentAuditTotal: number;
+  recoveryLedger: { order: number; event: string; atMs: number; detail: string }[];
+  stateEnd: string;
+  suspensionReason: string | null;
+}
+
+const gaEpochEvidence = async (page: Page): Promise<GaEpochEvidence> => {
+  const raw = await page.evaluate(() => {
+    const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+    if (holder === undefined) throw new Error('no imp seat on this page');
+    const sends = holder.predictor.sentAudit(); // {seq, epoch, atMs} — the audit CARRIES its epoch
+    const per: Record<string, number> = {};
+    for (const s of sends) per[String(s.epoch)] = (per[String(s.epoch)] ?? 0) + 1;
+    // detailRaw crosses the boundary IN MEMORY ONLY — the sanitizer runs below, before any caller
+    // can persist it; counts and ordering are untouched.
+    const recovery = holder.predictor.recoveryLedger().slice(-100).map((r, i) => ({
+      order: i,
+      event: String(r.event),
+      atMs: r.atMs,
+      detailRaw: String((r as { detail?: unknown }).detail ?? ''),
+    }));
+    return {
+      perEpochSent: per,
+      sentAuditTotal: sends.length,
+      recoveryLedger: recovery,
+      stateEnd: holder.predictor.stateName(),
+      suspensionReason: String(holder.predictor.suspensionReason() ?? ''),
+    };
+  });
+  return {
+    perEpochSent: raw.perEpochSent,
+    sentAuditTotal: raw.sentAuditTotal,
+    recoveryLedger: raw.recoveryLedger.map((row) => ({
+      order: row.order,
+      event: row.event,
+      atMs: row.atMs,
+      detail: sanitizeGa11Detail(row.detailRaw),
+    })),
+    stateEnd: raw.stateEnd,
+    suspensionReason: raw.suspensionReason,
+  };
+};
+
 /** One PRODUCER send on the ga seat: generation CONTINUES, stamp = sentCount + 1 by the adapter,
  * direct intent — an admissible input the invariant never declines (the ga5l suppressed input). */
 const gaOneShot = (page: Page, moveX: number, moveZ: number): Promise<{ seq: number; generation: number; error?: string }> =>
@@ -7536,6 +7591,9 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     rttRawFiniteMs?: readonly number[];
     rttTimeoutSampleCount?: number;
     windowInterruption?: { where: string; cause: string; pumpIterations: number; unexpectedMainFrameNavigations: number };
+    forcedRecoveryEpisode?: Record<string, unknown>;
+    windowCompleteness?: { metricsRecorded: boolean };
+    timelineFailure?: string;
     unexpectedMainFrameNavigations?: { mover: number; observer: number };
     pageErrors?: { mover: string; observer: string };
   }
@@ -7694,6 +7752,7 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
       let surfacesM: Ga11SeatSurfaces | undefined;
       let surfacesO: Ga11SeatSurfaces | undefined;
       let pumpPromise: Promise<GaPumpOutcome> | null = null;
+      let episodeHandle: Promise<void> | null = null;
       let pollerSettle: Promise<void> | null = null;
       let requestPollerStop: (() => void) | null = null;
       try {
@@ -7781,6 +7840,29 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         const pump = gaPump(pageM, GA11_FIXED_POPULATION.windowMs);
         pumpPromise = pump;
         persistGa11Progress(`session-${String(s)}-window-open`, sessions);
+        // Optional FORCED RECOVERY EPISODE (slice-30r7, the fixed-N fresh-attempt variant that
+        // closes the §5 gap of the evidence comparison): when UDG_GA11_RECOVERY_EPISODE names
+        // THIS session number, the mover context goes offline at 35% through the window for
+        // 2.5 s and returns — a real §3.2 episode on the dispatched path, so inequality 1's
+        // STALL TERM is measured on the remote path where it matters. The offline-trigger seam
+        // is deterministic and proof-cell-pinned (teardown-proof phase D) BEFORE any dispatch;
+        // populations, floors and eligibility rules are UNCHANGED — a large stall may
+        // legitimately demote this session, and that demotion IS the measurement, never hidden.
+        // Default OFF: an unset env never executes this path and changes nothing.
+        const episodeFor = Number.parseInt(process.env['UDG_GA11_RECOVERY_EPISODE'] ?? '', 10);
+        if (Number.isFinite(episodeFor) && episodeFor === s) {
+          episodeHandle = (async () => {
+            await ga11Wait(Math.round(GA11_FIXED_POPULATION.windowMs * 0.35));
+            await contextM?.setOffline(true);
+            session.forcedRecoveryEpisode = { offAtWindowFraction: 0.35, offlineMs: 2_500, firedAtNodeClockMs: Date.now() };
+            persistGa11Progress(`session-${String(s)}-episode-offline`, sessions);
+            await ga11Wait(2_500);
+            await contextM?.setOffline(false);
+          })().catch((error) => {
+            session.forcedRecoveryEpisode = { ...(session.forcedRecoveryEpisode ?? {}), cause: `${error instanceof Error ? error.name : 'error'}: ${redact(String(error)).slice(0, 140)}` };
+            void contextM?.setOffline(false).catch(() => undefined);
+          });
+        }
         await ga11Wait(1_000);
         const flowing = await gaRecovery(pageM);
         session.flow = { deliveriesBeforeWindow: flowing.deliveries };
@@ -7860,29 +7942,10 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         surfacesO.frames.active = false;
         pollsStop = true;
         await poller.catch(() => undefined);
-        // Epoch-scoped EVIDENCE for the slice-30r4 audit: the send audit read ONCE, grouped by
-        // its own epoch field (proven issuance per epoch), plus the predictor's recovery ledger
-        // (session ids scrubbed) for the sanitized episode timeline.
-        const epochEvidence = await pageM.evaluate(() => {
-          const holder = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
-          if (holder === undefined) throw new Error('no imp seat on this page');
-          const sends = holder.predictor.sentAudit(); // {seq, epoch, atMs} — the audit CARRIES its epoch
-          const per: Record<string, number> = {};
-          for (const s of sends) per[String(s.epoch)] = (per[String(s.epoch)] ?? 0) + 1;
-          const recovery = holder.predictor.recoveryLedger().slice(-100).map((r, i) => ({
-            order: i,
-            event: String(r.event),
-            atMs: r.atMs,
-            detail: sanitizeGa11Detail(String((r as { detail?: unknown }).detail ?? '')),
-          }));
-          return {
-            perEpochSent: per,
-            sentAuditTotal: sends.length,
-            recoveryLedger: recovery,
-            stateEnd: holder.predictor.stateName(),
-            suspensionReason: holder.predictor.suspensionReason(),
-          };
-        });
+        // METRICS FIRST (slice-30r7, the EE session-3 lesson): every INDEPENDENT metric is
+        // computed and lands in a progress receipt BEFORE the optional epoch/timeline evidence
+        // path — a failure on the optional path must never cost the run its RTT/patch/end-state
+        // populations again (the EE session 3 lost everything after the epoch-evidence throw).
         const after = await gaRecovery(pageM);
         session.moverEndState = {
           transportEpoch: after.transportEpoch,
@@ -7925,34 +7988,10 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
           note: 'client-observed: the resolved prefix is what the ROOM published into this seat\'s replicated row; the room\'s own internal ledger is NOT reachable through the nominated endpoint and is NOT claimed',
         };
 
-        // EPOCH-AWARE SEQUENCE AUDIT (slice-30r4): evaluate WITHIN each proven issuance epoch,
-        // preserve cross-epoch continuity, quarantine what cannot be attributed, red only real
-        // violations. The a4 diagnosis as a rule: the initial transport pointer is known-stale
-        // after a legitimate rejoin and the send audit is GLOBAL — neither may be equated with
-        // the active domain or with epoch-scoped issuance.
-        session.epochAudit = ga11EpochSequenceAudit({
-          joinEpoch,
-          rejoinEpochs: after.rejoins.map((r) => r.epoch),
-          initialPointerEpoch: after.transportEpoch,
-          perEpochSent: epochEvidence.perEpochSent,
-          sentAuditTotal: epochEvidence.sentAuditTotal,
-          sentMonotonicGeneration: after.sentMonotonic,
-          deliveries: ledger.rows.map((row) => ({ epoch: row.epoch, accepted: row.accepted, resolvedThrough: row.resolvedThrough })),
-          lastDelivery: { epoch: after.lastDelivery?.epoch ?? null, resolvedThrough: after.lastDelivery?.resolvedThrough ?? null },
-        });
-        session.episodeTimeline = {
-          note: 'sanitized episode timeline (slice-30r4): page-clock recovery-ledger events (identifier-shaped tokens scrubbed), node-clock mover-state polls (2 s cadence, window only) and node-clock raw WS frame arrivals — correlated by ORDER and local relative time ONLY; page and node clocks are never combined arithmetically (different origins); raw-received-frame lag and accepted-patch lag are DISTINCT populations by construction',
-          recoveryLedger: epochEvidence.recoveryLedger,
-          stateEnd: epochEvidence.stateEnd,
-          suspensionReason: epochEvidence.suspensionReason,
-          statePolls,
-          moverSocketCloses: surfacesM.frames.socketCloses,
-          observerSocketCloses: surfacesO.frames.socketCloses,
-        };
-
         // Patch-interval population and arrival-stall max over the FULL EXACT window [start,end]
         // on the mover page's monotonic clock — every in-window delivery and gap counted once,
-        // with truncation state recorded beside the counts.
+        // with truncation state recorded beside the counts. (slice-30r7: this METRICS block runs
+        // BEFORE the optional epoch/timeline evidence — metrics can no longer be lost to it.)
         const windowRows = ledger.rows.filter((row) => row.atMs >= ledger.startMs && row.atMs <= ledger.endMs);
         const gaps: number[] = [];
         for (let i = 1; i < windowRows.length; i += 1) gaps.push(Math.trunc((windowRows[i]!.atMs - windowRows[i - 1]!.atMs) * 100) / 100);
@@ -7989,6 +8028,45 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
           mover: idRedact((pageErrorSinks.get(`${tag}-M`) ?? []).slice(pageErrorsBeforeM).join('\n')),
           observer: idRedact((pageErrorSinks.get(`${tag}-O`) ?? []).slice(pageErrorsBeforeO).join('\n')),
         };
+        // EPOCH-AWARE SEQUENCE AUDIT and the sanitized episode timeline are the OPTIONAL
+        // evidence path (slice-30r7): they run AFTER metrics landed, through their own guarded
+        // block — gaEpochEvidence is self-contained across the serialization boundary (the EE
+        // closure bug is fixed and compiler-guarded), and a failure here is NAMED on the record
+        // (timelineFailure) WITHOUT discarding the metrics above.
+        session.windowCompleteness = { metricsRecorded: true };
+        persistGa11Progress(`session-${String(s)}-metrics`, [...sessions, session], { metricsFirst: true });
+        try {
+          const epochEvidence = await gaEpochEvidence(pageM);
+
+          // EPOCH-AWARE SEQUENCE AUDIT (slice-30r4): evaluate WITHIN each proven issuance epoch,
+          // preserve cross-epoch continuity, quarantine what cannot be attributed, red only real
+          // violations. The a4 diagnosis as a rule: the initial transport pointer is known-stale
+          // after a legitimate rejoin and the send audit is GLOBAL — neither may be equated with
+          // the active domain or with epoch-scoped issuance.
+          session.epochAudit = ga11EpochSequenceAudit({
+            joinEpoch,
+            rejoinEpochs: after.rejoins.map((r) => r.epoch),
+            initialPointerEpoch: after.transportEpoch,
+            perEpochSent: epochEvidence.perEpochSent,
+            sentAuditTotal: epochEvidence.sentAuditTotal,
+            sentMonotonicGeneration: after.sentMonotonic,
+            deliveries: ledger.rows.map((row) => ({ epoch: row.epoch, accepted: row.accepted, resolvedThrough: row.resolvedThrough })),
+            lastDelivery: { epoch: after.lastDelivery?.epoch ?? null, resolvedThrough: after.lastDelivery?.resolvedThrough ?? null },
+          });
+          session.episodeTimeline = {
+            note: 'sanitized episode timeline (slice-30r4): page-clock recovery-ledger events (identifier-shaped tokens scrubbed NODE-SIDE before persistence — slice-30r7), node-clock mover-state polls (2 s cadence, window only) and node-clock raw WS frame arrivals — correlated by ORDER and local relative time ONLY; page and node clocks are never combined arithmetically (different origins); raw-received-frame lag and accepted-patch lag are DISTINCT populations by construction',
+            recoveryLedger: epochEvidence.recoveryLedger,
+            stateEnd: epochEvidence.stateEnd,
+            suspensionReason: epochEvidence.suspensionReason,
+            statePolls,
+            moverSocketCloses: surfacesM.frames.socketCloses,
+            observerSocketCloses: surfacesO.frames.socketCloses,
+          };
+        }
+        catch (error) {
+          session.timelineFailure = `optional epoch/timeline evidence failed: ${redact(error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 300)} — metrics above are unaffected and remain the recorded populations`;
+        }
+
       } catch (error) {
         // FIRST named cause stands: a pump interruption (above) must not be overwritten by the
         // "target closed" noise of the read that merely noticed it first downstream.
@@ -7998,6 +8076,12 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
         // settle the pending pump and poller under named budgets → PERSIST the scrubbed
         // per-session evidence BEFORE releasing any resource → close pages → close contexts.
         requestPollerStop?.();
+        // The forced episode (if dispatched) must RETURN TO ONLINE before anything else closes;
+        // its own catch already restores connectivity, so this settle can only wait, never hang.
+        if (episodeHandle !== null) {
+          try { await ga11Budget('forced recovery episode settle', 15_000, episodeHandle); }
+          catch { void contextM?.setOffline(false).catch(() => undefined); }
+        }
         if (pageM !== null) await gaStopPump(pageM); // never rejects — stopping a gone page is not an error
         if (pumpPromise !== null) {
           try { await ga11Budget('pump settle after stop', 15_000, pumpPromise); }
@@ -8176,6 +8260,23 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     optimizerWarmup['ran'] === true,
     optimizerWarmup);
 
+  // ---- MEASUREMENT GRADE (slice-30r7, the EE-capture rule): computed SEPARATELY from the
+  // diagnostic checks. The EE capture was 16/16 GREEN yet only 2 of 3 promised sessions were
+  // eligible — green checks on an unmet fixed-N promise are NOT a measurement success.
+  const measurementGrade = ga11MeasurementGrade(GA11_FIXED_POPULATION.sessions, sessions.map((row) => ({
+    session: row.session,
+    joined: row.navigation !== undefined && is2xx(row.navigation.moverHttpStatus) && is2xx(row.navigation.observerHttpStatus) && row.joinMover?.ok === true && row.joinObserver?.ok === true,
+    promisedSamplesPresent: row.rtt !== undefined,
+    rttEligible: row.rtt?.eligible === true,
+    namedFailure: row.failure !== undefined || row.timelineFailure !== undefined,
+    populationComplete: (row.rtt?.collectionComplete !== false) && (row.patchIntervalsMs !== undefined ? row.patchIntervalsMs.ledgerTruncated === false : false) && row.windowInterruption === undefined,
+  })));
+  cellCheck('MEASUREMENT GRADE (slice-30r7) is computed and recorded INDEPENDENTLY of the diagnostic checks: COMPLETE requires the pre-registered fixed-N population under the UNCHANGED declared floors (§15B-B); a zero-session run is NOT-RUN; missing promised samples never count as arrivals; an unmet promise with green checks grades PARTIAL/INCOMPLETE with every reason named (exactly the EE-capture shape: all checks green, 2/3 eligible)',
+    measurementGrade.grade === 'COMPLETE'
+      ? measurementGrade.reasons.length === 0 && measurementGrade.eligibleSessions === measurementGrade.declaredSessions
+      : measurementGrade.reasons.length > 0,
+    measurementGrade);
+
   const record = {
     schemaVersion: 1,
     kind: 'GA11-ENDPOINT-INJECTION-SESSION',
@@ -8218,6 +8319,7 @@ test('spike cell: ga11-session — two real seats through the nominated origin\'
     negativeControl,
     hopReceipt,
     recordValidity: 'COMPLETE AS AN ATTEMPT — every dispatched session either produced its fixed populations or carries a NAMED failure; red checks live in `checks` and are never hidden. If the process had died before this line, spike-cell-ga11-session.progress.json (PARTIAL-labelled) would be the only trail — it is written atomically BEFORE cleanup at every phase.',
+    measurementGrade,
     attemptProgress: { file: 'spike-cell-ga11-session.progress.json', writes: progressWrites, note: 'the atomic PARTIAL-labelled trail kept DURING this attempt; superseded by this record once written' },
     optimizerWarmup,
     lateBudgetRejections: budgetLateRejections,
@@ -8357,6 +8459,99 @@ test('spike cell: ga11-teardown-proof — forced mid-window browser close + slow
       if (proxyHandle >= 0) await proxyHost.request({ op: 'close', handle: proxyHandle }).catch(() => undefined);
       await proxyHost.shutdown().catch(() => undefined);
     }
+
+    // ---- (D) FORCED NONEMPTY recovery/late-event path through the FIXED epoch-evidence read —
+    // the EXACT EE session-3 failure mode (a serialized evaluate referencing a Node-side helper
+    // throws ReferenceError ONLY when the recovery-ledger path runs), now proven deterministic
+    // in the actual pinned Chromium, plus the privacy half: the sanitizer runs NODE-SIDE before
+    // persistence, and the on-disk proof file is written WITHOUT the writer redactor, so an
+    // identity-free file can only be the sanitizer's doing (raw detail provably carried the id).
+    const proofBrowser3 = await chromium.launch({ headless: true });
+    const ctxD = await proofBrowser3.newContext();
+    const pageD = await ctxD.newPage();
+    await pageD.goto(`${CLIENT_ORIGIN}/`, { waitUntil: 'load', timeout: 30_000 });
+    await primeClientModules(pageD, 'ga11-tp-recovery');
+    const joinD = await joinGaSeat(pageD, fixture?.endpoint ?? '', { mode: 'create', roomName: ROOM_NAME });
+    cellCheck('the recovery-path proof seat joined the local fixture room (loopback; no credentials in this cell)', joinD.ok === true, { ok: joinD.ok === true, error: joinD.ok === true ? null : String(joinD.error ?? 'refused').slice(0, 200) });
+    const pumpD = gaPump(pageD, 60_000); // keep sending so the §3.2 ack-stall → recovery path fires
+    pumpD.catch(() => undefined);
+    await wait(800);
+    await ctxD.setOffline(true); // the deterministic trigger: deliveries stop, stall fires, rejoin schedules
+    let ledgerLenOffline = 0;
+    const triggerDeadline = Date.now() + 25_000;
+    while (Date.now() < triggerDeadline) {
+      ledgerLenOffline = await pageD.evaluate(() => {
+        const h = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+        return h === undefined ? -1 : h.predictor.recoveryLedger().length;
+      }).catch(() => -1);
+      if (ledgerLenOffline > 0) break;
+      await wait(200);
+    }
+    await ctxD.setOffline(false); // late events: whatever the recovery adds AFTER connectivity returns
+    let ledgerLenLate = ledgerLenOffline;
+    const lateDeadline = Date.now() + 30_000;
+    while (Date.now() < lateDeadline) {
+      ledgerLenLate = await pageD.evaluate(() => {
+        const h = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+        return h === undefined ? -1 : h.predictor.recoveryLedger().length;
+      }).catch(() => -1);
+      if (ledgerLenLate > ledgerLenOffline) break;
+      await wait(250);
+    }
+    await gaStopPump(pageD);
+    await pumpD;
+    // QUIESCENT READ POINT (slice-30r7): pump stopped AND the ledger size stable for a full
+    // second (bounded), so raw size, raw events and the fixed evidence read describe the SAME
+    // frozen ledger — the count/order comparison is then deterministic, not a read race.
+    let quiescentSize = -1;
+    let stableSinceMs = Date.now();
+    const quiesceDeadline = Date.now() + 20_000;
+    while (Date.now() < quiesceDeadline) {
+      const size = await pageD.evaluate(() => {
+        const h = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+        return h === undefined ? -1 : h.predictor.recoveryLedger().length;
+      }).catch(() => -1);
+      if (size === quiescentSize && Date.now() - stableSinceMs >= 1_000) break;
+      if (size !== quiescentSize) { quiescentSize = size; stableSinceMs = Date.now(); }
+      await wait(250);
+    }
+    ledgerLenLate = quiescentSize;
+    // QUIESCENT READ POINT (slice-30r7): the pump is stopped, so no NEW send-refused events join
+    // the ledger between reads — raw size, raw events and the fixed evidence read then describe
+    // the SAME ledger deterministically.
+    const rawSnap = await pageD.evaluate(() => {
+      const h = (globalThis as unknown as PredSeatWindow).__udgImpSeat;
+      if (h === undefined) return { size: -1, events: [] as string[], details: [] as string[] };
+      const rows = h.predictor.recoveryLedger();
+      return { size: rows.length, events: rows.map((r) => String(r.event)), details: rows.slice(-100).map((r) => String((r as { detail?: unknown }).detail ?? '')) };
+    });
+    const rawDetails = rawSnap.details;
+    const identityValues = [joinD.roomId, joinD.sessionId].filter((v): v is string => typeof v === 'string' && v !== '');
+    // Whether the PRODUCT's current detail strings happen to carry ids is recorded as DATA, not
+    // asserted: today's recovery details carry epochs/counts, while the sanitizer is
+    // defence-in-depth (its identity erasure is unit-pinned on fixture detail lines that DO carry
+    // ids). What IS asserted: whatever the raw read contained, the persisted file — written
+    // WITHOUT the writer redactor — carries no identity, so any identity present pre-sanitize
+    // was erased by the sanitizer itself, before persistence.
+    const rawCarriesIdentity = identityValues.length > 0 && rawDetails.some((d) => identityValues.some((id) => d.includes(id)));
+    const evidence1 = await gaEpochEvidence(pageD);
+    const evidence2 = await gaEpochEvidence(pageD);
+    const evidenceStable = JSON.stringify(evidence1) === JSON.stringify(evidence2);
+    const evidenceSerialized = JSON.stringify(evidence1);
+    const evidenceIdentityFree = identityValues.every((id) => !evidenceSerialized.includes(id));
+    const rawEventOrder = rawSnap.events.slice(-100);
+    const countsPreserved = evidence1.recoveryLedger.length === Math.min(rawSnap.size, 100) && rawSnap.size === ledgerLenLate
+      && evidence1.recoveryLedger.map((row) => row.event).join(',') === rawEventOrder.join(',');    // NO writer redactor here: an identity-free file on disk is then ONLY the sanitizer's doing.
+    const dWrite = writeGa11EvidenceAtomic(OUT_DIR, 'ga11-teardown-proof.d.json', { recordValidity: 'PARTIAL — proof artifact, never a valid record', phase: 'epoch-evidence-nonempty-recovery', evidence: evidence1 });
+    const dOnDisk = dWrite.ok === true ? readFileSync(join(OUT_DIR, 'ga11-teardown-proof.d.json'), 'utf8') : '';
+    cellCheck('FORCED NONEMPTY recovery/late-event path through the FIXED epoch-evidence read (deterministic offline trigger, the ACTUAL pinned chromium): the ledger is NONEMPTY and GREW after connectivity returned (trigger + late events), the SELF-CONTAINED evaluate crosses the serialization boundary without ReferenceError (the exact EE session-3 failure mode), the read is DETERMINISTIC (two consecutive reads identical) and COUNT/ORDER PRESERVING (events match the raw read exactly), and the persisted file — written WITHOUT the writer redactor — contains NO session identity whether or not the raw detail carried one (the sanitizer runs NODE-SIDE before persistence; its identity erasure itself is unit-pinned); still zero unhandled rejections',
+      ledgerLenOffline > 0 && ledgerLenLate > ledgerLenOffline
+        && evidenceStable && countsPreserved && evidenceIdentityFree
+        && dWrite.ok === true && identityValues.every((id) => !dOnDisk.includes(id))
+        && unhandledRejections.length === 0,
+      { ledgerLenOffline, ledgerLenLate, events: evidence1.recoveryLedger.map((row) => row.event), rawDetailCount: rawDetails.length, rawCarriesIdentity, evidenceIdentityFree, evidenceStable, countsPreserved, dWriteOk: dWrite.ok, unhandledRejections });
+    await ctxD.close().catch(() => undefined);
+    await proofBrowser3.close().catch(() => undefined);
   } finally {
     process.off('unhandledRejection', onUnhandled);
   }

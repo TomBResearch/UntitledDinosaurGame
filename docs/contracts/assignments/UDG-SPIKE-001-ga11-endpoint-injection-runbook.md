@@ -236,6 +236,16 @@ single-ISP-labelled paths, distinguished only by what the operator CONFIRMS abou
    EE bundle's "checksums but no record" shape cannot recur. The progress file is NEVER a record
    and its partial populations are never valid measurements; the complete
    `spike-cell-ga11-session.json`, when written, supersedes it.
+   Since slice-30r7 the wrapper also writes `MEASUREMENT-GRADE.json` (COMPLETE / PARTIAL /
+   INCOMPLETE / NOT-RUN, digests only, checksum-covered) computed from the bundle AT REST and
+   reported BESIDE the measurement: green diagnostic checks on an unmet fixed-N promise are
+   logged as an unmet promise, never as success, and the wrapper's exit stays the measurement's
+   own. Optional `UDG_GA11_RECOVERY_EPISODE=<session-number>` (forwarded by the wrapper, default
+   OFF) forces one §3.2 recovery episode (2.5 s offline at 35% through that session's window) —
+   the fixed-N fresh-attempt variant that measures inequality 1's stall term on the remote path;
+   the offline seam is deterministic and proof-cell-pinned before any dispatch, and the loopback
+   rehearsal caveat (rejoin timing through the TLS hop) is recorded in
+   `UDG-SPIKE-001-ga11-evidence-comparison.md` §5.
 4. Compare bundle identities: same endpoint digest, same triple, same client head — the ONLY
    intended variables are the egress path and the run id. Artefacts and their sha256s stay
    local.
