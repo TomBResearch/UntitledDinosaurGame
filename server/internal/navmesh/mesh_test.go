@@ -151,7 +151,7 @@ func TestAcceptsCollinearVertices(t *testing.T) {
 const goodRegion = `{
   "format": 1, "region_id": "tiny", "source_hash": "` + "abababababababababababababababababababababababababababababababab" + `",
   "navmesh": {"vertices": [[0,0,0],[4,0,0],[4,0,4],[0,0,4]], "polygons": [[0,1,2,3]]},
-  "player_spawns": [{"pos": [1,0,1]}], "respawn_points": [], "creature_spawns": [], "resource_nodes": [], "exits": []
+  "player_spawns": [{"pos": [1,0,1]}], "respawn_points": [], "creature_spawns": [], "resource_nodes": [], "exits": [], "entry_points": []
 }`
 
 func TestParseRegion(t *testing.T) {
@@ -169,6 +169,7 @@ func TestRejectsBadRegionFiles(t *testing.T) {
 		{"wrong format", `"format": 1`, `"format": 2`, "format 2, but this server reads format 1"},
 		{"no format", `"format": 1,`, ``, `no "format"`},
 		{"unknown field", `"exits": []`, `"exits": [], "colour": "red"`, `unknown field "colour"`},
+		{"misspelt entry_points", `"entry_points"`, `"entry_point"`, `unknown field "entry_point"`},
 		{"unknown navmesh field", `"polygons"`, `"adjacency": [], "polygons"`, `unknown field "adjacency"`},
 		{"out-of-range index", `[[0,1,2,3]]`, `[[0,1,2,9]]`, "vertex index 9"},
 		{"degenerate", `[[0,1,2,3]]`, `[[0,1,1]]`, "appears twice"},

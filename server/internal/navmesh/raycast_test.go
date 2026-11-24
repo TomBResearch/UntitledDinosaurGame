@@ -81,3 +81,18 @@ func TestRaycastAgreesWithPaths(t *testing.T) {
 		t.Error("no clear rays tested")
 	}
 }
+
+func TestRayAlongADiagonalWall(t *testing.T) {
+	// From the greybox region: a funnel leg runs exactly along a slanted wall edge, corner to corner, and
+	// float error made the edge look like the ray was leaving through it.
+	m, err := Build([]Vec3{{32.2, -0.5, 2.4}, {30.333, 0.1, 5.533}, {29.6, -0.3, 3.8}, {29.6, 0.1, 5.533}},
+		[][]int{{0, 1, 2}, {2, 1, 3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range [][2]Vec3{{{29.6, -0.3, 3.8}, {32.2, -0.5, 2.4}}, {{32.2, -0.5, 2.4}, {29.6, -0.3, 3.8}}} {
+		if hit, ok := m.Raycast(tc[0], tc[1]); !ok || hit.Blocked {
+			t.Errorf("%v→%v: %+v, %v; want clear", tc[0], tc[1], hit, ok)
+		}
+	}
+}

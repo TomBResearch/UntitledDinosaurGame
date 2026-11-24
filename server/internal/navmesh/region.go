@@ -22,10 +22,12 @@ type Region struct {
 	Mesh          *Mesh
 	PlayerSpawns  []Vec3
 	RespawnPoints []Vec3
-	// Not defined yet in format 1 (they arrive with the tasks that use them), so kept raw.
+	// Markers whose fields are read by the tasks that use them, so they're kept raw here. Their shapes are
+	// in docs/architecture/world-server.md.
 	CreatureSpawns []json.RawMessage
 	ResourceNodes  []json.RawMessage
 	Exits          []json.RawMessage
+	EntryPoints    []json.RawMessage
 }
 
 type regionFileV1 struct {
@@ -41,6 +43,7 @@ type regionFileV1 struct {
 	CreatureSpawns []json.RawMessage `json:"creature_spawns"`
 	ResourceNodes  []json.RawMessage `json:"resource_nodes"`
 	Exits          []json.RawMessage `json:"exits"`
+	EntryPoints    []json.RawMessage `json:"entry_points"`
 }
 
 type spawnV1 struct {
@@ -123,7 +126,7 @@ func ParseRegion(raw []byte) (*Region, error) {
 	}
 	r := &Region{
 		ID: f.RegionID, SourceHash: f.SourceHash, Mesh: mesh,
-		CreatureSpawns: f.CreatureSpawns, ResourceNodes: f.ResourceNodes, Exits: f.Exits,
+		CreatureSpawns: f.CreatureSpawns, ResourceNodes: f.ResourceNodes, Exits: f.Exits, EntryPoints: f.EntryPoints,
 	}
 	points := func(name string, in []spawnV1) []Vec3 {
 		out := make([]Vec3, 0, len(in))

@@ -17,8 +17,8 @@ func pathLength(path []Vec3) float64 {
 // interpolated along it match the surface.
 func checkPath(t *testing.T, m *Mesh, path []Vec3) {
 	t.Helper()
-	if len(path) < 2 {
-		t.Fatalf("path %v has fewer than 2 waypoints", path)
+	if len(path) < 1 || (len(path) == 1 && pathLength(path) != 0) {
+		t.Fatalf("path %v is empty", path)
 	}
 	for i := 1; i < len(path); i++ {
 		a, b := path[i-1], path[i]

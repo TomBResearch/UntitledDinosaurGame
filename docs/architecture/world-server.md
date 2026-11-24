@@ -73,9 +73,14 @@ The code is `server/internal/navmesh`. Its fixtures are in `testdata/`.
 - **Budget:** under 0.2 ms per path on the test regions.
   - `BenchmarkFindPath` runs in the slow lane (`tools/slow-tests.sh`), which fails if any mesh is over budget.
   - It times random same-island pairs on a generated 200 m × 200 m mesh: 2 m squares on hills with 60 obstacles, about 10,000 polygons. That's much denser than a Godot bake.
-  - It also times `data/regions/test_greybox.region.json` when that file exists.
+  - It also times `data/regions/test_greybox.region.json` (and `TestGreyboxRegion` checks paths on it) when that file exists.
   - The fast check only asserts no allocations and a coarse 1 ms bound.
-  - On the owner's Mac (M5 Pro), the generated mesh takes about 60 µs per path, averaging about 680 polygons explored, with 23 % of paths partial. A raycast takes about 0.5 µs.
+  - On the owner's Mac (M5 Pro):
+
+| Mesh | Per path | Polygons explored | Partial | Raycast |
+|---|---|---|---|---|
+| Generated | about 60 µs | about 680 | 23 % | about 0.5 µs |
+| Greybox export (1,736 triangles) | about 26 µs | about 250 | 25 % | about 1 µs |
 
 ### Region file, format 1
 
@@ -94,7 +99,8 @@ Written by `client/tools/export_region.gd`. Never edit it by hand.
   "respawn_points": [{"pos": [x, y, z]}],
   "creature_spawns": [],
   "resource_nodes": [],
-  "exits": []
+  "exits": [],
+  "entry_points": []
 }
 ```
 
@@ -104,7 +110,12 @@ Written by `client/tools/export_region.gd`. Never edit it by hand.
   - Either winding is accepted. The loader normalises it by signed area in the XZ plane.
   - Adjacency isn't stored. Two polygons are linked only if they share both vertices of an edge (within 1 cm), so a T-junction (one long edge against two short ones) isn't linked. A normal single-pass Godot bake shouldn't produce them.
 - **Spawn and respawn points** must be within 5 m of the navmesh.
-- **`creature_spawns`, `resource_nodes` and `exits`** are kept raw until the tasks that use them define their fields.
+- **Markers:** `creature_spawns`, `resource_nodes`, `exits` and `entry_points` are kept raw (`json.RawMessage`) for the tasks that use them. The exporter writes these shapes:
+  - creature spawn: `{"count", "creature_id", "pos", "respawn_s", "wander_radius"}`
+  - resource node: `{"node_id", "pos"}`
+  - exit: `{"pos", "size", "target_entry", "target_region", "yaw"}`. `pos` is the box centre and `size` its full size.
+  - entry point: `{"entry_id", "pos", "yaw"}`
+  - `yaw` is in radians about +Y, where 0 faces −Z, counter-clockwise seen from above. Numbers have 3 decimals.
 - **Validation:** `dataval`, and so the fast check, loads every region file. It rejects:
   - a wrong format version or unknown fields
   - an out-of-range index

@@ -11,6 +11,8 @@ const (
 	// rayStepHeight (metres): the most the surface may jump where a ray steps between polygons through a
 	// vertex. Stops a ray hopping onto a bridge overhead.
 	rayStepHeight = 0.5
+	// parallelTol: a ray within this angle (radians) of an edge's direction counts as running along it.
+	parallelTol = 1e-9
 )
 
 // RayHit is the result of a Raycast.
@@ -66,8 +68,10 @@ func (m *Mesh) castRay(start Location, to Vec3, trail []int32, record bool) (hit
 			a, b := m.verts[r[k]], m.verts[r[(k+1)%len(r)]]
 			ex, ez := b.X-a.X, b.Z-a.Z
 			dn := ex*dz - ez*dx
-			if dn >= 0 {
-				continue // parallel to this edge, or heading inwards across it
+			// Skip edges the ray runs along (to within float error: rays often follow a wall exactly,
+			// corner to corner) or heads inwards across.
+			if dn >= -parallelTol*math.Hypot(ex, ez)*length {
+				continue
 			}
 			tk := -cross2(a, b, o) / dn
 			slot := s + int32(k)

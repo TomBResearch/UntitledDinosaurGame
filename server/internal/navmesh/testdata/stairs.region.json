@@ -25,5 +25,6 @@
   "respawn_points": [{"pos": [1, 0, 1]}],
   "creature_spawns": [],
   "resource_nodes": [],
-  "exits": []
+  "exits": [],
+  "entry_points": []
 }

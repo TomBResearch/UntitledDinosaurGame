@@ -88,7 +88,7 @@ func NewPathfinder(m *Mesh, limits Limits) *Pathfinder {
 // start; each has its height (y) on the mesh. A straight line between two waypoints stays on the mesh,
 // and its interpolated height is within a few centimetres of the surface.
 //
-// On NoPath, dst comes back unchanged.
+// A click on the spot you're standing on gives a single waypoint. On NoPath, dst comes back unchanged.
 func (pf *Pathfinder) FindPath(dst []Vec3, from, to Vec3) ([]Vec3, Status) {
 	m := pf.mesh
 	pf.Explored = 0

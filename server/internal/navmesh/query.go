@@ -2,8 +2,14 @@ package navmesh
 
 import "math"
 
-// insideTol: how far (in cross-product units, m²) a point may sit outside an edge and still count as inside.
-const insideTol = 1e-9
+const (
+	// insideTol: how far (in cross-product units, m²) a point may sit outside an edge and still count as
+	// inside.
+	insideTol = 1e-9
+	// locateTol (metres): bounding boxes are this much bigger for lookups, so a point that float error put
+	// a hair outside its polygon (at a vertex, say) is still found.
+	locateTol = 1e-6
+)
 
 // Location is a point on the mesh and the polygon it lies in.
 type Location struct {
@@ -54,7 +60,8 @@ func (m *Mesh) locateXZ(p Vec3) (poly int32, y float64, ok bool) {
 	c := cz*m.gridW + cx
 	poly, bestDY := -1, math.Inf(1)
 	for _, cand := range m.gridPolys[m.gridStart[c]:m.gridStart[c+1]] {
-		if p.X < m.minX[cand] || p.X > m.maxX[cand] || p.Z < m.minZ[cand] || p.Z > m.maxZ[cand] || !m.insideXZ(cand, p) {
+		if p.X < m.minX[cand]-locateTol || p.X > m.maxX[cand]+locateTol ||
+			p.Z < m.minZ[cand]-locateTol || p.Z > m.maxZ[cand]+locateTol || !m.insideXZ(cand, p) {
 			continue
 		}
 		h := m.heightIn(cand, p.X, p.Z)

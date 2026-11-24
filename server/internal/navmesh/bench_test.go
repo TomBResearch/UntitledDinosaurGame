@@ -90,3 +90,39 @@ func TestPathBudget(t *testing.T) {
 		t.Errorf("%v per path is over 5× the %v budget", per, budget)
 	}
 }
+
+// TestGreyboxRegion checks paths on the real test region, once it's exported. The points are from the
+// greybox task: the river ford near (29.3, 9) is the only way across.
+func TestGreyboxRegion(t *testing.T) {
+	r, err := LoadRegion(greyboxRegion)
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Skip("data/regions/test_greybox.region.json isn't exported yet")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := r.Mesh
+	pf := NewPathfinder(m, DefaultLimits)
+	path, st := pf.FindPath(nil, r.PlayerSpawns[0], Vec3{58, 15.5, -52})
+	if st != Complete {
+		t.Fatalf("spawn to the NE hill top: %v", st)
+	}
+	checkPath(t, m, path)
+	ford := false
+	for i := 1; i < len(path); i++ { // some leg passes within 8 m of the ford (its point is approximate)
+		a, b := path[i-1], path[i]
+		f := Vec3{29.3, 0, 9}
+		q := a.Lerp(b, closestOnSegmentXZ(f, a, b))
+		ford = ford || q.DistXZ(f) < 8
+	}
+	if !ford {
+		t.Errorf("path doesn't cross at the ford: %v", path)
+	}
+	for _, q := range randomQueries(m, 300, 14) {
+		path, st = pf.FindPath(path[:0], q.from, q.to)
+		if st == NoPath {
+			t.Fatalf("%v→%v: NoPath", q.from, q.to)
+		}
+		checkPath(t, m, path)
+	}
+}

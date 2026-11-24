@@ -294,8 +294,8 @@ func (m *Mesh) buildGrid() {
 	m.gridH = int((z1-z0)/gridCell) + 1
 	counts := make([]int32, m.gridW*m.gridH+1)
 	each := func(p int, f func(c int)) {
-		cx0, cz0 := m.cellOf(m.minX[p], m.minZ[p])
-		cx1, cz1 := m.cellOf(m.maxX[p], m.maxZ[p])
+		cx0, cz0 := m.cellOf(m.minX[p]-locateTol, m.minZ[p]-locateTol)
+		cx1, cz1 := m.cellOf(m.maxX[p]+locateTol, m.maxZ[p]+locateTol)
 		for cz := cz0; cz <= cz1; cz++ {
 			for cx := cx0; cx <= cx1; cx++ {
 				f(cz*m.gridW + cx)
