@@ -10,7 +10,7 @@ The server pathfinds ([0002](0002-free-movement-server-paths.md)) and is written
 
 - **Godot is the only place a navmesh is baked.** Each region scene has a `NavigationRegion3D`, baked in the editor.
 - **An editor tool script** (`client/tools/export_region.gd`, run headless by `tools/export-regions.sh`) writes `data/regions/<region>.region.json` (or a compact binary later). The file contains:
-  - navmesh vertices and polygons, with polygon adjacency
+  - navmesh vertices and polygons. Polygon adjacency isn't stored: the server computes it at load from shared edges ([world-server.md](../architecture/world-server.md#region-file-format-1)).
   - spawn points (creatures, players and respawn points)
   - resource nodes (trees, rocks, fishing spots, dig sites), with their type ids
   - region exits (trigger area, then target region and entry point)
