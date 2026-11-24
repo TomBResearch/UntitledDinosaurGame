@@ -17,9 +17,9 @@ Folders marked *(planned)* don't exist yet. They're created by the M0 task that 
 | `wiki/` | Player-facing wiki (Markdown with front matter) | **Public** |
 | `docs/` | Internal design, architecture, decisions, roadmap. Start at [docs/README.md](docs/README.md) | Private |
 | `client/` | Godot project: the web client. No game rules live here. GUT tests in `client/tests/`. | Private |
-| `server/` | Go module: `cmd/dataval` now. Later `cmd/world` (world server), `cmd/api` (backend API), `cmd/protogen`, plus `internal/…` | Private |
+| `server/` | Go module: `cmd/dataval` and `cmd/protogen` now. Later `cmd/world` (world server), `cmd/api` (backend API), plus `internal/…` | Private |
 | `data/` | Game content as JSON: items, creatures, drop tables, skills, recipes, quests, XP curve. One source of truth for client and server. | Private |
-| `protocol/` *(planned)* | Network message schema. Go and GDScript codecs are generated from it. | Private |
+| `protocol/` | Network message schema (`messages.schema`) and shared test vectors. Go and GDScript codecs are generated from it. | Private |
 | `assets-src/` *(planned)* | Blender sources and licences (Git LFS) | Private |
 | `infra/` *(planned)* | Docker Compose, Caddy, nginx, deploy | Private |
 | `tools/` | Scripts: `check.sh` (fast check), `slow-tests.sh`, `check-links.py`. Later: export regions, build, deploy. | Private |
@@ -41,12 +41,13 @@ The **shared account platform** (login, roles, Premium, bans, friends) is a sepa
 
 | Task | Command |
 |---|---|
-| **Fast check (run before every push)** | `tools/check.sh`: data validation, Go format, vet, staticcheck and tests, then Godot import and GUT. About 3 s locally. `tools/check.sh go` and `tools/check.sh godot` run one half. |
+| **Fast check (run before every push)** | `tools/check.sh`: data validation, protocol staleness, Go format, vet, staticcheck and tests, then Godot import and GUT. About 3 s locally. `tools/check.sh go` and `tools/check.sh godot` run one half. |
 | Validate data and regenerate `client/data/` | `cd server && go run ./cmd/dataval -data ../data -emit-client ../client/data` (the check does this) |
+| Regenerate protocol codecs (after editing `protocol/messages.schema`) | `tools/protogen.sh`. See [protocol/README.md](protocol/README.md). |
 | Docs link check | `python3 tools/check-links.py` |
-| Slow tests (race detector now; bots, soak and builds later) | `tools/slow-tests.sh`. Runs nightly and on demand, never on every push. |
+| Slow tests (race detector and protocol fuzzing now; bots, soak and builds later) | `tools/slow-tests.sh`. Runs nightly and on demand, never on every push. |
 | Install staticcheck locally (optional; CI always runs it) | `go install honnef.co/go/tools/cmd/staticcheck@v0.8.2` |
-| *Planned in M0:* export regions, regenerate protocol, local stack, deploy | `tools/export-regions.sh`, `tools/protogen.sh`, `cd infra && docker compose up -d --build`, `tools/deploy.sh` |
+| *Planned in M0:* export regions, local stack, deploy | `tools/export-regions.sh`, `cd infra && docker compose up -d --build`, `tools/deploy.sh` |
 
 **MCP:** `.mcp.json` (Godot and Blender MCP servers) is local to the owner's Mac and ignored by git. Copy it from Untitled Racing Game if it's missing.
 

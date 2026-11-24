@@ -7,4 +7,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 echo "== Go tests with the race detector"
 (cd "$REPO_ROOT/server" && go test -race -count=1 ./...)
 
+echo "== Protocol decoder fuzzing (60 s)"
+(cd "$REPO_ROOT/server" && go test -run '^$' -fuzz '^FuzzDecode$' -fuzztime "${PROTO_FUZZTIME:-60s}" ./internal/proto)
+
 echo "Slow lane passed."
