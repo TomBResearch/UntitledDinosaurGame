@@ -13,4 +13,7 @@ echo "$bench"
 awk '/^BenchmarkFindPath\// { found = 1; if ($3 + 0 > 200000) { print "Over budget: " $1 " takes " $3 " ns per path"; bad = 1 } }
      END { if (!found) print "No FindPath benchmark ran"; exit bad || !found }' <<<"$bench"
 
+echo "== Protocol decoder fuzzing (60 s)"
+(cd "$REPO_ROOT/server" && go test -run '^$' -fuzz '^FuzzDecode$' -fuzztime "${PROTO_FUZZTIME:-60s}" ./internal/proto)
+
 echo "Slow lane passed."

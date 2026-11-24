@@ -1,0 +1,144 @@
+# The network protocol: every message between the web client and a world server.
+#
+# This file is the source of truth. `tools/protogen.sh` generates the Go codec
+# (server/internal/proto/messages_gen.go) and the GDScript codec (client/net/proto/messages.gd).
+# The wire format is described in docs/architecture/networking.md and protocol/README.md.
+#
+# Field types:
+#   bool               one bit in the struct's flag bytes
+#   u8, u16            fixed width, little-endian
+#   u32, u64           unsigned varint (u64 is capped at 2^63-1 so GDScript's int can hold it)
+#   i32                zigzag varint
+#   pos                3 x i32 (x, y, z) in centimetres from the region origin
+#   string<N>          UTF-8, varint byte length, at most N bytes (character limits are game rules)
+#   list<T, N>         varint count, at most N elements of T (not bool, list or optional)
+#   Name               an enum (u8 on the wire) or a struct declared below
+#   Name?              an optional struct: one bit in the flag bytes, then the struct if set
+#
+# A comment line directly above a declaration or field becomes its doc comment.
+# Comments don't change the protocol hash; anything else does.
+
+## Enums ##
+
+# What an entity is. Decides which scene the client shows.
+enum EntityKind {
+  player = 0
+  creature = 1
+  resource_node = 2
+  ground_item = 3
+  npc = 4
+}
+
+# Account role from the shared platform (docs/architecture/accounts.md). Shown as a chat badge.
+enum Role {
+  normal = 0
+  premium = 1
+  moderator = 2
+  admin = 3
+  owner = 4
+}
+
+## Structs ##
+
+# A path an entity walks: start at waypoints[0] at start_tick, then move at speed along the
+# waypoints, stopping at the last one. Position at tick t is speed * (t - start_tick) along it.
+struct Path {
+  start_tick: u32
+  # Centimetres per second.
+  speed: u32
+  # waypoints[0] is where the path starts. The server truncates longer paths.
+  waypoints: list<pos, 64>
+}
+
+## Client -> server (intents) ##
+
+# The first message on a connection. Its id and first field never change, so a server can
+# always read the protocol hash of an out-of-date client and tell it to refresh.
+message hello = 1 client {
+  # Must equal the generated protocol hash.
+  protocol_hash: u32
+  # The single-use join ticket from the backend API.
+  ticket: string<1024>
+  # SHA-256 (hex) of the client's content data (client/data/content_hash.txt).
+  content_hash: string<64>
+  client_version: string<32>
+}
+
+# Keepalive and clock sync. Sent every 5 s.
+message ping = 2 client {
+  # The client's own clock, in any unit. The server echoes it back unchanged in pong.
+  client_time: u64
+}
+
+# Walk to a point (a ground click).
+message move_to = 3 client {
+  position: pos
+}
+
+# Say something in local chat. The server caps it at 120 characters.
+message chat_say = 4 client {
+  text: string<480>
+}
+
+## Server -> client (events) ##
+
+# Reply to hello once the ticket is accepted.
+message welcome = 64 server {
+  # Your entity id in this region.
+  entity: u32
+  region: string<32>
+  server_tick: u32
+  # Ticks per second.
+  tick_hz: u8
+}
+
+# Reply to ping.
+message pong = 65 server {
+  # Echoed from ping.
+  client_time: u64
+  # The tick the server was on when it replied.
+  server_tick: u32
+  # How far through that tick, in 256ths.
+  tick_phase: u8
+}
+
+# An entity started a new path (or changed path). Sent to everyone who can see it.
+message path_started = 66 server {
+  entity: u32
+  path: Path
+}
+
+# An entity stopped walking.
+message path_stopped = 67 server {
+  entity: u32
+  tick: u32
+  position: pos
+}
+
+# An entity came into view, with its full current state.
+message entity_enter = 68 server {
+  entity: u32
+  kind: EntityKind
+  # Content id of the creature, node, item or NPC type (empty for players).
+  type_id: string<32>
+  name: string<64>
+  position: pos
+  # Set if the entity is walking.
+  path: Path?
+  # HP as a fraction of maximum, 0-255.
+  hp: u8
+  in_combat: bool
+}
+
+# An entity left view (or the region).
+message entity_leave = 69 server {
+  entity: u32
+}
+
+# A local chat line.
+message chat = 70 server {
+  entity: u32
+  name: string<48>
+  role: Role
+  text: string<480>
+}

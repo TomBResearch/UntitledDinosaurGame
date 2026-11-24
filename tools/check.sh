@@ -2,7 +2,7 @@
 # The fast check (ADR 0009). Same as the CI fast lane. Run it before every push; target under 60 s.
 #
 #   tools/check.sh          # everything
-#   tools/check.sh go       # Go only (format, vet, staticcheck, tests, data)
+#   tools/check.sh go       # Go only (format, vet, staticcheck, tests, data, protocol staleness)
 #   tools/check.sh godot    # data + Godot only (import, GUT)
 #
 # Env: GODOT (path to Godot 4.7.2; defaults to the Mac app), STATICCHECK (path, optional locally).
@@ -15,6 +15,11 @@ step() { printf '\n== %s (%ss)\n' "$1" "$((SECONDS - START))"; }
 run_data() {
   step "Content data: validate and emit the client copy"
   (cd "$REPO_ROOT/server" && go run ./cmd/dataval -data ../data -emit-client ../client/data)
+}
+
+run_proto() {
+  step "Protocol: generated codecs are up to date"
+  (cd "$REPO_ROOT/server" && go run ./cmd/protogen -check)
 }
 
 run_go() {
@@ -52,8 +57,8 @@ run_godot() {
 }
 
 case "$PART" in
-  all) run_data; run_go; run_godot ;;
-  go) run_data; run_go ;;
+  all) run_data; run_proto; run_go; run_godot ;;
+  go) run_data; run_proto; run_go ;;
   godot) run_data; run_godot ;;
   *) echo "usage: tools/check.sh [all|go|godot]" >&2; exit 2 ;;
 esac
