@@ -4,24 +4,79 @@ See [ADR 0002](../decisions/0002-free-movement-server-paths.md) for the movement
 
 ## Transport
 
-- WSS to `/w/<world-id>`: one connection per player, binary frames only.
-- **Server to client:** at most one frame per tick (every 50 ms), holding every event for that client from that tick. A tick with nothing new sends nothing.
-- **Client to server:** intents are sent as they happen. Each intent is a few bytes.
+- WSS to `/w/<world-id>`: one connection per player, binary frames only. A text frame closes the connection (status 1003).
+- **Server to client:** at most one frame per tick (every 50 ms), holding every event for that client from that tick. A tick with nothing new sends nothing. A `pong` goes out in its own frame as soon as the ping is read.
+- **Client to server:** intents are sent as they happen. Each intent is a few bytes. A client frame may hold several messages, but it must be at most `MaxClientMessageSize` bytes (1,132, the largest `hello`): that's the server's read limit, and a bigger frame closes the connection.
 - **Keepalive:** a ping every 5 s doubles as clock sync. The connection drops after 20 s of silence.
+- **Library:** the world server uses [`github.com/coder/websocket`](https://github.com/coder/websocket) (v1.8.15), the server's first Go dependency. It's small, has no dependencies of its own, takes a `context` on every read and write (so the silence and write timeouts are plain deadlines), and is safe to close from another goroutine, which is how a slow client is dropped without the tick waiting.
+- **Origins:** browsers may connect from the server's own host, plus the patterns in `-origins` (default `localhost:*,127.0.0.1:*`, for a locally served web export). Production sets it to the game's domain.
+
+### Connection lifecycle
+
+1. The client opens the WebSocket and sends `hello` as its first frame, within 10 s.
+2. The server checks, in order:
+   - `protocol_hash` (before decoding the rest, see [Protocol version](#wire-format)): a mismatch gets `kick(refresh)`.
+   - `content_hash` against the server's `data/` hash (the client's `client/data/content_hash.txt`): a mismatch gets `kick(refresh)`.
+   - `ticket` (see [Dev tickets](#dev-tickets)): refused gets `kick(bad_ticket)`.
+3. Accepted: the player joins the spawn region. The first frame back holds `welcome`, then `entity_enter` for **the player itself**, then `entity_enter` for everything in view.
+4. After that, intents and pings flow until either side closes.
+
+**The server closing a connection.** `kick(reason)` is always the last frame before a close the client should explain:
+
+| Reason | When | Close status | Client should |
+|---|---|---|---|
+| `refresh` | stale protocol or content | 1008 | ask the player to reload the page |
+| `bad_ticket` | the ticket was refused | 1008 | go back to the login or world list |
+| `shutdown` | the world is stopping (SIGTERM) | 1001 | say so and offer to reconnect |
+| `misbehaving` | too many invalid or rate-limited messages, or over the upload limit | 1008 | show an error |
+
+Without a `kick`, the connection was dropped: a malformed frame (status 1002), a silent or too-slow connection (no close handshake). The client may reconnect.
+
+**Slow clients never hold up the tick.** Each session has a queue of 64 frames (3.2 s). The region hands a frame over without waiting; if the queue is full, the player is removed from the region and the connection dropped. A single frame that can't be written within 10 s also drops it.
+
+### Dev tickets
+
+Until real join tickets arrive with the backend in M1, a development world server lets anyone in by name:
+
+- Start the server with **`-dev-tickets`**: `cd server && go run ./cmd/world -dev-tickets`. It logs a warning at startup. Never use it on a public server.
+- It listens on **`127.0.0.1:8090`** (`-addr`) and serves world **`dev`** (`-world`), so the client connects to **`ws://127.0.0.1:8090/w/dev`**.
+- The client sends `hello.ticket = "dev:<name>"`. `<name>` follows the character name rules ([backend.md](backend.md)): 3–12 characters, letters and digits with single spaces between words, no space at either end. Dev names are plain ASCII (`A–Z`, `a–z`, `0–9`) and aren't filtered or unique: two players can both be `Ugg`.
+- The name is the player's display name. Everyone spawns at a `player_spawns` point of `test_greybox` (`-spawn-region`), in turn.
+- Without `-dev-tickets`, every `dev:` ticket is refused, and so is anything else until M1: every `hello` gets `kick(bad_ticket)`.
+- `hello.content_hash` must match too, so run `tools/check.sh` (or `dataval -emit-client`) after changing `data/`, and restart the server.
+
+### Rate limits
+
+Checked by the server per player; a message over its limit is dropped and counted as invalid, and **more than 50 invalid messages in a minute** disconnects with `kick(misbehaving)` ([security.md](security.md)).
+
+| What | Limit | Where |
+|---|---|---|
+| `move_to` | 10 a second, burst 10 | region, counted in ticks so tests are exact |
+| `chat_say` | 1 a second, burst 3 | region (checked by the local chat task) |
+| `ping` | 1 a second, burst 3; extra pings aren't answered | session |
+| Upload | 4 KB/s, burst 16 KB; over it disconnects | session |
+| `move_to` further than 150 m from you | invalid | region |
 
 ## Clock sync
 
 Paths start at a **server tick**, so the client needs to know the server's time.
-- The client sends `ping(client_time)`. The server replies `pong(client_time, server_tick, tick_phase)`.
+- The client sends `ping(client_time)`. The server replies `pong(client_time, server_tick, tick_phase)`: `server_tick` is the last tick the region ran, and `tick_phase` is how long ago that tick was due, in 256ths of a tick (255 if a tick is late). So the server's time is `server_tick + tick_phase / 256` ticks.
 - The client keeps a smoothed offset, averaging the samples with the lowest round-trip time.
 - The client renders other entities **about 100 ms in the past** (interpolation delay), which absorbs jitter. It renders **your own character at the current estimated time**, so your movement feels immediate once the path arrives.
 
 ## Movement playback
 
 1. You click. The client shows the click marker, turns your character to face it and sends `move_to(x, y, z)`.
-2. The server replies with `path_started(entity, start_tick, speed, waypoints[])`, sent to everyone who can see you.
-3. Each client places the entity at `distance = speed × (now − start_tick)` along the waypoints. This is the same calculation everywhere, and it finishes at the last waypoint.
-4. A change of path sends a new `path_started`. Stopping sends `path_stopped(entity, tick, position)`.
+2. The server replies with `path_started(entity, start_tick, speed, waypoints[])`, sent to everyone who can see you, including you.
+3. Each client places the entity at `distance = speed × (now − start_tick)` along the waypoints. This is the same calculation everywhere, and it finishes at the last waypoint. Exactly:
+   - `distance_cm = speed × (t − start_tick) / tick_hz`, with `speed` in cm/s, `t` in ticks (fractional on the client) and `tick_hz` from `welcome`.
+   - Measure it along the straight **3D** segments between consecutive waypoints, which are whole centimetres. Past the end, stay on the last waypoint.
+   - The broadcast waypoints *are* the server's path: it computes its own positions from the same quantised numbers, so it never disagrees with a client by more than float rounding.
+   - Walk speed is `movement.walk_speed_m_s` in `data/progression.json` (4 m/s, sent as 400 cm/s).
+4. A change of path sends a new `path_started`. Its first waypoint is where the old path had the entity on the new `start_tick`, so there's no jump. Stopping sends `path_stopped(entity, tick, position)`:
+   - on arrival, on the first tick at or past the end, at the last waypoint;
+   - when a click finds no path, or is within 10 cm of where you are, at your current position. If you were walking, everyone who sees you gets it; if you were standing, only you do (so your client can clear the click marker).
+   - Only a player's last click in a tick is walked.
 5. **Correction:** if a client's drawn position ever differs from where the server's numbers place it by more than 0.5 m, for example after a lag spike, the entity blends to the correct place over 150 ms.
 
 ## Message catalogue (first draft)
@@ -67,7 +122,7 @@ These are the messages for M0–M3. The schema, [`protocol/messages.schema`](../
 | `system_message` | key and parameters (the client localises them) |
 | `dialogue` | NPC, text key, options |
 | `pong` **(M0)** | see clock sync |
-| `kick` | reason code |
+| `kick` **(M0)** | reason: `refresh`, `bad_ticket`, `shutdown` or `misbehaving` (see [Connection lifecycle](#connection-lifecycle)) |
 
 ## Bandwidth budget
 
@@ -111,5 +166,5 @@ The generator (`server/cmd/protogen`, run by `tools/protogen.sh`) turns the sche
 
 **Protocol version**
 - `ProtocolHash` (`Proto.PROTOCOL_HASH`) is the first 4 bytes of the SHA-256 of the schema in a canonical form, without comments or formatting. Changing a comment doesn't change the version; changing anything else does.
-- `hello` always has id 1 and starts with `protocol_hash: u32`, with no flag bytes (the generator enforces this). So the server can read an out-of-date client's hash even if the rest of its `hello` has changed shape. `proto.CheckHello` compares the hash before decoding the rest, and returns `ErrProtocolMismatch` for a stale client. The world server answers that with a "please refresh" message, which arrives with the world server core.
+- `hello` always has id 1 and starts with `protocol_hash: u32`, with no flag bytes (the generator enforces this). So the server can read an out-of-date client's hash even if the rest of its `hello` has changed shape. `proto.CheckHello` compares the hash before decoding the rest, and returns `ErrProtocolMismatch` for a stale client. The world server answers that with `kick(refresh)`.
 - `client_time` in `ping` and `pong` is opaque to the server: it is echoed back unchanged, in whatever unit the client uses. `tick_phase` in `pong` is how far through the tick the server was, in 256ths.

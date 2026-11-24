@@ -14,6 +14,8 @@ world process
 └── saver: batches character saves to Postgres
 ```
 
+The code: `server/cmd/world` (the process and its flags), `server/internal/world` (the WebSocket endpoint and sessions; the hub's job while there's one region) and `server/internal/region` (the simulation). Players all join one spawn region for now; region transfers and the saver come later.
+
 - **Regions don't share memory.** A region only receives messages through its inbox channel (player intents, a transfer in, a shutdown) and sends them through the hub. That's what lets a region move into its own process later ([ADR 0007](../decisions/0007-worlds-and-regions.md)).
 - **Inside a tick, everything is single-threaded.** No locks in game logic.
 
@@ -32,13 +34,24 @@ Each `Region.Step()` runs these steps in order:
 8. **Update interest:** grid cell changes, then enter and leave events.
 9. **Flush:** for each client, encode this tick's events into **one** binary frame and pass it to the writer goroutine.
 
+**What M0 runs.** `Region.Step()` (`server/internal/region`) does steps 1–3, 8 and 9; AI, combat, skilling and timers slot in between movement and interest as they arrive:
+1. **Inbox:** joins, leaves and intents, in arrival order. `move_to` is rate-limited and range-checked here, and only a player's last click in the tick is kept. `chat_say` has its handler (`Region.chat`) waiting for the local chat task.
+2. **Paths:** each kept click becomes a path from where the player is this tick (see [Pathfinding](#pathfinding)), or a stop.
+3. **Movement:** every walking entity moves to where its quantised path puts it this tick; one at or past the end stops there.
+4. **Interest:** entities that crossed a cell boundary move cells, with their enter and leave events.
+5. **Flush:** each player with anything queued gets one frame. A player whose queue is full is removed afterwards (its `entity_leave` goes out with the next tick).
+
+Within a tick a player's frame is in event order: `path_started` and `path_stopped` from steps 2–3, then `entity_enter` and `entity_leave`. An entity that comes into view in the same tick as it starts a path arrives as one `entity_enter` carrying that path.
+
+**The loop** (`Region.Run`) steps at `1 s / tick_hz`. A tick that finishes late is followed straight away by the next, so the simulation catches up; a tick over the 10 ms budget is logged. Exporting tick time as a metric comes with `/metrics`.
+
 **Tests call `Step()` directly** with a fake clock. A whole fight or gathering session runs in milliseconds ([ADR 0009](../decisions/0009-fast-ci.md)).
 
 **Budget:** a region's tick must finish within **10 ms at p99** with its target population. The time is exported as a metric. If the tick runs over, the loop logs it and catches up by running the next tick immediately. It never skips simulation.
 
 ## Entities
 
-Plain structs in slices indexed by a per-region `EntityID` (u32, recycled with a generation counter). There's no inheritance tree. Components are optional fields or side tables, checked only by the systems that need them:
+Plain structs in slices indexed by a per-region `EntityID` (u32, recycled with a generation counter: the slot index in the low 20 bits, so a region holds up to about a million entities, and the slot's generation in the high 12; 0 is never an id). There's no inheritance tree. Components are optional fields or side tables, checked only by the systems that need them:
 
 | Kind | Has |
 |---|---|
@@ -69,6 +82,11 @@ The code is `server/internal/navmesh`. Its fixtures are in `testdata/`.
   - The limits are `navmesh.DefaultLimits`.
 - **`Raycast(from, to)`** walks the line across the mesh in XZ and reports where the mesh edge stops it. It's used for line of sight (ranged and Voodoo attacks) and to clamp dashes (`RayHit.Pos`). A ray that runs exactly along a straight wall carries on through the vertices where polygons meet.
 - **`HeightAt(p)`** gives the surface height under a point. Where levels overlap (a bridge over a path), it picks the level nearest `p.Y`.
+- **Walking a path** (`server/internal/region`):
+  - The waypoints are rounded to whole centimetres (the protocol's `pos`), consecutive duplicates are dropped, and the path is cut at the protocol's 64 waypoints. That quantised path is what's broadcast **and** what the server walks, using the same formula as the clients ([networking.md](networking.md#movement-playback)).
+  - The path's first waypoint is the entity's current position, not `FindPath`'s snapped start, so a repath never jumps.
+  - A path shorter than 10 cm (a click on the spot) stops you instead, as does `NoPath`.
+  - A standing entity is always exactly on the centimetre grid.
 - **Followers** (chasing a target) repath at most every 4 ticks, and only if the target moved more than 1 m.
 - **Budget:** under 0.2 ms per path on the test regions.
   - `BenchmarkFindPath` runs in the slow lane (`tools/slow-tests.sh`), which fails if any mesh is over budget.
@@ -125,12 +143,15 @@ Written by `client/tools/export_region.gd`. Never edit it by hand.
 
 ## Interest management
 
-- The region uses a uniform grid of **16 m cells**. A player **sees** every cell within a radius of **64 m** (`view_radius_m`, configurable).
+- The region uses a uniform grid of **16 m cells** over the navmesh's bounds. A player **sees** every cell within a radius of **64 m** (`region.Config.ViewRadius`, configurable): every cell whose centre is within 64 m of their own cell's centre. That's 49 cells, so you always see at least 41 m in every direction (64 m minus a cell's diagonal) and at most about 86 m.
+- Seeing is symmetric: two players either see each other or neither does, and they find out in the same tick.
+- An entity's position is checked against its cell every tick. Crossing a boundary is the only thing that changes what anyone sees.
 - When a player crosses a cell boundary, the server works out which entities entered and left their view:
   - `entity_enter` carries the entity's full current state, including any path it's on.
   - `entity_leave` removes it.
 - An event about an entity goes only to players who can currently see it.
-- **Crowd control:** if more than about 150 entities are in view, low-priority ones are dropped first (other players' cosmetic actions, distant players). You still see them, with less detail.
+- On joining, a player gets `entity_enter` for itself first, then for everything in view. Its own events (`path_started`, `path_stopped`) come back to it like anyone else's.
+- **Crowd control** (not built yet): if more than about 150 entities are in view, low-priority ones are dropped first (other players' cosmetic actions, distant players). You still see them, with less detail.
 
 ## Saving characters
 
@@ -138,6 +159,7 @@ Written by `client/tools/export_region.gd`. Never edit it by hand.
 - **The saver saves dirty characters every 60 s**, plus right away on logout, region transfer, a bank deposit or withdrawal, and quest completion. Each save is one transaction.
 - **Online lease:** `characters.online_world_id` and `lease_until` are refreshed every 20 s by the world. A crashed world's characters can log in again after 60 s.
 - **Shutdown** (SIGTERM): stop accepting joins, warn players ("World restarting in 60 s"), save everyone, then release the leases.
+  - M0 has no saving yet. SIGTERM stops accepting connections, sends every player `kick(shutdown)` and closes them, waits up to 15 s, then stops the region loops.
 
 ## Item safety
 
@@ -147,5 +169,6 @@ Written by `client/tools/export_region.gd`. Never edit it by hand.
 
 ## Metrics and logs
 
+- Built so far: JSON logs (`log/slog`) for startup, joins, leaves, server-side closes and slow ticks, and the region's `Stats` counters (invalid intents by type, players dropped). `/metrics` itself isn't built yet.
 - Prometheus-style `/metrics` on an internal port: tick time (p50, p99, max), players and entities per region, bytes in and out, invalid intents by type, save duration.
 - Structured JSON logs. Never log tokens, tickets or chat containing personal data.

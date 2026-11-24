@@ -10,7 +10,7 @@ The game will have hundreds of items, creatures, drop tables, recipes and quests
 
 - **`data/` holds every content definition as JSON**, one file per category, split further as it grows:
   - `items/*.json`, `creatures/*.json`, `drops/*.json`, `recipes/*.json`, `nodes/*.json` (gathering spots), `quests/*.json`
-  - `skills.json`, `progression.json` (the XP curve and its settings), `abilities.json`
+  - `skills.json`, `progression.json` (the XP curve and its settings, the player walk speed and the tick rate), `abilities.json`
 - **Every entry has a stable string id** (`small_raptor_tooth`), never a number that could be reused.
 - **`cmd/dataval` validates everything:** schema, references between files (a drop table naming an item that doesn't exist fails), ranges, and premium flags (free content can't need premium items).
 - **The content hash:** a SHA-256 of the normalised data. The client sends it in the handshake, and a mismatch means "please refresh".

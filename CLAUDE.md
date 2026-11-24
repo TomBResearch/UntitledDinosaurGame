@@ -6,7 +6,7 @@ Read this first. It covers what the project is, where things live and the rules 
 
 A browser-based 3D sandbox MMORPG set in prehistoric times: cavemen, dinosaurs, jungles, caves and fossils. You start as a caveman in a pelt loincloth and level up skills (combat, gathering, processing and Hunting tasks) up to level 100. Movement is click-to-move in third person, with four ability keys. Each world is a full copy of the map, and you pick one from a world list, RuneScape-style. Progress is saved to your account, which is shared with the owner's other games.
 
-**Project stage:** M0 (Foundations) in progress: the repo skeleton and the fast check are in place. Work follows [docs/roadmap/milestones.md](docs/roadmap/milestones.md).
+**Project stage:** M0 (Foundations) in progress: the repo skeleton, fast check, protocol, test region, pathfinding and world server core are in place. Work follows [docs/roadmap/milestones.md](docs/roadmap/milestones.md).
 
 ## Where things live
 
@@ -17,7 +17,7 @@ Folders marked *(planned)* don't exist yet. They're created by the M0 task that 
 | `wiki/` | Player-facing wiki (Markdown with front matter) | **Public** |
 | `docs/` | Internal design, architecture, decisions, roadmap. Start at [docs/README.md](docs/README.md) | Private |
 | `client/` | Godot project: the web client. No game rules live here. GUT tests in `client/tests/`. | Private |
-| `server/` | Go module: `cmd/dataval` and `cmd/protogen` now. Later `cmd/world` (world server), `cmd/api` (backend API), plus `internal/…` | Private |
+| `server/` | Go module: `cmd/world` (world server), `cmd/dataval` and `cmd/protogen` now, later `cmd/api` (backend API). Packages in `internal/…`: `region` (the simulation), `world` (WebSocket sessions), `navmesh`, `proto`, `content`. | Private |
 | `data/` | Game content as JSON: items, creatures, drop tables, skills, recipes, quests, XP curve. One source of truth for client and server. | Private |
 | `protocol/` | Network message schema (`messages.schema`) and shared test vectors. Go and GDScript codecs are generated from it. | Private |
 | `assets-src/` *(planned)* | Blender sources and licences (Git LFS) | Private |
@@ -45,7 +45,8 @@ The **shared account platform** (login, roles, Premium, bans, friends) is a sepa
 | Validate data and regenerate `client/data/` | `cd server && go run ./cmd/dataval -data ../data -emit-client ../client/data` (the check does this) |
 | Regenerate protocol codecs (after editing `protocol/messages.schema`) | `tools/protogen.sh`. See [protocol/README.md](protocol/README.md). |
 | Docs link check | `python3 tools/check-links.py` |
-| Slow tests (race detector, protocol fuzzing and the pathfinding benchmark now; bots, soak and builds later) | `tools/slow-tests.sh`. Runs nightly and on demand, never on every push. |
+| Run the world server locally (dev tickets on; clients connect to `ws://127.0.0.1:8090/w/dev` with ticket `dev:<name>`) | `cd server && go run ./cmd/world -dev-tickets`. Flags: `-addr`, `-world`, `-data`, `-spawn-region`, `-origins`. Ctrl-C or SIGTERM shuts it down cleanly. See [networking.md](docs/architecture/networking.md#dev-tickets). |
+| Slow tests (race detector, protocol fuzzing, the pathfinding benchmark and the 50-bot walk test now; soak and builds later) | `tools/slow-tests.sh`. Runs nightly and on demand, never on every push. |
 | Install staticcheck locally (optional; CI always runs it) | `go install honnef.co/go/tools/cmd/staticcheck@v0.8.2` |
 | Export regions to `data/regions/` (after editing a region scene; `--bake` re-bakes the navmesh first) | `tools/export-regions.sh [--bake] [region_id ...]` |
 | *Planned in M0:* local stack, deploy | `cd infra && docker compose up -d --build`, `tools/deploy.sh` |
