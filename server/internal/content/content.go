@@ -12,7 +12,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/navmesh"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/progression"
 )
 
@@ -38,6 +40,9 @@ type Content struct {
 	Progression Progression
 	Skills      []Skill
 	XP          *progression.Table
+	// Regions are data/regions/*.region.json, sorted by id, exported from the Godot scenes (ADR 0004).
+	// They're server-only and not part of Hash: the client has the scenes themselves.
+	Regions []*navmesh.Region
 	// Hash is a SHA-256 of the normalised data files. Clients send it in `hello`; a mismatch means "please refresh".
 	Hash string
 	// files holds each source file's normalised JSON, by path relative to data/.
@@ -94,11 +99,43 @@ func Load(dir string) (*Content, error) {
 			problems = append(problems, fmt.Errorf("skills.json: %q has unknown group %q", s.ID, s.Group))
 		}
 	}
+	var regionProblems []error
+	c.Regions, regionProblems = loadRegions(dir)
+	problems = append(problems, regionProblems...)
 	if len(problems) > 0 {
 		return nil, errors.Join(problems...)
 	}
 	c.Hash = c.hash()
 	return c, nil
+}
+
+// loadRegions reads and validates every regions/*.region.json, if there are any.
+func loadRegions(dir string) ([]*navmesh.Region, []error) {
+	paths, err := filepath.Glob(filepath.Join(dir, "regions", "*.region.json"))
+	if err != nil {
+		return nil, []error{err}
+	}
+	sort.Strings(paths)
+	var regions []*navmesh.Region
+	var problems []error
+	for _, path := range paths {
+		name := "regions/" + filepath.Base(path)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			problems = append(problems, err)
+			continue
+		}
+		r, err := navmesh.ParseRegion(raw)
+		if err != nil {
+			problems = append(problems, fmt.Errorf("%s: %w", name, err))
+			continue
+		}
+		if want := strings.TrimSuffix(filepath.Base(path), ".region.json"); r.ID != want {
+			problems = append(problems, fmt.Errorf("%s: region_id %q doesn't match the file name", name, r.ID))
+		}
+		regions = append(regions, r)
+	}
+	return regions, problems
 }
 
 // readJSON decodes one file strictly (unknown fields are errors) and keeps its normalised form for hashing.

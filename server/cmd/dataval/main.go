@@ -28,5 +28,5 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	fmt.Printf("data/ ok: %d skills, max level %d, content hash %s\n", len(c.Skills), c.Progression.MaxLevel, c.Hash[:12])
+	fmt.Printf("data/ ok: %d skills, max level %d, %d regions, content hash %s\n", len(c.Skills), c.Progression.MaxLevel, len(c.Regions), c.Hash[:12])
 }

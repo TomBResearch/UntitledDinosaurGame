@@ -49,28 +49,7 @@ The exporter refuses a region with no player spawn, no respawn point, an empty n
 
 **Staleness:** each export records `source_hash`, the SHA-256 of `region.tscn`'s bytes. The fast check recomputes it (it hashes only, with no bake or export) and fails if they differ, if a scene has no export, or if an export has no scene. Opening and re-saving the scene in the editor changes the hash even if nothing moved, so re-export after any save. The hash covers `region.tscn` only. When chunks arrive, the hash must cover them too. If you change a marker script in a way that changes the export, re-export every region.
 
-**Region file, format 1.** Godot axes (+Y up), metres, every number written with 3 decimals (millimetres). Keys are sorted, and markers appear in scene-tree order, so re-exporting an unchanged scene gives a byte-identical file.
-
-```json
-{
-  "creature_spawns": [{"count": 3, "creature_id": "small_raptor", "pos": [x, y, z], "respawn_s": 45.000, "wander_radius": 8.000}],
-  "entry_points": [{"entry_id": "from_cave", "pos": [x, y, z], "yaw": 1.571}],
-  "exits": [{"pos": [x, y, z], "size": [x, y, z], "target_entry": "from_outside", "target_region": "cave", "yaw": 0.000}],
-  "format": 1,
-  "navmesh": {
-    "polygons": [[i0, i1, i2], ...],
-    "vertices": [[x, y, z], ...]
-  },
-  "player_spawns": [{"pos": [x, y, z]}],
-  "region_id": "test_greybox",
-  "resource_nodes": [{"node_id": "oak_tree", "pos": [x, y, z]}],
-  "respawn_points": [{"pos": [x, y, z]}],
-  "source_hash": "<sha256 of region.tscn>"
-}
-```
-
-- `polygons` come straight from `NavigationMesh.get_polygon(i)`. Godot builds them from Recast's detail mesh, so in practice they're all triangles, and vertex heights follow the ground. The file has no adjacency; the server's loader works it out from shared edges.
-- `yaw` is radians about +Y: 0 faces −Z, and positive turns counter-clockwise seen from above (the same as a node's `rotation.y`). An exit's `pos` is its box centre and `size` the box's full size.
+**Region file, format 1:** the full layout and the loader's validation rules are in [world-server.md](world-server.md#region-file-format-1). The exporter writes Godot axes (+Y up) in metres, every number with 3 decimals (millimetres), sorted keys, and markers in scene-tree order, so re-exporting an unchanged scene gives a byte-identical file. `polygons` come straight from `NavigationMesh.get_polygon(i)`; Godot builds them from Recast's detail mesh, so in practice they're all triangles whose vertex heights follow the ground.
 
 ### The test region (`test_greybox`)
 

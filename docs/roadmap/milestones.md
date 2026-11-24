@@ -10,9 +10,9 @@ Each milestone ends with something **playable on the test server**. Tasks inside
 |---|---|
 | Repo skeleton **(done)** | `client/`, `server/`, `data/` and `tools/` exist (`protocol/`, `infra/` and `assets-src/` arrive with the tasks that need them). `.gitignore`, `.gitattributes` (LFS for `assets-src/`), and `.mcp.json` for the Godot and Blender MCPs are in place. Go 1.27 is installed (`brew install go`). |
 | Fast check and CI **(done)** | `tools/check.sh` and the CI fast lane run in under 2 minutes. Docs-only changes skip CI. The nightly slow-lane workflow exists ([ADR 0009](../decisions/0009-fast-ci.md)). |
-| Protocol generator | A schema with `hello`, `welcome`, `ping`, `pong`, `move_to`, `path_started`, `path_stopped`, `entity_enter`, `entity_leave`, `chat_say` and `chat`. Codecs are generated for Go and GDScript, and round-trip tests pass on both sides. |
+| Protocol generator **(done)** | A schema with `hello`, `welcome`, `ping`, `pong`, `move_to`, `path_started`, `path_stopped`, `entity_enter`, `entity_leave`, `chat_say` and `chat`. Codecs are generated for Go and GDScript, and round-trip tests pass on both sides. |
 | Test region and export **(done)** | A greybox region (about 200 m × 200 m: hills, a river, rocks, a cave mouth) with a baked navmesh. `export_region.gd` writes the region file, and the staleness check works. |
-| Navmesh pathfinding (Go) | Load, A*, funnel and raycast, with unit tests on fixture meshes. A path in the test region takes under 0.2 ms. |
+| Navmesh pathfinding (Go) **(done)** | Load, A*, funnel and raycast, with unit tests on fixture meshes. A path in the test region takes under 0.2 ms. |
 | World server core | Tick loop, region inbox, `Step()`, spatial grid, interest management, movement along paths. Tick-stepped tests cover: walk, repath, stop, entity enter and leave. |
 | Client core | Connect with a **dev ticket** (no platform login yet), clock sync, click-to-move, path playback for you and others, third-person camera, click marker. |
 | Local chat | Within 40 m, rate limited, shown in a chat box and as a speech bubble. |

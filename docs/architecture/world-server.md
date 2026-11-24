@@ -50,12 +50,78 @@ Plain structs in slices indexed by a per-region `EntityID` (u32, recycled with a
 
 ## Pathfinding
 
-- The navmesh is loaded from `data/regions/<region>.region.json` ([ADR 0004](../decisions/0004-navmesh-baked-in-godot.md)): polygons, adjacency, and a polygon lookup grid for "which polygon contains this point?".
-- **`FindPath(from, to)`:** snap `to` onto the nearest polygon within 5 m, run A* over polygon centres (portal edges), then apply the funnel algorithm. The result is a few waypoints with heights (y).
-- **Path length cap:** 150 m, or 2,000 polygons explored. A longer click walks as far as the cap allows. A failed path stops the entity with no error message.
-- **`Raycast(from, to)`** over the navmesh is used for line of sight (ranged and Voodoo attacks) and to clamp dashes.
+The code is `server/internal/navmesh`. Its fixtures are in `testdata/`.
+
+- **Loading:** the navmesh comes from `data/regions/<region>.region.json` ([ADR 0004](../decisions/0004-navmesh-baked-in-godot.md)). The file format is below.
+  - Polygon adjacency is computed at load from edges that share both vertex indices, after merging vertices closer than 1 cm.
+  - The loader also labels islands (connected groups of polygons) and builds a 4 m polygon lookup grid for "which polygon is this point in?".
+  - A loaded `Mesh` is read-only and shared. Path search needs scratch memory, which lives in a `Pathfinder` owned by the region's tick goroutine. A warmed-up `FindPath` makes no allocations, and neither does `Raycast`.
+- **`FindPath(from, to)`:**
+  1. Snap `to` onto the nearest polygon within 5 m (3D distance). Further away, or on another island, means no path.
+  2. If the straight line is clear (`Raycast`), walk it. Most clicks are in plain sight, so this skips A* and avoids zigzags through small polygons.
+  3. Otherwise run A* over polygons, with costs through portal-edge midpoints, then the funnel algorithm (string pulling).
+  4. The result is a few waypoints with heights (y). The first waypoint is the start.
+  5. Extra waypoints are added where the path crosses a polygon edge and straight-line height interpolation would be more than 5 cm off the surface, for example at the top and bottom of a ramp. So a client that interpolates linearly between waypoints stays on the ground.
+- **Path length cap:** 150 m, or 2,000 polygons explored.
+  - A path longer than 150 m is cut at 150 m along its route.
+  - If the search runs out of polygons, the path goes to the explored point nearest the target.
+  - Either way the status is `Partial` and the entity walks it. A failed path (`NoPath`) stops the entity with no error message.
+  - The limits are `navmesh.DefaultLimits`.
+- **`Raycast(from, to)`** walks the line across the mesh in XZ and reports where the mesh edge stops it. It's used for line of sight (ranged and Voodoo attacks) and to clamp dashes (`RayHit.Pos`). A ray that runs exactly along a straight wall carries on through the vertices where polygons meet.
+- **`HeightAt(p)`** gives the surface height under a point. Where levels overlap (a bridge over a path), it picks the level nearest `p.Y`.
 - **Followers** (chasing a target) repath at most every 4 ticks, and only if the target moved more than 1 m.
-- **Budget:** under 0.2 ms per path on the test regions. A pathfinding benchmark runs in the slow lane.
+- **Budget:** under 0.2 ms per path on the test regions.
+  - `BenchmarkFindPath` runs in the slow lane (`tools/slow-tests.sh`), which fails if any mesh is over budget.
+  - It times random same-island pairs on a generated 200 m × 200 m mesh: 2 m squares on hills with 60 obstacles, about 10,000 polygons. That's much denser than a Godot bake.
+  - It also times `data/regions/test_greybox.region.json` (and `TestGreyboxRegion` checks paths on it) when that file exists.
+  - The fast check only asserts no allocations and a coarse 1 ms bound.
+  - On the owner's Mac (M5 Pro):
+
+| Mesh | Per path | Polygons explored | Partial | Raycast |
+|---|---|---|---|---|
+| Generated | about 60 µs | about 680 | 23 % | about 0.5 µs |
+| Greybox export (1,736 triangles) | about 26 µs | about 250 | 25 % | about 1 µs |
+
+### Region file, format 1
+
+Written by `client/tools/export_region.gd`. Never edit it by hand.
+
+```json
+{
+  "format": 1,
+  "region_id": "test_greybox",
+  "source_hash": "<hex sha256 of the region scene>",
+  "navmesh": {
+    "vertices": [[x, y, z], ...],
+    "polygons": [[i0, i1, i2, ...], ...]
+  },
+  "player_spawns": [{"pos": [x, y, z]}],
+  "respawn_points": [{"pos": [x, y, z]}],
+  "creature_spawns": [],
+  "resource_nodes": [],
+  "exits": [],
+  "entry_points": []
+}
+```
+
+- **Vertices:** metres, on Godot's axes (+Y up), in region (world) space.
+- **Polygons:** as `NavigationMesh.get_polygon()` returns them.
+  - Each has 3 to 6 indices into `vertices` and is convex in XZ.
+  - Either winding is accepted. The loader normalises it by signed area in the XZ plane.
+  - Adjacency isn't stored. Two polygons are linked only if they share both vertices of an edge (within 1 cm), so a T-junction (one long edge against two short ones) isn't linked. A normal single-pass Godot bake shouldn't produce them.
+- **Spawn and respawn points** must be within 5 m of the navmesh.
+- **Markers:** `creature_spawns`, `resource_nodes`, `exits` and `entry_points` are kept raw (`json.RawMessage`) for the tasks that use them. The exporter writes these shapes:
+  - creature spawn: `{"count", "creature_id", "pos", "respawn_s", "wander_radius"}`
+  - resource node: `{"node_id", "pos"}`
+  - exit: `{"pos", "size", "target_entry", "target_region", "yaw"}`. `pos` is the box centre and `size` its full size.
+  - entry point: `{"entry_id", "pos", "yaw"}`
+  - `yaw` is in radians about +Y, where 0 faces −Z, counter-clockwise seen from above. Numbers have 3 decimals.
+- **Validation:** `dataval`, and so the fast check, loads every region file. It rejects:
+  - a wrong format version or unknown fields
+  - an out-of-range index
+  - a polygon that's degenerate (repeated vertex, zero area) or not convex
+  - an edge shared by three polygons, or two overlapping polygons
+  - a `region_id` that doesn't match the file name
 
 ## Interest management
 

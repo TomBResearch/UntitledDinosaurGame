@@ -67,6 +67,28 @@ func TestRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestValidatesRegions(t *testing.T) {
+	dir := copyData(t)
+	if err := os.Mkdir(filepath.Join(dir, "regions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fixture := read(t, "../navmesh/testdata", "corridor.region.json")
+	write(t, dir, "regions/corridor.region.json", fixture)
+	c := mustLoad(t, dir)
+	if len(c.Regions) != 1 || c.Regions[0].ID != "corridor" || c.Regions[0].Mesh.PolygonCount() != 4 {
+		t.Fatalf("regions not loaded: %+v", c.Regions)
+	}
+
+	write(t, dir, "regions/misnamed.region.json", fixture)
+	write(t, dir, "regions/broken.region.json", strings.Replace(fixture, `"format": 1`, `"format": 9`, 1))
+	_, err := Load(dir)
+	for _, want := range []string{"regions/misnamed.region.json: region_id \"corridor\" doesn't match", "regions/broken.region.json: region file: format 9"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q, got: %v", want, err)
+		}
+	}
+}
+
 func TestEmitClientWritesOnlyClientFiles(t *testing.T) {
 	c := mustLoad(t, repoData)
 	out := t.TempDir()
