@@ -1,9 +1,10 @@
-[gd_scene load_steps=9 format=3]
+[gd_scene load_steps=10 format=3]
 
 [ext_resource type="Script" path="res://screens/game/game.gd" id="1_game"]
 [ext_resource type="Script" path="res://world/entity_manager.gd" id="2_entities"]
 [ext_resource type="Script" path="res://world/click_marker.gd" id="3_marker"]
 [ext_resource type="Script" path="res://world/orbit_camera.gd" id="4_camera"]
+[ext_resource type="PackedScene" path="res://ui/chat/chat_box.tscn" id="5_chat"]
 
 [sub_resource type="StandardMaterial3D" id="MarkerMaterial"]
 transparency = 1
@@ -75,6 +76,8 @@ grow_horizontal = 2
 mouse_filter = 2
 horizontal_alignment = 1
 label_settings = SubResource("DebugText")
+
+[node name="ChatBox" parent="Hud" instance=ExtResource("5_chat")]
 
 [node name="Overlay" type="CenterContainer" parent="Hud"]
 visible = false

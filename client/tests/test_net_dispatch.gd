@@ -75,6 +75,24 @@ func test_kick_is_reported_before_the_close() -> void:
 	assert_signal_emitted_with_parameters(net, "kicked", [Proto.KickReason.SHUTDOWN])
 
 
+func test_chat_and_system_messages_are_dispatched_typed() -> void:
+	var chat := Proto.Chat.new()
+	chat.entity = UGG
+	chat.name = "Ugg"
+	chat.text = "[b]Rawr[/b]"
+	var muted := Proto.SystemMessage.new()
+	muted.key = Proto.SystemKey.CHAT_MUTED
+	var w := Proto.Writer.new()
+	assert_true(Proto.encode_into(w, chat))
+	assert_true(Proto.encode_into(w, muted))
+	assert_true(net.handle_frame(w.buf, 0.0))
+	var got: Proto.Chat = get_signal_parameters(net, "chat_received", 0)[0]
+	assert_eq(got.entity, UGG)
+	assert_eq(got.text, "[b]Rawr[/b]")
+	var notice: Proto.SystemMessage = get_signal_parameters(net, "system_message_received", 0)[0]
+	assert_eq(notice.key, Proto.SystemKey.CHAT_MUTED)
+
+
 func test_a_malformed_frame_is_rejected_whole() -> void:
 	# The welcome frame with its last byte cut off: the final entity_enter is truncated, so none of
 	# the frame's messages are dispatched.
