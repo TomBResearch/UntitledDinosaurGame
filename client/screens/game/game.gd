@@ -1,7 +1,8 @@
 class_name GameScreen
 extends Node3D
 ## The in-world screen: the region, every entity in view, your camera and the click marker, plus a
-## small HUD for connection status. It sends intents (move_to) and draws what the server sends;
+## HUD with connection status and the chat box. It sends intents (move_to, chat_say) and draws what
+## the server sends;
 ## nothing here decides an outcome (CLAUDE.md rule 2).
 
 ## The server refused the dev name: main goes back to the name box with this message.
@@ -38,6 +39,7 @@ var _rng := RandomNumberGenerator.new()
 @onready var _overlay: Control = $Hud/Overlay
 @onready var _overlay_text: Label = $Hud/Overlay/Panel/Box/Message
 @onready var _overlay_button: Button = $Hud/Overlay/Panel/Box/Button
+@onready var _chat: ChatBox = $Hud/ChatBox
 
 
 ## Connects to the world with these options.
@@ -50,6 +52,9 @@ func start(opts: LaunchOptions, client: NetClient) -> void:
 	net.welcomed.connect(_on_welcomed)
 	net.path_stopped.connect(_on_path_stopped)
 	net.kicked.connect(_on_kicked)
+	net.chat_received.connect(_on_chat)
+	net.system_message_received.connect(_on_system_message)
+	_chat.submitted.connect(_on_chat_submitted)
 	net.disconnected.connect(_on_disconnected)
 	_overlay_button.pressed.connect(func() -> void: _overlay_action.call())
 	_demo_timer = DEMO_MIN_S
@@ -98,6 +103,23 @@ func _on_self_spawned(view: PlayerView) -> void:
 func _on_path_stopped(m: Proto.PathStopped) -> void:
 	if m.entity == net.entity_id and float(m.tick) >= floorf(_click_tick):
 		_marker.clear()
+
+
+## A chat line: in the chat box, and over the speaker's head if they're in view.
+func _on_chat(m: Proto.Chat) -> void:
+	_chat.add_chat(m.name, m.text, m.role, m.entity == net.entity_id)
+	var speaker := _entities.view(m.entity)
+	if speaker != null:
+		speaker.say(m.text)
+
+
+func _on_system_message(m: Proto.SystemMessage) -> void:
+	_chat.add_system(ChatLog.system_text(m.key))
+
+
+func _on_chat_submitted(text: String) -> void:
+	if net != null and net.state == NetClient.State.IN_WORLD:
+		net.send_chat(text)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -176,9 +198,11 @@ func _update_debug() -> void:
 	if net == null or net.state != NetClient.State.IN_WORLD:
 		_debug.text = ""
 		return
-	_debug.text = "%d fps · tick %.1f · rtt %.0f ms · offset %+.1f ms · %d in view · %.1f KB in" % [
+	var me := _entities.self_view
+	var at := "(%.0f, %.0f, %.0f)" % [me.position.x, me.position.y, me.position.z] if me != null else "-"
+	_debug.text = "%d fps · tick %.1f · rtt %.0f ms · offset %+.1f ms · %d in view · %.1f KB in · at %s" % [
 		Engine.get_frames_per_second(), net.server_tick_now(), net.clock.best_rtt_ms(),
-		net.clock.offset_ms() - net.clock.target_offset_ms(), _entities.count(), net.bytes_in / 1024.0]
+		net.clock.offset_ms() - net.clock.target_offset_ms(), _entities.count(), net.bytes_in / 1024.0, at]
 
 
 func _on_kicked(reason: Proto.KickReason) -> void:

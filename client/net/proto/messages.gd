@@ -7,7 +7,7 @@ extends RefCounted
 ## Proto.encode(msg), and pass each received frame to Proto.decode(frame, Proto.Dir.FROM_SERVER).
 
 ## Identifies this version of the schema. Sent as the first field of hello.
-const PROTOCOL_HASH: int = 0x3d810d0d
+const PROTOCOL_HASH: int = 0x5cee648b
 
 ## Who sends a message.
 enum Dir { FROM_CLIENT = 1, FROM_SERVER = 2 }
@@ -42,6 +42,12 @@ enum KickReason {
 	MISBEHAVING = 3,
 }
 
+## A line of game text the client shows in the chat box, in the player's language.
+enum SystemKey {
+	## You're muted: your chat line wasn't sent.
+	CHAT_MUTED = 0,
+}
+
 # Message ids.
 const MSG_HELLO: int = 1
 const MSG_PING: int = 2
@@ -55,6 +61,7 @@ const MSG_ENTITY_ENTER: int = 68
 const MSG_ENTITY_LEAVE: int = 69
 const MSG_CHAT: int = 70
 const MSG_KICK: int = 71
+const MSG_SYSTEM_MESSAGE: int = 72
 
 const _MAX_U63: int = 0x7fffffffffffffff
 
@@ -360,6 +367,8 @@ static func new_message(id: int) -> Message:
 			return Chat.new()
 		MSG_KICK:
 			return Kick.new()
+		MSG_SYSTEM_MESSAGE:
+			return SystemMessage.new()
 	return null
 
 
@@ -469,7 +478,8 @@ class MoveTo extends Message:
 		position = r.vec3()
 
 
-## Say something in local chat. The server caps it at 120 characters.
+## Say something in local chat. The server cleans it, rejects it over 120 characters
+## (code points, data/progression.json chat.max_chars) and masks filtered words.
 class ChatSay extends Message:
 	var text: String = ""
 
@@ -696,7 +706,7 @@ class EntityLeave extends Message:
 		entity = r.u32()
 
 
-## A local chat line.
+## A local chat line, sent to every player within the chat radius of the speaker (them included).
 class Chat extends Message:
 	var entity: int = 0
 	var name: String = ""
@@ -749,3 +759,26 @@ class Kick extends Message:
 
 	func decode_body(r: Reader) -> void:
 		reason = r.enum8(4) as KickReason
+
+
+## A line of game text for the chat box, sent only to you.
+class SystemMessage extends Message:
+	var key: SystemKey = SystemKey.CHAT_MUTED
+
+	func message_id() -> int:
+		return MSG_SYSTEM_MESSAGE
+
+	func message_name() -> String:
+		return "system_message"
+
+	func direction() -> Dir:
+		return Dir.FROM_SERVER
+
+	func max_body_size() -> int:
+		return 1
+
+	func encode_body(w: Writer) -> void:
+		w.enum8(key, 1)
+
+	func decode_body(r: Reader) -> void:
+		key = r.enum8(1) as SystemKey

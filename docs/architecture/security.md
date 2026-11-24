@@ -11,7 +11,7 @@ The server decides everything that matters. The client sends **intents**, and th
 | `ability` | You know the ability and it's off cooldown. Dash distance is the server's own number, clamped by a navmesh raycast. |
 | `item_action` and `item_move` | The slot really holds that item, the action is valid for it, and you meet the requirements. |
 | `bank_action` | You're near a bank, and the amounts are positive and no more than you hold. |
-| `chat_say` | Length, rate limit, word filter, and you're not muted. |
+| `chat_say` | Rate limit (over it is invalid), cleaned of control and invisible characters, at most 120 characters (over it is invalid), not muted, then the word filter. See [world-server.md](world-server.md#local-chat). |
 
 **Rule:** if an intent is invalid, drop it, count it in a metric, and never crash or answer with details. If invalid intents keep coming (more than 50 a minute), disconnect the player and log it.
 
@@ -46,4 +46,5 @@ Every security-relevant change comes with negative tests:
 - An action on an out-of-range target, a missing item, or a slot the player doesn't own changes nothing.
 - The item invariant test: random action sequences never create or destroy items except through sources and sinks.
 - Each staff action: every lower rank is refused.
+- Chat: a line over the rate limit or over 120 characters is dropped and counted as invalid; a muted player's line reaches nobody; control, bidi and zero-width characters never reach other players (`server/internal/region/chat_test.go`).
 - The deletion hook: a wrong or missing service key is refused, it answers `204` for an unknown account, it's idempotent, and characters are gone afterwards.

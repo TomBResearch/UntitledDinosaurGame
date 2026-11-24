@@ -21,12 +21,12 @@ Rows marked *(planned)* don't exist yet.
 | `screens/` | `game/` (the world) and `name_entry/` now. *(planned)* Boot (version check), Login, World select, Character select and create, Loading |
 | `world/` | `PathPlayback`, `MotionTrack`, `ErrorBlend`, the `EntityManager`, the `OrbitCamera` and the `ClickMarker`. *(planned)* chunk streaming |
 | `entities/player/` | The player view: placeholder caveman and name label. *(planned)* creatures, nodes and ground items |
-| `ui/` *(planned)* | HUD, inventory, equipment, skills, bank, chat, dialogue, context menu, ability bar |
+| `ui/` | `ui/chat/`: the `ChatBox`, `ChatLog` and `SpeechBubble`. *(planned)* HUD, inventory, equipment, skills, bank, dialogue, context menu, ability bar |
 | `autoload/session.gd` *(planned, M1)* | Platform login, single-flight token refresh, `/api` calls (via a `JavaScriptBridge` fetch wrapper on the web) |
 | `regions/<region>/` | Authoring scenes: terrain chunks, props, navmesh, marker nodes ([content-pipeline.md](content-pipeline.md)) |
 | `tools/export_region.gd` | Editor script that exports region data for the server |
 | `data/` | **Generated** from `data/` by `dataval -emit-client` (ignored by git). `content_hash.txt` goes in `hello`. |
-| `tests/` | GUT unit tests (path playback, clock, error blend, frame dispatch, proto round-trips, launch options) |
+| `tests/` | GUT unit tests (path playback, clock, error blend, frame dispatch, proto round-trips, launch options, chat) |
 
 ## Input
 
@@ -50,7 +50,7 @@ How the pieces fit, as built in the M0 client core task. The wire rules are in [
 ### Connecting
 
 - `NetClient.connect_to_world(url, "dev:<name>")` opens the `WebSocketPeer`. When it's open the client sends `hello` (`Proto.PROTOCOL_HASH`, the ticket, `res://data/content_hash.txt` and the project version).
-- Every server frame goes through `Proto.decode(frame, FROM_SERVER)` and comes out as typed signals: `welcomed`, `entity_entered`, `entity_left`, `path_started`, `path_stopped`, `chat_received` and `kicked`. A frame that fails to decode, or a text frame, closes the connection with status 1002. Nothing is hand-encoded.
+- Every server frame goes through `Proto.decode(frame, FROM_SERVER)` and comes out as typed signals: `welcomed`, `entity_entered`, `entity_left`, `path_started`, `path_stopped`, `chat_received`, `system_message_received` and `kicked`. A frame that fails to decode, or a text frame, closes the connection with status 1002. Nothing is hand-encoded.
 - Frames still waiting when the socket closes are read first, because a `kick` is often in the same poll as the close.
 - Pings: four a second apart after `welcome` so the clock settles quickly (the server allows a burst of 3 and then 1 a second), then one every 5 s.
 - Kicks: `refresh` shows "please refresh the page" (with a Refresh button that reloads it on the web); `shutdown` shows "The world is restarting." with Reconnect; `bad_ticket` goes back to the name box with a message; `misbehaving` shows an error with Reconnect. A close without a kick shows "Lost the connection" with Reconnect.
@@ -83,6 +83,16 @@ How the pieces fit, as built in the M0 client core task. The wire rules are in [
 - The arrow keys orbit at up to 120°/s (turn) and 70°/s (tilt), easing in and out over about a fifth of a second, so a tap nudges the view and a hold turns it smoothly. Left and right turn the same way as dragging the mouse.
 - The camera follows your character smoothly, and is pulled in front of any collision between it and you, so it never ends up underground.
 
+### Chat
+
+Local chat as the client shows it. The rules (40 m, the rate limit, cleaning, the filter, mutes) are all the server's: see [world-server.md](world-server.md#local-chat).
+
+- **Chat box** (`ChatBox`, bottom left): the last 50 lines (`ChatLog`), each the speaker's name then the text. A role badge (`[Mod]`, `[Admin]` and so on) goes before the name for anyone who isn't a normal player; that's always nobody until M1. Your own name is yellow and others' are blue. `system_message` lines (only "you're muted" so far) show in red, with English text chosen by the client from the message key.
+- **Plain text only:** player text is added with `RichTextLabel.add_text`, which never parses BBCode, and BBCode is off on the label. `[color=red]hi[/color]` shows exactly as typed. There's nothing to escape, so nothing can be escaped wrongly.
+- **Typing:** Enter opens a one-line input; Enter sends (an empty or all-space line just closes it) and Esc cancels. The input is capped at `chat.max_chars` from `data/progression.json` (120), which Godot counts in code points like the server does; the server still checks. While the input is open, keys go to it and the camera ignores the arrow keys. Clicks on the game still walk: a click takes the focus away, so the input takes it straight back.
+- **Speech bubble** (`SpeechBubble`, a `Label3D` on the player view): your latest line over your head for 5 s, in yellow with a dark outline, word-wrapped at 420 px, at a fixed size on screen so it reads at any camera distance. A new line replaces it. It's a child of the player's view, so it follows them and goes when they leave view. `Label3D` doesn't parse BBCode either.
+- **Emoji** arrive and are sent fine, but the default font has no emoji, so they show as a box in the chat box and as nothing in a bubble. An emoji fallback font is a later job.
+
 ### Launch options and dev aids
 
 - **Web:** query string, for example `index.html?name=Grug&server=ws://127.0.0.1:8090/w/dev`.
@@ -93,7 +103,7 @@ How the pieces fit, as built in the M0 client core task. The wire rules are in [
   - `lag=150` adds 150 ms of round-trip latency (75 ms each way).
   - `shot=<path>` saves the window to a PNG every 2 s (desktop).
   - `quit=<seconds>` quits after that long.
-- The HUD's top line shows fps, the estimated tick, the best round trip, how far the clock is still slewing, entities in view and KB received.
+- The HUD's top line shows fps, the estimated tick, the best round trip, how far the clock is still slewing, entities in view, KB received and where your character is drawn (metres).
 
 ### Web export
 

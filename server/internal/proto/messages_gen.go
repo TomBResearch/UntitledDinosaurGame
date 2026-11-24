@@ -14,7 +14,7 @@ import (
 
 // ProtocolHash identifies this version of the schema. Clients send it as the first field of
 // hello; a mismatch means the client is out of date.
-const ProtocolHash uint32 = 0x3d810d0d
+const ProtocolHash uint32 = 0x5cee648b
 
 // MaxClientMessageSize is the largest encoded client-to-server message, header included.
 const MaxClientMessageSize = 1132
@@ -24,18 +24,19 @@ const MaxServerMessageSize = 1095
 
 // Message ids.
 const (
-	MsgHello       MsgID = 1
-	MsgPing        MsgID = 2
-	MsgMoveTo      MsgID = 3
-	MsgChatSay     MsgID = 4
-	MsgWelcome     MsgID = 64
-	MsgPong        MsgID = 65
-	MsgPathStarted MsgID = 66
-	MsgPathStopped MsgID = 67
-	MsgEntityEnter MsgID = 68
-	MsgEntityLeave MsgID = 69
-	MsgChat        MsgID = 70
-	MsgKick        MsgID = 71
+	MsgHello         MsgID = 1
+	MsgPing          MsgID = 2
+	MsgMoveTo        MsgID = 3
+	MsgChatSay       MsgID = 4
+	MsgWelcome       MsgID = 64
+	MsgPong          MsgID = 65
+	MsgPathStarted   MsgID = 66
+	MsgPathStopped   MsgID = 67
+	MsgEntityEnter   MsgID = 68
+	MsgEntityLeave   MsgID = 69
+	MsgChat          MsgID = 70
+	MsgKick          MsgID = 71
+	MsgSystemMessage MsgID = 72
 )
 
 // String returns the message's schema name.
@@ -65,6 +66,8 @@ func (id MsgID) String() string {
 		return "chat"
 	case MsgKick:
 		return "kick"
+	case MsgSystemMessage:
+		return "system_message"
 	}
 	return fmt.Sprintf("message(%d)", uint8(id))
 }
@@ -96,6 +99,8 @@ func (id MsgID) info() (dir Direction, maxBody int, ok bool) {
 		return FromServer, 537, true
 	case MsgKick:
 		return FromServer, 1, true
+	case MsgSystemMessage:
+		return FromServer, 1, true
 	}
 	return 0, 0, false
 }
@@ -126,6 +131,8 @@ func newMessage(id MsgID) Message {
 		return &Chat{}
 	case MsgKick:
 		return &Kick{}
+	case MsgSystemMessage:
+		return &SystemMessage{}
 	}
 	return nil
 }
@@ -174,6 +181,17 @@ const (
 )
 
 const kickReasonCount = 4
+
+// A line of game text the client shows in the chat box, in the player's language.
+type SystemKey uint8
+
+// SystemKey values.
+const (
+	// You're muted: your chat line wasn't sent.
+	SystemKeyChatMuted SystemKey = 0
+)
+
+const systemKeyCount = 1
 
 // A path an entity walks: start at waypoints[0] at start_tick, then move at speed along the
 // waypoints, stopping at the last one. Position at tick t is speed * (t - start_tick) along it.
@@ -268,7 +286,8 @@ func (m *MoveTo) decode(d *decoder) {
 // MessageID returns MsgMoveTo.
 func (*MoveTo) MessageID() MsgID { return MsgMoveTo }
 
-// Say something in local chat. The server caps it at 120 characters.
+// Say something in local chat. The server cleans it, rejects it over 120 characters
+// (code points, data/progression.json chat.max_chars) and masks filtered words.
 type ChatSay struct {
 	Text string
 }
@@ -446,7 +465,7 @@ func (m *EntityLeave) decode(d *decoder) {
 // MessageID returns MsgEntityLeave.
 func (*EntityLeave) MessageID() MsgID { return MsgEntityLeave }
 
-// A local chat line.
+// A local chat line, sent to every player within the chat radius of the speaker (them included).
 type Chat struct {
 	Entity uint32
 	Name   string
@@ -486,6 +505,22 @@ func (m *Kick) decode(d *decoder) {
 
 // MessageID returns MsgKick.
 func (*Kick) MessageID() MsgID { return MsgKick }
+
+// A line of game text for the chat box, sent only to you.
+type SystemMessage struct {
+	Key SystemKey
+}
+
+func (m *SystemMessage) encode(e *encoder) {
+	e.enum(uint8(m.Key), systemKeyCount)
+}
+
+func (m *SystemMessage) decode(d *decoder) {
+	m.Key = SystemKey(d.enum(systemKeyCount))
+}
+
+// MessageID returns MsgSystemMessage.
+func (*SystemMessage) MessageID() MsgID { return MsgSystemMessage }
 
 // Message is one protocol message. Only the generated message types implement it.
 type Message interface {

@@ -1,6 +1,7 @@
-[gd_scene load_steps=10 format=3]
+[gd_scene load_steps=11 format=3]
 
 [ext_resource type="Script" path="res://entities/player/player_view.gd" id="1_view"]
+[ext_resource type="Script" path="res://ui/chat/speech_bubble.gd" id="2_bubble"]
 
 [sub_resource type="StandardMaterial3D" id="Skin"]
 albedo_color = Color(0.85, 0.62, 0.45, 1)
@@ -71,3 +72,22 @@ outline_modulate = Color(0, 0, 0, 0.85)
 text = "Name"
 font_size = 40
 outline_size = 12
+
+[node name="Bubble" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.15, 0)
+visible = false
+pixel_size = 0.0011
+offset = Vector2(0, 34)
+billboard = 1
+no_depth_test = true
+fixed_size = true
+render_priority = 1
+outline_render_priority = 0
+modulate = Color(1, 0.93, 0.35, 1)
+outline_modulate = Color(0, 0, 0, 0.9)
+font_size = 34
+outline_size = 12
+vertical_alignment = 2
+autowrap_mode = 3
+width = 420.0
+script = ExtResource("2_bubble")

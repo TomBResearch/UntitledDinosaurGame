@@ -14,6 +14,8 @@ signal entity_left(msg: Proto.EntityLeave)
 signal path_started(msg: Proto.PathStarted)
 signal path_stopped(msg: Proto.PathStopped)
 signal chat_received(msg: Proto.Chat)
+## A line of game text for the chat box (e.g. "you're muted").
+signal system_message_received(msg: Proto.SystemMessage)
 ## The server is closing the connection for this reason. disconnected follows.
 signal kicked(reason: Proto.KickReason)
 ## The connection is gone. kicked is true if a kick explained it first.
@@ -196,6 +198,8 @@ func _dispatch(m: Proto.Message, received_ms: float) -> void:
 			path_stopped.emit(m as Proto.PathStopped)
 		Proto.MSG_CHAT:
 			chat_received.emit(m as Proto.Chat)
+		Proto.MSG_SYSTEM_MESSAGE:
+			system_message_received.emit(m as Proto.SystemMessage)
 		Proto.MSG_KICK:
 			_kicked = true
 			kicked.emit((m as Proto.Kick).reason)

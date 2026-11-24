@@ -23,6 +23,7 @@ var _walked_m: float = 0.0
 
 @onready var _model: Node3D = $Model
 @onready var _label: Label3D = $Name
+@onready var _bubble: SpeechBubble = $Bubble
 
 
 ## Sets the entity up from its entity_enter, so it can be drawn from the first frame.
@@ -44,6 +45,15 @@ func _apply_label(player_name: String) -> void:
 	_label.text = player_name
 	if is_self:
 		_label.modulate = SELF_NAME_COLOR
+
+
+## Shows a chat line over the player's head for a few seconds.
+func say(text: String) -> void:
+	_bubble.say(text)
+
+
+func bubble() -> SpeechBubble:
+	return _bubble
 
 
 ## Hands the entity a new path, drawn at tick t. If the path has already started at t (always, for

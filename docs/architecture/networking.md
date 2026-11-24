@@ -55,7 +55,7 @@ Checked by the server per player; a message over its limit is dropped and counte
 | What | Limit | Where |
 |---|---|---|
 | `move_to` | 10 a second, burst 10 | region, counted in ticks so tests are exact |
-| `chat_say` | 1 a second, burst 3 | region (checked by the local chat task) |
+| `chat_say` | 1 a second, burst 3 | region. Over 120 characters once cleaned is invalid too ([world-server.md](world-server.md#local-chat)). |
 | `ping` | 1 a second, burst 3; extra pings aren't answered | session |
 | Upload | 4 KB/s, burst 16 KB; over it disconnects | session |
 | `move_to` further than 150 m from you | invalid | region |
@@ -99,7 +99,7 @@ These are the messages for M0–M3. The schema, [`protocol/messages.schema`](../
 | `item_action` | container, slot, action (use, equip, drop, eat, use-on) and target | 10/s |
 | `item_move` | from container and slot, to container and slot | 10/s |
 | `bank_action` | deposit, withdraw or deposit all, with slot and amount | 10/s |
-| `chat_say` **(M0)** | text (up to 120 characters) | 1/s, burst 3 |
+| `chat_say` **(M0)** | text (up to 120 characters, counted in code points after cleaning) | 1/s, burst 3 |
 | `dialogue_choice` | dialogue id, option | 5/s |
 | `logout` | – | – |
 
@@ -121,8 +121,8 @@ These are the messages for M0–M3. The schema, [`protocol/messages.schema`](../
 | `inventory_changed` / `equipment_changed` / `bank_changed` | changed slots only |
 | `xp_gained` | skill, amount, new total XP, level (if it changed) |
 | `skilling` | entity, action animation, node (for others to see) |
-| `chat` **(M0)** | sender entity, name, role badge, text |
-| `system_message` | key and parameters (the client localises them) |
+| `chat` **(M0)** | sender entity, name, role badge, text. Sent to every player within 40 m of the speaker, the speaker included. |
+| `system_message` **(M0)** | key (the client localises it). M0 has one key, `chat_muted`; parameters come with the first key that needs them. |
 | `dialogue` | NPC, text key, options |
 | `pong` **(M0)** | see clock sync |
 | `kick` **(M0)** | reason: `refresh`, `bad_ticket`, `shutdown` or `misbehaving` (see [Connection lifecycle](#connection-lifecycle)) |

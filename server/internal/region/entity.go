@@ -49,6 +49,10 @@ type entity struct {
 	pendingMove                           bool
 	moveTarget                            navmesh.Vec3
 	moveTokens, chatTokens, invalidTokens bucket
+	// role is the account role shown as a chat badge: always normal until accounts arrive in M1.
+	role proto.Role
+	// muted players' chat is dropped, and only they are told. Always false until staff tools (M7).
+	muted bool
 }
 
 // alloc takes a free slot (or a new one) and gives it a fresh id.

@@ -35,13 +35,13 @@ Each `Region.Step()` runs these steps in order:
 9. **Flush:** for each client, encode this tick's events into **one** binary frame and pass it to the writer goroutine.
 
 **What M0 runs.** `Region.Step()` (`server/internal/region`) does steps 1–3, 8 and 9; AI, combat, skilling and timers slot in between movement and interest as they arrive:
-1. **Inbox:** joins, leaves and intents, in arrival order. `move_to` is rate-limited and range-checked here, and only a player's last click in the tick is kept. `chat_say` has its handler (`Region.chat`) waiting for the local chat task.
+1. **Inbox:** joins, leaves and intents, in arrival order. `move_to` is rate-limited and range-checked here, and only a player's last click in the tick is kept. `chat_say` is handled here too, and its `chat` goes out in this tick's frame (see [Local chat](#local-chat)).
 2. **Paths:** each kept click becomes a path from where the player is this tick (see [Pathfinding](#pathfinding)), or a stop.
 3. **Movement:** every walking entity moves to where its quantised path puts it this tick; one at or past the end stops there.
 4. **Interest:** entities that crossed a cell boundary move cells, with their enter and leave events.
 5. **Flush:** each player with anything queued gets one frame. A player whose queue is full is removed afterwards (its `entity_leave` goes out with the next tick).
 
-Within a tick a player's frame is in event order: `path_started` and `path_stopped` from steps 2–3, then `entity_enter` and `entity_leave`. An entity that comes into view in the same tick as it starts a path arrives as one `entity_enter` carrying that path.
+Within a tick a player's frame is in event order: `chat` and `system_message` from step 1, `path_started` and `path_stopped` from steps 2–3, then `entity_enter` and `entity_leave`. An entity that comes into view in the same tick as it starts a path arrives as one `entity_enter` carrying that path.
 
 **The loop** (`Region.Run`) steps at `1 s / tick_hz`. A tick that finishes late is followed straight away by the next, so the simulation catches up; a tick over the 10 ms budget is logged. Exporting tick time as a metric comes with `/metrics`.
 
@@ -153,6 +153,28 @@ Written by `client/tools/export_region.gd`. Never edit it by hand.
 - On joining, a player gets `entity_enter` for itself first, then for everything in view. Its own events (`path_started`, `path_stopped`) come back to it like anyone else's.
 - **Crowd control** (not built yet): if more than about 150 entities are in view, low-priority ones are dropped first (other players' cosmetic actions, distant players). You still see them, with less detail.
 
+## Local chat
+
+`Region.chat` handles `chat_say` in the inbox step, in this order:
+
+1. **Rate limit:** 1 a second, burst 3 (`Config.ChatLimit`, counted in ticks). Over it is dropped and counted as invalid, like `move_to`.
+2. **Clean** (`server/internal/chat`, `Clean`): runs of whitespace become one space and the ends are trimmed. Control characters (Unicode Cc) and format characters (Cf) are dropped: Cf is where the bidi controls that could reverse text live (U+202A–U+202E, U+2066–U+2069, U+200E/F, U+061C) and the zero-width ones that could hide or split a word (U+200B–U+200D, U+2060, U+FEFF, the soft hyphen). A few letters that draw as nothing (the Hangul fillers and the blank Braille pattern) count as whitespace. Dropping U+200D splits emoji joined with it (a family emoji shows as its people); variation selectors stay.
+3. **Empty** once cleaned: dropped, not invalid (`Stats.ChatEmpty`). Nothing is sent.
+4. **Length:** over `chat.max_chars` (120) Unicode code points once cleaned is dropped and counted as invalid (`Stats.ChatTooLong`), never cut short. A real client can't type more, so a longer line isn't from one. The wire limit is 480 bytes, 4 per character.
+5. **Muted:** the line is dropped and only the speaker gets `system_message(chat_muted)` (`Stats.ChatMuted`). The entity's `muted` flag is always false until staff tools arrive in M7. A muted player's notices are rate limited like their chat.
+6. **Filter** (`chat.Filter`, from `data/chat_filter.json`): each listed word is replaced by `*` for each of its characters, so the length never changes (`Stats.ChatFiltered` counts lines with a hit).
+   - A word is a run of letters, digits and substitution symbols. It matches a listed word if, lower-cased and with each symbol read as its letter (`$` → s, `1` → i, `0` → o and so on, also in the file), it's equal to it. Digits and symbols at either end are also tried without, so `shit!` masks as `****!` and `$hit` as `****`.
+   - Only whole words match, so `shitake` and `Scunthorpe` are safe. The price is that every form has to be listed (`fuck`, `fucking`, `fucker`).
+   - The list is short and obvious on purpose; the owner extends it. Don't add a word that's also an everyday word or a name (dick, cock, prick): it would mask innocent chat. `dataval` checks every word is 2–32 letters a–z, with no duplicates, and every substitution is one non-letter mapped to one letter.
+   - The file is server-only: it isn't copied to the client, though it is part of the content hash.
+7. **Deliver:** one `chat(entity, name, role, text)` to every player within `chat.radius_m` (40 m, `data/progression.json`) of the speaker, **measured in 3D**, the speaker included, in this tick's frame. The candidates are the speaker's watchers from the interest grid, so the radius must fit inside the view: `region.New` refuses a radius over the view radius less a cell's diagonal (64 − 22.6 = 41.4 m). `role` is always `normal` until accounts arrive in M1.
+
+**3D, not 2D:** someone on a cliff 30 m above you and 30 m along is 42 m away and doesn't hear you, even though they're 30 m away on the map. That matches what you see, and caves under hills don't overhear the hill.
+
+**Never logged:** the region doesn't log chat text, or anything about a line except the `Stats` counters (`ChatSent`, `ChatFiltered`, `ChatEmpty`, `ChatMuted`, `ChatRateLimited`, `ChatTooLong`). Chat reports with context (M7) will need their own retention rules.
+
+A whole-region "shout" may come later ([open questions](../open-questions.md), S3).
+
 ## Saving characters
 
 - **Dirty tracking:** any change to a character's skills, items, bank, quests or position marks it dirty.
@@ -169,6 +191,6 @@ Written by `client/tools/export_region.gd`. Never edit it by hand.
 
 ## Metrics and logs
 
-- Built so far: JSON logs (`log/slog`) for startup, joins, leaves, server-side closes and slow ticks, and the region's `Stats` counters (invalid intents by type, players dropped). `/metrics` itself isn't built yet.
+- Built so far: JSON logs (`log/slog`) for startup, joins, leaves, server-side closes and slow ticks, and the region's `Stats` counters (invalid intents by type, players dropped, chat lines by outcome). `/metrics` itself isn't built yet.
 - Prometheus-style `/metrics` on an internal port: tick time (p50, p99, max), players and entities per region, bytes in and out, invalid intents by type, save duration.
-- Structured JSON logs. Never log tokens, tickets or chat containing personal data.
+- Structured JSON logs. Never log tokens, tickets or chat containing personal data. The world server logs no chat text at all.

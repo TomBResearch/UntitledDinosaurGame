@@ -52,7 +52,7 @@ func run() error {
 		return fmt.Errorf("loading %s: %w", *dataDir, err)
 	}
 	hz := data.Progression.Server.TickHz
-	cfg := region.DefaultConfig(hz, data.Progression.Movement.WalkSpeed)
+	cfg := region.ConfigFor(data)
 	var regions []*region.Region
 	var spawn *region.Region
 	for _, rf := range data.Regions {
