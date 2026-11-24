@@ -34,8 +34,13 @@ type Config struct {
 
 	// HelloTimeout: a connection must send hello within this.
 	HelloTimeout time.Duration
-	// SilenceTimeout: a connection that sends nothing for this long is dropped. Clients ping every 5 s.
+	// SilenceTimeout: a connection we hear nothing from for this long is dropped. Hearing means a
+	// message from the client or a pong to one of our WebSocket pings (KeepaliveInterval).
 	SilenceTimeout time.Duration
+	// KeepaliveInterval: how often the server sends a WebSocket ping. Browsers answer pings
+	// themselves, even when a background tab has paused the game, so a player who switches tabs
+	// isn't dropped. A client that's really gone stops answering and is dropped after SilenceTimeout.
+	KeepaliveInterval time.Duration
 	// WriteTimeout: a frame that can't be written within this drops the connection.
 	WriteTimeout time.Duration
 	// QueueFrames is the per-session outbound queue, in frames (one a tick). If it fills, the
@@ -52,17 +57,18 @@ type Config struct {
 // DefaultConfig gives the spec's settings for a world.
 func DefaultConfig(worldID, contentHash string) Config {
 	return Config{
-		WorldID:          worldID,
-		ContentHash:      contentHash,
-		HelloTimeout:     10 * time.Second,
-		SilenceTimeout:   20 * time.Second,
-		WriteTimeout:     10 * time.Second,
-		QueueFrames:      64, // 3.2 s of ticks at 20 Hz
-		BytesPerSecond:   4 << 10,
-		BytesBurst:       16 << 10,
-		PingPerSecond:    1,
-		PingBurst:        3,
-		InvalidPerMinute: 50,
+		WorldID:           worldID,
+		ContentHash:       contentHash,
+		HelloTimeout:      10 * time.Second,
+		SilenceTimeout:    20 * time.Second,
+		KeepaliveInterval: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		QueueFrames:       64, // 3.2 s of ticks at 20 Hz
+		BytesPerSecond:    4 << 10,
+		BytesBurst:        16 << 10,
+		PingPerSecond:     1,
+		PingBurst:         3,
+		InvalidPerMinute:  50,
 	}
 }
 
@@ -74,11 +80,13 @@ type Server struct {
 	regionDone <-chan struct{}
 	log        *slog.Logger
 
-	nextID   atomic.Uint64
-	mu       sync.Mutex
-	closing  bool
-	sessions map[*session]struct{}
-	wg       sync.WaitGroup
+	nextID atomic.Uint64
+	// keepalivesAnswered counts pongs to keepalive pings (tests and, later, metrics).
+	keepalivesAnswered atomic.Uint64
+	mu                 sync.Mutex
+	closing            bool
+	sessions           map[*session]struct{}
+	wg                 sync.WaitGroup
 }
 
 // New makes a server whose players join spawn. regionDone must be closed when the regions stop.

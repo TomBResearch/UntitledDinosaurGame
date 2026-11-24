@@ -14,6 +14,7 @@ Agents: if your task depends on one of these, **ask the owner** before building.
 | # | Question | Proposal | Blocks |
 |---|---|---|---|
 | S2 | **Appearance options at creation?** | Body type, skin tone, hair style and colour, beard. More options later through items. | M1 |
+| S4 | **Idle logout:** how long can you stay logged in without doing anything (including in a background tab)? | 15 minutes without a click, key press or chat, with a 1-minute warning. Logging out saves you where you stand. It also bounds what a background tab has to catch up on ([networking.md](architecture/networking.md)). | M1 |
 
 ## Platform and operations
 
