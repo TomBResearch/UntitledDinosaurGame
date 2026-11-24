@@ -32,6 +32,11 @@ window/stretch/aspect="expand"
 
 enabled=PackedStringArray("res://addons/gut/plugin.cfg")
 
+[navigation]
+
+3d/default_cell_size=0.2
+3d/default_cell_height=0.2
+
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
