@@ -1,0 +1,18 @@
+{
+  "skills": [
+    { "id": "strength", "name": "Strength", "group": "combat" },
+    { "id": "ranged", "name": "Ranged", "group": "combat" },
+    { "id": "voodoo", "name": "Voodoo", "group": "combat" },
+    { "id": "defence", "name": "Defence", "group": "combat" },
+    { "id": "hitpoints", "name": "Hitpoints", "group": "combat" },
+    { "id": "digging", "name": "Digging", "group": "gathering" },
+    { "id": "lumberjacking", "name": "Lumberjacking", "group": "gathering" },
+    { "id": "excavating", "name": "Excavating", "group": "gathering" },
+    { "id": "angling", "name": "Angling", "group": "gathering" },
+    { "id": "crafting", "name": "Crafting", "group": "processing" },
+    { "id": "weaponcrafting", "name": "Weapon-Crafting", "group": "processing" },
+    { "id": "herbology", "name": "Herbology", "group": "processing" },
+    { "id": "cooking", "name": "Cooking", "group": "processing" },
+    { "id": "hunting", "name": "Hunting", "group": "other" }
+  ]
+}

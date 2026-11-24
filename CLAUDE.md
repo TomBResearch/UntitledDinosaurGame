@@ -6,23 +6,23 @@ Read this first. It covers what the project is, where things live and the rules 
 
 A browser-based 3D sandbox MMORPG set in prehistoric times: cavemen, dinosaurs, jungles, caves and fossils. You start as a caveman in a pelt loincloth and level up skills (combat, gathering, processing and Hunting tasks) up to level 100. Movement is click-to-move in third person, with four ability keys. Each world is a full copy of the map, and you pick one from a world list, RuneScape-style. Progress is saved to your account, which is shared with the owner's other games.
 
-**Project stage:** planning. Nothing is built yet. Work follows [docs/roadmap/milestones.md](docs/roadmap/milestones.md), starting at M0.
+**Project stage:** M0 (Foundations) in progress: the repo skeleton and the fast check are in place. Work follows [docs/roadmap/milestones.md](docs/roadmap/milestones.md).
 
 ## Where things live
 
-Folders marked *(planned)* are created in M0.
+Folders marked *(planned)* don't exist yet. They're created by the M0 task that first needs them.
 
 | Path | What | Audience |
 |---|---|---|
 | `wiki/` | Player-facing wiki (Markdown with front matter) | **Public** |
 | `docs/` | Internal design, architecture, decisions, roadmap. Start at [docs/README.md](docs/README.md) | Private |
-| `client/` *(planned)* | Godot project: the web client. No game rules live here. | Private |
-| `server/` *(planned)* | Go module: `cmd/world` (world server), `cmd/api` (backend API), `cmd/protogen`, `internal/…` | Private |
-| `data/` *(planned)* | Game content as JSON: items, creatures, drop tables, skills, recipes, quests, XP curve. One source of truth for client and server. | Private |
+| `client/` | Godot project: the web client. No game rules live here. GUT tests in `client/tests/`. | Private |
+| `server/` | Go module: `cmd/dataval` now. Later `cmd/world` (world server), `cmd/api` (backend API), `cmd/protogen`, plus `internal/…` | Private |
+| `data/` | Game content as JSON: items, creatures, drop tables, skills, recipes, quests, XP curve. One source of truth for client and server. | Private |
 | `protocol/` *(planned)* | Network message schema. Go and GDScript codecs are generated from it. | Private |
 | `assets-src/` *(planned)* | Blender sources and licences (Git LFS) | Private |
 | `infra/` *(planned)* | Docker Compose, Caddy, nginx, deploy | Private |
-| `tools/` *(planned)* | Scripts: check, export regions, build, deploy | Private |
+| `tools/` | Scripts: `check.sh` (fast check), `slow-tests.sh`, `check-links.py`. Later: export regions, build, deploy. | Private |
 
 The **shared account platform** (login, roles, Premium, bans, friends) is a separate service in the owner's repo `TomBResearch/UntitledAccountSystem`, live at `accounts.untitledgames.co.uk`. What this game uses from it is in [docs/architecture/accounts.md](docs/architecture/accounts.md).
 
@@ -39,16 +39,22 @@ The **shared account platform** (login, roles, Premium, bans, friends) is a sepa
 
 ## Commands
 
-These are set up in M0. Until then, this table is the target.
-
 | Task | Command |
 |---|---|
-| **Fast check (run before every push)** | `tools/check.sh` (Go tests, vet, lint, data validation, GDScript tests). Target: under 60 s. |
-| Export region data from Godot | `tools/export-regions.sh` |
-| Regenerate protocol codecs | `tools/protogen.sh` |
-| Start the local stack | `cd infra && docker compose up -d --build` |
-| Slow tests (bots, soak, web export) | `tools/slow-tests.sh`. These run nightly and on demand, never on every push. |
-| Deploy to the test server | `tools/deploy.sh` |
+| **Fast check (run before every push)** | `tools/check.sh`: data validation, Go format, vet, staticcheck and tests, then Godot import and GUT. About 3 s locally. `tools/check.sh go` and `tools/check.sh godot` run one half. |
+| Validate data and regenerate `client/data/` | `cd server && go run ./cmd/dataval -data ../data -emit-client ../client/data` (the check does this) |
+| Docs link check | `python3 tools/check-links.py` |
+| Slow tests (race detector now; bots, soak and builds later) | `tools/slow-tests.sh`. Runs nightly and on demand, never on every push. |
+| Install staticcheck locally (optional; CI always runs it) | `go install honnef.co/go/tools/cmd/staticcheck@v0.8.2` |
+| *Planned in M0:* export regions, regenerate protocol, local stack, deploy | `tools/export-regions.sh`, `tools/protogen.sh`, `cd infra && docker compose up -d --build`, `tools/deploy.sh` |
+
+**MCP:** `.mcp.json` (Godot and Blender MCP servers) is local to the owner's Mac and ignored by git. Copy it from Untitled Racing Game if it's missing.
+
+**CI** ([ADR 0009](docs/decisions/0009-fast-ci.md)):
+- `ci.yml` is the fast lane for code and data: Go, Godot and gitleaks, run in parallel.
+- `docs.yml` covers docs-only changes, with a link check only.
+- `nightly.yml` is the slow lane.
+- gitleaks false positives go in `.gitleaks.toml`.
 
 ## Non-negotiable rules
 

@@ -1,0 +1,21 @@
+# Slow lane (ADR 0009): nightly on main, and on demand from the Actions tab.
+# Never on every push. Bot tests, soak and load tests, web/server builds and deploy dry runs go here.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  slow:
+    name: Slow tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.mod
+      - run: tools/slow-tests.sh

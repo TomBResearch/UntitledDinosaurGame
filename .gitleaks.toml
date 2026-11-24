@@ -1,0 +1,11 @@
+# gitleaks config: the default rules, plus one allowlisted path.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known false positives"
+paths = [
+  # The archived first attempt (tag archive/colyseus-attempt) kept SHA-256 checksums here,
+  # which the generic-api-key rule mistakes for keys. The file no longer exists on main.
+  '''^docs/contracts/checksums\.json$''',
+]
