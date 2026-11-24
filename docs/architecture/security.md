@@ -28,7 +28,7 @@ These live in environment variables only. `.env` files are ignored by git, and g
 ## Rate limits
 
 - **API:** per IP and per account ([backend.md](backend.md)).
-- **World:** per message type ([networking.md](networking.md)), plus a limit on bytes per second per connection.
+- **World:** per message type, plus a limit on bytes per second per connection (4 KB/s, burst 16 KB). The numbers and where each is checked are in [networking.md](networking.md#rate-limits).
 - **Join tickets:** single use, 30 s.
 - **Connections per IP:** at most 10 to a world.
 

@@ -67,6 +67,16 @@ func TestRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestRejectsBadWalkSpeed(t *testing.T) {
+	for _, speed := range []string{"0", "-1", "100"} {
+		dir := copyData(t)
+		write(t, dir, "progression.json", strings.Replace(read(t, dir, "progression.json"), `"walk_speed_m_s": 4.0`, `"walk_speed_m_s": `+speed, 1))
+		if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "walk_speed_m_s") {
+			t.Errorf("walk speed %s: expected an error, got %v", speed, err)
+		}
+	}
+}
+
 func TestValidatesRegions(t *testing.T) {
 	dir := copyData(t)
 	if err := os.Mkdir(filepath.Join(dir, "regions"), 0o755); err != nil {

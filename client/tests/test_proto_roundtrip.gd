@@ -243,6 +243,11 @@ func samples() -> Array[Sample]:
 	chat_long.role = Proto.Role.NORMAL
 	chat_long.text = "a".repeat(300)
 
+	var kick := Proto.Kick.new()
+	kick.reason = Proto.KickReason.REFRESH
+	var kick_misbehaving := Proto.Kick.new()
+	kick_misbehaving.reason = Proto.KickReason.MISBEHAVING
+
 	var f_stopped := Proto.PathStopped.new()
 	f_stopped.entity = 7
 	f_stopped.tick = 1300
@@ -271,6 +276,8 @@ func samples() -> Array[Sample]:
 		Sample.new("entity_leave", [leave]),
 		Sample.new("chat", [chat]),
 		Sample.new("chat_long", [chat_long]),
+		Sample.new("kick", [kick]),
+		Sample.new("kick_misbehaving", [kick_misbehaving]),
 		Sample.new("server_frame", [f_stopped, f_leave, f_chat]),
 	]
 

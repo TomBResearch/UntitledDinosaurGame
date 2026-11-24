@@ -38,6 +38,18 @@ enum Role {
   owner = 4
 }
 
+# Why the server is closing the connection (sent in kick, just before the close).
+enum KickReason {
+  # The client is out of date (protocol or content hash): reload the page to update.
+  refresh = 0
+  # The join ticket was refused.
+  bad_ticket = 1
+  # The world is shutting down or restarting.
+  shutdown = 2
+  # Too many invalid or rate-limited messages.
+  misbehaving = 3
+}
+
 ## Structs ##
 
 # A path an entity walks: start at waypoints[0] at start_tick, then move at speed along the
@@ -141,4 +153,9 @@ message chat = 70 server {
   name: string<48>
   role: Role
   text: string<480>
+}
+
+# The server is closing the connection. Sent as the last frame before the close.
+message kick = 71 server {
+  reason: KickReason
 }

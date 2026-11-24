@@ -14,7 +14,7 @@ import (
 
 // ProtocolHash identifies this version of the schema. Clients send it as the first field of
 // hello; a mismatch means the client is out of date.
-const ProtocolHash uint32 = 0xa2c24e1a
+const ProtocolHash uint32 = 0x3d810d0d
 
 // MaxClientMessageSize is the largest encoded client-to-server message, header included.
 const MaxClientMessageSize = 1132
@@ -35,6 +35,7 @@ const (
 	MsgEntityEnter MsgID = 68
 	MsgEntityLeave MsgID = 69
 	MsgChat        MsgID = 70
+	MsgKick        MsgID = 71
 )
 
 // String returns the message's schema name.
@@ -62,6 +63,8 @@ func (id MsgID) String() string {
 		return "entity_leave"
 	case MsgChat:
 		return "chat"
+	case MsgKick:
+		return "kick"
 	}
 	return fmt.Sprintf("message(%d)", uint8(id))
 }
@@ -91,6 +94,8 @@ func (id MsgID) info() (dir Direction, maxBody int, ok bool) {
 		return FromServer, 5, true
 	case MsgChat:
 		return FromServer, 537, true
+	case MsgKick:
+		return FromServer, 1, true
 	}
 	return 0, 0, false
 }
@@ -119,6 +124,8 @@ func newMessage(id MsgID) Message {
 		return &EntityLeave{}
 	case MsgChat:
 		return &Chat{}
+	case MsgKick:
+		return &Kick{}
 	}
 	return nil
 }
@@ -150,6 +157,23 @@ const (
 )
 
 const roleCount = 5
+
+// Why the server is closing the connection (sent in kick, just before the close).
+type KickReason uint8
+
+// KickReason values.
+const (
+	// The client is out of date (protocol or content hash): reload the page to update.
+	KickReasonRefresh KickReason = 0
+	// The join ticket was refused.
+	KickReasonBadTicket KickReason = 1
+	// The world is shutting down or restarting.
+	KickReasonShutdown KickReason = 2
+	// Too many invalid or rate-limited messages.
+	KickReasonMisbehaving KickReason = 3
+)
+
+const kickReasonCount = 4
 
 // A path an entity walks: start at waypoints[0] at start_tick, then move at speed along the
 // waypoints, stopping at the last one. Position at tick t is speed * (t - start_tick) along it.
@@ -446,6 +470,22 @@ func (m *Chat) decode(d *decoder) {
 
 // MessageID returns MsgChat.
 func (*Chat) MessageID() MsgID { return MsgChat }
+
+// The server is closing the connection. Sent as the last frame before the close.
+type Kick struct {
+	Reason KickReason
+}
+
+func (m *Kick) encode(e *encoder) {
+	e.enum(uint8(m.Reason), kickReasonCount)
+}
+
+func (m *Kick) decode(d *decoder) {
+	m.Reason = KickReason(d.enum(kickReasonCount))
+}
+
+// MessageID returns MsgKick.
+func (*Kick) MessageID() MsgID { return MsgKick }
 
 // Message is one protocol message. Only the generated message types implement it.
 type Message interface {
