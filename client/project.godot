@@ -1,0 +1,39 @@
+; Engine configuration file.
+; Untitled Dinosaur Game: Godot 4.7.2, Compatibility renderer (docs/decisions/0001-godot-web-client.md).
+; The client is a renderer only: no game rules live here (CLAUDE.md rule 2).
+
+config_version=5
+
+[application]
+
+config/name="Untitled Dinosaur Game"
+config/version="0.0.1"
+run/main_scene="res://main.tscn"
+run/flush_stdout_on_print=true
+config/features=PackedStringArray("4.7", "GL Compatibility")
+
+[debug]
+
+gdscript/warnings/untyped_declaration=2
+gdscript/warnings/inferred_declaration=0
+gdscript/warnings/unsafe_property_access=2
+gdscript/warnings/unsafe_method_access=2
+gdscript/warnings/unsafe_cast=1
+gdscript/warnings/unsafe_call_argument=2
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/gut/plugin.cfg")
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/vram_compression/import_etc2_astc=true

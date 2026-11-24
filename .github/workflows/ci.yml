@@ -1,0 +1,75 @@
+# Fast lane (ADR 0009): every push and PR that touches code or data. Target: under 2 minutes.
+# Same checks as tools/check.sh. Docs-only changes run docs.yml instead.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "wiki/**", "**.md"]
+  pull_request:
+    paths-ignore: ["docs/**", "wiki/**", "**.md"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: 4.7.2
+  STATICCHECK_VERSION: v0.8.2
+
+jobs:
+  go:
+    name: Go (format, vet, staticcheck, tests, data)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.mod
+      - name: Cache staticcheck
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/staticcheck
+          key: staticcheck-${{ env.STATICCHECK_VERSION }}-${{ runner.os }}
+      - name: Install staticcheck
+        run: test -x ~/go/bin/staticcheck || go install honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}
+      - run: STATICCHECK=~/go/bin/staticcheck tools/check.sh go
+
+  godot:
+    name: Godot (import, GUT)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.mod
+      - name: Cache Godot
+        uses: actions/cache@v4
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT_VERSION }}-linux-x86_64
+      - name: Download Godot
+        run: |
+          if [ ! -x ~/godot/godot ]; then
+            mkdir -p ~/godot
+            curl -sSL -o /tmp/godot.zip \
+              "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -q /tmp/godot.zip -d ~/godot
+            mv ~/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 ~/godot/godot
+          fi
+          ~/godot/godot --version
+      - run: GODOT=~/godot/godot tools/check.sh godot
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.28.0 detect --source /repo --config /repo/.gitleaks.toml --no-banner --redact --verbose

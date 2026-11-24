@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Secrets: never commit real env files
+.env
+.env.*
+!.env.example
+
+# Local MCP config (absolute paths on the owner's Mac)
+.mcp.json
+
+# Build output (web export, server binaries)
+/build/
+
+# Godot
+client/.godot/
+# Generated from data/ by `dataval -emit-client` (tools/check.sh does it)
+client/data/
+*.translation
+
+# Go
+server/bin/
+
+# Blender backups
+*.blend1

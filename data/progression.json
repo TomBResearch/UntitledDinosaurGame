@@ -1,0 +1,12 @@
+{
+  "max_level": 100,
+  "max_xp": 200000000,
+  "xp_curve": {
+    "base": 50,
+    "growth": 1.1,
+    "linear": 25
+  },
+  "server": {
+    "tick_hz": 20
+  }
+}

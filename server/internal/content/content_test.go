@@ -1,0 +1,121 @@
+package content
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+const repoData = "../../../data"
+
+func TestRepoDataIsValid(t *testing.T) {
+	c, err := Load(repoData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Skills) != 14 {
+		t.Errorf("expected 14 skills (docs/design/skills.md), got %d", len(c.Skills))
+	}
+	if got := c.XP.XPForLevel(100); got != 6387165 {
+		t.Errorf("level 100 needs %d XP, want 6387165", got)
+	}
+	if len(c.Hash) != 64 {
+		t.Errorf("bad hash %q", c.Hash)
+	}
+}
+
+func TestHashIgnoresFormattingButNotValues(t *testing.T) {
+	dir := copyData(t)
+	base := mustLoad(t, dir).Hash
+
+	reformatted := strings.ReplaceAll(read(t, dir, "skills.json"), "\n", "\n\n  ")
+	write(t, dir, "skills.json", reformatted)
+	if got := mustLoad(t, dir).Hash; got != base {
+		t.Error("whitespace changed the hash")
+	}
+
+	write(t, dir, "progression.json", strings.Replace(read(t, dir, "progression.json"), `"linear": 25`, `"linear": 26`, 1))
+	if got := mustLoad(t, dir).Hash; got == base {
+		t.Error("a value change didn't change the hash")
+	}
+}
+
+func TestRejectsBadSkills(t *testing.T) {
+	dir := copyData(t)
+	write(t, dir, "skills.json", `{"skills": [
+		{"id": "strength", "name": "Strength", "group": "combat"},
+		{"id": "strength", "name": "Again", "group": "combat"},
+		{"id": "Bad Id", "name": "", "group": "nonsense"}
+	]}`)
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected errors")
+	}
+	for _, want := range []string{"duplicate id", "bad id", "no name", "unknown group"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q, got: %v", want, err)
+		}
+	}
+}
+
+func TestRejectsUnknownFields(t *testing.T) {
+	dir := copyData(t)
+	write(t, dir, "progression.json", strings.Replace(read(t, dir, "progression.json"), `"max_level"`, `"max_levle": 1, "max_level"`, 1))
+	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "max_levle") {
+		t.Fatalf("expected an unknown-field error, got %v", err)
+	}
+}
+
+func TestEmitClientWritesOnlyClientFiles(t *testing.T) {
+	c := mustLoad(t, repoData)
+	out := t.TempDir()
+	if err := c.EmitClient(out); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(out)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if strings.Join(names, ",") != "content_hash.txt,progression.json,skills.json" {
+		t.Errorf("unexpected client files: %v", names)
+	}
+	if strings.TrimSpace(read(t, out, "content_hash.txt")) != c.Hash {
+		t.Error("content_hash.txt doesn't match")
+	}
+}
+
+func copyData(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, n := range []string{"progression.json", "skills.json"} {
+		write(t, dir, n, read(t, repoData, n))
+	}
+	return dir
+}
+
+func mustLoad(t *testing.T, dir string) *Content {
+	t.Helper()
+	c, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func read(t *testing.T, dir, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func write(t *testing.T, dir, name, text string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
