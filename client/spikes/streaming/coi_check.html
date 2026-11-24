@@ -1,0 +1,43 @@
+<!doctype html><meta charset=utf-8><title>COI check</title>
+<!-- Streaming spike: what cross-origin isolation (COOP/COEP, serve.py --coi) changes for the page.
+     Needs the world server on ws://127.0.0.1:8090/w/dev and cors_peer.py on 127.0.0.1:8063 (another
+     origin). Posts its findings to /results like the bench, and follows serve.py's plan. -->
+<pre id=out></pre>
+<script>
+const out = [];
+const log = (k, v) => { out.push(k + ': ' + v); document.getElementById('out').textContent = out.join('\n'); };
+const q = new URLSearchParams(location.search);
+const ws = q.get('ws') || 'ws://127.0.0.1:8090/w/dev';
+const other = q.get('other') || 'http://127.0.0.1:8063';
+async function run() {
+  log('origin', location.origin);
+  log('crossOriginIsolated', self.crossOriginIsolated);
+  log('SharedArrayBuffer', typeof SharedArrayBuffer);
+  await new Promise(res => {
+    try {
+      const s = new WebSocket(ws);
+      s.onopen = () => { log('websocket to world server (other port)', 'open'); s.close(); res(); };
+      s.onerror = () => { log('websocket to world server (other port)', 'error'); res(); };
+      setTimeout(() => { log('websocket', 'timeout'); res(); }, 3000);
+    } catch (e) { log('websocket', 'threw ' + e); res(); }
+  });
+  const cases = [
+    ['fetch POST cors+credentials, peer sends CORS (platform login)', '/cors', {credentials: 'include', method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'}],
+    ['fetch GET cors, peer sends no CORS', '/plain', {}],
+    ['fetch GET no-cors, peer sends no CORP', '/plain', {mode: 'no-cors'}],
+    ['fetch GET no-cors, peer sends CORP cross-origin', '/corp', {mode: 'no-cors'}],
+  ];
+  for (const [name, path, opts] of cases) {
+    try { const r = await fetch(other + path, opts); log(name, 'ok ' + r.status + ' ' + r.type); }
+    catch (e) { log(name, 'blocked (' + e + ')'); }
+  }
+  for (const [name, path] of [['<img> peer sends no CORP', '/img'], ['<img> peer sends CORP cross-origin', '/img-corp']]) {
+    await new Promise(res => { const i = new Image(); i.onload = () => { log(name, 'loaded'); res(); }; i.onerror = () => { log(name, 'blocked'); res(); }; i.src = other + path; });
+  }
+  const r = await fetch('/results?label=' + encodeURIComponent(q.get('label') || 'coi-check'),
+      {method: 'POST', body: JSON.stringify({label: q.get('label'), user_agent: navigator.userAgent, checks: out})});
+  const j = await r.json();
+  if (j.next) setTimeout(() => location.href = j.next, 1000);
+}
+run();
+</script>

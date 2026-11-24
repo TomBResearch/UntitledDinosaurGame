@@ -19,7 +19,8 @@ Rows marked *(planned)* don't exist yet.
 | `net/proto/` | **Generated** encoders and decoders. Never edit them by hand. |
 | `core/launch_options.gd` | Name, server URL and dev aids from the web query string or desktop arguments |
 | `screens/` | `game/` (the world) and `name_entry/` now. *(planned)* Boot (version check), Login, World select, Character select and create, Loading |
-| `world/` | `PathPlayback`, `MotionTrack`, `ErrorBlend`, the `EntityManager`, the `OrbitCamera` and the `ClickMarker`. *(planned)* chunk streaming |
+| `world/` | `PathPlayback`, `MotionTrack`, `ErrorBlend`, the `EntityManager`, the `OrbitCamera` and the `ClickMarker`. *(planned)* chunk streaming, starting from the spike's `SpikeChunkStreamer` |
+| `spikes/streaming/` | The M0 streaming spike: region generator, chunk streamer, bench and web measuring tools ([README](../../client/spikes/streaming/README.md)). Not shipped. |
 | `entities/player/` | The player view: placeholder caveman and name label. *(planned)* creatures, nodes and ground items |
 | `ui/` | `ui/chat/`: the `ChatBox`, `ChatLog` and `SpeechBubble`. *(planned)* HUD, inventory, equipment, skills, bank, dialogue, context menu, ability bar |
 | `autoload/session.gd` *(planned, M1)* | Platform login, single-flight token refresh, `/api` calls (via a `JavaScriptBridge` fetch wrapper on the web) |
@@ -116,9 +117,14 @@ Build it with `mkdir -p build/web && Godot --headless --path client --export-rel
 
 ## Region streaming
 
+Decided by the M0 streaming spike: [ADR 0013](../decisions/0013-region-streaming-web-threads.md), with its numbers. The spike's streamer and bench are in `client/spikes/streaming/`.
+
 - Each region is split into **64 m chunks**, each its own scene with terrain, props and decoration.
-- The client keeps chunks within **about 160 m** loaded and frees those beyond about 220 m. The two distances differ (hysteresis) so a chunk near the edge doesn't load and unload repeatedly.
-- Loading uses `ResourceLoader.load_threaded_request`. **M0 spike:** check how this behaves in the web build, both single-threaded and with threads (which need COOP/COEP headers). Pick whichever gives the fewest hitches, and record it in an ADR.
+- The client keeps chunks within **about 160 m** loaded and frees those beyond about 220 m. The two distances differ (hysteresis) so a chunk near the edge doesn't load and unload repeatedly. Distance is from the player to the nearest point of the chunk.
+- Loading uses `ResourceLoader.load_threaded_request`, nearest chunk first. **The web build is single-threaded**, and there the call loads synchronously: the whole load runs inside it, on the main thread. That's about 2 ms for a spike chunk on an M5 Pro. The same code loads in the background on desktop, or on a threaded build.
+- To keep that from hitching:
+  - **at most one chunk is finished (get, instantiate, add) a frame, and at most one is freed a frame**, farthest first. Freeing a chunk occasionally costs about 10 ms;
+  - **chunks stay light.** Repeated props are one `MultiMeshInstance3D` per mesh per chunk, shared meshes, materials and prop scenes are their own files, instanced scenes are only for things that need collision, and small props have a visibility range.
 - Changing region shows a loading screen. The new region's nearby chunks load before you appear.
 
 ## Rendering budgets (desktop browser, first target)
@@ -135,6 +141,8 @@ Mobile browsers are an [open question](../open-questions.md).
 
 ## Web export settings
 
-- Precompressed `.br` and `.gz` files are served by Caddy, as in the racing game.
+- **Single-threaded** (`variant/thread_support=false`), so the page needs **no cross-origin isolation**: no COOP/COEP headers ([ADR 0013](../decisions/0013-region-streaming-web-threads.md)). Turning threads on would need those headers, and CORS or CORP on every cross-origin resource the page loads; the ADR has the details.
+- Precompressed `.br` and `.gz` files are served by Caddy, as in the racing game. The engine `index.wasm` is about 6.7 MB with Brotli (9.8 MB gzip, 38 MB raw).
 - The `index.html` shell shows a branded loading bar.
 - `Cache-Control: no-cache` on `index.html`, and long caching on content-hashed `.pck` and `.wasm` files.
+- The **Web** preset excludes `spikes/*`. The two "Streaming spike" presets export the spike bench instead of the game: their `streaming_spike` feature tag makes `bench.tscn` the main scene.

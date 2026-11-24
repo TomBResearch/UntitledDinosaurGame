@@ -24,7 +24,7 @@ A region is a folder in `client/regions/<region_id>/`. The folder name is the re
 
 | Node or scene | Purpose |
 |---|---|
-| `chunks/chunk_<x>_<z>.tscn` | 64 m terrain and props. The client streams these. *(Comes with the streaming spike; `test_greybox` is a single scene for now.)* |
+| `chunks/chunk_<x>_<z>.tscn` | 64 m terrain and props. The client streams these. *(Comes with the real chunk streaming, after the M0 spike ([ADR 0013](../decisions/0013-region-streaming-web-threads.md)); `test_greybox` is a single scene for now. Keep chunks light: one `MultiMeshInstance3D` per repeated prop mesh, shared meshes and materials in their own files.)* |
 | `region.tscn` | Authoring root: instances every chunk, plus the nodes below |
 | `NavigationRegion3D` (exactly one) | Baked navmesh. Agent radius 0.4 m, height 1.8 m, max climb 0.4 m, max slope 40°; cell size and height 0.2 m (the project's navigation map uses the same). Parse **static colliders** only. |
 | `SpawnPoint` markers | `client/regions/markers/spawn_point.gd`. Kind Player, or Creature with `creature_id`, count, wander radius and respawn time |
