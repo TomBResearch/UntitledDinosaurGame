@@ -15,7 +15,7 @@ Each milestone ends with something **playable on the test server**. Tasks inside
 | Navmesh pathfinding (Go) **(done)** | Load, A*, funnel and raycast, with unit tests on fixture meshes. A path in the test region takes under 0.2 ms. |
 | World server core **(done)** | Tick loop, region inbox, `Step()`, spatial grid, interest management, movement along paths. Tick-stepped tests cover: walk, repath, stop, entity enter and leave. |
 | Client core **(done)** | Connect with a **dev ticket** (no platform login yet), clock sync, click-to-move, path playback for you and others, third-person camera, click marker. |
-| Local chat | Within 40 m, rate limited, shown in a chat box and as a speech bubble. |
+| Local chat **(done)** | Within 40 m, rate limited, shown in a chat box and as a speech bubble. |
 | Streaming spike | Chunked loading measured on the web, with and without threads. An ADR records the choice. |
 | Static site for the wiki and docs | A generator is chosen (with an ADR) and builds `/wiki/` (published pages only) and `/dev/` (behind a password). |
 | Deploy | DNS, the nginx file, the certificate, `/opt/udg`, `tools/deploy.sh`. The game is live at `https://dinosaur.untitledgames.co.uk`, with the racing site and other sites unaffected. |

@@ -1,7 +1,7 @@
 ---
 title: Untitled Dinosaur Game wiki
 status: draft
-updated: 2026-11-23
+updated: 2026-11-24
 ---
 
 # Untitled Dinosaur Game wiki
@@ -13,6 +13,7 @@ Welcome, caveman. This wiki explains how the world works: skills, items, creatur
 ## Getting going
 
 - [Controls](controls.md): walking and the camera
+- [Chat](chat.md): talking to players near you
 - [Skills](skills.md): everything you can train
 - [Levels and XP](levels-and-xp.md): how levelling works, and the full XP table
 - [Worlds and Premium](worlds-and-premium.md): picking a world, and what Premium means

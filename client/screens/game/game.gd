@@ -198,9 +198,11 @@ func _update_debug() -> void:
 	if net == null or net.state != NetClient.State.IN_WORLD:
 		_debug.text = ""
 		return
-	_debug.text = "%d fps · tick %.1f · rtt %.0f ms · offset %+.1f ms · %d in view · %.1f KB in" % [
+	var me := _entities.self_view
+	var at := "(%.0f, %.0f, %.0f)" % [me.position.x, me.position.y, me.position.z] if me != null else "-"
+	_debug.text = "%d fps · tick %.1f · rtt %.0f ms · offset %+.1f ms · %d in view · %.1f KB in · at %s" % [
 		Engine.get_frames_per_second(), net.server_tick_now(), net.clock.best_rtt_ms(),
-		net.clock.offset_ms() - net.clock.target_offset_ms(), _entities.count(), net.bytes_in / 1024.0]
+		net.clock.offset_ms() - net.clock.target_offset_ms(), _entities.count(), net.bytes_in / 1024.0, at]
 
 
 func _on_kicked(reason: Proto.KickReason) -> void:
