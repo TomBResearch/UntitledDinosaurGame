@@ -2,7 +2,7 @@
 # The fast check (ADR 0009). Same as the CI fast lane. Run it before every push; target under 60 s.
 #
 #   tools/check.sh          # everything
-#   tools/check.sh go       # Go only (format, vet, staticcheck, tests, data, protocol staleness)
+#   tools/check.sh go       # Go only (format, vet, staticcheck, tests, data, protocol and region staleness)
 #   tools/check.sh godot    # data + Godot only (import, GUT)
 #
 # Env: GODOT (path to Godot 4.7.2; defaults to the Mac app), STATICCHECK (path, optional locally).
@@ -20,6 +20,36 @@ run_data() {
 run_proto() {
   step "Protocol: generated codecs are up to date"
   (cd "$REPO_ROOT/server" && go run ./cmd/protogen -check)
+}
+
+# Each region scene's export must be current (ADR 0004). Hash only: no bake or export here.
+run_regions() {
+  step "Regions: exports match their scenes"
+  local stale=0 scene id export want have
+  for scene in "$REPO_ROOT"/client/regions/*/region.tscn; do
+    [[ -e "$scene" ]] || continue
+    id="$(basename "$(dirname "$scene")")"
+    export="$REPO_ROOT/data/regions/$id.region.json"
+    if [[ ! -f "$export" ]]; then
+      echo "$id: no data/regions/$id.region.json"; stale=1; continue
+    fi
+    want="$( (sha256sum "$scene" 2>/dev/null || shasum -a 256 "$scene") | cut -d' ' -f1)"
+    have="$(grep -oE '"source_hash": *"[0-9a-f]{64}"' "$export" | grep -oE '[0-9a-f]{64}' || true)"
+    if [[ "$want" != "$have" ]]; then
+      echo "$id: region.tscn changed since it was exported"; stale=1
+    fi
+  done
+  for export in "$REPO_ROOT"/data/regions/*.region.json; do
+    [[ -e "$export" ]] || continue
+    id="$(basename "$export" .region.json)"
+    if [[ ! -f "$REPO_ROOT/client/regions/$id/region.tscn" ]]; then
+      echo "$id: export has no scene at client/regions/$id/region.tscn"; stale=1
+    fi
+  done
+  if [[ $stale -ne 0 ]]; then
+    echo "Stale region exports. Run: tools/export-regions.sh (add --bake if the level changed), then commit the scene and data/regions/ together." >&2
+    exit 1
+  fi
 }
 
 run_go() {
@@ -57,8 +87,8 @@ run_godot() {
 }
 
 case "$PART" in
-  all) run_data; run_proto; run_go; run_godot ;;
-  go) run_data; run_proto; run_go ;;
+  all) run_data; run_proto; run_regions; run_go; run_godot ;;
+  go) run_data; run_proto; run_regions; run_go ;;
   godot) run_data; run_godot ;;
   *) echo "usage: tools/check.sh [all|go|godot]" >&2; exit 2 ;;
 esac
