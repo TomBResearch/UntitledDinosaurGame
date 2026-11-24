@@ -77,7 +77,7 @@ Paths start at a **server tick**, so the client needs to know the server's time.
    - on arrival, on the first tick at or past the end, at the last waypoint;
    - when a click finds no path, or is within 10 cm of where you are, at your current position. If you were walking, everyone who sees you gets it; if you were standing, only you do (so your client can clear the click marker).
    - Only a player's last click in a tick is walked.
-5. **Correction:** if a client's drawn position ever differs from where the server's numbers place it by more than 0.5 m, for example after a lag spike, the entity blends to the correct place over 150 ms.
+5. **Correction:** if a client's drawn position ever differs from where the server's numbers place it by more than 0.5 m, for example after a lag spike, the entity blends to the correct place over 150 ms. The client blends smaller differences the same way rather than snapping, because a repath of your own character (drawn ahead of the server) moves its target by up to about 0.6 m at 150 ms of latency. See [client.md](client.md#drawing-entities).
 
 ## Message catalogue (first draft)
 

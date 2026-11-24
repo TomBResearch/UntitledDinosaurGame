@@ -6,7 +6,7 @@ Read this first. It covers what the project is, where things live and the rules 
 
 A browser-based 3D sandbox MMORPG set in prehistoric times: cavemen, dinosaurs, jungles, caves and fossils. You start as a caveman in a pelt loincloth and level up skills (combat, gathering, processing and Hunting tasks) up to level 100. Movement is click-to-move in third person, with four ability keys. Each world is a full copy of the map, and you pick one from a world list, RuneScape-style. Progress is saved to your account, which is shared with the owner's other games.
 
-**Project stage:** M0 (Foundations) in progress: the repo skeleton, fast check, protocol, test region, pathfinding and world server core are in place. Work follows [docs/roadmap/milestones.md](docs/roadmap/milestones.md).
+**Project stage:** M0 (Foundations) in progress: the repo skeleton, fast check, protocol, test region, pathfinding, world server core and client core are in place. Work follows [docs/roadmap/milestones.md](docs/roadmap/milestones.md).
 
 ## Where things live
 
@@ -46,6 +46,7 @@ The **shared account platform** (login, roles, Premium, bans, friends) is a sepa
 | Regenerate protocol codecs (after editing `protocol/messages.schema`) | `tools/protogen.sh`. See [protocol/README.md](protocol/README.md). |
 | Docs link check | `python3 tools/check-links.py` |
 | Run the world server locally (dev tickets on; clients connect to `ws://127.0.0.1:8090/w/dev` with ticket `dev:<name>`) | `cd server && go run ./cmd/world -dev-tickets`. Flags: `-addr`, `-world`, `-data`, `-spawn-region`, `-origins`. Ctrl-C or SIGTERM shuts it down cleanly. See [networking.md](docs/architecture/networking.md#dev-tickets). |
+| Run the client against a local world server (start the server first, as above) | Desktop: `/Applications/Godot.app/Contents/MacOS/Godot --path client -- --name=Grug` (run it twice with different names to see each other). Web: `Godot --headless --path client --export-release Web ../build/web/index.html`, serve `build/web` (for example `python3 -m http.server 8060 -d build/web`) and open `http://localhost:8060/?name=Grug`. Options: `server`, `demo`, `lag=150`, `shot`, `quit` ([client.md](docs/architecture/client.md#launch-options-and-dev-aids)). |
 | Slow tests (race detector, protocol fuzzing, the pathfinding benchmark and the 50-bot walk test now; soak and builds later) | `tools/slow-tests.sh`. Runs nightly and on demand, never on every push. |
 | Install staticcheck locally (optional; CI always runs it) | `go install honnef.co/go/tools/cmd/staticcheck@v0.8.2` |
 | Export regions to `data/regions/` (after editing a region scene; `--bake` re-bakes the navmesh first) | `tools/export-regions.sh [--bake] [region_id ...]` |

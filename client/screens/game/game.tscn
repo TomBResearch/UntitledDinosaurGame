@@ -1,0 +1,105 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://screens/game/game.gd" id="1_game"]
+[ext_resource type="Script" path="res://world/entity_manager.gd" id="2_entities"]
+[ext_resource type="Script" path="res://world/click_marker.gd" id="3_marker"]
+[ext_resource type="Script" path="res://world/orbit_camera.gd" id="4_camera"]
+
+[sub_resource type="StandardMaterial3D" id="MarkerMaterial"]
+transparency = 1
+shading_mode = 0
+albedo_color = Color(1, 0.86, 0.2, 0.85)
+
+[sub_resource type="TorusMesh" id="MarkerMesh"]
+material = SubResource("MarkerMaterial")
+inner_radius = 0.32
+outer_radius = 0.46
+rings = 24
+ring_segments = 6
+
+[sub_resource type="StyleBoxFlat" id="OverlayStyle"]
+bg_color = Color(0.1, 0.08, 0.06, 0.88)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+content_margin_left = 24.0
+content_margin_top = 18.0
+content_margin_right = 24.0
+content_margin_bottom = 18.0
+
+[sub_resource type="LabelSettings" id="DebugText"]
+font_size = 13
+outline_size = 4
+outline_color = Color(0, 0, 0, 0.8)
+
+[node name="Game" type="Node3D"]
+script = ExtResource("1_game")
+
+[node name="Entities" type="Node3D" parent="."]
+script = ExtResource("2_entities")
+
+[node name="ClickMarker" type="Node3D" parent="."]
+script = ExtResource("3_marker")
+
+[node name="Ring" type="MeshInstance3D" parent="ClickMarker"]
+transform = Transform3D(1, 0, 0, 0, 0.25, 0, 0, 0, 1, 0, 0, 0)
+cast_shadow = 0
+mesh = SubResource("MarkerMesh")
+
+[node name="CameraRig" type="Node3D" parent="."]
+script = ExtResource("4_camera")
+
+[node name="Camera3D" type="Camera3D" parent="CameraRig"]
+current = true
+fov = 60.0
+near = 0.1
+far = 600.0
+
+[node name="Hud" type="CanvasLayer" parent="."]
+
+[node name="Debug" type="Label" parent="Hud"]
+offset_left = 10.0
+offset_top = 8.0
+offset_right = 700.0
+offset_bottom = 30.0
+mouse_filter = 2
+label_settings = SubResource("DebugText")
+
+[node name="Status" type="Label" parent="Hud"]
+anchors_preset = 10
+anchor_right = 1.0
+offset_top = 40.0
+offset_bottom = 70.0
+grow_horizontal = 2
+mouse_filter = 2
+horizontal_alignment = 1
+label_settings = SubResource("DebugText")
+
+[node name="Overlay" type="CenterContainer" parent="Hud"]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="Hud/Overlay"]
+custom_minimum_size = Vector2(380, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("OverlayStyle")
+
+[node name="Box" type="VBoxContainer" parent="Hud/Overlay/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Message" type="Label" parent="Hud/Overlay/Panel/Box"]
+custom_minimum_size = Vector2(340, 0)
+layout_mode = 2
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="Button" type="Button" parent="Hud/Overlay/Panel/Box"]
+layout_mode = 2
+size_flags_horizontal = 4
+text = "Reconnect"

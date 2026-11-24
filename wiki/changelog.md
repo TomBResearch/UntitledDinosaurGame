@@ -1,11 +1,13 @@
 ---
 title: Changelog
 status: draft
-updated: 2026-11-23
+updated: 2026-11-24
 ---
 
 # Changelog
 
 What's changed in each update, newest first.
 
-*No updates yet. The game is in early development.*
+## In development
+
+- You can walk around a test area by clicking the ground, and see other players walking too. See [Controls](controls.md).
