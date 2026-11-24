@@ -277,13 +277,62 @@ func TestOversizedFrameDropsTheConnection(t *testing.T) {
 	expectClosed(t, ctx, c)
 }
 
+// waitFor polls cond until it's true or ctx ends. It waits on a condition, never a fixed time.
+func waitFor(t *testing.T, ctx context.Context, what string, cond func() bool) {
+	t.Helper()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for !cond() {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %s", what)
+		case <-tick.C:
+		}
+	}
+}
+
+func quickKeepalive(c *Config) {
+	c.SilenceTimeout = 20 * time.Millisecond
+	c.KeepaliveInterval = 4 * time.Millisecond
+}
+
+// A client that stops reading also stops answering pings (pongs are sent from Read), like a
+// crashed browser or a dead network. It's dropped after the silence timeout.
 func TestSilentConnectionIsDropped(t *testing.T) {
-	w := startWorld(t, func(c *Config) { c.SilenceTimeout = 20 * time.Millisecond })
+	w := startWorld(t, quickKeepalive)
 	ctx := testCtx(t)
 	c := w.dial(ctx, "/w/dev")
 	send(t, ctx, c, w.hello("dev:Ugg"))
 	readUntil[*proto.Welcome](t, ctx, c)
+	waitFor(t, ctx, "the silent session to be dropped", func() bool { return w.srv.Sessions() == 0 })
 	expectClosed(t, ctx, c)
+}
+
+// A background browser tab pauses the game, so the client sends nothing, but the browser still
+// answers WebSocket pings. That player stays connected well past the silence timeout.
+func TestQuietClientThatAnswersPingsStays(t *testing.T) {
+	w := startWorld(t, quickKeepalive)
+	ctx := testCtx(t)
+	c := w.dial(ctx, "/w/dev")
+	send(t, ctx, c, w.hello("dev:Ugg"))
+	readUntil[*proto.Welcome](t, ctx, c)
+	// Keep reading (which answers pings) but never send anything.
+	go func() {
+		for {
+			if _, _, err := c.Read(ctx); err != nil {
+				return
+			}
+		}
+	}()
+	start := time.Now()
+	before := w.srv.keepalivesAnswered.Load()
+	waitFor(t, ctx, "15 keepalives", func() bool { return w.srv.keepalivesAnswered.Load() >= before+15 })
+	if quiet := time.Since(start); quiet < 2*20*time.Millisecond {
+		t.Fatalf("only %v of quiet; want well past the 20 ms silence timeout", quiet)
+	}
+	if n := w.srv.Sessions(); n != 1 {
+		t.Fatalf("%d sessions after a long quiet spell answering pings, want 1", n)
+	}
 }
 
 func TestWrongWorldIsNotFound(t *testing.T) {

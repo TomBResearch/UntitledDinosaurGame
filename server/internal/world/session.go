@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -48,6 +49,9 @@ type session struct {
 
 	name                   string
 	upload, pings, invalid rate
+
+	// heard is when we last heard from the client (unix nanoseconds): a message or a keepalive pong.
+	heard atomic.Int64
 }
 
 func newSession(srv *Server, id region.SessionID, conn *websocket.Conn) *session {
@@ -109,7 +113,12 @@ func (s *session) run() {
 		return
 	}
 	defer s.toRegion(region.Input{Kind: region.InputLeave, Session: s.id})
-	s.readLoop()
+	// Cancelling readCtx ends the read loop: that's how a silent connection is dropped.
+	readCtx, cancelRead := context.WithCancel(context.Background())
+	defer cancelRead()
+	s.touch()
+	go s.keepalive(readCtx, cancelRead)
+	s.readLoop(readCtx)
 	s.srv.log.Info("player left", "session", s.id, "name", s.name)
 }
 
@@ -152,16 +161,14 @@ func (s *session) handshake() bool {
 	return true
 }
 
-func (s *session) readLoop() {
-	cfg := s.srv.cfg
+func (s *session) readLoop(ctx context.Context) {
 	for {
-		// A read that times out closes the connection: that's the silence timeout.
-		ctx, cancel := context.WithTimeout(context.Background(), cfg.SilenceTimeout)
+		// Read also answers the client's control frames and delivers pongs to keepalive.
 		typ, data, err := s.conn.Read(ctx)
-		cancel()
 		if err != nil {
 			return
 		}
+		s.touch()
 		if typ != websocket.MessageBinary {
 			s.endWith(endProtocol, 0, websocket.StatusUnsupportedData)
 			return
@@ -200,6 +207,40 @@ func (s *session) readLoop() {
 					return
 				}
 			}
+		}
+	}
+}
+
+// touch records that we've just heard from the client.
+func (s *session) touch() { s.heard.Store(time.Now().UnixNano()) }
+
+// keepalive pings the client every KeepaliveInterval and drops the connection (by cancelling the
+// read) once nothing has been heard for SilenceTimeout. Browsers answer WebSocket pings without the
+// page's help, so a background tab whose game loop is paused stays connected; the client's own
+// pings (clock sync) resume when the tab does.
+func (s *session) keepalive(ctx context.Context, cancelRead context.CancelFunc) {
+	cfg := s.srv.cfg
+	t := time.NewTicker(cfg.KeepaliveInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.done:
+			return
+		case <-t.C:
+		}
+		if time.Since(time.Unix(0, s.heard.Load())) > cfg.SilenceTimeout {
+			s.srv.log.Info("connection silent", "session", s.id, "name", s.name)
+			cancelRead()
+			return
+		}
+		pctx, cancel := context.WithTimeout(ctx, cfg.KeepaliveInterval)
+		err := s.conn.Ping(pctx)
+		cancel()
+		if err == nil {
+			s.touch()
+			s.srv.keepalivesAnswered.Add(1)
 		}
 	}
 }

@@ -25,8 +25,16 @@ const CONTENT_HASH_PATH := "res://data/content_hash.txt"
 ## Pings at connect, a second apart, so the clock settles quickly (the server allows 1/s, burst 3).
 const WARMUP_PINGS := 4
 const WARMUP_INTERVAL_S := 1.0
-## The keepalive (the server drops a connection after 20 s of silence).
+## Clock-sync pings. The server's own WebSocket pings keep the connection alive (the browser
+## answers them even in a background tab), so these can pause with the game.
 const PING_INTERVAL_S := 5.0
+## Receive buffer. In a background tab the browser pauses the game loop but keeps receiving, so
+## frames queue here until the tab comes back; if it fills, frames are lost and what's on screen
+## goes wrong. 8 MB and 65,536 frames hold about an hour of a quiet area (about 2 KB/s, at most
+## one frame per tick at 20 Hz) and several minutes of a very busy one. The defaults (64 KB, 4,096
+## frames) would fill in about 30 seconds.
+const INBOUND_BUFFER_BYTES := 8 * 1024 * 1024
+const INBOUND_MAX_FRAMES := 65536
 
 var state: State = State.IDLE
 var clock := ClockSync.new()
@@ -61,6 +69,8 @@ func connect_to_world(url: String, ticket: String) -> Error:
 	_reset_session()
 	_ticket = ticket
 	_socket = WebSocketPeer.new()
+	_socket.inbound_buffer_size = INBOUND_BUFFER_BYTES
+	_socket.max_queued_packets = INBOUND_MAX_FRAMES
 	var err := _socket.connect_to_url(url)
 	if err != OK:
 		_socket = null

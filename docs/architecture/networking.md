@@ -7,7 +7,10 @@ See [ADR 0002](../decisions/0002-free-movement-server-paths.md) for the movement
 - WSS to `/w/<world-id>`: one connection per player, binary frames only. A text frame closes the connection (status 1003).
 - **Server to client:** at most one frame per tick (every 50 ms), holding every event for that client from that tick. A tick with nothing new sends nothing. A `pong` goes out in its own frame as soon as the ping is read.
 - **Client to server:** intents are sent as they happen. Each intent is a few bytes. A client frame may hold several messages, but it must be at most `MaxClientMessageSize` bytes (1,132, the largest `hello`): that's the server's read limit, and a bigger frame closes the connection.
-- **Keepalive:** a ping every 5 s doubles as clock sync. The connection drops after 20 s of silence.
+- **Keepalive:** the server sends a WebSocket ping every 5 s. The connection drops after 20 s in which the server hears nothing: no message and no pong.
+  - Browsers answer WebSocket pings themselves. A background tab pauses the game loop but stays connected, so switching tabs doesn't log you out.
+  - The client's own `ping` every 5 s is for clock sync. It pauses with the game in a background tab, and that's fine.
+  - While paused, the browser keeps receiving. Frames wait in the client's receive buffer (8 MB, 65,536 frames: about an hour of a quiet area) and are played through when the tab comes back. A longer absence can overflow it; an idle logout would bound this (open question).
 - **Library:** the world server uses [`github.com/coder/websocket`](https://github.com/coder/websocket) (v1.8.15), the server's first Go dependency. It's small, has no dependencies of its own, takes a `context` on every read and write (so the silence and write timeouts are plain deadlines), and is safe to close from another goroutine, which is how a slow client is dropped without the tick waiting.
 - **Origins:** browsers may connect from the server's own host, plus the patterns in `-origins` (default `localhost:*,127.0.0.1:*`, for a locally served web export). Production sets it to the game's domain.
 
