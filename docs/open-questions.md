@@ -14,7 +14,6 @@ Agents: if your task depends on one of these, **ask the owner** before building.
 | # | Question | Proposal | Blocks |
 |---|---|---|---|
 | S2 | **Appearance options at creation?** | Body type, skin tone, hair style and colour, beard. More options later through items. | M1 |
-| S4 | **Idle logout:** how long can you stay logged in without doing anything (including in a background tab)? | 15 minutes without a click, key press or chat, with a 1-minute warning. Logging out saves you where you stand. It also bounds what a background tab has to catch up on ([networking.md](architecture/networking.md)). | M1 |
 
 ## Platform and operations
 
@@ -48,4 +47,5 @@ Agents: if your task depends on one of these, **ask the owner** before building.
 | 2026-11-23 | E2: Drop visibility | Only the killer, for 120 s, then they disappear (until trading exists) |
 | 2026-11-23 | E3: Currency | Shells |
 | 2026-11-24 | S3: Chat radius | 40 m. A whole-region "shout" may come later. |
+| 2026-11-24 | S4: Idle logout | 15 minutes without a click, key press or chat, with a 1-minute warning. Logging out saves you where you stand. Built in M1 with persistence ([architecture/networking.md](architecture/networking.md)). |
 | 2026-11-23 | P2: Platform email links | Moved to generic confirmation pages on `accounts.untitledgames.co.uk` ([architecture/accounts.md](architecture/accounts.md)) |

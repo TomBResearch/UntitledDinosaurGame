@@ -31,7 +31,7 @@ Each milestone ends with something **playable on the test server**. Tasks inside
 | `cmd/api` | JWKS check, service API client, worlds, character CRUD (3 slots, name rules), join tickets, deleted-accounts list |
 | Character creation | Name, a basic appearance (skin tone, hair, beard), starting gear (pelt loincloth) |
 | World select | World 1 (free) and World 2 (premium only), with tests for premium refused and allowed |
-| Persistence | Position, region and HP saved. Online lease. Graceful shutdown saves everyone. |
+| Persistence | Position, region and HP saved. Online lease. Graceful shutdown saves everyone. Idle logout after 15 minutes with no input, with a 1-minute warning (S4). |
 | Deletion hook | `/internal/players/:id` is live, then `DELETION_HOOKS` is added to the platform, with an end-to-end deletion test |
 
 **Acceptance:** register on the platform, log in, create up to 3 characters, join either world (premium only if flagged), log out and back in where you left off, and delete your account with your characters gone too. The racing game is unaffected throughout.
