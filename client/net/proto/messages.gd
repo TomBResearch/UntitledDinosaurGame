@@ -7,7 +7,7 @@ extends RefCounted
 ## Proto.encode(msg), and pass each received frame to Proto.decode(frame, Proto.Dir.FROM_SERVER).
 
 ## Identifies this version of the schema. Sent as the first field of hello.
-const PROTOCOL_HASH: int = 0xa2c24e1a
+const PROTOCOL_HASH: int = 0x3d810d0d
 
 ## Who sends a message.
 enum Dir { FROM_CLIENT = 1, FROM_SERVER = 2 }
@@ -30,6 +30,18 @@ enum Role {
 	OWNER = 4,
 }
 
+## Why the server is closing the connection (sent in kick, just before the close).
+enum KickReason {
+	## The client is out of date (protocol or content hash): reload the page to update.
+	REFRESH = 0,
+	## The join ticket was refused.
+	BAD_TICKET = 1,
+	## The world is shutting down or restarting.
+	SHUTDOWN = 2,
+	## Too many invalid or rate-limited messages.
+	MISBEHAVING = 3,
+}
+
 # Message ids.
 const MSG_HELLO: int = 1
 const MSG_PING: int = 2
@@ -42,6 +54,7 @@ const MSG_PATH_STOPPED: int = 67
 const MSG_ENTITY_ENTER: int = 68
 const MSG_ENTITY_LEAVE: int = 69
 const MSG_CHAT: int = 70
+const MSG_KICK: int = 71
 
 const _MAX_U63: int = 0x7fffffffffffffff
 
@@ -345,6 +358,8 @@ static func new_message(id: int) -> Message:
 			return EntityLeave.new()
 		MSG_CHAT:
 			return Chat.new()
+		MSG_KICK:
+			return Kick.new()
 	return null
 
 
@@ -711,3 +726,26 @@ class Chat extends Message:
 		name = r.utf8(48)
 		role = r.enum8(5) as Role
 		text = r.utf8(480)
+
+
+## The server is closing the connection. Sent as the last frame before the close.
+class Kick extends Message:
+	var reason: KickReason = KickReason.REFRESH
+
+	func message_id() -> int:
+		return MSG_KICK
+
+	func message_name() -> String:
+		return "kick"
+
+	func direction() -> Dir:
+		return Dir.FROM_SERVER
+
+	func max_body_size() -> int:
+		return 1
+
+	func encode_body(w: Writer) -> void:
+		w.enum8(reason, 4)
+
+	func decode_body(r: Reader) -> void:
+		reason = r.enum8(4) as KickReason

@@ -49,6 +49,8 @@ func samples() []sample {
 		{"entity_leave", []Message{&EntityLeave{Entity: 300}}},
 		{"chat", []Message{&Chat{Entity: 1, Name: "Ugg", Role: RoleModerator, Text: "Rawr"}}},
 		{"chat_long", []Message{&Chat{Entity: 2, Name: "Grok", Role: RoleNormal, Text: strings.Repeat("a", 300)}}},
+		{"kick", []Message{&Kick{Reason: KickReasonRefresh}}},
+		{"kick_misbehaving", []Message{&Kick{Reason: KickReasonMisbehaving}}},
 		{"server_frame", []Message{
 			&PathStopped{Entity: 7, Tick: 1300, Position: Pos{1, 2, 3}},
 			&EntityLeave{Entity: 8},

@@ -6,6 +6,9 @@
     "growth": 1.1,
     "linear": 25
   },
+  "movement": {
+    "walk_speed_m_s": 4.0
+  },
   "server": {
     "tick_hz": 20
   }

@@ -23,7 +23,11 @@ type Progression struct {
 	MaxLevel int               `json:"max_level"`
 	MaxXP    int64             `json:"max_xp"`
 	XPCurve  progression.Curve `json:"xp_curve"`
-	Server   struct {
+	Movement struct {
+		// WalkSpeed is how fast a player walks along a path, in metres per second.
+		WalkSpeed float64 `json:"walk_speed_m_s"`
+	} `json:"movement"`
+	Server struct {
 		TickHz int `json:"tick_hz"`
 	} `json:"server"`
 }
@@ -76,6 +80,9 @@ func Load(dir string) (*Content, error) {
 	p := c.Progression
 	if p.Server.TickHz < 1 || p.Server.TickHz > 60 {
 		problems = append(problems, fmt.Errorf("progression.json: server.tick_hz must be 1..60, got %d", p.Server.TickHz))
+	}
+	if w := p.Movement.WalkSpeed; !(w >= 0.5 && w <= 20) {
+		problems = append(problems, fmt.Errorf("progression.json: movement.walk_speed_m_s must be 0.5..20, got %v", w))
 	}
 	table, err := progression.NewTable(p.XPCurve, p.MaxLevel, p.MaxXP)
 	if err != nil {
