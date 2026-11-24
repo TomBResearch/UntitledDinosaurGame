@@ -62,12 +62,12 @@ mesh = SubResource("ClubMesh")
 
 [node name="Name" type="Label3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.15, 0)
-pixel_size = 0.004
+pixel_size = 0.0011
 billboard = 1
 no_depth_test = true
-fixed_size = false
+fixed_size = true
 modulate = Color(1, 1, 1, 1)
 outline_modulate = Color(0, 0, 0, 0.85)
 text = "Name"
-font_size = 56
-outline_size = 14
+font_size = 40
+outline_size = 12

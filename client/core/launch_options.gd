@@ -9,6 +9,7 @@ extends RefCounted
 ##   demo     walk to a random nearby point every few seconds, as if clicking
 ##   shot     save a screenshot of the window to this path every couple of seconds (desktop)
 ##   quit     quit after this many seconds
+##   lag      add this many ms of round-trip latency, to try the client on a slow connection
 
 const DEFAULT_SERVER_URL := "ws://127.0.0.1:8090/w/dev"
 
@@ -17,6 +18,7 @@ var server_url: String = DEFAULT_SERVER_URL
 var demo_walk: bool = false
 var screenshot_path: String = ""
 var quit_after_s: float = 0.0
+var lag_ms: float = 0.0
 
 
 ## Reads the options for this run: the URL query on the web, user arguments elsewhere.
@@ -62,6 +64,8 @@ static func _from_pairs(pairs: Dictionary[String, String]) -> LaunchOptions:
 	o.screenshot_path = pairs.get("shot", "")
 	var quit: String = pairs.get("quit", "0")
 	o.quit_after_s = maxf(quit.to_float(), 0.0)
+	var lag: String = pairs.get("lag", "0")
+	o.lag_ms = maxf(lag.to_float(), 0.0)
 	return o
 
 

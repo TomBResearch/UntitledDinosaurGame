@@ -14,7 +14,7 @@ Each milestone ends with something **playable on the test server**. Tasks inside
 | Test region and export **(done)** | A greybox region (about 200 m × 200 m: hills, a river, rocks, a cave mouth) with a baked navmesh. `export_region.gd` writes the region file, and the staleness check works. |
 | Navmesh pathfinding (Go) **(done)** | Load, A*, funnel and raycast, with unit tests on fixture meshes. A path in the test region takes under 0.2 ms. |
 | World server core **(done)** | Tick loop, region inbox, `Step()`, spatial grid, interest management, movement along paths. Tick-stepped tests cover: walk, repath, stop, entity enter and leave. |
-| Client core | Connect with a **dev ticket** (no platform login yet), clock sync, click-to-move, path playback for you and others, third-person camera, click marker. |
+| Client core **(done)** | Connect with a **dev ticket** (no platform login yet), clock sync, click-to-move, path playback for you and others, third-person camera, click marker. |
 | Local chat | Within 40 m, rate limited, shown in a chat box and as a speech bubble. |
 | Streaming spike | Chunked loading measured on the web, with and without threads. An ADR records the choice. |
 | Static site for the wiki and docs | A generator is chosen (with an ADR) and builds `/wiki/` (published pages only) and `/dev/` (behind a password). |

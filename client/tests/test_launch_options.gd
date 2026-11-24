@@ -22,11 +22,12 @@ func test_defaults() -> void:
 
 
 func test_args() -> void:
-	var o := LaunchOptions.parse_args(PackedStringArray(["--name=Ugg", "--demo", "--shot=/tmp/a.png", "--quit=12", "stray"]))
+	var o := LaunchOptions.parse_args(PackedStringArray(["--name=Ugg", "--demo", "--shot=/tmp/a.png", "--quit=12", "--lag=150", "stray"]))
 	assert_eq(o.name, "Ugg")
 	assert_true(o.demo_walk)
 	assert_eq(o.screenshot_path, "/tmp/a.png")
 	assert_eq(o.quit_after_s, 12.0)
+	assert_eq(o.lag_ms, 150.0)
 	assert_eq(o.server_url, LaunchOptions.DEFAULT_SERVER_URL)
 
 

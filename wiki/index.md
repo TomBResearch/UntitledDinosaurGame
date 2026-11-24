@@ -12,6 +12,7 @@ Welcome, caveman. This wiki explains how the world works: skills, items, creatur
 
 ## Getting going
 
+- [Controls](controls.md): walking and the camera
 - [Skills](skills.md): everything you can train
 - [Levels and XP](levels-and-xp.md): how levelling works, and the full XP table
 - [Worlds and Premium](worlds-and-premium.md): picking a world, and what Premium means

@@ -37,6 +37,8 @@ var tick_hz: int = 0
 ## Frames and bytes received (debug overlay).
 var frames_in: int = 0
 var bytes_in: int = 0
+## Testing aid: adds this much round-trip latency, half each way (LaunchOptions "lag").
+var sim_latency_ms: float = 0.0
 
 var _socket: WebSocketPeer = null
 var _ticket: String = ""
@@ -46,6 +48,11 @@ var _ping_timer_s: float = 0.0
 var _pings_sent: int = 0
 var _kicked: bool = false
 var _error: String = ""
+## Frames held back by sim_latency_ms, with the client time each is due.
+var _in_frames: Array[PackedByteArray] = []
+var _in_due: PackedFloat64Array = PackedFloat64Array()
+var _out_frames: Array[PackedByteArray] = []
+var _out_due: PackedFloat64Array = PackedFloat64Array()
 
 
 ## Opens a connection to url (e.g. ws://127.0.0.1:8090/w/dev) and joins with ticket.
@@ -99,28 +106,43 @@ func _process(delta: float) -> void:
 	if _socket == null:
 		return
 	_socket.poll()
-	match _socket.get_ready_state():
-		WebSocketPeer.STATE_OPEN:
-			if not _hello_sent:
-				_send_hello()
-			while _socket != null and _socket.get_available_packet_count() > 0:
-				var frame := _socket.get_packet()
-				if _socket.was_string_packet():
-					_fail("the server sent a text frame")
-					return
-				if not handle_frame(frame, now_ms()):
-					return
-			if state == State.IN_WORLD:
-				_tick_pings(delta)
-		WebSocketPeer.STATE_CLOSED:
-			var code := _socket.get_close_code()
-			var reason := _socket.get_close_reason()
-			_socket = null
-			var detail := _error
-			if detail == "":
-				detail = "closed (%d%s)" % [code, ", " + reason if reason != "" else ""]
-			_set_state(State.CLOSED)
-			disconnected.emit(detail, _kicked)
+	var ready := _socket.get_ready_state()
+	if ready == WebSocketPeer.STATE_OPEN and not _hello_sent:
+		_send_hello()
+	# Read whatever has arrived even once the socket has closed: a kick is the last frame before
+	# the close, and often arrives in the same poll.
+	if not _receive():
+		return
+	if ready == WebSocketPeer.STATE_CLOSED:
+		_flush_delayed(INF)
+		var code := _socket.get_close_code()
+		var reason := _socket.get_close_reason()
+		_socket = null
+		var detail := _error
+		if detail == "":
+			detail = "closed (%d%s)" % [code, ", " + reason if reason != "" else ""]
+		_set_state(State.CLOSED)
+		disconnected.emit(detail, _kicked)
+		return
+	if not _flush_delayed(now_ms()):
+		return
+	if ready == WebSocketPeer.STATE_OPEN and state == State.IN_WORLD:
+		_tick_pings(delta)
+
+
+## Reads every frame the socket holds. Returns false if one was bad (the connection is closing).
+func _receive() -> bool:
+	while _socket != null and _socket.get_available_packet_count() > 0:
+		var frame := _socket.get_packet()
+		if _socket.was_string_packet():
+			_fail("the server sent a text frame")
+			return false
+		if sim_latency_ms > 0.0:
+			_in_frames.append(frame)
+			_in_due.append(now_ms() + sim_latency_ms / 2.0)
+		elif not handle_frame(frame, now_ms()):
+			return false
+	return true
 
 
 ## Decodes one frame from the server and emits a signal per message. received_ms is the client
@@ -203,7 +225,27 @@ func _send(m: Proto.Message) -> void:
 	if frame.is_empty():
 		push_error("can't encode %s" % m.message_name())
 		return
+	if sim_latency_ms > 0.0:
+		_out_frames.append(frame)
+		_out_due.append(now_ms() + sim_latency_ms / 2.0)
+		return
 	_socket.send(frame, WebSocketPeer.WRITE_MODE_BINARY)
+
+
+## Releases frames held back by sim_latency_ms that are due by now. Returns false if an incoming
+## frame was malformed (the connection is then closing).
+func _flush_delayed(now: float) -> bool:
+	while not _out_frames.is_empty() and _out_due[0] <= now and _socket != null:
+		if _socket.get_ready_state() == WebSocketPeer.STATE_OPEN:
+			_socket.send(_out_frames[0], WebSocketPeer.WRITE_MODE_BINARY)
+		_out_frames.pop_front()
+		_out_due.remove_at(0)
+	while not _in_frames.is_empty() and _in_due[0] <= now:
+		var frame: PackedByteArray = _in_frames.pop_front()
+		_in_due.remove_at(0)
+		if not handle_frame(frame, minf(now, now_ms())):
+			return false
+	return true
 
 
 func _fail(detail: String) -> void:
@@ -229,6 +271,10 @@ func _reset_session() -> void:
 	_ping_timer_s = 0.0
 	_kicked = false
 	_error = ""
+	_in_frames.clear()
+	_in_due.clear()
+	_out_frames.clear()
+	_out_due.clear()
 
 
 func _set_state(s: State) -> void:

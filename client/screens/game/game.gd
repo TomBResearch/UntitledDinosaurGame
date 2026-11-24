@@ -13,7 +13,7 @@ const CLICK_RAY_M := 600.0
 ## Dev aids (LaunchOptions): demo walk interval and radius, screenshot interval.
 const DEMO_MIN_S := 2.5
 const DEMO_MAX_S := 5.0
-const DEMO_RADIUS_M := 14.0
+const DEMO_RADIUS_M := 9.0
 const SCREENSHOT_EVERY_S := 2.0
 
 var options: LaunchOptions = null
@@ -44,6 +44,7 @@ var _rng := RandomNumberGenerator.new()
 func start(opts: LaunchOptions, client: NetClient) -> void:
 	options = opts
 	net = client
+	net.sim_latency_ms = opts.lag_ms
 	_entities.attach(net)
 	_entities.self_spawned.connect(_on_self_spawned)
 	net.welcomed.connect(_on_welcomed)
