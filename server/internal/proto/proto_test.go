@@ -51,6 +51,7 @@ func samples() []sample {
 		{"chat_long", []Message{&Chat{Entity: 2, Name: "Grok", Role: RoleNormal, Text: strings.Repeat("a", 300)}}},
 		{"kick", []Message{&Kick{Reason: KickReasonRefresh}}},
 		{"kick_misbehaving", []Message{&Kick{Reason: KickReasonMisbehaving}}},
+		{"system_message", []Message{&SystemMessage{Key: SystemKeyChatMuted}}},
 		{"server_frame", []Message{
 			&PathStopped{Entity: 7, Tick: 1300, Position: Pos{1, 2, 3}},
 			&EntityLeave{Entity: 8},

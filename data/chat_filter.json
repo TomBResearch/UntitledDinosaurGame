@@ -1,0 +1,40 @@
+{
+  "about": "Words masked with * in chat (server only). Whole words, matched case-insensitively after the substitutions below, so 'Sh1t' and '$hit' match 'shit' but 'shitake' doesn't. List each form you want caught (fuck, fucking, fucker). Keep it short and obvious: a word that is also an everyday word or a name (dick, cock, prick) masks innocent chat. See docs/architecture/world-server.md, 'Local chat'.",
+  "substitutions": {
+    "@": "a",
+    "4": "a",
+    "3": "e",
+    "1": "i",
+    "!": "i",
+    "0": "o",
+    "5": "s",
+    "$": "s",
+    "7": "t"
+  },
+  "words": [
+    "arsehole",
+    "asshole",
+    "bastard",
+    "bitch",
+    "bullshit",
+    "cunt",
+    "dickhead",
+    "fag",
+    "faggot",
+    "fuck",
+    "fucked",
+    "fucker",
+    "fucking",
+    "kys",
+    "motherfucker",
+    "nigga",
+    "nigger",
+    "retard",
+    "shit",
+    "shitty",
+    "slut",
+    "twat",
+    "wanker",
+    "whore"
+  ]
+}

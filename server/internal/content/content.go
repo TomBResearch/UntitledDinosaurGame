@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/chat"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/navmesh"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/progression"
 )
@@ -27,6 +28,12 @@ type Progression struct {
 		// WalkSpeed is how fast a player walks along a path, in metres per second.
 		WalkSpeed float64 `json:"walk_speed_m_s"`
 	} `json:"movement"`
+	Chat struct {
+		// RadiusM: a chat line reaches every player within this distance of the speaker, in metres (3D).
+		RadiusM float64 `json:"radius_m"`
+		// MaxChars is the longest chat line, in Unicode code points.
+		MaxChars int `json:"max_chars"`
+	} `json:"chat"`
 	Server struct {
 		TickHz int `json:"tick_hz"`
 	} `json:"server"`
@@ -39,11 +46,23 @@ type Skill struct {
 	Group string `json:"group"`
 }
 
+// ChatFilterFile is data/chat_filter.json: the words masked in chat. Server only.
+type ChatFilterFile struct {
+	About         string            `json:"about"`
+	Substitutions map[string]string `json:"substitutions"`
+	Words         []string          `json:"words"`
+}
+
+// MaxChatChars is the most max_chars can be: chat text is string<480> on the wire, 4 bytes a character.
+const MaxChatChars = 120
+
 // Content is everything loaded from data/.
 type Content struct {
 	Progression Progression
 	Skills      []Skill
 	XP          *progression.Table
+	// ChatFilter is built from data/chat_filter.json.
+	ChatFilter *chat.Filter
 	// Regions are data/regions/*.region.json, sorted by id, exported from the Godot scenes (ADR 0004).
 	// They're server-only and not part of Hash: the client has the scenes themselves.
 	Regions []*navmesh.Region
@@ -53,7 +72,8 @@ type Content struct {
 	files map[string][]byte
 }
 
-// The files that are copied to the client as they are. Everything server-only is left out (ADR 0011).
+// The files that are copied to the client as they are. Everything server-only is left out (ADR 0011),
+// including chat_filter.json: the client never filters, the server does.
 var clientFiles = []string{"progression.json", "skills.json"}
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,47}$`)
@@ -73,6 +93,10 @@ func Load(dir string) (*Content, error) {
 		problems = append(problems, err)
 	}
 	c.Skills = skills.Skills
+	var filter ChatFilterFile
+	if err := c.readJSON(dir, "chat_filter.json", &filter); err != nil {
+		problems = append(problems, err)
+	}
 	if len(problems) > 0 {
 		return nil, errors.Join(problems...)
 	}
@@ -83,6 +107,17 @@ func Load(dir string) (*Content, error) {
 	}
 	if w := p.Movement.WalkSpeed; !(w >= 0.5 && w <= 20) {
 		problems = append(problems, fmt.Errorf("progression.json: movement.walk_speed_m_s must be 0.5..20, got %v", w))
+	}
+	if r := p.Chat.RadiusM; !(r >= 1 && r <= 60) {
+		problems = append(problems, fmt.Errorf("progression.json: chat.radius_m must be 1..60, got %v", r))
+	}
+	if n := p.Chat.MaxChars; n < 1 || n > MaxChatChars {
+		problems = append(problems, fmt.Errorf("progression.json: chat.max_chars must be 1..%d, got %d", MaxChatChars, n))
+	}
+	if f, err := chat.NewFilter(filter.Words, filter.Substitutions); err != nil {
+		problems = append(problems, fmt.Errorf("chat_filter.json: %w", err))
+	} else {
+		c.ChatFilter = f
 	}
 	table, err := progression.NewTable(p.XPCurve, p.MaxLevel, p.MaxXP)
 	if err != nil {

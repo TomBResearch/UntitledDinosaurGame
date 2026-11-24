@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/chat"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/content"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/navmesh"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/proto"
 )
@@ -89,6 +91,14 @@ type Config struct {
 	InboxSize int
 	// Paths limits path finding.
 	Paths navmesh.Limits
+	// ChatRadius (metres, data/progression.json chat.radius_m): a chat line reaches every player within
+	// this 3D distance of the speaker. It must fit inside the view (see New).
+	ChatRadius float64
+	// ChatMaxChars (data/progression.json chat.max_chars) is the longest chat line in code points,
+	// after cleaning. Longer lines are invalid.
+	ChatMaxChars int
+	// ChatFilter masks words in chat (data/chat_filter.json). Nil masks nothing.
+	ChatFilter *chat.Filter
 	// Rate limits per player, per message type (docs/architecture/networking.md), and the invalid
 	// intent limit that disconnects a player (docs/architecture/security.md).
 	MoveLimit, ChatLimit, InvalidLimit Limit
@@ -113,10 +123,25 @@ func DefaultConfig(tickHz int, walkSpeed float64) Config {
 	}
 }
 
+// ConfigFor is DefaultConfig with the game numbers from data/.
+func ConfigFor(c *content.Content) Config {
+	cfg := DefaultConfig(c.Progression.Server.TickHz, c.Progression.Movement.WalkSpeed)
+	cfg.ChatRadius = c.Progression.Chat.RadiusM
+	cfg.ChatMaxChars = c.Progression.Chat.MaxChars
+	cfg.ChatFilter = c.ChatFilter
+	return cfg
+}
+
 // Stats counts what a region has dropped. Read it only from the tick goroutine (or after Run returns).
 type Stats struct {
 	// Invalid intents, by reason. Each one is dropped without a reply.
 	MoveRateLimited, MoveTooFar, UnknownIntent uint64
+	ChatRateLimited, ChatTooLong               uint64
+	// Chat lines that were dropped without counting as invalid: empty once cleaned, or from a muted
+	// player.
+	ChatEmpty, ChatMuted uint64
+	// Chat lines sent, and how many of them had a word masked. Never the text itself.
+	ChatSent, ChatFiltered uint64
 	// Players dropped by the region.
 	Misbehaving, TooSlow uint64
 }
@@ -153,6 +178,11 @@ type Region struct {
 	mStopped proto.PathStopped
 	mEnter   proto.EntityEnter
 	mLeave   proto.EntityLeave
+	mChat    proto.Chat
+	mSystem  proto.SystemMessage
+
+	chatRunes []rune // the chat line being cleaned
+	chatBytes []byte // the filter's scratch buffer
 
 	Stats Stats
 }
@@ -166,6 +196,14 @@ func New(rf *navmesh.Region, cfg Config) (*Region, error) {
 		return nil, fmt.Errorf("region %s: walk speed %v out of range", rf.ID, cfg.WalkSpeed)
 	case !(cfg.CellSize > 0) || !(cfg.ViewRadius >= 0):
 		return nil, fmt.Errorf("region %s: bad interest grid settings", rf.ID)
+	case cfg.ChatMaxChars < 1:
+		return nil, fmt.Errorf("region %s: chat max chars %d out of range", rf.ID, cfg.ChatMaxChars)
+	// A chat line goes to the speaker's watchers who are in range, so the view must reach every point
+	// within the chat radius: a listener can be up to a cell's diagonal further from the speaker's cell
+	// centre than from the speaker.
+	case !(cfg.ChatRadius > 0) || cfg.ChatRadius+cfg.CellSize*math.Sqrt2 > cfg.ViewRadius:
+		return nil, fmt.Errorf("region %s: chat radius %v m must be above 0 and at most the view radius less a cell diagonal (%.1f m)",
+			rf.ID, cfg.ChatRadius, cfg.ViewRadius-cfg.CellSize*math.Sqrt2)
 	case len(rf.PlayerSpawns) == 0:
 		return nil, fmt.Errorf("region %s: no player spawns", rf.ID)
 	}
@@ -321,11 +359,49 @@ func (r *Region) intent(e *entity, msg proto.Message) {
 	}
 }
 
-// chat handles chat_say. Local chat is its own M0 task: it checks the length (120 characters), the
-// rate (e.chatTokens with cfg.ChatLimit) and mutes here, then sends chat to players within 40 m. Until
-// then chat_say is accepted and dropped.
+// chat handles chat_say (docs/architecture/world-server.md, "Local chat"): rate limit, clean, length,
+// mute, filter, then a chat message to every player within ChatRadius, the speaker included, in this
+// tick's frame. Chat text is never logged.
 func (r *Region) chat(e *entity, m *proto.ChatSay) {
-	_, _ = e, m
+	if !e.chatTokens.take(r.cfg.ChatLimit, r.tick, r.ticksPerMinute) {
+		r.Stats.ChatRateLimited++
+		r.invalid(e)
+		return
+	}
+	text := chat.Clean(r.chatRunes[:0], m.Text)
+	r.chatRunes = text
+	switch {
+	case len(text) == 0:
+		r.Stats.ChatEmpty++
+		return
+	case len(text) > r.cfg.ChatMaxChars:
+		// A real client stops at the limit, so this one isn't playing fair.
+		r.Stats.ChatTooLong++
+		r.invalid(e)
+		return
+	case e.muted:
+		r.Stats.ChatMuted++
+		r.mSystem = proto.SystemMessage{Key: proto.SystemKeyChatMuted}
+		e.out = mustAppend(e.out, &r.mSystem)
+		return
+	}
+	if r.cfg.ChatFilter != nil {
+		var n int
+		n, r.chatBytes = r.cfg.ChatFilter.Mask(text, r.chatBytes)
+		if n > 0 {
+			r.Stats.ChatFiltered++
+		}
+	}
+	r.Stats.ChatSent++
+	r.mChat = proto.Chat{Entity: uint32(e.id), Name: e.name, Role: e.role, Text: string(text)}
+	r.scratch = mustAppend(r.scratch[:0], &r.mChat)
+	r.mChat.Text = ""
+	r2 := r.cfg.ChatRadius * r.cfg.ChatRadius
+	r.grid.forWatchers(r, e, func(w *entity) {
+		if w.pos.DistSq(e.pos) <= r2 {
+			w.out = append(w.out, r.scratch...)
+		}
+	})
 }
 
 // invalid counts an invalid intent against the player, and drops them past the limit.

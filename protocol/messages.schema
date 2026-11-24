@@ -50,6 +50,12 @@ enum KickReason {
   misbehaving = 3
 }
 
+# A line of game text the client shows in the chat box, in the player's language.
+enum SystemKey {
+  # You're muted: your chat line wasn't sent.
+  chat_muted = 0
+}
+
 ## Structs ##
 
 # A path an entity walks: start at waypoints[0] at start_tick, then move at speed along the
@@ -87,7 +93,8 @@ message move_to = 3 client {
   position: pos
 }
 
-# Say something in local chat. The server caps it at 120 characters.
+# Say something in local chat. The server cleans it, rejects it over 120 characters
+# (code points, data/progression.json chat.max_chars) and masks filtered words.
 message chat_say = 4 client {
   text: string<480>
 }
@@ -147,7 +154,7 @@ message entity_leave = 69 server {
   entity: u32
 }
 
-# A local chat line.
+# A local chat line, sent to every player within the chat radius of the speaker (them included).
 message chat = 70 server {
   entity: u32
   name: string<48>
@@ -158,4 +165,9 @@ message chat = 70 server {
 # The server is closing the connection. Sent as the last frame before the close.
 message kick = 71 server {
   reason: KickReason
+}
+
+# A line of game text for the chat box, sent only to you.
+message system_message = 72 server {
+  key: SystemKey
 }

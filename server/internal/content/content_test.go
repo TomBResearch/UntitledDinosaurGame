@@ -121,7 +121,7 @@ func TestEmitClientWritesOnlyClientFiles(t *testing.T) {
 func copyData(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, n := range []string{"progression.json", "skills.json"} {
+	for _, n := range []string{"progression.json", "skills.json", "chat_filter.json"} {
 		write(t, dir, n, read(t, repoData, n))
 	}
 	return dir
@@ -149,5 +149,48 @@ func write(t *testing.T, dir, name, text string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRejectsBadChatSettings(t *testing.T) {
+	for _, c := range []struct{ from, to, want string }{
+		{`"radius_m": 40.0`, `"radius_m": 0`, "chat.radius_m"},
+		{`"radius_m": 40.0`, `"radius_m": 500`, "chat.radius_m"},
+		{`"max_chars": 120`, `"max_chars": 0`, "chat.max_chars"},
+		{`"max_chars": 120`, `"max_chars": 121`, "chat.max_chars"},
+	} {
+		dir := copyData(t)
+		write(t, dir, "progression.json", strings.Replace(read(t, dir, "progression.json"), c.from, c.to, 1))
+		if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: expected an error mentioning %s, got %v", c.to, c.want, err)
+		}
+	}
+}
+
+func TestRejectsBadChatFilter(t *testing.T) {
+	dir := copyData(t)
+	write(t, dir, "chat_filter.json", `{"about": "", "substitutions": {"$": "s"}, "words": ["Rude"]}`)
+	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "chat_filter.json") {
+		t.Fatalf("expected a chat_filter.json error, got %v", err)
+	}
+	dir = copyData(t)
+	write(t, dir, "chat_filter.json", `{"words": [], "substitutions": {}, "extra": 1}`)
+	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "extra") {
+		t.Fatalf("expected an unknown-field error, got %v", err)
+	}
+}
+
+func TestChatFilterIsServerOnly(t *testing.T) {
+	c := mustLoad(t, repoData)
+	out := t.TempDir()
+	if err := c.EmitClient(out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "chat_filter.json")); err == nil {
+		t.Error("chat_filter.json was copied to the client")
+	}
+	text := []rune("oh sh1t")
+	if n, _ := c.ChatFilter.Mask(text, nil); n != 1 {
+		t.Errorf("the repo filter didn't mask %q", "oh sh1t")
 	}
 }

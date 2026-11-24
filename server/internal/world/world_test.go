@@ -44,7 +44,7 @@ func startWorld(t *testing.T, tweak func(*Config)) *testWorld {
 			rf = r
 		}
 	}
-	reg, err := region.New(rf, region.DefaultConfig(data.Progression.Server.TickHz, data.Progression.Movement.WalkSpeed))
+	reg, err := region.New(rf, region.ConfigFor(data))
 	if err != nil {
 		t.Fatal(err)
 	}

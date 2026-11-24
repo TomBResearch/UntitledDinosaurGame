@@ -91,7 +91,7 @@ type harness struct {
 func newHarness(t testing.TB) *harness {
 	t.Helper()
 	c, rf := testData(t)
-	r, err := New(rf, DefaultConfig(c.Progression.Server.TickHz, c.Progression.Movement.WalkSpeed))
+	r, err := New(rf, ConfigFor(c))
 	if err != nil {
 		t.Fatal(err)
 	}

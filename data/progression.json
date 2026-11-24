@@ -9,6 +9,10 @@
   "movement": {
     "walk_speed_m_s": 4.0
   },
+  "chat": {
+    "radius_m": 40.0,
+    "max_chars": 120
+  },
   "server": {
     "tick_hz": 20
   }
