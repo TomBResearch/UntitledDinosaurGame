@@ -36,7 +36,8 @@ Rows marked *(planned)* don't exist yet.
 | Left click on an entity | Its default option (attack a creature, chop a tree, talk to an NPC, take an item) |
 | Right click | Context menu of every option, like RuneScape |
 | Keys 1–4 | Abilities: 1 Dash/Dodge, 2 (to be decided), 3 Defensive, 4 Weapon special |
-| Right drag or middle drag | Orbit the camera (third person, following you). A right click without a drag stays free for the context menu. |
+| Middle drag | Orbit the camera (third person, following you). Right click is kept for the context menu. |
+| Arrow keys | Orbit the camera smoothly: left and right turn it, up raises it to look down more, down lowers it. Ignored while a text field (chat) has the keyboard. |
 | Mouse wheel | Camera zoom |
 | Enter | Chat |
 
@@ -78,7 +79,8 @@ How the pieces fit, as built in the M0 client core task. The wire rules are in [
 
 ### Camera (`OrbitCamera`)
 
-- Right or middle drag orbits; the wheel zooms. Pitch is clamped to 12–80° and distance to 4–30 m.
+- Middle drag orbits; the wheel zooms. Pitch is clamped to 12–80° and distance to 4–30 m.
+- The arrow keys orbit at up to 120°/s (turn) and 70°/s (tilt), easing in and out over about a fifth of a second, so a tap nudges the view and a hold turns it smoothly. Left and right turn the same way as dragging the mouse.
 - The camera follows your character smoothly, and is pulled in front of any collision between it and you, so it never ends up underground.
 
 ### Launch options and dev aids
@@ -100,7 +102,7 @@ How the pieces fit, as built in the M0 client core task. The wire rules are in [
 - `data/*.json` and `data/*.txt` are included, and tests, GUT and editor tools are left out;
 - output goes to `build/web/`, which is ignored by git.
 
-Build it with `Godot --headless --path client --export-release Web ../build/web/index.html` (about 2 s), then serve `build/web` on localhost. The world server allows `localhost:*` origins by default. It runs on WebGL 2 (Compatibility) in Chromium.
+Build it with `mkdir -p build/web && Godot --headless --path client --export-release Web ../build/web/index.html` (Godot won't create the folder) (about 2 s), then serve `build/web` on localhost. The world server allows `localhost:*` origins by default. It runs on WebGL 2 (Compatibility) in Chromium.
 
 ## Region streaming
 
