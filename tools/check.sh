@@ -22,13 +22,13 @@ run_proto() {
   (cd "$REPO_ROOT/server" && go run ./cmd/protogen -check)
 }
 
-# Each region scene's export must be current (ADR 0004). Hash only: no bake or export here.
 # The wiki and docs site (ADR 0012). Fails on a leak from the public wiki or a broken link or anchor.
 run_site() {
   step "Site: build wiki and docs (leak guard)"
   "$REPO_ROOT/tools/build-site.sh"
 }
 
+# Each region scene's export must be current (ADR 0004). Hash only: no bake or export here.
 run_regions() {
   step "Regions: exports match their scenes"
   local stale=0 scene id export want have
