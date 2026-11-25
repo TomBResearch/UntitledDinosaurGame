@@ -65,15 +65,16 @@ func newEnv(t *testing.T) *env {
 		)}
 	clock := func() time.Time { return e.now }
 	e.srv = New(Config{
-		Store:     e.store,
-		Tokens:    &platform.Verifier{Keys: e.plat, Issuer: platformtest.Issuer, Audience: platformtest.Audience, Now: clock},
-		Accounts:  e.plat,
-		Worlds:    e.worlds,
-		TicketKey: ticketKey,
-		PublicWS:  "wss://dinosaur.example",
-		Data:      data,
-		Version:   "test",
-		Now:       clock,
+		Store:      e.store,
+		Tokens:     &platform.Verifier{Keys: e.plat, Issuer: platformtest.Issuer, Audience: platformtest.Audience, Now: clock},
+		Accounts:   e.plat,
+		Worlds:     e.worlds,
+		TicketKey:  ticketKey,
+		ServiceKey: serviceKey,
+		PublicWS:   "wss://dinosaur.example",
+		Data:       data,
+		Version:    "test",
+		Now:        clock,
 	})
 	e.h = e.srv.Handler()
 	return e

@@ -143,6 +143,8 @@ func (s *Server) createCharacter(w http.ResponseWriter, r *http.Request, who *ca
 		writeError(w, http.StatusConflict, "slot_used")
 	case errors.Is(err, ErrNameTaken):
 		writeError(w, http.StatusConflict, "name_taken")
+	case errors.Is(err, ErrAccountDeleted): // the deletion hook ran while this request was in flight
+		writeError(w, http.StatusUnauthorized, "unauthorized")
 	case err != nil:
 		s.storeError(w, err)
 	default:

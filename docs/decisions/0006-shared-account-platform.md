@@ -13,7 +13,7 @@ The owner already runs an account platform (`TomBResearch/UntitledAccountSystem`
 - **Three additive config changes** on the platform's container, which is deployed from the racing repo's `infra/production/docker-compose.yml`:
   1. Add `https://dinosaur.untitledgames.co.uk` to `ALLOWED_ORIGINS`.
   2. Add `dinosaur=<secret>` to `SERVICE_KEYS`.
-  3. Add `dinosaur=http://udg-api:3000/internal/players/{id}` to `DELETION_HOOKS`. **Add this only after this game's deletion endpoint is deployed and answering `204`.** Otherwise every account deletion, including racing players', fails with `503`.
+  3. Add `dinosaur=http://udg-api:3000/internal/players/{id}` to `DELETION_HOOKS` (the hook was built on its own port, so the URL is now `http://udg-api:3001/internal/players/{id}`: [accounts.md](../architecture/accounts.md)). **Add this only after this game's deletion endpoint is deployed and answering `204`.** Otherwise every account deletion, including racing players', fails with `503`.
 - The changes are made as a PR to the racing repo, and the racing game's login and deletion are checked afterwards.
 
 ## Consequences

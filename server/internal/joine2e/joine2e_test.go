@@ -45,11 +45,15 @@ var (
 )
 
 type stack struct {
-	t      *testing.T
-	data   *content.Content
-	plat   *platformtest.Platform
-	api    *httptest.Server
-	worlds map[int]*httptest.Server
+	t    *testing.T
+	data *content.Content
+	plat *platformtest.Platform
+	api  *httptest.Server
+	// internal is the API's internal listener: the deletion hook, which only the platform calls.
+	internal *httptest.Server
+	// renewEvery is how often the worlds renew their leases (zero: the real 20 s).
+	renewEvery time.Duration
+	worlds     map[int]*httptest.Server
 	// chars is the worlds' side of the shared database: saved positions and online leases.
 	chars *persist.MemStore
 }
@@ -64,13 +68,20 @@ func (s statusByID) Status(ctx context.Context, id int) (int, bool) {
 	return 0, false
 }
 
-func start(t *testing.T) *stack {
+func start(t *testing.T) *stack { return startWith(t, 0) }
+
+// serviceKey is DINOSAUR_SERVICE_KEY in these tests: what the platform sends to the deletion hook.
+const serviceKey = "e2e-service-key-0123456789abcdefghij"
+
+// startWith starts the stack with the worlds renewing their leases every renewEvery (0: 20 s).
+func startWith(t *testing.T, renewEvery time.Duration) *stack {
 	t.Helper()
 	data, err := loadData()
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &stack{t: t, data: data, plat: platformtest.New(), worlds: map[int]*httptest.Server{}, chars: persist.NewMemStore()}
+	s := &stack{t: t, data: data, plat: platformtest.New(), worlds: map[int]*httptest.Server{}, chars: persist.NewMemStore(),
+		renewEvery: renewEvery}
 	status := statusByID{}
 	for id, premiumOnly := range map[int]bool{1: false, 2: true} {
 		hs := s.startWorld(strconv.Itoa(id), premiumOnly)
@@ -84,16 +95,19 @@ func start(t *testing.T) *stack {
 			api.World{ID: 1, Name: "World 1", MaxPlayers: 1000, WSPath: "/w/1"},
 			api.World{ID: 2, Name: "World 2", PremiumOnly: true, MaxPlayers: 1000, WSPath: "/w/2"},
 		),
-		Tokens:    &platform.Verifier{Keys: s.plat, Issuer: platformtest.Issuer, Audience: platformtest.Audience, Now: time.Now},
-		Accounts:  s.plat,
-		Worlds:    status,
-		TicketKey: ticketKey,
-		PublicWS:  "ws://worlds.test",
-		Data:      data,
-		Version:   "test",
+		Tokens:     &platform.Verifier{Keys: s.plat, Issuer: platformtest.Issuer, Audience: platformtest.Audience, Now: time.Now},
+		Accounts:   s.plat,
+		Worlds:     status,
+		TicketKey:  ticketKey,
+		ServiceKey: serviceKey,
+		PublicWS:   "ws://worlds.test",
+		Data:       data,
+		Version:    "test",
 	})
 	s.api = httptest.NewServer(srv.Handler())
 	t.Cleanup(s.api.Close)
+	s.internal = httptest.NewServer(srv.InternalHandler())
+	t.Cleanup(s.internal.Close)
 	return s
 }
 
@@ -102,7 +116,7 @@ func start(t *testing.T) *stack {
 func (s *stack) startWorld(id string, premiumOnly bool) *httptest.Server {
 	t := s.t
 	worldNum, _ := strconv.Atoi(id)
-	saver := persist.NewSaver(persist.SaverConfig{Store: s.chars, World: worldNum})
+	saver := persist.NewSaver(persist.SaverConfig{Store: s.chars, World: worldNum, RenewEvery: s.renewEvery})
 	saving, stopSaving := context.WithCancel(context.Background())
 	saverDone := make(chan struct{})
 	go func() { saver.Run(saving); close(saverDone) }()

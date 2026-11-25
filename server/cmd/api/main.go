@@ -61,6 +61,8 @@ func run() error {
 	worldStatus := flag.String("world-status", "http://127.0.0.1:8090/status",
 		"each world's status URL, with {id} for the world id (production: http://world-{id}:8090/status)")
 	trustProxy := flag.Bool("trust-proxy", false, "take the client IP from X-Real-IP (behind Caddy)")
+	internalAddr := flag.String("internal-addr", "127.0.0.1:3011",
+		"listen address for the routes only the platform calls (the deletion hook); never behind Caddy (production: 0.0.0.0:3001)")
 	flag.Parse()
 
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -120,6 +122,7 @@ func run() error {
 		Accounts:   platform.NewAccounts(*platformURL, serviceKey),
 		Worlds:     api.NewHTTPWorldStatus(*worldStatus),
 		TicketKey:  ticketKey,
+		ServiceKey: serviceKey,
 		PublicWS:   *publicWS,
 		Data:       data,
 		TrustProxy: *trustProxy,
@@ -127,15 +130,26 @@ func run() error {
 		Log:        log,
 	})
 
-	ln, err := net.Listen("tcp", *addr)
-	if err != nil {
-		return err
+	if *internalAddr == *addr {
+		return errors.New("-internal-addr must differ from -addr: the internal routes never share the public listener")
 	}
-	httpSrv := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second}
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- httpSrv.Serve(ln) }()
-	log.Info("api listening", "addr", ln.Addr().String(), "version", version, "platform", *platformURL)
+	serveErr := make(chan error, 2)
+	var servers []*http.Server
+	for _, l := range []struct {
+		addr    string
+		handler http.Handler
+		what    string
+	}{{*addr, srv.Handler(), "api listening"}, {*internalAddr, srv.InternalHandler(), "internal routes listening"}} {
+		ln, err := net.Listen("tcp", l.addr)
+		if err != nil {
+			return err
+		}
+		hs := &http.Server{Handler: l.handler, ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second}
+		servers = append(servers, hs)
+		go func() { serveErr <- hs.Serve(ln) }()
+		log.Info(l.what, "addr", ln.Addr().String(), "version", version, "platform", *platformURL)
+	}
 
 	sigs, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stopSignals()
@@ -148,8 +162,10 @@ func run() error {
 	log.Info("shutting down")
 	shut, cancelShut := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelShut()
-	if err := httpSrv.Shutdown(shut); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+	for _, hs := range servers {
+		if err := hs.Shutdown(shut); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
 	}
 	return nil
 }
