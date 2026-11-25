@@ -28,8 +28,8 @@ These go through the racing repo's `infra/production/docker-compose.yml` and `.e
 
 | When | Change |
 |---|---|
-| M1 (before our login goes live) | `ALLOWED_ORIGINS: https://${GAME_DOMAIN},https://dinosaur.untitledgames.co.uk`. **In [racing PR #47](https://github.com/TomBResearch/UntitledRacingGame/pull/47), not merged or rolled out yet.** `tools/deploy.sh` here refuses to deploy until the platform allows it. |
-| M1 | `SERVICE_KEYS: racing=${PLATFORM_SERVICE_KEY},dinosaur=${DINOSAUR_SERVICE_KEY}` (same PR). The racing repo's `tools/deploy.sh` adds the key to its `.env` (48 random letters and digits, like its other keys); the same value goes in `/opt/udg/.env`. The compose file insists on it, because the platform won't start with a key under 32 characters. |
+| M1 (before our login goes live) | `ALLOWED_ORIGINS: https://${GAME_DOMAIN},https://dinosaur.untitledgames.co.uk`. **Live since 2026-11-25** ([racing PR #47](https://github.com/TomBResearch/UntitledRacingGame/pull/47)). `tools/deploy.sh` here refuses to deploy if the platform ever stops allowing it. |
+| M1 | `SERVICE_KEYS: racing=${PLATFORM_SERVICE_KEY},dinosaur=${DINOSAUR_SERVICE_KEY}` (same PR, **live since 2026-11-25**; the key is in `/opt/urg/.env`, `/opt/udg/.env` and the racing repo's `infra/production/.env` on the Mac). The racing repo's `tools/deploy.sh` adds the key to its `.env` (48 random letters and digits, like its other keys); the same value goes in `/opt/udg/.env`. The compose file insists on it, because the platform won't start with a key under 32 characters. |
 | M1, **only after** `udg-api` answers `204` on `/internal/players/{id}` and is on `urg_default` | `DELETION_HOOKS: racing=…,dinosaur=http://udg-api:3000/internal/players/{id}` |
 
 **After each change:** check racing by hand at `racing.untitledgames.co.uk`: log in, reload (still logged in, so refresh works), log out, and delete a throwaway account. The racing repo's smoke tests run against local servers, not the live platform, so they don't cover this. The racing repo's [deploy.md](https://github.com/TomBResearch/UntitledRacingGame/blob/main/docs/operations/deploy.md) lists these entries too.
