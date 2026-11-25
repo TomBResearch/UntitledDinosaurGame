@@ -63,9 +63,22 @@ static func badge(role: Proto.Role) -> String:
 	return ""
 
 
-## The English text for a system_message key.
-static func system_text(key: Proto.SystemKey) -> String:
+## The English text for a system_message key. seconds is the message's countdown, for the keys
+## that have one.
+static func system_text(key: Proto.SystemKey, seconds: int = 0) -> String:
 	match key:
 		Proto.SystemKey.CHAT_MUTED:
 			return "You're muted, so nobody heard that."
+		Proto.SystemKey.IDLE_WARNING:
+			return "You've been idle for a while. You'll be logged out in %s unless you do something." % duration_text(seconds)
+		Proto.SystemKey.SHUTDOWN_WARNING:
+			return "The world is restarting in %s. Your progress will be saved." % duration_text(seconds)
 	return "(unknown game message %d)" % key
+
+
+## A countdown in words: "1 minute", "2 minutes", "90 seconds", "1 second".
+static func duration_text(seconds: int) -> String:
+	if seconds >= 60 and seconds % 60 == 0:
+		var minutes := seconds / 60
+		return "1 minute" if minutes == 1 else "%d minutes" % minutes
+	return "1 second" if seconds == 1 else "%d seconds" % seconds

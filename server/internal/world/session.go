@@ -9,6 +9,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/persist"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/proto"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/region"
 )
@@ -49,6 +50,11 @@ type session struct {
 
 	name                   string
 	upload, pings, invalid rate
+	// region is the region the player is in (the spawn region until the handshake says otherwise).
+	region *region.Region
+	// character and lease: the saved character this session plays, and its online lease (empty for
+	// dev players).
+	character, lease string
 
 	// heard is when we last heard from the client (unix nanoseconds): a message or a keepalive pong.
 	heard atomic.Int64
@@ -57,7 +63,7 @@ type session struct {
 func newSession(srv *Server, id region.SessionID, conn *websocket.Conn) *session {
 	c := srv.cfg
 	return &session{
-		srv: srv, id: id, conn: conn,
+		srv: srv, id: id, conn: conn, region: srv.spawn,
 		out:        make(chan []byte, c.QueueFrames),
 		done:       make(chan struct{}),
 		writerDone: make(chan struct{}),
@@ -84,11 +90,14 @@ func (s *session) Deliver(frame []byte) bool {
 
 // Disconnect is the region dropping this player.
 func (s *session) Disconnect(why region.DisconnectReason) {
-	if why == region.DisconnectMisbehaving {
+	switch why {
+	case region.DisconnectMisbehaving:
 		s.end(endKick, proto.KickReasonMisbehaving)
-		return
+	case region.DisconnectIdle:
+		s.end(endKick, proto.KickReasonIdle)
+	default:
+		s.end(endAbrupt, 0)
 	}
-	s.end(endAbrupt, 0)
 }
 
 // end ends the session; the first call wins. The writer then sends any kick and closes.
@@ -112,6 +121,10 @@ func (s *session) run() {
 	if !s.handshake() {
 		return
 	}
+	if s.character != "" {
+		defer s.srv.untrack(s.character, s)
+	}
+	// Leaving the region saves the player and releases their lease.
 	defer s.toRegion(region.Input{Kind: region.InputLeave, Session: s.id})
 	// Cancelling readCtx ends the read loop: that's how a silent connection is dropped.
 	readCtx, cancelRead := context.WithCancel(context.Background())
@@ -122,7 +135,8 @@ func (s *session) run() {
 	s.srv.log.Info("player left", "session", s.id, "name", s.name)
 }
 
-// handshake reads hello and joins the player to the spawn region (which then sends welcome).
+// handshake reads hello, loads the character and takes its online lease (for a real ticket), and joins
+// the player to their region (which then sends welcome).
 func (s *session) handshake() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), s.srv.cfg.HelloTimeout)
 	typ, data, err := s.conn.Read(ctx)
@@ -146,18 +160,55 @@ func (s *session) handshake() bool {
 		s.end(endKick, proto.KickReasonRefresh)
 		return false
 	}
-	name, ok := s.srv.checkTicket(hello.Ticket)
+	who, ok := s.srv.checkTicket(hello.Ticket)
 	if !ok {
 		s.end(endKick, proto.KickReasonBadTicket)
 		return false
 	}
-	s.name = name
-	if !s.toRegion(region.Input{Kind: region.InputJoin, Session: s.id, Client: s, Name: name}) {
+	s.name = who.name
+	join := region.Input{Kind: region.InputJoin, Session: s.id, Client: s, Name: who.name, Role: who.role, HP: persist.HPFull}
+	if who.characterID != "" && !s.claim(who, &join) {
+		return false
+	}
+	if !s.toRegion(join) {
+		if s.character != "" { // the regions have stopped: give the lease back
+			s.srv.cfg.Saver.Enqueue(persist.Save{CharacterID: s.character, Lease: s.lease, Release: true, LeaseOnly: true})
+			s.srv.untrack(s.character, s)
+		}
 		s.end(endKick, kickShutdown)
 		return false
 	}
-	s.srv.log.Info("player joined", "session", s.id, "name", name, "region", s.srv.spawn.ID(),
-		"client_version", hello.ClientVersion)
+	s.srv.log.Info("player joined", "session", s.id, "name", who.name, "account", who.accountID,
+		"character", who.characterID, "region", s.region.ID(), "client_version", hello.ClientVersion)
+	return true
+}
+
+// claim takes the character's online lease and loads it into join: where it was saved, if that's a
+// region this world has, and its HP. A refusal kicks the player.
+func (s *session) claim(who joiner, join *region.Input) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), s.srv.cfg.ClaimTimeout)
+	c, lease, err := s.srv.cfg.Saver.Claim(ctx, who.accountID, who.characterID)
+	cancel()
+	switch {
+	case errors.Is(err, persist.ErrOnline):
+		s.srv.log.Info("join refused: already online", "account", who.accountID, "character", who.characterID)
+		s.end(endKick, proto.KickReasonAlreadyOnline)
+		return false
+	case errors.Is(err, persist.ErrNotFound):
+		s.srv.log.Warn("join refused: no such character on the account", "account", who.accountID, "character", who.characterID)
+		s.end(endKick, proto.KickReasonBadTicket)
+		return false
+	case err != nil:
+		s.srv.log.Error("loading a character failed", "account", who.accountID, "character", who.characterID, "err", err)
+		s.end(endKick, proto.KickReasonUnavailable)
+		return false
+	}
+	s.character, s.lease = who.characterID, lease
+	join.Character, join.Lease, join.HP = who.characterID, lease, c.HP
+	if r, ok := s.srv.regions[c.Region]; ok && c.Pos != nil {
+		s.region, join.Start = r, c.Pos
+	}
+	s.srv.track(who.characterID, s)
 	return true
 }
 
@@ -193,7 +244,7 @@ func (s *session) readLoop(ctx context.Context) {
 					}
 					continue
 				}
-				tick, phase := s.srv.spawn.Clock().Now()
+				tick, phase := s.region.Clock().Now()
 				frame, _ := proto.Append(nil, &proto.Pong{ClientTime: m.ClientTime, ServerTick: tick, TickPhase: phase})
 				if !s.Deliver(frame) {
 					s.end(endAbrupt, 0)
@@ -245,10 +296,10 @@ func (s *session) keepalive(ctx context.Context, cancelRead context.CancelFunc) 
 	}
 }
 
-// toRegion sends to the spawn region's inbox, unless the regions have stopped.
+// toRegion sends to the player's region's inbox, unless the regions have stopped.
 func (s *session) toRegion(in region.Input) bool {
 	select {
-	case s.srv.spawn.Inbox() <- in:
+	case s.region.Inbox() <- in:
 		return true
 	case <-s.srv.regionDone:
 		return false
@@ -284,8 +335,13 @@ func (s *session) finish() {
 		_ = s.conn.Write(ctx, websocket.MessageBinary, frame)
 		cancel()
 		code, why := websocket.StatusPolicyViolation, kickText[s.kick]
-		if s.kick == proto.KickReasonShutdown {
+		switch s.kick {
+		case proto.KickReasonShutdown:
 			code = websocket.StatusGoingAway
+		case proto.KickReasonIdle:
+			code = websocket.StatusNormalClosure
+		case proto.KickReasonUnavailable:
+			code = websocket.StatusTryAgainLater
 		}
 		_ = s.conn.Close(code, why)
 	case endProtocol:
@@ -299,10 +355,13 @@ func (s *session) finish() {
 }
 
 var kickText = map[proto.KickReason]string{
-	proto.KickReasonRefresh:     "client out of date: refresh",
-	proto.KickReasonBadTicket:   "ticket refused",
-	proto.KickReasonShutdown:    "world shutting down",
-	proto.KickReasonMisbehaving: "too many invalid messages",
+	proto.KickReasonRefresh:       "client out of date: refresh",
+	proto.KickReasonBadTicket:     "ticket refused",
+	proto.KickReasonShutdown:      "world shutting down",
+	proto.KickReasonMisbehaving:   "too many invalid messages",
+	proto.KickReasonIdle:          "idle for too long",
+	proto.KickReasonAlreadyOnline: "already online",
+	proto.KickReasonUnavailable:   "couldn't load the character",
 }
 
 func closeText(s *session) string {

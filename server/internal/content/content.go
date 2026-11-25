@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/chat"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/names"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/navmesh"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/progression"
 )
@@ -34,6 +35,13 @@ type Progression struct {
 		// MaxChars is the longest chat line, in Unicode code points.
 		MaxChars int `json:"max_chars"`
 	} `json:"chat"`
+	Session struct {
+		// IdleLogoutS: a player who sends no input (a click, a key that does something, chat) for this
+		// many seconds is logged out, saved where they stand (open question S4).
+		IdleLogoutS int `json:"idle_logout_s"`
+		// IdleWarningS: how long before the idle logout the player is warned.
+		IdleWarningS int `json:"idle_warning_s"`
+	} `json:"session"`
 	Server struct {
 		TickHz int `json:"tick_hz"`
 	} `json:"server"`
@@ -63,6 +71,8 @@ type Content struct {
 	XP          *progression.Table
 	// ChatFilter is built from data/chat_filter.json.
 	ChatFilter *chat.Filter
+	// NameFilter is built from data/name_filter.json (and the chat word list): character names.
+	NameFilter *names.Filter
 	// Regions are data/regions/*.region.json, sorted by id, exported from the Godot scenes (ADR 0004).
 	// They're server-only and not part of Hash: the client has the scenes themselves.
 	Regions []*navmesh.Region
@@ -73,7 +83,7 @@ type Content struct {
 }
 
 // The files that are copied to the client as they are. Everything server-only is left out (ADR 0011),
-// including chat_filter.json: the client never filters, the server does.
+// including chat_filter.json and name_filter.json: the client never filters, the server does.
 var clientFiles = []string{"progression.json", "skills.json"}
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,47}$`)
@@ -97,6 +107,10 @@ func Load(dir string) (*Content, error) {
 	if err := c.readJSON(dir, "chat_filter.json", &filter); err != nil {
 		problems = append(problems, err)
 	}
+	var nameFilter names.FilterFile
+	if err := c.readJSON(dir, "name_filter.json", &nameFilter); err != nil {
+		problems = append(problems, err)
+	}
 	if len(problems) > 0 {
 		return nil, errors.Join(problems...)
 	}
@@ -114,10 +128,20 @@ func Load(dir string) (*Content, error) {
 	if n := p.Chat.MaxChars; n < 1 || n > MaxChatChars {
 		problems = append(problems, fmt.Errorf("progression.json: chat.max_chars must be 1..%d, got %d", MaxChatChars, n))
 	}
+	if s := p.Session; s.IdleLogoutS < 60 || s.IdleLogoutS > 4*3600 {
+		problems = append(problems, fmt.Errorf("progression.json: session.idle_logout_s must be 60..14400, got %d", s.IdleLogoutS))
+	} else if s.IdleWarningS < 1 || s.IdleWarningS >= s.IdleLogoutS || s.IdleWarningS > 65535 {
+		problems = append(problems, fmt.Errorf("progression.json: session.idle_warning_s must be 1..idle_logout_s-1, got %d", s.IdleWarningS))
+	}
 	if f, err := chat.NewFilter(filter.Words, filter.Substitutions); err != nil {
 		problems = append(problems, fmt.Errorf("chat_filter.json: %w", err))
 	} else {
 		c.ChatFilter = f
+	}
+	if f, err := names.NewFilter(nameFilter, c.ChatFilter); err != nil {
+		problems = append(problems, fmt.Errorf("name_filter.json: %w", err))
+	} else {
+		c.NameFilter = f
 	}
 	table, err := progression.NewTable(p.XPCurve, p.MaxLevel, p.MaxXP)
 	if err != nil {

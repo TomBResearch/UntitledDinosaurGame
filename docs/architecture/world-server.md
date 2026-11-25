@@ -11,10 +11,10 @@ world process
 ├── region "fern_valley": tick goroutine ─┐
 ├── region "tar_pits":    tick goroutine ─┼─ each owns its own entities, navmesh and spatial grid
 ├── region "raptor_cave": tick goroutine ─┘
-└── saver: batches character saves to Postgres
+└── saver: batches character saves to Postgres and renews online leases
 ```
 
-The code: `server/cmd/world` (the process and its flags), `server/internal/world` (the WebSocket endpoint and sessions; the hub's job while there's one region) and `server/internal/region` (the simulation). Players all join one spawn region for now; region transfers and the saver come later.
+The code: `server/cmd/world` (the process and its flags), `server/internal/world` (the WebSocket endpoint and sessions; the hub's job while there's one region), `server/internal/region` (the simulation) and `server/internal/persist` (the saver and the database, [below](#saving-characters)). New characters join the spawn region (`-spawn-region`); a saved character joins the region it was saved in, if the world has it. Region transfers come later.
 
 - **Regions don't share memory.** A region only receives messages through its inbox channel (player intents, a transfer in, a shutdown) and sends them through the hub. That's what lets a region move into its own process later ([ADR 0007](../decisions/0007-worlds-and-regions.md)).
 - **Inside a tick, everything is single-threaded.** No locks in game logic.
@@ -34,14 +34,15 @@ Each `Region.Step()` runs these steps in order:
 8. **Update interest:** grid cell changes, then enter and leave events.
 9. **Flush:** for each client, encode this tick's events into **one** binary frame and pass it to the writer goroutine.
 
-**What M0 runs.** `Region.Step()` (`server/internal/region`) does steps 1–3, 8 and 9; AI, combat, skilling and timers slot in between movement and interest as they arrive:
-1. **Inbox:** joins, leaves and intents, in arrival order. `move_to` is rate-limited and range-checked here, and only a player's last click in the tick is kept. `chat_say` is handled here too, and its `chat` goes out in this tick's frame (see [Local chat](#local-chat)).
+**What runs now.** `Region.Step()` (`server/internal/region`) does steps 1–3 and 7–9; AI, combat and skilling slot in between movement and the timers as they arrive:
+1. **Inbox:** joins, leaves, intents and notices (the shutdown warning), in arrival order. `move_to` is rate-limited and range-checked here, and only a player's last click in the tick is kept. `chat_say` is handled here too, and its `chat` goes out in this tick's frame (see [Local chat](#local-chat)).
 2. **Paths:** each kept click becomes a path from where the player is this tick (see [Pathfinding](#pathfinding)), or a stop.
 3. **Movement:** every walking entity moves to where its quantised path puts it this tick; one at or past the end stops there.
-4. **Interest:** entities that crossed a cell boundary move cells, with their enter and leave events.
-5. **Flush:** each player with anything queued gets one frame. A player whose queue is full is removed afterwards (its `entity_leave` goes out with the next tick).
+4. **Timers:** the [idle logout](#idle-logout) (a warning, then the logout) and [periodic saves](#saving-characters).
+5. **Interest:** entities that crossed a cell boundary move cells, with their enter and leave events.
+6. **Flush:** each player with anything queued gets one frame. A player whose queue is full is removed afterwards (its `entity_leave` goes out with the next tick).
 
-Within a tick a player's frame is in event order: `chat` and `system_message` from step 1, `path_started` and `path_stopped` from steps 2–3, then `entity_enter` and `entity_leave`. An entity that comes into view in the same tick as it starts a path arrives as one `entity_enter` carrying that path.
+Within a tick a player's frame is in event order: `chat` and `system_message` from step 1, `path_started` and `path_stopped` from steps 2–3, the idle warning from step 4, then `entity_enter` and `entity_leave`. An entity that comes into view in the same tick as it starts a path arrives as one `entity_enter` carrying that path.
 
 **The loop** (`Region.Run`) steps at `1 s / tick_hz`. A tick that finishes late is followed straight away by the next, so the simulation catches up; a tick over the 10 ms budget is logged. Exporting tick time as a metric comes with `/metrics`.
 
@@ -177,11 +178,47 @@ A whole-region "shout" may come later ([open questions](../open-questions.md), S
 
 ## Saving characters
 
-- **Dirty tracking:** any change to a character's skills, items, bank, quests or position marks it dirty.
-- **The saver saves dirty characters every 60 s**, plus right away on logout, region transfer, a bank deposit or withdrawal, and quest completion. Each save is one transaction.
-- **Online lease:** `characters.online_world_id` and `lease_until` are refreshed every 20 s by the world. A crashed world's characters can log in again after 60 s.
-- **Shutdown** (SIGTERM): stop accepting joins, warn players ("World restarting in 60 s"), save everyone, then release the leases.
-  - M0 has no saving yet. SIGTERM stops accepting connections, sends every player `kick(shutdown)` and closes them, waits up to 15 s, then stops the region loops.
+The code: `server/internal/persist` (the saver, the store interface and an in-memory store for tests) and `server/internal/persist/pgpersist` (Postgres). How the world reaches the database, and why: [ADR 0017](../decisions/0017-world-saves-to-postgres-directly.md).
+
+**What's saved** (M1): the region, the position (whole centimetres, like the protocol) and HP. HP is stored as null for full; nothing changes it until combat (M3), which also defines maximum HP. Skills, items, the bank and quests join the save as their milestones arrive. Dev players (`-dev-tickets`) are never saved, and a world with no database runs fine for them.
+
+**Joining** with a join ticket, in the connection's goroutine (never a region's):
+1. The world takes the character's **online lease** and loads it, in one transaction that locks every row of the account. It refuses with `kick(already_online)` if any of the account's characters holds an unexpired lease, on any world, so an account has one character online even if the API issued two tickets at once. A character that isn't the ticket's account's, or is deleted, gets `kick(bad_ticket)`; a database error, `kick(unavailable)`.
+2. The player joins the region they were saved in, at their saved position snapped onto its navmesh (within 5 m). A new character, a saved region this world doesn't have, or a position off the mesh starts at a `player_spawns` point.
+
+**Saving:**
+- **Periodically:** each player is checked every 60 s from when they joined (`region.Config.SaveEvery`), so saves are spread out, and saved only if their position or HP changed. A new character is saved at the first check.
+- **On leaving the region, for any reason:** logging out, closing the tab, a dropped connection, the idle logout, a kick, too slow, and shutdown. That save is where the player stands, mid-walk included, and it releases the lease.
+- **Never on the tick:** the region hands the save to the saver (`persist.Saver.Enqueue`), which never blocks. The saver keeps the newest unsaved state of each character in memory and writes them from its own goroutine, as one transaction per batch. If the database fails, the saves stay queued (a newer save replaces an older one, and a release is never lost) and are tried again every 2 s. `TestTheTickNeverWaitsForTheDatabase` steps a region with 20 players walking and leaving while the database is stuck.
+- Every save also records `last_played_at`, which the API shows in the character list.
+
+**The online lease:** `characters.online_world_id`, `lease_until` and `lease_id` (a random token the world picks when it takes the lease).
+- A lease lasts 60 s (`persist.LeaseTTL`). The saver renews every lease the world holds every 20 s (`persist.RenewEvery`), and every save extends it too.
+- The world saves, renews and releases only by its token, on its own world id. While a world holds a lease, the API refuses `POST /api/join` (`already_online`), renames and deletes for that account.
+- **Crash safety:** a crashed world stops renewing, so its characters can log in again within 60 s. When a world starts, it ends every lease still on its own world id (one process per world, so they're left from its crash), and players can log in at once. What a crash loses is any walking since each player's last periodic save.
+- **A stalled world:** if a world stops renewing for over 60 s and another world takes a character, the stalled world's saves for it change nothing. When it next renews or saves, it learns the lease is gone and disconnects the player with `kick(already_online)`.
+
+**Not yet:** saving right away on a region transfer, a bank deposit or withdrawal, and quest completion (those features don't exist yet).
+
+## Shutdown
+
+On SIGTERM (or Ctrl-C), `cmd/world`:
+1. Stops accepting connections (`503`).
+2. If anyone is playing, sends everyone `system_message(shutdown_warning, 60)` ("The world is restarting in 1 minute") and waits 60 s (`-shutdown-warning`). Players keep playing meanwhile. A second signal skips the rest of the wait. An empty world skips it altogether.
+3. Sends every player `kick(shutdown)` and closes them, waiting up to 10 s. Each player leaves their region as their connection closes, which saves them and releases their lease.
+4. Stops the regions. A region saves anyone still in it as it stops (`Region.Stop`), for example a connection that didn't close in time.
+5. Writes every queued save, retrying for up to 15 s, then exits.
+
+Compose's `stop_grace_period` for the world is 100 s, which covers all of it.
+
+## Idle logout
+
+Open question S4, answered by the owner on 2026-11-24.
+
+- A player who sends **no input for 15 minutes** is logged out, saved where they stand (`data/progression.json` `session.idle_logout_s`).
+- **1 minute before** (`session.idle_warning_s`), they get `system_message(idle_warning, 60)`, which the client shows in the chat box.
+- **Input** is any intent the client sends: a click to move, a chat line, and later attacks, abilities and item actions. A key press counts when it does something in the game, and so sends an intent; keys that only move the camera don't reach the server. The client's clock-sync pings and the browser's keepalive pongs aren't input, so a background tab is logged out like any idle player. Walking a long path isn't input either, only the click that started it.
+- The logout is `kick(idle)`. The region times it in ticks, so tests run 15 minutes of idling in milliseconds.
 
 ## Item safety
 
@@ -191,6 +228,6 @@ A whole-region "shout" may come later ([open questions](../open-questions.md), S
 
 ## Metrics and logs
 
-- Built so far: JSON logs (`log/slog`) for startup, joins, leaves, server-side closes and slow ticks, and the region's `Stats` counters (invalid intents by type, players dropped, chat lines by outcome). `/metrics` itself isn't built yet.
+- Built so far: JSON logs (`log/slog`) for startup, joins, leaves, server-side closes, slow ticks, refused joins, failed saves and lost leases, and the region's `Stats` counters (invalid intents by type, players dropped by reason including idle, chat lines by outcome, saves queued). `/metrics` itself isn't built yet.
 - Prometheus-style `/metrics` on an internal port: tick time (p50, p99, max), players and entities per region, bytes in and out, invalid intents by type, save duration.
 - Structured JSON logs. Never log tokens, tickets or chat containing personal data. The world server logs no chat text at all.

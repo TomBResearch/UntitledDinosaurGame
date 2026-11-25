@@ -1,0 +1,28 @@
+{
+  "about": "Character names refused at creation and rename (server only). The same rules and lists as the account platform's usernames (UntitledAccountSystem src/lib/usernames.ts, copied 2026-11-25; keep them in step by hand). blocked_anywhere: refused anywhere in the name, after undoing look-alike digits. blocked_words: refused only as the whole name or one space- or digit-separated part, so 'class' and 'grape' pass. reserved_*: names that could pass for staff or the game. Words in chat_filter.json are refused too, as whole words. See docs/architecture/backend.md, 'Character names'.",
+  "lookalikes": {
+    "0": "o",
+    "1": "i",
+    "3": "e",
+    "4": "a",
+    "5": "s",
+    "7": "t",
+    "8": "b",
+    "9": "g"
+  },
+  "blocked_anywhere": [
+    "fuck", "shit", "cunt", "nigger", "nigga", "faggot", "retard", "whore", "slut", "wank", "bitch",
+    "twat", "bollock", "rapist", "pedo", "paedo", "nazi", "hitler", "porn", "penis", "vagina", "pussy",
+    "dildo", "jizz", "kkk"
+  ],
+  "blocked_words": [
+    "ass", "arse", "dick", "cock", "rape", "sex", "tits", "cum", "kys", "fag", "paki", "spic", "kike", "chink",
+    "coon", "tranny", "dyke", "homo", "nonce", "prick", "clit", "anal", "boob", "boobs", "piss", "crap"
+  ],
+  "reserved_prefixes": [
+    "admin", "moderator", "owner", "staff", "official", "support", "system", "tomblundell", "untitledgames"
+  ],
+  "reserved_exact": [
+    "mod", "mods", "root", "server", "null", "undefined", "everyone", "here", "anonymous"
+  ]
+}

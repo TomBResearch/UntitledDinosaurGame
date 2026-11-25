@@ -4,6 +4,8 @@
 // follows the pointer. Works without animation when the visitor prefers reduced motion.
 //
 // Preview the signed-in card with ?demo=account (sample data, nothing is sent anywhere).
+// Accounts (js/auth.js): on load the page refreshes once to show the signed-in card. It never
+// refreshes again, so it doesn't compete with the game for the refresh cookie (ADR 0015).
 
 import { buildScene, letterBird, cornerVine } from "./scene.js";
 import { raptorPeek } from "./critters.js";
@@ -91,16 +93,25 @@ function fail(form, text, field) {
   note.textContent = text;
   note.className = "note";
   note.hidden = false;
+  for (const f of form.querySelectorAll(".field.invalid")) f.classList.remove("invalid");
   if (field) { field.closest(".field").classList.add("invalid"); field.focus(); }
   card.classList.remove("shake");
   void card.offsetWidth;
   if (!reduced.matches) card.classList.add("shake");
 }
 
+function notice(form, text) {
+  const note = $(".note", form);
+  note.textContent = text;
+  note.className = "note good";
+  note.hidden = false;
+}
+
 function busy(form, on) {
   const btn = $(".btn-primary", form);
   btn.disabled = on;
   btn.style.filter = on ? "grayscale(.6)" : "";
+  form.setAttribute("aria-busy", String(on));
 }
 
 for (const input of document.querySelectorAll(".field input")) {
@@ -136,7 +147,9 @@ function ageOn(dob, today = new Date()) {
 
 // ---------- Forms ----------
 
-let lastEmail = "";
+// The last "check your inbox" email, so "Send it again" repeats the right thing.
+let lastSent = null; // { kind: "verify" | "reset", email }
+const loginResend = $("#loginResend");
 
 $("#loginForm").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -144,12 +157,31 @@ $("#loginForm").addEventListener("submit", async (e) => {
   const email = form.email.value.trim(), password = form.password.value;
   if (!EMAIL.test(email)) return fail(form, "Enter the email address you signed up with.", form.email);
   if (!password) return fail(form, "A password, please. Fossils don't count.", form.password);
+  loginResend.hidden = true;
   busy(form, true);
   const r = await auth.logIn(email, password);
   busy(form, false);
-  if (!r.ok) return fail(form, auth.explain(r));
+  if (!r.ok) {
+    // Only shown after a correct password, so offering the link again gives nothing away.
+    if (r.error === "email_not_verified") {
+      lastSent = { kind: "verify", email };
+      loginResend.hidden = false;
+    }
+    const field = r.error === "invalid_credentials" ? form.password : null;
+    return fail(form, auth.explain(r), field);
+  }
   form.password.value = "";
   signIn(r.data.account);
+});
+
+loginResend.addEventListener("click", async () => {
+  const form = $("#loginForm");
+  loginResend.disabled = true;
+  const r = await auth.resendVerification(lastSent.email);
+  loginResend.disabled = false;
+  if (!r.ok) return fail(form, auth.explain(r));
+  loginResend.hidden = true;
+  notice(form, "Sent. Check your inbox (and spam folder) for the link, then log in.");
 });
 
 $("#joinForm").addEventListener("submit", async (e) => {
@@ -172,9 +204,14 @@ $("#joinForm").addEventListener("submit", async (e) => {
   busy(form, true);
   const r = await auth.register(username, email, password, dob);
   busy(form, false);
-  if (!r.ok) return fail(form, auth.explain(r));
+  if (!r.ok) {
+    const field = auth.fieldFor(r.error);
+    return fail(form, auth.explain(r), field ? form[field] : null);
+  }
   form.reset();
-  lastEmail = email;
+  // The platform answers the same for an email that already has an account (the owner gets an
+  // email instead), so this never says whether an account exists.
+  lastSent = { kind: "verify", email };
   $("#sentText").textContent = "We've sent a link to confirm your email. Open it within an hour, then log in.";
   location.hash = "sent";
 });
@@ -188,21 +225,26 @@ $("#forgotForm").addEventListener("submit", async (e) => {
   const r = await auth.requestReset(email);
   busy(form, false);
   if (!r.ok) return fail(form, auth.explain(r));
-  lastEmail = email;
+  lastSent = { kind: "reset", email };
   $("#sentText").textContent = "If that email has an account, a reset link is on its way. It works for one hour.";
   location.hash = "sent";
 });
 
-$("#resendBtn").addEventListener("click", async () => {
-  if (!lastEmail) return toast("Head back and enter your email first.");
-  const r = await auth.resendVerification(lastEmail);
+$("#resendBtn").addEventListener("click", async (e) => {
+  if (!lastSent) return toast("Head back and enter your email first.");
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  const r = lastSent.kind === "reset" ? await auth.requestReset(lastSent.email) : await auth.resendVerification(lastSent.email);
+  btn.disabled = false;
   toast(r.ok ? "Sent again. Check your spam folder too." : auth.explain(r));
 });
 
-$("#logoutBtn").addEventListener("click", async () => {
-  await auth.logOut();
+$("#logoutBtn").addEventListener("click", async (e) => {
+  e.currentTarget.disabled = true;
+  const r = await auth.logOut();
+  e.currentTarget.disabled = false;
   signedIn = null;
-  toast("See you soon, explorer.");
+  toast(r.ok || r.status === 401 ? "See you soon, explorer." : "We couldn't reach the accounts server, so you may still be logged in. Try again in a moment.");
   location.hash = "login";
   show("login");
 });
@@ -224,6 +266,8 @@ function signIn(account) {
   if (account.premium) badges.push(`<span class="badge premium">Premium</span>`);
   if (!badges.length) badges.push(`<span class="badge">Explorer</span>`);
   $("#accBadges").innerHTML = badges.join("");
+  // Testing against a local platform: the game uses the same one.
+  $("#playBtn").href = auth.localPlatform ? `play/?accounts=${encodeURIComponent(auth.localPlatform)}` : "play/";
   location.hash = "account";
   show("account");
 }
@@ -238,6 +282,14 @@ if (params.get("demo") === "account") {
 } else {
   show(location.hash.slice(1) || "login", { focus: false });
   if (auth.ENABLED) {
-    auth.refresh().then((r) => { if (r.ok && r.data?.account) signIn(r.data.account); });
+    // Already logged in? Hold the login button until we know, so the two can't cross.
+    const form = $("#loginForm");
+    busy(form, true);
+    auth.refresh().then((r) => {
+      busy(form, false);
+      if (r.ok && r.data?.account) signIn(r.data.account);
+      // No session is the usual case. Only a problem worth telling the player about is shown.
+      else if (!["no_session", "session_expired"].includes(r.error)) fail(form, auth.explain(r));
+    });
   }
 }

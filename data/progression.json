@@ -13,6 +13,10 @@
     "radius_m": 40.0,
     "max_chars": 120
   },
+  "session": {
+    "idle_logout_s": 900,
+    "idle_warning_s": 60
+  },
   "server": {
     "tick_hz": 20
   }

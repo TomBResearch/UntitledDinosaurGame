@@ -6,7 +6,7 @@ The shared platform lives in `TomBResearch/UntitledAccountSystem`; its `docs/spe
 
 | Need | How |
 |---|---|
-| Log in (landing page), refresh and log out (page and client) | `POST https://accounts.untitledgames.co.uk/auth/login`, `/auth/refresh` and `/auth/logout`, all with `credentials: "include"`. The refresh token is an HttpOnly cookie on the accounts domain that the client never sees. The access token is kept in memory and refreshed about 60 s before it expires, **one refresh at a time** (two at once count as reuse and log you out). |
+| Log in (landing page), refresh and log out (page and client) | `POST https://accounts.untitledgames.co.uk/auth/login`, `/auth/refresh` and `/auth/logout`, all with `credentials: "include"`. The refresh token is an HttpOnly cookie on the accounts domain that the client never sees. The access token is kept in memory and refreshed about 60 s before it expires, **one refresh at a time** (two at once count as reuse and log you out). The landing page ([web/README.md](../../web/README.md#accounts)) refreshes only on load; the game's `Session` autoload refreshes at start and before expiry ([client.md](client.md#platform-session)). Both take the same Web Lock, so two tabs never refresh at once. |
 | Sign up, verify, reset password | The platform's `/auth/*` routes. The landing page (`web/`) shows the forms ([ADR 0015](../decisions/0015-login-on-the-landing-page.md)). |
 | Who is this (API) | Verify the JWT with the JWKS. Claims: `sub` (account id), `username`, `role` (effective), `premium`. |
 | Fresh role, Premium and ban state | `GET /service/accounts/:id` with `Authorization: Service <dinosaur key>`, cached for at most 30 s |
@@ -28,11 +28,11 @@ These go through the racing repo's `infra/production/docker-compose.yml` and `.e
 
 | When | Change |
 |---|---|
-| M1 (before our login goes live) | `ALLOWED_ORIGINS: https://${GAME_DOMAIN},https://dinosaur.untitledgames.co.uk` |
-| M1 | `SERVICE_KEYS: racing=${PLATFORM_SERVICE_KEY},dinosaur=${DINOSAUR_SERVICE_KEY}`, with the new key added to `/opt/urg/.env` (`openssl rand -base64 36`) and the same value in `/opt/udg/.env` |
+| M1 (before our login goes live) | `ALLOWED_ORIGINS: https://${GAME_DOMAIN},https://dinosaur.untitledgames.co.uk`. **Live since 2026-11-25** ([racing PR #47](https://github.com/TomBResearch/UntitledRacingGame/pull/47)). `tools/deploy.sh` here refuses to deploy if the platform ever stops allowing it. |
+| M1 | `SERVICE_KEYS: racing=${PLATFORM_SERVICE_KEY},dinosaur=${DINOSAUR_SERVICE_KEY}` (same PR, **live since 2026-11-25**; the key is in `/opt/urg/.env`, `/opt/udg/.env` and the racing repo's `infra/production/.env` on the Mac). The racing repo's `tools/deploy.sh` adds the key to its `.env` (48 random letters and digits, like its other keys); the same value goes in `/opt/udg/.env`. The compose file insists on it, because the platform won't start with a key under 32 characters. |
 | M1, **only after** `udg-api` answers `204` on `/internal/players/{id}` and is on `urg_default` | `DELETION_HOOKS: racing=…,dinosaur=http://udg-api:3000/internal/players/{id}` |
 
-**After each change:** check racing login, refresh and account deletion still work (the racing repo's `tools/e2e-smoke.sh` and a manual check).
+**After each change:** check racing by hand at `racing.untitledgames.co.uk`: log in, reload (still logged in, so refresh works), log out, and delete a throwaway account. The racing repo's smoke tests run against local servers, not the live platform, so they don't cover this. The racing repo's [deploy.md](https://github.com/TomBResearch/UntitledRacingGame/blob/main/docs/operations/deploy.md) lists these entries too.
 
 ## Known gaps (affect every game)
 

@@ -6,6 +6,7 @@ package world
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,7 +17,12 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/names"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/persist"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/platform"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/proto"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/region"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/ticket"
 )
 
 // Config is a world server's network settings. DefaultConfig fills in the spec's values.
@@ -26,8 +32,23 @@ type Config struct {
 	// ContentHash is the server's data/ hash. A client whose hello has a different one is out of date
 	// and is told to refresh.
 	ContentHash string
+	// TicketKey is WORLD_TICKET_KEY, shared with the backend API, which signs join tickets with it.
+	// Without it, only dev tickets (if on) are accepted.
+	TicketKey []byte
+	// PremiumOnly refuses tickets from accounts without Premium (staff count as Premium). The API
+	// checks this before issuing a ticket; the world checks again.
+	PremiumOnly bool
 	// DevTickets accepts "dev:<name>" tickets (development only; see networking.md "Dev tickets").
+	// Dev players are never saved.
 	DevTickets bool
+	// Saver loads and saves characters and keeps their online leases (persist.Saver, on the world's
+	// database). Real join tickets need it: without one they're refused, since the world couldn't
+	// keep one character per account online.
+	Saver *persist.Saver
+	// ClaimTimeout bounds loading a character when it joins.
+	ClaimTimeout time.Duration
+	// Now is the clock for ticket expiry (tests set it). Nil means time.Now.
+	Now func() time.Time
 	// OriginPatterns are the browser origins allowed to connect besides the server's own host, as
 	// github.com/coder/websocket AcceptOptions.OriginPatterns.
 	OriginPatterns []string
@@ -69,16 +90,21 @@ func DefaultConfig(worldID, contentHash string) Config {
 		PingPerSecond:     1,
 		PingBurst:         3,
 		InvalidPerMinute:  50,
+		ClaimTimeout:      5 * time.Second,
 	}
 }
 
-// Server accepts connections and runs their sessions. Players join the spawn region.
+// Server accepts connections and runs their sessions. Players join the region they were saved in, or
+// the spawn region.
 type Server struct {
-	cfg   Config
-	spawn *region.Region
+	cfg     Config
+	spawn   *region.Region
+	regions map[string]*region.Region
 	// regionDone is closed once the regions have stopped, so a session never blocks on a dead inbox.
 	regionDone <-chan struct{}
 	log        *slog.Logger
+
+	tickets *ticket.Guard
 
 	nextID atomic.Uint64
 	// keepalivesAnswered counts pongs to keepalive pings (tests and, later, metrics).
@@ -86,20 +112,52 @@ type Server struct {
 	mu                 sync.Mutex
 	closing            bool
 	sessions           map[*session]struct{}
-	wg                 sync.WaitGroup
+	// byCharacter finds the session playing a saved character.
+	byCharacter map[string]*session
+	wg          sync.WaitGroup
 }
 
-// New makes a server whose players join spawn. regionDone must be closed when the regions stop.
-func New(cfg Config, spawn *region.Region, regionDone <-chan struct{}, log *slog.Logger) *Server {
-	return &Server{cfg: cfg, spawn: spawn, regionDone: regionDone, log: log, sessions: map[*session]struct{}{}}
+// New makes a server for the world's regions; new characters join spawn, which must be one of them.
+// regionDone must be closed when the regions stop.
+func New(cfg Config, regions []*region.Region, spawn *region.Region, regionDone <-chan struct{}, log *slog.Logger) *Server {
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.ClaimTimeout == 0 {
+		cfg.ClaimTimeout = 5 * time.Second
+	}
+	s := &Server{cfg: cfg, spawn: spawn, regions: map[string]*region.Region{}, regionDone: regionDone, log: log,
+		sessions: map[*session]struct{}{}, byCharacter: map[string]*session{}}
+	for _, r := range regions {
+		s.regions[r.ID()] = r
+	}
+	s.regions[spawn.ID()] = spawn
+	if len(cfg.TicketKey) > 0 {
+		s.tickets = ticket.NewGuard(cfg.TicketKey, cfg.WorldID)
+	}
+	return s
 }
 
-// Handler serves /w/<world-id> (WebSocket) and /healthz.
+// Handler serves /w/<world-id> (WebSocket), /healthz and /status.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /w/{world}", s.serveWS)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("GET /status", s.serveStatus)
 	return mux
+}
+
+// Status is GET /status: what the backend API shows in the world list. It's only reachable inside
+// Docker (Caddy doesn't route it).
+type Status struct {
+	World   string `json:"world"`
+	Players int    `json:"players"`
+}
+
+func (s *Server) serveStatus(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(Status{World: s.cfg.WorldID, Players: s.Sessions()})
 }
 
 func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
@@ -136,8 +194,44 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 }
 
+// StopJoins refuses new connections from now on: the first step of a shutdown.
+func (s *Server) StopJoins() {
+	s.mu.Lock()
+	s.closing = true
+	s.mu.Unlock()
+}
+
+// Warn tells every player the world is stopping in the given time (system_message(shutdown_warning)).
+// It doesn't wait for the time to pass.
+func (s *Server) Warn(ctx context.Context, in time.Duration) {
+	secs := uint16(min(in.Round(time.Second)/time.Second, 65535))
+	for _, r := range s.regions {
+		select {
+		case r.Inbox() <- region.Input{Kind: region.InputNotice, Msg: &proto.SystemMessage{Key: proto.SystemKeyShutdownWarning, Seconds: secs}}:
+		case <-ctx.Done():
+			return
+		case <-s.regionDone:
+			return
+		}
+	}
+}
+
+// LostLease disconnects whoever is playing the character: another world has taken its online lease
+// (persist.SaverConfig.OnLost). It never blocks.
+func (s *Server) LostLease(characterID string) {
+	s.mu.Lock()
+	sess := s.byCharacter[characterID]
+	s.mu.Unlock()
+	if sess != nil {
+		s.log.Warn("disconnecting a player whose lease another world took", "session", sess.id, "character", characterID)
+		sess.end(endKick, proto.KickReasonAlreadyOnline)
+	}
+}
+
 // Shutdown refuses new connections, tells every session the world is shutting down, closes them and
-// waits for them to finish (or for ctx). Stop the regions after it returns.
+// waits for them to finish (or for ctx). Each player leaves their region as their connection closes,
+// which saves them and releases their lease. Stop the regions after it returns: a region saves anyone
+// still in it when it stops.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	s.closing = true
@@ -166,32 +260,55 @@ func (s *Server) Sessions() int {
 	return len(s.sessions)
 }
 
-// checkTicket returns the display name a ticket joins as. Real tickets (signed by the backend API)
-// arrive in M1; until then only dev tickets exist, and only with DevTickets on.
-func (s *Server) checkTicket(ticket string) (string, bool) {
-	name, ok := strings.CutPrefix(ticket, "dev:")
-	if !ok || !s.cfg.DevTickets || !ValidName(name) {
-		return "", false
-	}
-	return name, true
+// joiner is who a ticket lets in.
+type joiner struct {
+	name        string
+	role        proto.Role
+	accountID   string // empty for dev tickets
+	characterID string
 }
 
-// ValidName reports whether name follows the character name rules (docs/architecture/backend.md):
-// 3–12 characters, letters and numbers with single spaces between words, no space at either end.
-// Dev tickets use plain ASCII letters and digits; the word filter and uniqueness come with real
-// characters in M1.
-func ValidName(name string) bool {
-	if len(name) < 3 || len(name) > 12 || name[0] == ' ' || name[len(name)-1] == ' ' {
-		return false
+// track records which session plays a saved character (for LostLease); untrack forgets it.
+func (s *Server) track(characterID string, sess *session) {
+	s.mu.Lock()
+	s.byCharacter[characterID] = sess
+	s.mu.Unlock()
+}
+
+func (s *Server) untrack(characterID string, sess *session) {
+	s.mu.Lock()
+	if s.byCharacter[characterID] == sess {
+		delete(s.byCharacter, characterID)
 	}
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case c == ' ' && name[i-1] != ' ':
-		default:
-			return false
+	s.mu.Unlock()
+}
+
+// checkTicket checks hello's ticket. A real ticket is signed by the backend API with TicketKey, for
+// this world, unexpired and unused (docs/architecture/backend.md, "Join tickets"). A dev ticket is
+// "dev:<name>", accepted only with DevTickets on.
+func (s *Server) checkTicket(t string) (joiner, bool) {
+	if name, ok := strings.CutPrefix(t, "dev:"); ok {
+		if !s.cfg.DevTickets || !names.WellFormed(name) {
+			return joiner{}, false
 		}
+		return joiner{name: name, role: proto.RoleNormal}, true
 	}
-	return true
+	if s.tickets == nil || s.cfg.Saver == nil {
+		return joiner{}, false
+	}
+	p, err := s.tickets.Check(t, s.cfg.Now())
+	if err != nil {
+		s.log.Info("join ticket refused", "why", err)
+		return joiner{}, false
+	}
+	role := platform.Role(p.Role)
+	switch {
+	case !names.WellFormed(p.Name) || !role.Valid() || !platform.ValidAccountID(p.AccountID) || !platform.ValidAccountID(p.CharacterID):
+		s.log.Warn("join ticket has a valid signature but bad contents", "account", p.AccountID)
+		return joiner{}, false
+	case s.cfg.PremiumOnly && !p.Premium:
+		s.log.Info("join ticket refused", "why", "premium world, no Premium", "account", p.AccountID)
+		return joiner{}, false
+	}
+	return joiner{name: p.Name, role: proto.Role(role.Rank()), accountID: p.AccountID, characterID: p.CharacterID}, true
 }

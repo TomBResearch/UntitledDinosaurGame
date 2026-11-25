@@ -55,3 +55,35 @@ func test_deployed_pages_use_their_own_host() -> void:
 	assert_eq(LaunchOptions.default_server_for_page("https:", "dinosaur.untitledgames.co.uk"),
 			"wss://dinosaur.untitledgames.co.uk/w/1")
 	assert_eq(LaunchOptions.default_server_for_page("http:", "192.168.1.20:8080"), "ws://192.168.1.20:8080/w/1")
+
+
+func test_deployed_page_without_a_name_uses_the_platform() -> void:
+	var o := LaunchOptions.parse_query("")
+	o.apply_page("https:", "dinosaur.untitledgames.co.uk")
+	assert_true(o.use_platform)
+	assert_eq(o.accounts_url, LaunchOptions.DEFAULT_ACCOUNTS_URL)
+	assert_eq(o.home_url, "/")
+
+
+func test_a_name_is_a_dev_run_without_the_platform() -> void:
+	var o := LaunchOptions.parse_query("?name=Grug")
+	o.apply_page("https:", "dinosaur.untitledgames.co.uk")
+	assert_false(o.use_platform)
+	assert_false(LaunchOptions.parse_args(PackedStringArray(["--name=Grug"])).use_platform, "desktop")
+
+
+func test_local_pages_skip_the_platform_unless_asked() -> void:
+	var o := LaunchOptions.parse_query("")
+	o.apply_page("http:", "localhost:8060")
+	assert_false(o.use_platform, "local dev runs keep the name box")
+	o = LaunchOptions.parse_query("?accounts=http%3A%2F%2Flocalhost%3A3110%2F")
+	o.apply_page("http:", "localhost:8060")
+	assert_true(o.use_platform)
+	assert_eq(o.accounts_url, "http://localhost:3110")
+
+
+func test_deployed_pages_ignore_another_accounts_server() -> void:
+	var o := LaunchOptions.parse_query("?accounts=https%3A%2F%2Fevil.example")
+	o.apply_page("https:", "dinosaur.untitledgames.co.uk")
+	assert_eq(o.accounts_url, LaunchOptions.DEFAULT_ACCOUNTS_URL)
+	assert_eq(o.home_url, "/")

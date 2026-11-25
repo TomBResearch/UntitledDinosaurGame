@@ -49,10 +49,20 @@ type entity struct {
 	pendingMove                           bool
 	moveTarget                            navmesh.Vec3
 	moveTokens, chatTokens, invalidTokens bucket
-	// role is the account role shown as a chat badge: always normal until accounts arrive in M1.
+	// role is the account role shown as a chat badge, from the join ticket (normal for dev tickets).
 	role proto.Role
 	// muted players' chat is dropped, and only they are told. Always false until staff tools (M7).
 	muted bool
+
+	// Saving (empty character: a dev player, never saved). savedPos and savedHP are what the
+	// database has, so an unchanged player isn't saved again.
+	character, lease string
+	hp, savedHP      int32
+	savedPos         proto.Pos
+	nextSave         uint32
+	// The idle logout: the tick of the player's last intent, and whether they've been warned since.
+	lastInput  uint32
+	idleWarned bool
 }
 
 // alloc takes a free slot (or a new one) and gives it a fresh id.

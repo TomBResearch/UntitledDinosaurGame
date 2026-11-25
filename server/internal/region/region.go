@@ -14,6 +14,7 @@ import (
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/chat"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/content"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/navmesh"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/persist"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/proto"
 )
 
@@ -36,6 +37,8 @@ const (
 	DisconnectMisbehaving DisconnectReason = iota + 1
 	// DisconnectTooSlow: the client's outbound queue overflowed.
 	DisconnectTooSlow
+	// DisconnectIdle: no input for Config.IdleTicks (the idle logout).
+	DisconnectIdle
 )
 
 func (d DisconnectReason) String() string {
@@ -44,6 +47,8 @@ func (d DisconnectReason) String() string {
 		return "misbehaving"
 	case DisconnectTooSlow:
 		return "too slow"
+	case DisconnectIdle:
+		return "idle"
 	}
 	return fmt.Sprintf("DisconnectReason(%d)", uint8(d))
 }
@@ -55,12 +60,15 @@ type SessionID uint64
 type InputKind uint8
 
 const (
-	// InputJoin adds a player: Session, Client and Name are set.
+	// InputJoin adds a player: Session, Client, Name and Role are set.
 	InputJoin InputKind = iota + 1
 	// InputLeave removes the session's player (it disconnected). Unknown sessions are ignored.
 	InputLeave
 	// InputIntent is a decoded client message (move_to, chat_say) from the session's player.
 	InputIntent
+	// InputNotice sends Msg, a *proto.SystemMessage, to every player in the region (the shutdown
+	// warning). Session is unused.
+	InputNotice
 )
 
 // Input is one item in a region's inbox.
@@ -69,7 +77,23 @@ type Input struct {
 	Session SessionID
 	Client  Client        // InputJoin
 	Name    string        // InputJoin: the display name, already validated
-	Msg     proto.Message // InputIntent
+	Role    proto.Role    // InputJoin: the account's role, shown as a chat badge
+	Msg     proto.Message // InputIntent, InputNotice
+
+	// InputJoin, for a saved character (empty for dev players, who are never saved): its id and the
+	// online lease the world holds for it.
+	Character, Lease string
+	// InputJoin: where the player starts, as saved, or nil for a spawn point. A position that isn't
+	// on this region's navmesh (within the snap radius) is ignored.
+	Start *proto.Pos
+	// InputJoin: the saved HP (persist.HPFull for full).
+	HP int32
+}
+
+// Saver takes character saves off the tick (persist.Saver). Enqueue must never block or wait for the
+// database.
+type Saver interface {
+	Enqueue(persist.Save)
 }
 
 // Config is a region's settings. Game numbers (tick rate, walk speed) come from data/; the rest are
@@ -102,6 +126,17 @@ type Config struct {
 	// Rate limits per player, per message type (docs/architecture/networking.md), and the invalid
 	// intent limit that disconnects a player (docs/architecture/security.md).
 	MoveLimit, ChatLimit, InvalidLimit Limit
+
+	// Saver gets each saved character's saves: every SaveEvery ticks if it changed, and when it leaves
+	// the region for any reason (releasing its lease). Nil saves nothing.
+	Saver Saver
+	// SaveEvery is how often (in ticks) a player whose position or HP changed is saved. 0: only when
+	// they leave.
+	SaveEvery uint32
+	// IdleTicks: a player who sends no intent for this many ticks is logged out (the idle logout,
+	// data/progression.json session.idle_logout_s). 0 turns it off. IdleWarnTicks before that, they get
+	// system_message(idle_warning).
+	IdleTicks, IdleWarnTicks uint32
 }
 
 // Limit is a token bucket: PerMinute tokens a minute, holding at most Burst.
@@ -120,6 +155,7 @@ func DefaultConfig(tickHz int, walkSpeed float64) Config {
 		MoveLimit:        Limit{PerMinute: 600, Burst: 10}, // 10/s
 		ChatLimit:        Limit{PerMinute: 60, Burst: 3},   // 1/s, burst 3
 		InvalidLimit:     Limit{PerMinute: 50, Burst: 50},  // more than 50 a minute disconnects
+		SaveEvery:        uint32(60 * tickHz),              // world-server.md: every 60 s if changed
 	}
 }
 
@@ -129,6 +165,9 @@ func ConfigFor(c *content.Content) Config {
 	cfg.ChatRadius = c.Progression.Chat.RadiusM
 	cfg.ChatMaxChars = c.Progression.Chat.MaxChars
 	cfg.ChatFilter = c.ChatFilter
+	hz := c.Progression.Server.TickHz
+	cfg.IdleTicks = uint32(c.Progression.Session.IdleLogoutS * hz)
+	cfg.IdleWarnTicks = uint32(c.Progression.Session.IdleWarningS * hz)
 	return cfg
 }
 
@@ -143,7 +182,9 @@ type Stats struct {
 	// Chat lines sent, and how many of them had a word masked. Never the text itself.
 	ChatSent, ChatFiltered uint64
 	// Players dropped by the region.
-	Misbehaving, TooSlow uint64
+	Misbehaving, TooSlow, Idle uint64
+	// Saves handed to the Saver.
+	Saves uint64
 }
 
 // Region is one region's simulation. Everything except Inbox, ID and Clock belongs to the goroutine
@@ -169,6 +210,7 @@ type Region struct {
 
 	pending  []EntityID // players with a move_to to start this tick, in arrival order
 	overflow []EntityID // players whose Deliver failed in this tick's flush
+	idle     []EntityID // players to log out for being idle this tick
 	pathBuf  []navmesh.Vec3
 	scratch  []byte // one encoded message, appended to every player who should get it
 
@@ -206,6 +248,8 @@ func New(rf *navmesh.Region, cfg Config) (*Region, error) {
 			rf.ID, cfg.ChatRadius, cfg.ViewRadius-cfg.CellSize*math.Sqrt2)
 	case len(rf.PlayerSpawns) == 0:
 		return nil, fmt.Errorf("region %s: no player spawns", rf.ID)
+	case cfg.IdleTicks > 0 && (cfg.IdleWarnTicks == 0 || cfg.IdleWarnTicks >= cfg.IdleTicks || cfg.IdleWarnTicks/uint32(cfg.TickHz) > math.MaxUint16):
+		return nil, fmt.Errorf("region %s: the idle warning must come after the player goes idle and before the logout", rf.ID)
 	}
 	r := &Region{
 		id:             rf.ID,
@@ -251,6 +295,7 @@ func (r *Region) Step() {
 	r.drainInbox()
 	r.startPaths()
 	r.advance()
+	r.timers()
 	r.updateInterest()
 	r.flush()
 }
@@ -280,6 +325,17 @@ func (r *Region) handle(in Input) {
 			return // the player already left (or was dropped); late intents are ignored
 		}
 		r.intent(r.get(id), in.Msg)
+	case InputNotice:
+		m, ok := in.Msg.(*proto.SystemMessage)
+		if !ok {
+			return
+		}
+		r.scratch = mustAppend(r.scratch[:0], m)
+		for i := range r.ents {
+			if e := &r.ents[i]; e.id != 0 && e.kind == proto.EntityKindPlayer {
+				e.out = append(e.out, r.scratch...)
+			}
+		}
 	}
 }
 
@@ -290,10 +346,27 @@ func (r *Region) join(in Input) {
 	e := r.alloc()
 	e.kind = proto.EntityKindPlayer
 	e.name = in.Name
+	e.role = in.Role
 	e.session = in.Session
 	e.client = in.Client
-	e.pos = r.spawns[r.nextSpawn%len(r.spawns)]
-	r.nextSpawn++
+	e.character, e.lease = in.Character, in.Lease
+	e.hp = in.HP
+	if in.Character == "" {
+		e.hp = persist.HPFull
+	}
+	// savedPos and savedHP are what the database has, so a save is only needed once something
+	// changes. A player put at a spawn point is saved at the first chance.
+	e.savedHP = e.hp
+	if loc, ok := r.startOf(in.Start); ok {
+		e.pos = loc
+		e.savedPos = quantise(loc)
+	} else {
+		e.pos = r.spawns[r.nextSpawn%len(r.spawns)]
+		r.nextSpawn++
+		e.savedPos = proto.Pos{Y: math.MinInt32}
+	}
+	e.lastInput = r.tick
+	e.nextSave = r.tick + r.cfg.SaveEvery
 	e.moveTokens.fill(r.cfg.MoveLimit, r.tick, r.ticksPerMinute)
 	e.chatTokens.fill(r.cfg.ChatLimit, r.tick, r.ticksPerMinute)
 	e.invalidTokens.fill(r.cfg.InvalidLimit, r.tick, r.ticksPerMinute)
@@ -305,7 +378,21 @@ func (r *Region) join(in Input) {
 	r.grid.insert(r, e)
 }
 
-// remove takes an entity out of the region: everyone who could see it gets entity_leave.
+// startOf is where a saved position puts a joining player: the nearest point on the navmesh within
+// the snap radius, on the centimetre grid. False for no saved position, or one off this region's mesh.
+func (r *Region) startOf(p *proto.Pos) (navmesh.Vec3, bool) {
+	if p == nil {
+		return navmesh.Vec3{}, false
+	}
+	loc, ok := r.mesh.ClosestPoint(dequantise(*p), r.cfg.Paths.SnapRadius)
+	if !ok {
+		return navmesh.Vec3{}, false
+	}
+	return dequantise(quantise(loc.Pos)), true
+}
+
+// remove takes an entity out of the region: everyone who could see it gets entity_leave. A player
+// is saved where they stand, and their lease released.
 func (r *Region) remove(id EntityID) {
 	e := r.get(id)
 	if e == nil {
@@ -313,9 +400,70 @@ func (r *Region) remove(id EntityID) {
 	}
 	r.grid.remove(r, e)
 	if e.kind == proto.EntityKindPlayer {
+		r.save(e, true)
 		delete(r.sessions, e.session)
 	}
 	r.release(e)
+}
+
+// save hands a player's state to the Saver: always when release is set (they're leaving), otherwise
+// only if it changed since the last save. Dev players (no character) are never saved.
+func (r *Region) save(e *entity, release bool) {
+	if e.character == "" || r.cfg.Saver == nil {
+		return
+	}
+	pos := quantise(e.pos)
+	if !release && pos == e.savedPos && e.hp == e.savedHP {
+		return
+	}
+	e.savedPos, e.savedHP = pos, e.hp
+	r.Stats.Saves++
+	r.cfg.Saver.Enqueue(persist.Save{CharacterID: e.character, Lease: e.lease, Region: r.id, Pos: pos, HP: e.hp, Release: release})
+}
+
+// timers runs the per-player timers: the idle warning and logout, and periodic saves.
+func (r *Region) timers() {
+	for i := range r.ents {
+		e := &r.ents[i]
+		if e.id == 0 || e.kind != proto.EntityKindPlayer {
+			continue
+		}
+		if r.cfg.IdleTicks > 0 {
+			idle := r.tick - e.lastInput
+			if idle >= r.cfg.IdleTicks {
+				r.idle = append(r.idle, e.id)
+				continue
+			}
+			if !e.idleWarned && idle >= r.cfg.IdleTicks-r.cfg.IdleWarnTicks {
+				e.idleWarned = true
+				r.mSystem = proto.SystemMessage{Key: proto.SystemKeyIdleWarning,
+					Seconds: uint16((r.cfg.IdleTicks - idle + uint32(r.cfg.TickHz) - 1) / uint32(r.cfg.TickHz))}
+				e.out = mustAppend(e.out, &r.mSystem)
+			}
+		}
+		if r.cfg.SaveEvery > 0 && r.tick >= e.nextSave {
+			e.nextSave = r.tick + r.cfg.SaveEvery
+			r.save(e, false)
+		}
+	}
+	for _, id := range r.idle {
+		if e := r.get(id); e != nil {
+			r.drop(e, DisconnectIdle)
+		}
+	}
+	r.idle = r.idle[:0]
+}
+
+// Stop ends the region's simulation: it handles whatever is left in the inbox (players who just
+// left), then removes every player still in it, so each is saved and their lease released. Run calls
+// it when its context ends; the world stops the regions only after every connection has closed.
+func (r *Region) Stop() {
+	r.drainInbox()
+	for i := range r.ents {
+		if e := &r.ents[i]; e.id != 0 && e.kind == proto.EntityKindPlayer {
+			r.remove(e.id)
+		}
+	}
 }
 
 // drop removes a player and tells its connection to close.
@@ -326,12 +474,17 @@ func (r *Region) drop(e *entity, why DisconnectReason) {
 		r.Stats.Misbehaving++
 	case DisconnectTooSlow:
 		r.Stats.TooSlow++
+	case DisconnectIdle:
+		r.Stats.Idle++
 	}
 	r.remove(e.id)
 	c.Disconnect(why)
 }
 
 func (r *Region) intent(e *entity, msg proto.Message) {
+	// Any intent is input: it resets the idle logout (a click, chat, and later attacks, abilities and
+	// items). The client's pings and the browser's keepalive pongs aren't intents, so they don't.
+	e.lastInput, e.idleWarned = r.tick, false
 	switch m := msg.(type) {
 	case *proto.MoveTo:
 		if !e.moveTokens.take(r.cfg.MoveLimit, r.tick, r.ticksPerMinute) {

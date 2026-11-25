@@ -48,12 +48,22 @@ enum KickReason {
   shutdown = 2
   # Too many invalid or rate-limited messages.
   misbehaving = 3
+  # Logged out after too long with no input (the idle logout). You were saved where you stood.
+  idle = 4
+  # That character, or another on the same account, is already online in some world.
+  already_online = 5
+  # The world couldn't load your character just then (its database didn't answer). Try again.
+  unavailable = 6
 }
 
 # A line of game text the client shows in the chat box, in the player's language.
 enum SystemKey {
   # You're muted: your chat line wasn't sent.
   chat_muted = 0
+  # You'll be logged out for being idle in `seconds` unless you do something.
+  idle_warning = 1
+  # The world is restarting in `seconds`. Everyone is saved before it stops.
+  shutdown_warning = 2
 }
 
 ## Structs ##
@@ -170,4 +180,6 @@ message kick = 71 server {
 # A line of game text for the chat box, sent only to you.
 message system_message = 72 server {
   key: SystemKey
+  # For a key that counts down (idle_warning, shutdown_warning): how many seconds are left. 0 otherwise.
+  seconds: u16
 }

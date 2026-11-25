@@ -16,11 +16,11 @@ Decision: [ADR 0010](../decisions/0010-hosting-shared-server.md).
 
 | Service | Image | Network | Notes |
 |---|---|---|---|
-| `postgres` | `postgres:17-alpine` | `udg_default` | Volume `udg_pgdata` |
-| `api` (container `udg-api`) | `udg-server:<ver>` (`/app/api`) | `udg_default` + **`urg_default` (external)** | Reaches `accounts:3100`, and the platform reaches its deletion hook |
-| `world-1` | `udg-server:<ver>` (`/app/world`) | `udg_default` | World 1, free |
-| `world-2` | `udg-server:<ver>` (`/app/world`) | `udg_default` | World 2, premium only |
-| `caddy` | `caddy:2-alpine` | `udg_default` | Listens on `127.0.0.1:8082`. Serves the landing page at `/`, the web client at `/play/`, `/wiki/` and `/dev/` ([site.md](site.md)), and proxies `/api/*` and `/w/<id>`. The client is single-threaded, so **no COOP/COEP (cross-origin isolation) headers** ([ADR 0013](../decisions/0013-region-streaming-web-threads.md)). |
+| `postgres` | `postgres:17-alpine` | `udg_default` | Volume `udg_pgdata`. Database and user `udg`, password `POSTGRES_PASSWORD`. Small settings (`shared_buffers=32MB`, 30 connections), 160 MB limit. Not reachable from outside Docker. |
+| `api` (container `udg-api`) | `udg-server:<ver>` (`/app/api`) | `udg_default` + **`urg_default` (external)** | The backend API on port 3000 ([backend.md](../architecture/backend.md)). Applies migrations at start. Reaches the platform at `accounts:3100`, and (from the deletion hook task) the platform reaches it. Needs `POSTGRES_PASSWORD`, `WORLD_TICKET_KEY` and `DINOSAUR_SERVICE_KEY`. |
+| `world-1` | `udg-server:<ver>` (`/app/world`) | `udg_default` | World 1, free. Accepts the API's join tickets (`WORLD_TICKET_KEY`) and, until the client logs in, dev tickets. |
+| `world-2` | `udg-server:<ver>` (`/app/world`, `-premium-only`) | `udg_default` | World 2, premium only. **Not running yet:** it arrives with the world select task. Until then the API lists it as offline. |
+| `caddy` | `caddy:2-alpine` | `udg_default` | Listens on `127.0.0.1:8082`. Serves the landing page at `/`, the web client at `/play/`, `/wiki/` and `/dev/` ([site.md](site.md)), and proxies `/api/*` (passing the player's IP as `X-Real-IP`) and `/w/<id>`. The client is single-threaded, so **no COOP/COEP (cross-origin isolation) headers** ([ADR 0013](../decisions/0013-region-streaming-web-threads.md)). |
 
 ## nginx
 
@@ -45,7 +45,7 @@ This fits for playtesting, as long as both games aren't busy at once. **Move to 
 
 `tools/deploy.sh` builds on the Mac, copies to `/opt/udg` and checks the result. How to use it, the passwords and the one-off nginx step: [deploy.md](deploy.md).
 
-**M0 runs only `world-1` and `caddy`**, with dev tickets behind the playtest gate ([ADR 0014](../decisions/0014-playtest-gate.md)). `postgres`, `api` and `world-2` arrive in M1.
+**M0 ran only `world-1` and `caddy`**, with dev tickets behind the playtest gate ([ADR 0014](../decisions/0014-playtest-gate.md)). The `cmd/api` task adds `postgres` and `api` to the Compose file; they start on the first deploy after it, which needs the M1 secrets first ([deploy.md](deploy.md#m1-secrets)). `world-2` comes with the world select task.
 
 Worlds shut down gracefully on SIGTERM: everyone gets `kick(shutdown)`. From M1, a 60 s warning first and everyone saved.
 
