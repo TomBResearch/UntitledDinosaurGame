@@ -1,6 +1,6 @@
 # 0013: Stream region chunks on the single-threaded web build; no cross-origin isolation
 
-**Status:** Proposed (2026-11-25). Measured in Chromium with real drawing (headless Chrome on the GPU), on desktop, and in a throttled browser. **Safari is not measured** (see "Still to measure"); the owner accepts or asks for Safari first.
+**Status:** Proposed (2026-11-25), for the owner to approve. Measured with real drawing in Chromium (headless Chrome on the GPU) and Safari, on desktop, and in a throttled browser. Only the 2020 integrated-GPU target is still unmeasured (see "Still to measure").
 
 ## Context
 
@@ -24,7 +24,8 @@ Regions are seamless inside ([0007](0007-worlds-and-regions.md)), so the client 
 - **Machine:** Apple M5 Pro (18 cores), macOS 27.2.
 - **Browsers:**
   1. **Headless Chrome 158** (Chrome for Testing's `chrome-headless-shell`), drawing WebGL 2 on the GPU (ANGLE on Metal, recorded in every result). Two suites: one at the normal 60 Hz vsync, and one with Chrome's frame-rate limit and vsync off (`--disable-frame-rate-limit --disable-gpu-vsync`), so frame times show what a frame costs. **These are the main numbers.**
-  2. **Chromium 156** (the Claude desktop app's browser pane), with the Mac's screen locked. That throttles any page that draws WebGL to about 1 frame a second, so these runs used the bench's `norender=1`: the render loop is off, but mesh and buffer uploads still happen. Its per-chunk costs came out two to three times higher than in headless Chrome, probably because the pane was a background, throttled page. Its frame-time maxima and first-ring times aren't usable.
+  2. **Safari 27.2**, in a visible foreground window on the Apple GPU, at the display's vsync (about 72 Hz, so frames are about 14 ms). Safari only gives whole-millisecond timers to pages that aren't cross-origin isolated, so its single-threaded numbers are rounded to 1 ms; the isolated (threaded) runs get finer timers.
+  3. **Chromium 156** (the Claude desktop app's browser pane), with the Mac's screen locked. That throttles any page that draws WebGL to about 1 frame a second, so these runs used the bench's `norender=1`: the render loop is off, but mesh and buffer uploads still happen. Its per-chunk costs came out two to three times higher than in headless Chrome, probably because the pane was a background, throttled page. Its frame-time maxima and first-ring times aren't usable.
 - **Desktop:** the same bench run natively from the exported pack (`godot --main-pack build/.../index.pck`), so it loads the same binary chunks, with a 45 s walk (540 m). The screen was locked, so nothing was presented and there was no vsync.
 
 ### Results
@@ -49,6 +50,16 @@ No frame in any run took over 25 ms. The worst walking frames (4–6 ms) weren't
 The same single-threaded load costs about twice as much at 60 Hz as uncapped (1.4 against 0.7 ms), most likely because the CPU clocks down between frames when it's mostly idle. Real play is at 60 Hz, so **plan on about 1.5 ms a chunk on an M5 Pro, 2.5 ms worst**.
 
 At 60 Hz the first ring is limited by the one-chunk-a-frame rule: 31 frames is 0.52 s. Uncapped, the same 31 chunks load in 0.26 s.
+
+**Safari 27.2 at about 72 Hz.** Its frame times are **vsync-limited** too: every run came out at 13.9–14.0 ms p50 and 16–21 ms max, with no frame over 25 ms. Busy times aren't. Milliseconds, p50 / max (single-threaded values are whole milliseconds):
+
+| Build | Main thread per chunk | Busy, frame with chunk work | Busy, idle frame | Walking frames p50 / p95 / max | Load, request to placed | First ring (31 chunks) | Start-up |
+|---|---|---|---|---|---|---|---|
+| Single-threaded, `load_threaded_request` | 1 / 2 | 3 / 6 | 2 | 14 / 15 / 16–21 | 1 | 0.58 s (1.3 s on the first, cold-cache run) | 0.65–0.75 s |
+| Single-threaded, plain `load` | 1 / 2 | 3 / 5 | 2 | 14 / 15 / 16 | 1 | 0.58 s | 0.62 s |
+| Threads + COOP/COEP, `load_threaded_request` | 0.4 / 0.6–0.7 | 2.4 / 5.3–5.4 | 2.0 | 13.9 / 14.5–14.6 / 16.5–19.4 | 14 (on workers) | 0.63 s | 0.63–0.73 s |
+
+Safari runs the threaded build. Threads there cost less than in Chrome (loads take about one frame, and the first ring is only 10% slower), but they gain about as little: about 0.6 ms of busy time on a frame with chunk work. The fallbacks behaved as in Chrome: 32 m chunks made idle frames busier (3 against 2 ms) with 479 draw calls against 308, the split made each chunk take 140 ms to appear and the first ring 4.9 s, and the wider ring did nothing for the cost per chunk. Freeing a chunk cost at most 2–4 ms.
 
 **Desktop (native)** and the throttled browser pane, for comparison (main thread per 64 m chunk, p50 / max):
 
@@ -92,7 +103,7 @@ Other findings:
 
 ### What cross-origin isolation changes
 
-Checked with `coi_check.html` in Chromium 156 and again in headless Chrome 158, with the same results. Each was checked isolated (COOP/COEP) and not, against a second local origin (`cors_peer.py`):
+Checked with `coi_check.html` in Chromium 156, headless Chrome 158 and Safari 27.2, with the same results in all three. Each was checked isolated (COOP/COEP) and not, against a second local origin (`cors_peer.py`):
 
 | From the page | Not isolated | Isolated |
 |---|---|---|
@@ -124,7 +135,7 @@ With `COOP: same-origin`, a popup to another origin also loses its link to the p
    - instanced scenes with collision only where they're needed;
    - small props get a visibility range.
 
-   A chunk like the spike's costs about 1.5 ms of main thread at 60 Hz (2.5 ms worst) on an M5 Pro, in Chromium with drawing. Expect roughly two to three times that on the 2020 integrated-GPU target. It stays well inside a 16.7 ms frame, provided the frame's own work leaves room.
+   A chunk like the spike's costs about 1.5 ms of main thread at 60 Hz (2.5 ms worst) on an M5 Pro in Chromium with drawing, and about 1 ms (2–3 ms worst) in Safari. Expect roughly two to three times that on the 2020 integrated-GPU target. It stays well inside a 16.7 ms frame, provided the frame's own work leaves room.
 5. **Revisit threads** (a new ADR) if real chunks or the target hardware push the single-threaded cost per chunk past about 8 ms (half a 60 Hz frame), and the cheaper fixes above don't bring it back.
 
 ## What the deploy must do
@@ -145,7 +156,6 @@ With `COOP: same-origin`, a popup to another origin also loses its link to the p
 
 ## Still to measure
 
-- **Safari:** not measured. It needs a visible Safari window on an unlocked Mac: `client/spikes/streaming/run_web_suite.sh safari` runs the whole suite there and prints the table. It matters most for the threaded build, which this ADR rejects. The single-threaded build uses nothing Safari lacks.
 - **The 2020 integrated-GPU target:** the numbers above are from an M5 Pro. The same suite (`run_web_suite.sh chrome`) runs on any machine with Chrome.
 
 ## Consequences
@@ -161,7 +171,7 @@ With `COOP: same-origin`, a popup to another origin also loses its link to the p
 - **Follow-up:**
   - the real streamer in `client/world/` with the rules above;
   - chunk scenes in the region pipeline (`chunks/chunk_<x>_<z>.tscn`) with the staleness hash covering them ([content-pipeline.md](../architecture/content-pipeline.md));
-  - Safari, and the target hardware.
+  - the target hardware.
 
 ## Rejected
 
@@ -169,8 +179,9 @@ With `COOP: same-origin`, a popup to another origin also loses its link to the p
   - isolation headers on every response;
   - CORS or CORP on every cross-origin resource, now and later;
   - loads that take about 10 times longer at 60 Hz (over 100 times uncapped), and a slower first ring;
-  - slightly slower frames;
-  - Safari risk that hasn't been measured.
+  - slightly slower frames in Chrome.
+
+  Safari runs it, so browser support isn't the reason; the small gain is.
 - **Smaller (32 m) chunks:** about three and a half times the loads for the same walk and 70% more draw calls, which makes every frame slower, to fix a hitch that isn't there.
 - **Adding a chunk's nodes over several frames:** cheaper frames with chunk work (1.2 against 1.9 ms), but each chunk takes longer to appear and the first ring takes twice as long. Not needed at this chunk weight; the first fix to try if chunks get much heavier.
 - **A wider preload ring:** loads more chunks and draws more, for the same hitch per chunk. Useful only if loads had to be spread out, and the one-a-frame rule already does that.
