@@ -98,7 +98,7 @@ Local chat as the client shows it. The rules (40 m, the rate limit, cleaning, th
 
 - **Web:** query string, for example `index.html?name=Grug&server=ws://127.0.0.1:8090/w/dev`.
 - **Desktop:** user arguments, for example `godot --path client -- --name=Grug`.
-- `server` defaults to `ws://127.0.0.1:8090/w/dev`. Without a `name` (or after the server refuses it) the client asks for one in a small text box.
+- `server` defaults to `ws://127.0.0.1:8090/w/dev` on desktop and on a page served from this machine (localhost or 127.0.0.1). A page served from anywhere else connects to its own host's `/w/1`, over `wss://` when the page is https ([deploy.md](../operations/deploy.md)). Without a `name` (or after the server refuses it) the client asks for one in a small text box.
 - Dev aids for trying several clients at once:
   - `demo` clicks a random spot within 9 m every 2.5–5 s.
   - `lag=150` adds 150 ms of round-trip latency (75 ms each way).

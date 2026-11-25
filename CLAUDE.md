@@ -22,8 +22,8 @@ Folders marked *(planned)* don't exist yet. They're created by the M0 task that 
 | `site/` | Theme for the built wiki and docs site: `page.html` and `site.css` ([ADR 0012](docs/decisions/0012-static-site-generator.md)) | Private |
 | `protocol/` | Network message schema (`messages.schema`) and shared test vectors. Go and GDScript codecs are generated from it. | Private |
 | `assets-src/` *(planned)* | Blender sources and licences (Git LFS) | Private |
-| `infra/` *(planned)* | Docker Compose, Caddy, nginx, deploy | Private |
-| `tools/` | Scripts: `check.sh` (fast check), `slow-tests.sh`, `check-links.py`, `build-site.sh`, `export-regions.sh`. Later: build, deploy. | Private |
+| `infra/` | `production/`: the live stack's Compose file, Caddyfile and nginx file. `server/`: the server image. | Private |
+| `tools/` | Scripts: `check.sh` (fast check), `slow-tests.sh`, `check-links.py`, `build-site.sh`, `export-regions.sh`, `deploy.sh`, `set-passwords.sh`. | Private |
 
 The **shared account platform** (login, roles, Premium, bans, friends) is a separate service in the owner's repo `TomBResearch/UntitledAccountSystem`, live at `accounts.untitledgames.co.uk`. What this game uses from it is in [docs/architecture/accounts.md](docs/architecture/accounts.md).
 
@@ -52,7 +52,7 @@ The **shared account platform** (login, roles, Premium, bans, friends) is a sepa
 | Slow tests (race detector, protocol fuzzing, the pathfinding benchmark and the 50-bot walk test now; soak and builds later) | `tools/slow-tests.sh`. Runs nightly and on demand, never on every push. |
 | Install staticcheck locally (optional; CI always runs it) | `go install honnef.co/go/tools/cmd/staticcheck@v0.8.2` |
 | Export regions to `data/regions/` (after editing a region scene; `--bake` re-bakes the navmesh first) | `tools/export-regions.sh [--bake] [region_id ...]` |
-| *Planned in M0:* local stack, deploy | `cd infra && docker compose up -d --build`, `tools/deploy.sh` |
+| Deploy to `https://dinosaur.untitledgames.co.uk` (playtest password; see [deploy.md](docs/operations/deploy.md)) | `tools/deploy.sh`. Passwords: `tools/set-passwords.sh`. |
 
 **MCP:** `.mcp.json` (Godot and Blender MCP servers) is local to the owner's Mac and ignored by git. Copy it from Untitled Racing Game if it's missing.
 

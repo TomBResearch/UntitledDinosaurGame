@@ -12,9 +12,13 @@ extends RefCounted
 ##   lag      add this many ms of round-trip latency, to try the client on a slow connection
 
 const DEFAULT_SERVER_URL := "ws://127.0.0.1:8090/w/dev"
+## On a deployed site the world is on the page's own host. Until the world list (M1) there's one.
+const SITE_WORLD_PATH := "/w/1"
 
 var name: String = ""
 var server_url: String = DEFAULT_SERVER_URL
+## Whether server came from the options rather than the default.
+var server_given: bool = false
 var demo_walk: bool = false
 var screenshot_path: String = ""
 var quit_after_s: float = 0.0
@@ -25,7 +29,13 @@ var lag_ms: float = 0.0
 static func from_environment() -> LaunchOptions:
 	if OS.has_feature("web"):
 		var query: Variant = JavaScriptBridge.eval("window.location.search", true)
-		return parse_query(str(query) if query != null else "")
+		var protocol: Variant = JavaScriptBridge.eval("window.location.protocol", true)
+		var host: Variant = JavaScriptBridge.eval("window.location.host", true)
+		var o := parse_query(str(query) if query != null else "")
+		if not o.server_given:
+			o.server_url = default_server_for_page(str(protocol) if protocol != null else "",
+					str(host) if host != null else "")
+		return o
 	return parse_args(OS.get_cmdline_user_args())
 
 
@@ -59,6 +69,7 @@ static func _from_pairs(pairs: Dictionary[String, String]) -> LaunchOptions:
 	var server: String = pairs.get("server", "")
 	if server != "":
 		o.server_url = server
+		o.server_given = true
 	var demo: String = pairs.get("demo", "0")
 	o.demo_walk = pairs.has("demo") and demo not in ["0", "false", "no"]
 	o.screenshot_path = pairs.get("shot", "")
@@ -67,6 +78,17 @@ static func _from_pairs(pairs: Dictionary[String, String]) -> LaunchOptions:
 	var lag: String = pairs.get("lag", "0")
 	o.lag_ms = maxf(lag.to_float(), 0.0)
 	return o
+
+
+## The world URL for a web page with no server option. A page served from this machine
+## (localhost, 127.0.0.1, or a file) uses the local dev server; a deployed page uses its own host,
+## over wss when the page is https.
+static func default_server_for_page(protocol: String, host: String) -> String:
+	var hostname := host.substr(0, host.find("]") + 1) if host.begins_with("[") else host.get_slice(":", 0)
+	if host == "" or protocol == "file:" or hostname in ["localhost", "127.0.0.1", "[::1]"]:
+		return DEFAULT_SERVER_URL
+	var scheme := "wss://" if protocol == "https:" else "ws://"
+	return scheme + host + SITE_WORLD_PATH
 
 
 ## The dev ticket for a name. The server checks the name; the client doesn't second-guess it.

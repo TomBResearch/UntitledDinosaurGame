@@ -1,0 +1,44 @@
+# The game's stack on the project server (/opt/udg, compose project "udg").
+# docs/operations/hosting.md and docs/operations/deploy.md. Deployed by tools/deploy.sh.
+#
+# M0: one world and Caddy. Postgres and the backend API join in M1, with platform login.
+# /opt/udg/.env (mode 600, never in git) is made by tools/set-passwords.sh.
+name: udg
+
+services:
+  world-1:
+    image: udg-server:prod
+    # Dev tickets are on only because the whole game sits behind the playtest password and
+    # cookie in the Caddyfile (decided by the owner, 2026-11-25). They go when M1 login lands.
+    command:
+      - -addr=0.0.0.0:8090
+      - -world=1
+      - -data=/app/data
+      - -dev-tickets
+      - -origins=${UDG_DOMAIN:?set in .env}
+    read_only: true
+    mem_limit: 256m
+    # SIGTERM: the server kicks everyone with "shutdown" and stops within 15 s.
+    stop_grace_period: 20s
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    env_file: .env
+    ports:
+      # Local only: the host's nginx (TLS on 80/443) passes dinosaur.untitledgames.co.uk here.
+      - "127.0.0.1:8082:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./web:/srv/web:ro
+      - ./site:/srv/site:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 128m
+    depends_on:
+      - world-1
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

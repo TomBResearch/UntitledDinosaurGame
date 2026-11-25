@@ -19,5 +19,6 @@ Each significant technical choice gets a short record: the context, the decision
 | [0011](0011-content-as-json-data.md) | Game content as JSON in `data/`, with a content hash | Accepted |
 | [0012](0012-static-site-generator.md) | A small Go generator (`sitegen`) builds the wiki and docs site | Accepted |
 | [0013](0013-region-streaming-web-threads.md) | Stream region chunks on the single-threaded web build; no cross-origin isolation | Accepted |
+| [0014](0014-playtest-gate.md) | A playtest password over the live game until platform login | Accepted |
 
 Template: [0000-template.md](0000-template.md)

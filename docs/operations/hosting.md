@@ -40,15 +40,13 @@ A **new** file, `/etc/nginx/conf.d/dinosaur.untitledgames.co.uk.conf`, modelled 
 
 This fits for playtesting, as long as both games aren't busy at once. **Move to a t4g.medium (4 GB)** if both run playtests at the same time. At real scale, each world moves to its own machine.
 
-## Deploy (built in M0)
+## Deploy
 
-`tools/deploy.sh`:
-1. Builds the server image for `linux/arm64` and exports the web client.
-2. Copies the images and files to `/opt/udg`.
-3. Runs `docker compose up -d`.
-4. Checks `GET /api/health` and that a test WebSocket can connect.
+`tools/deploy.sh` builds on the Mac, copies to `/opt/udg` and checks the result. How to use it, the passwords and the one-off nginx step: [deploy.md](deploy.md).
 
-Worlds shut down gracefully (SIGTERM, a 60 s warning to players, save everyone).
+**M0 runs only `world-1` and `caddy`**, with dev tickets behind the playtest gate ([ADR 0014](../decisions/0014-playtest-gate.md)). `postgres`, `api` and `world-2` arrive in M1.
+
+Worlds shut down gracefully on SIGTERM: everyone gets `kick(shutdown)`. From M1, a 60 s warning first and everyone saved.
 
 ## Backups
 

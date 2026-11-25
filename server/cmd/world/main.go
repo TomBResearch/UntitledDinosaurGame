@@ -77,7 +77,7 @@ func run() error {
 		}
 	}
 	if *devTickets {
-		log.Warn("DEV TICKETS ARE ON: anyone can join with a \"dev:<name>\" ticket as any name. Never use -dev-tickets on a public server.")
+		log.Warn("DEV TICKETS ARE ON: anyone can join with a \"dev:<name>\" ticket as any name. Use -dev-tickets on a public server only behind the playtest gate (docs/operations/deploy.md).")
 	}
 
 	// The regions tick until regionCtx ends, which is after every session has closed.
