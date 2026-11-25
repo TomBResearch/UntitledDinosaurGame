@@ -9,6 +9,8 @@ config_version=5
 config/name="Untitled Dinosaur Game"
 config/version="0.0.1"
 run/main_scene="res://main.tscn"
+; Only in the streaming spike's web exports (client/spikes/streaming/README.md).
+run/main_scene.streaming_spike="res://spikes/streaming/bench.tscn"
 run/flush_stdout_on_print=true
 config/features=PackedStringArray("4.7", "GL Compatibility")
 

@@ -26,3 +26,5 @@ server/bin/
 
 # Compiled Go test binaries (go test -c)
 *.test
+client/spikes/streaming/generated/
+__pycache__/
