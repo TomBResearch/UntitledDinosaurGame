@@ -1,0 +1,38 @@
+{
+  "about": "Character appearance choices (open question S2, answered 2026-11-25). The API refuses any id not listed here; the client shows these choices and draws the caveman from them. \"default\" is what a character without a choice (or a dev player) looks like. Colours are sRGB hex; width and height scale the placeholder body.",
+  "default": { "bodyType": "sturdy", "skinTone": "tone_3", "hairStyle": "shaggy", "hairColour": "brown", "beard": "short" },
+  "body_types": [
+    { "id": "sturdy", "name": "Sturdy", "width": 1.0, "height": 1.0 },
+    { "id": "lean", "name": "Lean", "width": 0.85, "height": 1.04 },
+    { "id": "broad", "name": "Broad", "width": 1.2, "height": 0.97 }
+  ],
+  "skin_tones": [
+    { "id": "tone_1", "name": "Tone 1", "colour": "#f2d0b1" },
+    { "id": "tone_2", "name": "Tone 2", "colour": "#e0b48f" },
+    { "id": "tone_3", "name": "Tone 3", "colour": "#c99470" },
+    { "id": "tone_4", "name": "Tone 4", "colour": "#a8714c" },
+    { "id": "tone_5", "name": "Tone 5", "colour": "#7d4f33" },
+    { "id": "tone_6", "name": "Tone 6", "colour": "#55341f" }
+  ],
+  "hair_styles": [
+    { "id": "shaggy", "name": "Shaggy" },
+    { "id": "short", "name": "Short" },
+    { "id": "long", "name": "Long" },
+    { "id": "topknot", "name": "Topknot" },
+    { "id": "bald", "name": "Bald" }
+  ],
+  "hair_colours": [
+    { "id": "black", "name": "Black", "colour": "#1c1714" },
+    { "id": "dark_brown", "name": "Dark brown", "colour": "#3b2416" },
+    { "id": "brown", "name": "Brown", "colour": "#6b4226" },
+    { "id": "auburn", "name": "Auburn", "colour": "#8c3b1e" },
+    { "id": "blond", "name": "Blond", "colour": "#c9a25a" },
+    { "id": "grey", "name": "Grey", "colour": "#9a958e" }
+  ],
+  "beards": [
+    { "id": "none", "name": "None" },
+    { "id": "stubble", "name": "Stubble" },
+    { "id": "short", "name": "Short" },
+    { "id": "long", "name": "Long" }
+  ]
+}

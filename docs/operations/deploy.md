@@ -10,18 +10,19 @@ The live game is at **`https://dinosaur.untitledgames.co.uk`**, on the shared pr
 |---|---|---|
 | `/` | The landing and login page ([web/](../../web/README.md)): log in, sign up, reset a password, and the signed-in card with Play | Everyone |
 | `/play/` | The web client (the game). It refreshes the player's platform session and sends anyone without one back to `/`. | Playtest password ([ADR 0014](../decisions/0014-playtest-gate.md)) and a logged-in account |
-| `/w/1` | World 1 (WebSocket), with dev tickets on | Needs the cookie the game page sets |
+| `/w/1` | World 1 (WebSocket), free. Join tickets, and dev tickets while the playtest gate is on | Needs the cookie the game page sets |
+| `/w/2` | World 2 (WebSocket), premium only. Join tickets only. **Starts on the next deploy** (it's in the Compose file since the world select task). | Needs the cookie the game page sets |
 | `/wiki/` | The public wiki | Everyone |
 | `/dev/` | These docs | Staff password ([site.md](site.md)) |
 | `/healthz` | The world server's health check (`ok`) | Everyone |
 
-On a deployed page the client connects to its own host's `/w/1` (`wss://` on https), so testers log in at `https://dinosaur.untitledgames.co.uk/`, press Play and give the playtest password. Until characters exist they join under their username (spaces for underscores, cut to 12 characters). `/play/?name=Grug` is still a dev run that skips the account check, which works only while the world has dev tickets on. Postgres and the backend API join the stack in M1.
+Testers log in at `https://dinosaur.untitledgames.co.uk/`, press Play and give the playtest password. **From the next deploy** the game then shows their characters (make up to 3), then the world list, and joins the chosen world with a join ticket from the API, at the `wsUrl` the API gives (`wss://dinosaur.untitledgames.co.uk/w/<id>`). Until that deploy, the live game joins World 1 under the player's username with a dev ticket. `/play/?name=Grug` is still a dev run that skips the account check and joins World 1, which works only while World 1 has dev tickets on.
 
 ## The pieces
 
 | Path | What |
 |---|---|
-| [`infra/production/docker-compose.yml`](../../infra/production/docker-compose.yml) | The `udg` stack: `postgres`, `api`, `world-1` and `caddy` (on `127.0.0.1:8082`) |
+| [`infra/production/docker-compose.yml`](../../infra/production/docker-compose.yml) | The `udg` stack: `postgres`, `api`, `world-1`, `world-2` and `caddy` (on `127.0.0.1:8082`) |
 | [`infra/production/Caddyfile`](../../infra/production/Caddyfile) | Routes, the playtest gate, `/dev/` auth, security headers. No COOP/COEP ([ADR 0013](../decisions/0013-region-streaming-web-threads.md)). |
 | [`infra/server/Dockerfile`](../../infra/server/Dockerfile) | The `udg-server` image: `FROM scratch`, the static `world` and `api` binaries and `data/*.json`, running as a non-root user. |
 | [`infra/production/nginx/dinosaur.conf.template`](../../infra/production/nginx/dinosaur.conf.template), [`setup-nginx.sh`](../../infra/production/setup-nginx.sh) | The host nginx file and the script that installs it |
@@ -85,7 +86,7 @@ tools/deploy.sh
 1. Checks the M1 secrets are in `/opt/udg/.env`, validates `data/`, exports the web client and precompresses it (Brotli and gzip), builds the wiki and docs site, cross-compiles the world server and the API for `linux/arm64` and builds the image.
 2. Copies the image (`docker save | ssh docker load`), the stack files, `build/web/` to `/opt/udg/web/`, `build/site/` to `/opt/udg/site/` and `web/` (the landing page) to `/opt/udg/landing/`, through `tools/stage-landing.py`. That script stamps every file reference with `?v=<hash of web/>`, so a browser never mixes a new page with an old script. Cloudflare must also respect our `Cache-Control` headers ([hosting.md](hosting.md#nginx)).
 3. Runs `docker compose up -d`, recreating Caddy if the Caddyfile changed, and removes old `udg-server` images (only those labelled `project=udg`).
-4. Checks `/healthz` on the server and from outside, and that everything answers as it should: the landing page 200, the game (`/play/`) 401, the wiki 200, `/dev/` 401, the world without the cookie 403 and `/api/health` 200.
+4. Checks `/healthz` on the server and from outside, and that everything answers as it should: the landing page 200, the game (`/play/`) 401, the wiki 200, `/dev/` 401, both worlds without the cookie 403 and `/api/health` 200. Then it waits up to 20 s for `/api/worlds` to show both worlds online.
 
 A deploy restarts the world: everyone gets "The world is restarting." and can reconnect. `SKIP_BUILD=1` re-sends config and files without rebuilding.
 

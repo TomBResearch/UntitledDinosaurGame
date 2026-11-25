@@ -7,6 +7,14 @@ extends Node3D
 
 ## The server refused the dev name: main goes back to the name box with this message.
 signal name_refused(message: String)
+## The world refused the join ticket, or a new one couldn't be had (platform session): main goes
+## back to the world list, with message if there is one.
+signal ticket_refused(message: String)
+## Reconnect after a drop or a restart (platform session): main asks the API for a new ticket,
+## because each ticket works once, and calls reconnect_with().
+signal rejoin_requested
+## The player pressed Characters (platform session): main closes the connection and shows them.
+signal leave_requested
 ## The player pressed Log out (only shown with a platform session): main ends the session.
 signal log_out_requested
 
@@ -21,6 +29,9 @@ const SCREENSHOT_EVERY_S := 2.0
 
 var options: LaunchOptions = null
 var net: NetClient = null
+## The join ticket for the next connection: a join ticket from the API (platform session), or a
+## dev ticket for options.name.
+var ticket: String = ""
 
 var _region_id: String = ""
 var _region: Node = null
@@ -43,12 +54,21 @@ var _rng := RandomNumberGenerator.new()
 @onready var _overlay_button: Button = $Hud/Overlay/Panel/Box/Button
 @onready var _chat: ChatBox = $Hud/ChatBox
 @onready var _log_out: Button = $Hud/LogOut
+@onready var _characters: Button = $Hud/Characters
 
 
-## Connects to the world with these options.
-func start(opts: LaunchOptions, client: NetClient) -> void:
+func _ready() -> void:
+	_overlay_button.pressed.connect(func() -> void: _overlay_action.call())
+
+
+## Connects to the world with these options. join_ticket is the API's ticket for options.server_url
+## (platform session); without one it's a dev ticket for options.name. look is your character's
+## appearance.
+func start(opts: LaunchOptions, client: NetClient, join_ticket: String = "", look: Dictionary = {}) -> void:
 	options = opts
 	net = client
+	ticket = join_ticket if join_ticket != "" else LaunchOptions.dev_ticket(opts.name)
+	_entities.self_look = look
 	net.sim_latency_ms = opts.lag_ms
 	_entities.attach(net)
 	_entities.self_spawned.connect(_on_self_spawned)
@@ -59,11 +79,14 @@ func start(opts: LaunchOptions, client: NetClient) -> void:
 	net.system_message_received.connect(_on_system_message)
 	_chat.submitted.connect(_on_chat_submitted)
 	net.disconnected.connect(_on_disconnected)
-	_overlay_button.pressed.connect(func() -> void: _overlay_action.call())
 	_log_out.visible = opts.use_platform
 	_log_out.pressed.connect(func() -> void:
 		_log_out.disabled = true
 		log_out_requested.emit())
+	_characters.visible = opts.use_platform
+	_characters.pressed.connect(func() -> void:
+		_characters.disabled = true
+		leave_requested.emit())
 	_demo_timer = DEMO_MIN_S
 	_connect()
 
@@ -77,7 +100,31 @@ func _connect() -> void:
 	_overlay.visible = false
 	_status.text = "Connecting to %s as %s…" % [options.server_url, options.name]
 	_status.visible = true
-	net.connect_to_world(options.server_url, LaunchOptions.dev_ticket(options.name))
+	net.connect_to_world(options.server_url, ticket)
+
+
+## Connects again with a new ticket from the API (after rejoin_requested).
+func reconnect_with(url: String, join_ticket: String) -> void:
+	options.server_url = url
+	ticket = join_ticket
+	_connect()
+
+
+## Shows why a rejoin failed, with a way back to the world list.
+func show_rejoin_failed(message: String) -> void:
+	_show_overlay(message, "Choose a world", func() -> void: ticket_refused.emit(message))
+
+
+## Reconnect: a dev ticket can be used again, but a join ticket can't, so with a platform session
+## main fetches a new one first.
+func _reconnect() -> void:
+	if options.use_platform:
+		_status.text = "Reconnecting…"
+		_status.visible = true
+		_overlay.visible = false
+		rejoin_requested.emit()
+	else:
+		_connect()
 
 
 func _on_welcomed(w: Proto.Welcome) -> void:
@@ -217,11 +264,14 @@ func _on_kicked(reason: Proto.KickReason) -> void:
 		Proto.KickReason.REFRESH:
 			_show_overlay("The game has been updated. Please refresh the page.", "Refresh", _reload_page)
 		Proto.KickReason.BAD_TICKET:
-			name_refused.emit("The server refused that name. Use letters and digits, with single spaces between words.")
+			if options.use_platform:
+				ticket_refused.emit("")
+			else:
+				name_refused.emit("The server refused that name. Use letters and digits, with single spaces between words.")
 		Proto.KickReason.SHUTDOWN:
-			_show_overlay("The world is restarting.", "Reconnect", _connect)
+			_show_overlay("The world is restarting.", "Reconnect", _reconnect)
 		Proto.KickReason.MISBEHAVING:
-			_show_overlay("Disconnected: too many invalid messages.", "Reconnect", _connect)
+			_show_overlay("Disconnected: too many invalid messages.", "Reconnect", _reconnect)
 
 
 func _on_disconnected(detail: String, was_kicked: bool) -> void:
@@ -230,7 +280,7 @@ func _on_disconnected(detail: String, was_kicked: bool) -> void:
 	_camera.follow(null)
 	if was_kicked:
 		return  # The kick already explained it.
-	_show_overlay("Lost the connection to the world (%s)." % detail, "Reconnect", _connect)
+	_show_overlay("Lost the connection to the world (%s)." % detail, "Reconnect", _reconnect)
 
 
 func _show_overlay(message: String, button: String, action: Callable) -> void:

@@ -132,11 +132,16 @@ func test_refresh_delay() -> void:
 	assert_eq(PlatformSession.refresh_delay_s(0.0), PlatformSession.MIN_REFRESH_DELAY_S)
 
 
-func test_dev_name_for_username() -> void:
-	assert_eq(PlatformSession.dev_name_for("Grug"), "Grug")
-	assert_eq(PlatformSession.dev_name_for("Raptor_Ranger99"), "Raptor Range")
-	assert_eq(PlatformSession.dev_name_for("_big__ugg_"), "big ugg")
-	assert_eq(PlatformSession.dev_name_for("abcdefghijk_m"), "abcdefghijk")
+func test_has_premium_from_the_profile() -> void:
+	var s := PlatformSession.new(FakeTransport.new())
+	assert_false(s.has_premium(), "signed out")
+	s.account = {"role": "normal", "premium": false}
+	assert_false(s.has_premium())
+	s.account = {"role": "normal", "premium": true}
+	assert_true(s.has_premium())
+	for staff: String in ["premium", "moderator", "admin", "owner"]:
+		s.account = {"role": staff, "premium": false}
+		assert_true(s.has_premium(), "%s counts as Premium" % staff)
 
 
 # ---------- SessionKeeper (the Session autoload) ----------

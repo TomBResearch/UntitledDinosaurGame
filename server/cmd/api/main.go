@@ -55,7 +55,7 @@ func run() error {
 	jwksURL := flag.String("jwks", "https://accounts.untitledgames.co.uk/.well-known/jwks.json", "the platform's public keys")
 	issuer := flag.String("issuer", "https://accounts.untitledgames.co.uk", "access tokens' iss")
 	audience := flag.String("audience", "tomblundell-games", "access tokens' aud")
-	publicWS := flag.String("public-ws", "ws://127.0.0.1:8090", "where browsers reach the worlds (no path)")
+	publicWS := flag.String("public-ws", "ws://127.0.0.1:8090", "where browsers reach the worlds (no path; {id} becomes the world id, for local worlds on their own ports)")
 	worldStatus := flag.String("world-status", "http://127.0.0.1:8090/status",
 		"each world's status URL, with {id} for the world id (production: http://world-{id}:8090/status)")
 	trustProxy := flag.Bool("trust-proxy", false, "take the client IP from X-Real-IP (behind Caddy)")

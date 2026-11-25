@@ -10,14 +10,15 @@ extends Node
 ## - log_out() ends the session and goes to the landing page.
 ## - Dev runs (a name in the launch options, desktop, local pages) never call begin().
 ##
-## Joining a world still uses a dev ticket named after the account (main.gd). The seam for real
-## join tickets (cmd/api, M1): main.gd's _on_signed_in() asks /api for one with
-## platform.access_token instead.
+## api is the game's backend API (/api on the page's own site) with this session's access token:
+## characters, worlds and join tickets (main.gd and the character and world screens).
 
 ## Retry a refresh that got no usable answer after this long.
 const RETRY_S := 15.0
 
 var platform: PlatformSession = null
+## The game API, with this session's token. Set by begin().
+var api: GameApi = null
 
 var _timer: Timer = null
 var _home_url: String = LaunchOptions.HOME_PATH
@@ -31,15 +32,20 @@ func _ready() -> void:
 	add_child(_timer)
 
 
-## Starts the session for these options. transport is for tests; the web build talks to the real
-## platform. navigate is for tests too: it gets the URL instead of the page going there.
-func begin(options: LaunchOptions, transport: PlatformTransport = null, navigate: Callable = Callable()) -> PlatformSession.Outcome:
+## Starts the session for these options. transport and api_transport are for tests; the web build
+## talks to the real platform, and to /api on its own site. navigate is for tests too: it gets the
+## URL instead of the page going there.
+func begin(options: LaunchOptions, transport: PlatformTransport = null, navigate: Callable = Callable(),
+		api_transport: PlatformTransport = null) -> PlatformSession.Outcome:
 	if transport == null:
 		transport = WebPlatformTransport.new(options.accounts_url) if OS.has_feature("web") else PlatformTransport.new()
+	if api_transport == null:
+		api_transport = WebPlatformTransport.new("") if OS.has_feature("web") else PlatformTransport.new()
 	if navigate.is_valid():
 		_navigate = navigate
 	_home_url = options.home_url
 	platform = PlatformSession.new(transport)
+	api = GameApi.new(api_transport, func() -> String: return platform.access_token, _refresh_for_api)
 	return await _refresh_now()
 
 
@@ -60,6 +66,12 @@ func log_out() -> void:
 func go_home() -> void:
 	_timer.stop()
 	_navigate.call(_home_url)
+
+
+## For the game API after a 401: one refresh (shared with any already running). True if the
+## session is still there; with no session this also goes to the landing page.
+func _refresh_for_api() -> bool:
+	return await _refresh_now() == PlatformSession.Outcome.SIGNED_IN
 
 
 func _on_refresh_due() -> void:

@@ -7,6 +7,7 @@
 #   /wiki/    the public wiki (published pages only)
 #   /dev/     the internal docs, behind the staff password
 #   /w/1      world 1 (WebSocket), only with the playtest cookie
+#   /w/2      world 2, premium only (WebSocket), only with the playtest cookie
 #   /play/    the web client (the game), behind the playtest password
 #   /*        the landing and login page (web/), public
 #
@@ -75,11 +76,16 @@
 		file_server
 	}
 
-	# World 1. The page sets the cookie; without it, no connection.
+	# The worlds. The page sets the cookie; without it, no connection.
 	handle /w/1 {
 		@noPlaytestCookie not header Cookie *udg_play={$UDG_PLAY_COOKIE}*
 		respond @noPlaytestCookie "Open the game page and sign in with the playtest password first." 403
 		reverse_proxy world-1:8090
+	}
+	handle /w/2 {
+		@noPlaytestCookie not header Cookie *udg_play={$UDG_PLAY_COOKIE}*
+		respond @noPlaytestCookie "Open the game page and sign in with the playtest password first." 403
+		reverse_proxy world-2:8090
 	}
 	handle /w/* {
 		respond 404

@@ -12,23 +12,26 @@ Rows marked *(planned)* don't exist yet.
 
 | Path | What |
 |---|---|
-| `main.tscn` | The entry scene: reads the launch options, checks the platform session on the deployed page (or asks for a dev name in a dev run), opens the game screen |
+| `main.tscn` | The entry scene: reads the launch options, then on the deployed page checks the platform session and goes through characters and the world list to the game ([below](#characters-worlds-and-joining)); in a dev run it asks for a dev name and opens the game |
 | `autoload/net.gd` | The `Net` autoload: the world connection, so it outlives screen changes. All its code is `NetClient`. |
 | `net/net_client.gd` | `NetClient`: `WebSocketPeer`, the `hello` handshake, pings, decoding frames into typed signals, kicks |
 | `net/clock_sync.gd` | `ClockSync`: the server clock estimate from pings |
 | `net/proto/` | **Generated** encoders and decoders. Never edit them by hand. |
 | `core/launch_options.gd` | Name, server URL and dev aids from the web query string or desktop arguments |
-| `screens/` | `game/` (the world), `name_entry/` (dev runs) and `account_check/` ("Checking your account…", or Try again when the platform can't be reached) now. *(planned)* Boot (version check), World select, Character select and create, Loading. Login is on the landing page, not in the client ([ADR 0015](../decisions/0015-login-on-the-landing-page.md)). |
+| `core/appearance_catalog.gd` | `AppearanceCatalog`: the appearance choices from `data/appearance.json` (names, colours, body sizes), stepping through them and random looks |
+| `core/json_read.gd` | `JsonRead`: typed reads from parsed JSON with fallbacks |
+| `net/api/` | `GameApi` (the backend API with the session's token; one refresh and retry on a 401) and `ApiText` (plain words for every API error) |
+| `screens/` | `game/` (the world), `name_entry/` (dev runs), `account_check/` ("Checking your account…", or Try again when the platform can't be reached), `characters/` (the character list with rename and delete, and creation) and `worlds/` (the world list). *(planned)* Boot (version check), Loading. Login is on the landing page, not in the client ([ADR 0015](../decisions/0015-login-on-the-landing-page.md)). |
 | `world/` | `PathPlayback`, `MotionTrack`, `ErrorBlend`, the `EntityManager`, the `OrbitCamera` and the `ClickMarker`. *(planned)* chunk streaming, starting from the spike's `SpikeChunkStreamer` |
 | `spikes/streaming/` | The M0 streaming spike: region generator, chunk streamer, bench and web measuring tools ([README](../../client/spikes/streaming/README.md)). Not shipped. |
-| `entities/player/` | The player view: placeholder caveman and name label. *(planned)* creatures, nodes and ground items |
-| `ui/` | `ui/chat/`: the `ChatBox`, `ChatLog` and `SpeechBubble`. *(planned)* HUD, inventory, equipment, skills, bank, dialogue, context menu, ability bar |
-| `autoload/session.gd` | The `Session` autoload: the account platform session ([below](#platform-session)). All its code is `SessionKeeper` (`core/session_keeper.gd`). *(planned)* `/api` calls with the access token. |
+| `entities/player/` | The player view (`PlayerView`: name label, speech bubble) and the placeholder caveman (`CavemanModel`, `caveman.tscn`), drawn from a look. *(planned)* creatures, nodes and ground items |
+| `ui/` | `ui/chat/`: the `ChatBox`, `ChatLog` and `SpeechBubble`. `ui/caveman_preview/`: the turning 3D caveman on the character screens. `ui/theme/screens.tres`: the menu screens' theme. *(planned)* HUD, inventory, equipment, skills, bank, dialogue, context menu, ability bar |
+| `autoload/session.gd` | The `Session` autoload: the account platform session ([below](#platform-session)) and `Session.api`, the game API with its token. All its code is `SessionKeeper` (`core/session_keeper.gd`). |
 | `net/platform/` | `PlatformSession` (token, profile, one refresh at a time), `PlatformReply`, and the transports: `WebPlatformTransport` (a `JavaScriptBridge` fetch) and the `PlatformTransport` base |
 | `regions/<region>/` | Authoring scenes: terrain chunks, props, navmesh, marker nodes ([content-pipeline.md](content-pipeline.md)) |
 | `tools/export_region.gd` | Editor script that exports region data for the server |
 | `data/` | **Generated** from `data/` by `dataval -emit-client` (ignored by git). `content_hash.txt` goes in `hello`. |
-| `tests/` | GUT unit tests (path playback, clock, error blend, frame dispatch, proto round-trips, launch options, chat, platform session) |
+| `tests/` | GUT unit tests (path playback, clock, error blend, frame dispatch, proto round-trips, launch options, chat, platform session, the game API, appearance, the character and world screens, the game screen's kicks). `tests/helpers/` has a fake game API transport. |
 
 ## Platform session
 
@@ -36,15 +39,28 @@ Login is on the landing page ([ADR 0015](../decisions/0015-login-on-the-landing-
 
 - **When:** on the web, on a deployed page with no `name` option (`LaunchOptions.use_platform`). Desktop runs and local pages without `accounts=` never touch the platform, so dev tickets, `?name=` and `-- --name=` work as before.
 - **Start:** `main.gd` shows "Checking your account…" and calls `Session.begin()`, which refreshes once (`POST /auth/refresh`, with the cookie).
-  - Signed in: the player joins. **Until characters and join tickets exist** they join with a dev ticket named after the account (`PlatformSession.dev_name_for`: underscores become spaces, cut to 12 characters). If the world refuses that name, the name box opens.
+  - Signed in: the character list ([below](#characters-worlds-and-joining)).
   - No session (401, or 403 for a ban or an origin the platform doesn't allow): straight back to `/` (`location.replace`, so Back doesn't return to the game).
   - No usable answer (offline, rate limited, platform down): Try again, or back to Base Camp.
 - **Keeping it:** a one-shot timer refreshes 60 s before the access token expires (`PlatformSession.refresh_delay_s`; 840 s for the platform's 15-minute tokens). If the platform can't be reached it retries every 15 s; the world connection doesn't need the token. A refresh that finds the session gone (logged out on the landing page, banned, reused) goes back to `/`.
 - **One refresh at a time:** a second caller waits for the refresh already running and gets the same answer. Across tabs, refresh and log out run under the Web Lock `udg-platform-session`, which the landing page takes too (`navigator.locks`), so the page and the game never refresh with the same cookie at once.
 - **Log out:** the HUD's Log out button (shown only with a platform session) closes the world connection, waits for any running refresh, calls `/auth/logout` and goes to `/`.
 - **Transport:** Godot's `HTTPRequest` can't send credentialed cross-origin requests, so `WebPlatformTransport` adds a small `window.udgPlatform.send` helper and calls `fetch(..., { credentials: "include" })` through `JavaScriptBridge`, with a callback per request.
-- **The join-ticket seam:** when `cmd/api` arrives, `main.gd`'s `_on_signed_in()` asks `/api` for a join ticket with `Session.platform.access_token` instead of making a dev ticket. Then the playtest gate and `-dev-tickets` go ([ADR 0014](../decisions/0014-playtest-gate.md)).
 - **Tests** (`tests/test_platform_session.gd`, headless, no real time): single-flight refresh, log out waiting for a refresh, what each answer means, the timer's delay and retries, and when to go back to `/`, with a fake transport and the timer's handler called directly.
+
+## Characters, worlds and joining
+
+With a platform session, `main.gd`'s `_on_signed_in()` goes: character list → (creation) → world list → `POST /api/join` → the game screen with the ticket. The screens live in the client, not on the landing page: the caveman preview is 3D, and the chosen character and world flow straight into the join without handing anything between pages. The design side (slots, names, appearance) is in [design/characters.md](../design/characters.md).
+
+- **The game API** (`Session.api`, a `GameApi`) calls `/api` on the page's own origin through the same `JavaScriptBridge` fetch as the platform (`WebPlatformTransport` with an empty base URL), with `Authorization: Bearer <access token>`. A 401 refreshes the session once and tries again: a background tab pauses the refresh timer, so the token may have just expired. A second 401 means no session: back to `/`.
+- **Character list** (`CharacterSelectScreen`): three slots from `GET /api/characters`; the selected character turns in the 3D preview (`CavemanPreview`, its own `World3D`). An empty slot opens creation. Rename and Delete open a dialog. Delete stays off until the name is typed (any case, as the API checks), and rename explains the 30-day wait from `nextRenameAt` before the player tries.
+- **Creation** (`CharacterCreateScreen`): a name, and `<` `>` buttons for each part of the look, starting from a random look, with Randomise. The preview follows every change. `POST /api/characters` decides; the client checks nothing. Every refusal (name shape, not allowed, reserved, taken, slot used, look not available, rate limited) is shown in plain words from `ApiText`, and the player can fix it and try again.
+- **World list** (`WorldSelectScreen`): `GET /api/worlds` with each world's busy band (Low, Medium, High, Full) or Offline, and a Premium badge on premium-only worlds. Without Premium (from the profile: `PlatformSession.has_premium()`, which counts staff) a premium world's Join is off and it says why. That's only a hint: the API decides with the account's fresh state.
+- **Joining:** Join asks `POST /api/join`. A ticket opens the game at the API's `wsUrl`. Any refusal stays on the list with the reason (Premium, already online, offline, full, banned); a character that's gone goes back to the character list; no session goes to `/`.
+- **In the world:** a refused ticket (`kick(bad_ticket)`) goes back to the world list with a message. Reconnect (after a drop or a world restart) asks for a new ticket for the same character and world, because each works once; if that fails the overlay says why and offers the world list. The HUD's Characters button leaves the world for the character list.
+- **Your look in the world:** your own caveman is drawn with your character's appearance. Other players are drawn with the default look until the world sends appearance in `entity_enter` (not yet: it needs the ticket, the region and the protocol to carry it).
+- **Dev runs** (desktop, `?name=`, local pages without `accounts=`) skip all of this and join with a dev ticket, as before.
+- **Tests** (`tests/test_game_api.gd`, `test_appearance.gd`, `test_character_screens.gd`, `test_world_select.gd`, `test_game_screen.gd`): routes, bodies and the 401 retry; text for every API error; appearance from data and the caveman drawn from it; each screen against a fake API (lists, create, rename, delete, every refusal, premium hints, where each join answer leads); and the game screen's kicks and reconnects.
 
 ## Input
 

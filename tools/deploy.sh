@@ -116,7 +116,17 @@ game="$(code "https://$DOMAIN/play/")"
 wiki="$(code "https://$DOMAIN/wiki/")"
 dev="$(code "https://$DOMAIN/dev/")"
 world="$(code "https://$DOMAIN/w/1")"
+world2="$(code "https://$DOMAIN/w/2")"
 api="$(code "https://$DOMAIN/api/health")"
-echo "landing $landing (want 200), game $game (want 401), wiki $wiki (want 200), dev $dev (want 401), world without cookie $world (want 403), api $api (want 200)"
-[[ "$landing" == 200 && "$game" == 401 && "$wiki" == 200 && "$dev" == 401 && "$world" == 403 && "$api" == 200 ]] || { echo "Something answered unexpectedly." >&2; exit 1; }
+echo "landing $landing (want 200), game $game (want 401), wiki $wiki (want 200), dev $dev (want 401), worlds without cookie $world and $world2 (want 403), api $api (want 200)"
+[[ "$landing" == 200 && "$game" == 401 && "$wiki" == 200 && "$dev" == 401 && "$world" == 403 && "$world2" == 403 && "$api" == 200 ]] || { echo "Something answered unexpectedly." >&2; exit 1; }
+# The world list: the API must see both worlds (it caches each world's status for 5 s).
+online=0
+for _ in $(seq 1 10); do
+  online="$(curl -s --max-time 15 "https://$DOMAIN/api/worlds" | grep -o '"online":true' | wc -l | tr -d ' ')"
+  [[ "$online" == 2 ]] && break
+  sleep 2
+done
+echo "worlds online in /api/worlds: $online (want 2)"
+[[ "$online" == 2 ]] || { echo "The API doesn't see both worlds: ssh $HOST 'cd /opt/udg && docker compose logs --tail 50 api world-1 world-2'" >&2; exit 1; }
 echo "Live: https://$DOMAIN"

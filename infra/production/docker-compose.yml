@@ -1,8 +1,7 @@
 # The game's stack on the project server (/opt/udg, compose project "udg").
 # docs/operations/hosting.md and docs/operations/deploy.md. Deployed by tools/deploy.sh.
 #
-# M1: Postgres, the backend API (udg-api), world 1 and Caddy. World 2 (premium only) comes with the
-# world select task.
+# M1: Postgres, the backend API (udg-api), World 1 (free), World 2 (premium only) and Caddy.
 # /opt/udg/.env (mode 600, never in git) is made by tools/set-passwords.sh and tools/set-secrets.sh.
 name: udg
 
@@ -58,7 +57,9 @@ services:
   world-1:
     image: udg-server:prod
     # Dev tickets are on only because the whole game sits behind the playtest password and
-    # cookie in the Caddyfile (decided by the owner, 2026-11-25). They go when M1 login lands.
+    # cookie in the Caddyfile (decided by the owner, 2026-11-25). The client joins with the API's
+    # join tickets now; turning dev tickets and the gate off is the owner's call at deploy time
+    # (ADR 0014).
     command:
       - -addr=0.0.0.0:8090
       - -world=1
@@ -66,11 +67,28 @@ services:
       - -dev-tickets
       - -origins=${UDG_DOMAIN:?set in .env}
     environment:
-      # Join tickets from the API. Dev tickets stay on too, until the client logs in (a later M1 task).
+      # Join tickets from the API. Dev tickets stay on too, until the owner turns them off (ADR 0014).
       WORLD_TICKET_KEY: ${WORLD_TICKET_KEY:?run tools/set-secrets.sh}
     read_only: true
     mem_limit: 256m
     # SIGTERM: the server kicks everyone with "shutdown" and stops within 15 s.
+    stop_grace_period: 20s
+    restart: unless-stopped
+
+  # World 2: premium only (docs/design/worlds-and-premium.md). It takes only the API's join tickets,
+  # never dev tickets, and refuses a ticket without Premium even if the API issued one.
+  world-2:
+    image: udg-server:prod
+    command:
+      - -addr=0.0.0.0:8090
+      - -world=2
+      - -data=/app/data
+      - -premium-only
+      - -origins=${UDG_DOMAIN:?set in .env}
+    environment:
+      WORLD_TICKET_KEY: ${WORLD_TICKET_KEY:?run tools/set-secrets.sh}
+    read_only: true
+    mem_limit: 256m
     stop_grace_period: 20s
     restart: unless-stopped
 
@@ -90,6 +108,7 @@ services:
     mem_limit: 128m
     depends_on:
       - world-1
+      - world-2
       - api
     restart: unless-stopped
 

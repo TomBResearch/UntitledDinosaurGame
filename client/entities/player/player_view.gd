@@ -1,7 +1,7 @@
 class_name PlayerView
 extends Node3D
-## A player as the client draws it: the placeholder caveman (a capsule with a pelt and a club) and
-## a name label. It never decides where it is: its position is its MotionTrack at the tick the
+## A player as the client draws it: the placeholder caveman (CavemanModel, in his pelt loincloth)
+## and a name label. It never decides where it is: its position is its MotionTrack at the tick the
 ## entity manager passes in, plus any ErrorBlend correction still running. Its height comes from
 ## the path's waypoints (the server sends y), so it follows the navmesh up slopes and steps.
 
@@ -21,7 +21,7 @@ var _yaw: float = 0.0
 var _target_yaw: float = 0.0
 var _walked_m: float = 0.0
 
-@onready var _model: Node3D = $Model
+@onready var _model: CavemanModel = $Model
 @onready var _label: Label3D = $Name
 @onready var _bubble: SpeechBubble = $Bubble
 
@@ -45,6 +45,15 @@ func _apply_label(player_name: String) -> void:
 	_label.text = player_name
 	if is_self:
 		_label.modulate = SELF_NAME_COLOR
+
+
+## Draws the caveman with a look ({bodyType, skinTone, hairStyle, hairColour, beard}).
+func apply_look(look: Dictionary) -> void:
+	_model.apply(look)
+
+
+func model() -> CavemanModel:
+	return _model
 
 
 ## Shows a chat line over the player's head for a few seconds.
