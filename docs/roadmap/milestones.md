@@ -29,7 +29,7 @@ Each milestone ends with something **playable on the test server**. Tasks inside
 | Platform login on the landing page ([ADR 0015](../decisions/0015-login-on-the-landing-page.md)) **(built; the platform now allows our origin, so it's live on the next deploy)** | `web/js/auth.js` turned on: log in, sign up, password reset, resend verification and the account card on `/`. The game at `/play/` refreshes its own session (one refresh at a time) through `JavaScriptBridge` fetch, sends players with no session back to `/`, and logs out. |
 | Platform config (racing repo PR) **(live 2026-11-25, [racing PR #47](https://github.com/TomBResearch/UntitledRacingGame/pull/47); racing login re-check by hand still to do)** | `ALLOWED_ORIGINS` and `SERVICE_KEYS` additions. Racing login is re-checked. |
 | `cmd/api` **(done)** | JWKS check, service API client, worlds, character CRUD (3 slots, name rules), join tickets, deleted-accounts list |
-| Character creation | Name, a basic appearance (skin tone, hair, beard), starting gear (pelt loincloth) |
+| Character creation | Name, appearance (body type, skin tone, hair style, hair colour, beard; S2, answered 2026-11-25), starting gear (pelt loincloth) |
 | World select | World 1 (free) and World 2 (premium only), with tests for premium refused and allowed |
 | Persistence | Position, region and HP saved. Online lease. Graceful shutdown saves everyone. Idle logout after 15 minutes with no input, with a 1-minute warning (S4). |
 | Deletion hook | `/internal/players/:id` is live, then `DELETION_HOOKS` is added to the platform, with an end-to-end deletion test |
