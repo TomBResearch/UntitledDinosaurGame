@@ -7,7 +7,7 @@ extends RefCounted
 ## Proto.encode(msg), and pass each received frame to Proto.decode(frame, Proto.Dir.FROM_SERVER).
 
 ## Identifies this version of the schema. Sent as the first field of hello.
-const PROTOCOL_HASH: int = 0x5cee648b
+const PROTOCOL_HASH: int = 0x499c4b56
 
 ## Who sends a message.
 enum Dir { FROM_CLIENT = 1, FROM_SERVER = 2 }
@@ -40,12 +40,22 @@ enum KickReason {
 	SHUTDOWN = 2,
 	## Too many invalid or rate-limited messages.
 	MISBEHAVING = 3,
+	## Logged out after too long with no input (the idle logout). You were saved where you stood.
+	IDLE = 4,
+	## That character, or another on the same account, is already online in some world.
+	ALREADY_ONLINE = 5,
+	## The world couldn't load your character just then (its database didn't answer). Try again.
+	UNAVAILABLE = 6,
 }
 
 ## A line of game text the client shows in the chat box, in the player's language.
 enum SystemKey {
 	## You're muted: your chat line wasn't sent.
 	CHAT_MUTED = 0,
+	## You'll be logged out for being idle in `seconds` unless you do something.
+	IDLE_WARNING = 1,
+	## The world is restarting in `seconds`. Everyone is saved before it stops.
+	SHUTDOWN_WARNING = 2,
 }
 
 # Message ids.
@@ -755,15 +765,17 @@ class Kick extends Message:
 		return 1
 
 	func encode_body(w: Writer) -> void:
-		w.enum8(reason, 4)
+		w.enum8(reason, 7)
 
 	func decode_body(r: Reader) -> void:
-		reason = r.enum8(4) as KickReason
+		reason = r.enum8(7) as KickReason
 
 
 ## A line of game text for the chat box, sent only to you.
 class SystemMessage extends Message:
 	var key: SystemKey = SystemKey.CHAT_MUTED
+	## For a key that counts down (idle_warning, shutdown_warning): how many seconds are left. 0 otherwise.
+	var seconds: int = 0
 
 	func message_id() -> int:
 		return MSG_SYSTEM_MESSAGE
@@ -775,10 +787,12 @@ class SystemMessage extends Message:
 		return Dir.FROM_SERVER
 
 	func max_body_size() -> int:
-		return 1
+		return 3
 
 	func encode_body(w: Writer) -> void:
-		w.enum8(key, 1)
+		w.enum8(key, 3)
+		w.u16(seconds)
 
 	func decode_body(r: Reader) -> void:
-		key = r.enum8(1) as SystemKey
+		key = r.enum8(3) as SystemKey
+		seconds = r.u16()

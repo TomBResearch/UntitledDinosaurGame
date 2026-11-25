@@ -35,6 +35,13 @@ type Progression struct {
 		// MaxChars is the longest chat line, in Unicode code points.
 		MaxChars int `json:"max_chars"`
 	} `json:"chat"`
+	Session struct {
+		// IdleLogoutS: a player who sends no input (a click, a key that does something, chat) for this
+		// many seconds is logged out, saved where they stand (open question S4).
+		IdleLogoutS int `json:"idle_logout_s"`
+		// IdleWarningS: how long before the idle logout the player is warned.
+		IdleWarningS int `json:"idle_warning_s"`
+	} `json:"session"`
 	Server struct {
 		TickHz int `json:"tick_hz"`
 	} `json:"server"`
@@ -120,6 +127,11 @@ func Load(dir string) (*Content, error) {
 	}
 	if n := p.Chat.MaxChars; n < 1 || n > MaxChatChars {
 		problems = append(problems, fmt.Errorf("progression.json: chat.max_chars must be 1..%d, got %d", MaxChatChars, n))
+	}
+	if s := p.Session; s.IdleLogoutS < 60 || s.IdleLogoutS > 4*3600 {
+		problems = append(problems, fmt.Errorf("progression.json: session.idle_logout_s must be 60..14400, got %d", s.IdleLogoutS))
+	} else if s.IdleWarningS < 1 || s.IdleWarningS >= s.IdleLogoutS || s.IdleWarningS > 65535 {
+		problems = append(problems, fmt.Errorf("progression.json: session.idle_warning_s must be 1..idle_logout_s-1, got %d", s.IdleWarningS))
 	}
 	if f, err := chat.NewFilter(filter.Words, filter.Substitutions); err != nil {
 		problems = append(problems, fmt.Errorf("chat_filter.json: %w", err))

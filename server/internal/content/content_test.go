@@ -158,6 +158,9 @@ func TestRejectsBadChatSettings(t *testing.T) {
 		{`"radius_m": 40.0`, `"radius_m": 500`, "chat.radius_m"},
 		{`"max_chars": 120`, `"max_chars": 0`, "chat.max_chars"},
 		{`"max_chars": 120`, `"max_chars": 121`, "chat.max_chars"},
+		{`"idle_logout_s": 900`, `"idle_logout_s": 10`, "session.idle_logout_s"},
+		{`"idle_warning_s": 60`, `"idle_warning_s": 900`, "session.idle_warning_s"},
+		{`"idle_warning_s": 60`, `"idle_warning_s": 0`, "session.idle_warning_s"},
 	} {
 		dir := copyData(t)
 		write(t, dir, "progression.json", strings.Replace(read(t, dir, "progression.json"), c.from, c.to, 1))
