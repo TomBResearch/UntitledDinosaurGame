@@ -28,6 +28,7 @@ A **new** file, `/etc/nginx/conf.d/dinosaur.untitledgames.co.uk.conf`, modelled 
 - Port 80 serves the ACME challenge from `/var/www/letsencrypt`, and everything else redirects to HTTPS.
 - Port 443 uses its own certificate (`certbot certonly --webroot -d dinosaur.untitledgames.co.uk`). It takes the real IP from Cloudflare's `CF-Connecting-IP` header, and proxies to `127.0.0.1:8082` with WebSocket upgrade and long read timeouts.
 - Cloudflare needs a DNS record for `dinosaur` (proxied) with WebSockets enabled.
+- **Cloudflare's Browser Cache TTL must be "Respect Existing Headers"** (Caching → Configuration). The owner set it for the whole `untitledgames.co.uk` zone on 2026-11-25. Before that, Cloudflare rewrote our `Cache-Control: no-cache` to a 4-hour browser cache on static files, so after a deploy a browser could mix new and old files: the landing page broke, and the game at `/play/` could load a mismatched `.wasm` and `.pck`. Our files are revalidated with ETags, so `no-cache` stays cheap. The landing page's `?v=` stamps (`tools/stage-landing.py`) are a second guard.
 
 ## Memory budget (test server)
 
