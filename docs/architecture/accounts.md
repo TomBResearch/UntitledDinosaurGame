@@ -24,15 +24,15 @@ Premium only gets you into premium-only worlds for now ([design/worlds-and-premi
 
 ## Configuration changes needed on the platform
 
-These go through the racing repo's `infra/production/docker-compose.yml` and `.env` (compose project `urg`). They're additive only, and racing keeps working.
+Since 2026-11-25 the platform has its own stack (`/opt/accounts`), and these settings are PRs in its repo, [TomBResearch/UntitledAccountSystem](https://github.com/TomBResearch/UntitledAccountSystem): `infra/production/docker-compose.yml` and its `.env` ([its operations guide](https://github.com/TomBResearch/UntitledAccountSystem/blob/main/docs/operations/accounts-stack.md)). `udg-api` reaches the platform over the shared Docker network `untitled_platform`, and the platform reaches our hook the same way. Before that they went through the racing repo, as below. The table is kept as history.
 
 | When | Change |
 |---|---|
 | M1 (before our login goes live) | `ALLOWED_ORIGINS: https://${GAME_DOMAIN},https://dinosaur.untitledgames.co.uk`. **Live since 2026-11-25** ([racing PR #47](https://github.com/TomBResearch/UntitledRacingGame/pull/47)). `tools/deploy.sh` here refuses to deploy if the platform ever stops allowing it. |
-| M1 | `SERVICE_KEYS: racing=${PLATFORM_SERVICE_KEY},dinosaur=${DINOSAUR_SERVICE_KEY}` (same PR, **live since 2026-11-25**; the key is in `/opt/urg/.env`, `/opt/udg/.env` and the racing repo's `infra/production/.env` on the Mac). The racing repo's `tools/deploy.sh` adds the key to its `.env` (48 random letters and digits, like its other keys); the same value goes in `/opt/udg/.env`. The compose file insists on it, because the platform won't start with a key under 32 characters. |
-| M1, **ready** once the deletion hook is deployed (`udg-api` answers on port 3001 over `urg_default`; port 3000 is only for Caddy) | `DELETION_HOOKS: racing=…,dinosaur=http://udg-api:3001/internal/players/{id}`. Needs the owner's OK. The racing repo PR has the exact rollout steps: settings only, no `tools/deploy.sh`. |
+| M1 | `SERVICE_KEYS: racing=${PLATFORM_SERVICE_KEY},dinosaur=${DINOSAUR_SERVICE_KEY}` (same PR, **live since 2026-11-25**; the key was in `/opt/urg/.env`, `/opt/udg/.env` and the racing repo's `infra/production/.env` on the Mac; now it's in `/opt/accounts/.env`, `/opt/udg/.env` and the platform repo's `infra/production/.env`). The racing repo's `tools/deploy.sh` adds the key to its `.env` (48 random letters and digits, like its other keys); the same value goes in `/opt/udg/.env`. The compose file insists on it, because the platform won't start with a key under 32 characters. |
+| M1, **ready** once the deletion hook is deployed (`udg-api` answers on port 3001, now over `untitled_platform`; port 3000 is only for Caddy) | `DELETION_HOOKS: racing=…,dinosaur=http://udg-api:3001/internal/players/{id}`. Needs the owner's OK. The racing repo PR has the exact rollout steps: settings only, no `tools/deploy.sh`. |
 
-**After each change:** check racing by hand at `racing.untitledgames.co.uk`: log in, reload (still logged in, so refresh works), log out, and delete a throwaway account. The racing repo's smoke tests run against local servers, not the live platform, so they don't cover this. The racing repo's [deploy.md](https://github.com/TomBResearch/UntitledRacingGame/blob/main/docs/operations/deploy.md) lists these entries too.
+**After each change:** check both games still log in and delete accounts. The platform's `tools/prod-check.sh run` does this against the live platform, through both games' origins and both hooks. The racing repo's [deploy.md](https://github.com/TomBResearch/UntitledRacingGame/blob/main/docs/operations/deploy.md) lists these entries too.
 
 ## Known gaps (affect every game)
 

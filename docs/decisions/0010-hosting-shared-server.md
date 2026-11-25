@@ -11,6 +11,7 @@ The owner's project server (an AWS t4g.small: ARM64, 2 vCPU, about 1.8 GB RAM, A
 - This game's stack is its **own Docker Compose project (`udg`) in `/opt/udg`**, with its own Postgres, Caddy, API and world servers.
 - **Domain:** `dinosaur.untitledgames.co.uk`. A **new, separate nginx file** (`/etc/nginx/conf.d/dinosaur.untitledgames.co.uk.conf`) terminates TLS (certbot) and proxies to this stack's Caddy on `127.0.0.1:8082`. No other site's nginx file is touched.
 - **Only `udg-api` also joins the racing stack's `urg_default` network**, so it can call `accounts:3100` and so the platform can call our deletion hook. Game servers and the database stay on our own network.
+  - **Update 2026-11-25:** the platform moved to its own stack (`/opt/accounts`, the platform's decision 0002). `udg-api` now joins the shared network `untitled_platform` instead, which holds only the platform and game backends. So it can no longer reach racing's database or game servers.
 - **Images are built on the Mac** (or in CI) for `linux/arm64` and copied to the server, as the racing game does. Nothing is compiled on the server.
 - **World servers are fixed services in Compose for now** (`world-1` free, `world-2` premium). Starting and stopping worlds on demand (like the racing game's runner) comes later, when it's needed.
 
