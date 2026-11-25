@@ -31,6 +31,9 @@ type Config struct {
 	Worlds WorldStatus
 	// TicketKey is WORLD_TICKET_KEY.
 	TicketKey []byte
+	// ServiceKey is DINOSAUR_SERVICE_KEY: the platform sends it to the deletion hook
+	// (InternalHandler), as the API sends it to the platform's service API.
+	ServiceKey string
 	// PublicWS is where players' browsers reach the worlds, without the path: for example
 	// wss://dinosaur.untitledgames.co.uk. A world's ws_path is added to it. {id} in it is replaced by
 	// the world's id, so local worlds can each have their own port (ws://127.0.0.1:809{id}).

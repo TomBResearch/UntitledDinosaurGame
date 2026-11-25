@@ -69,6 +69,27 @@ func (m *MemStore) RecordDeletedAccount(_ context.Context, accountID string, now
 	return nil
 }
 
+func (m *MemStore) DeleteAccount(_ context.Context, accountID string, now time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.deleted[accountID]; !ok {
+		m.deleted[accountID] = now
+	}
+	gone := map[string]bool{}
+	for id, c := range m.chars {
+		if c.AccountID == accountID {
+			delete(m.chars, id)
+			gone[id] = true
+		}
+	}
+	for lower, n := range m.names {
+		if gone[n.characterID] {
+			delete(m.names, lower)
+		}
+	}
+	return len(gone), nil
+}
+
 func (m *MemStore) Worlds(context.Context) ([]World, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -128,6 +149,9 @@ func (m *MemStore) CreateCharacter(_ context.Context, accountID string, slot int
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, gone := m.deleted[accountID]; gone {
+		return Character{}, ErrAccountDeleted
+	}
 	for _, c := range m.chars {
 		if c.AccountID == accountID && c.deletedAt == nil && c.Slot == slot {
 			return Character{}, ErrSlotUsed

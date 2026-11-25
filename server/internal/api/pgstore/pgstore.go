@@ -40,6 +40,33 @@ func (s *Store) RecordDeletedAccount(ctx context.Context, accountID string, now 
 	return err
 }
 
+// lockAccount serialises CreateCharacter and DeleteAccount for one account, until the transaction
+// ends. Without it, a create that started before the deletion hook could commit a character after
+// the hook had deleted the others. (Read committed: each statement after the lock sees what the
+// other transaction committed.)
+func lockAccount(ctx context.Context, tx pgx.Tx, accountID string) error {
+	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended('udg-account:' || $1, 0))", accountID)
+	return err
+}
+
+func (s *Store) DeleteAccount(ctx context.Context, accountID string, now time.Time) (int, error) {
+	var n int64
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := lockAccount(ctx, tx, accountID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO deleted_accounts (account_id, deleted_at) VALUES ($1, $2)
+			ON CONFLICT (account_id) DO NOTHING`, accountID, now); err != nil {
+			return err
+		}
+		// Names, skills and anything else referencing a character go with it (ON DELETE CASCADE).
+		tag, err := tx.Exec(ctx, "DELETE FROM characters WHERE account_id = $1", accountID)
+		n = tag.RowsAffected()
+		return err
+	})
+	return int(n), err
+}
+
 func (s *Store) Worlds(ctx context.Context) ([]api.World, error) {
 	rows, err := s.pool.Query(ctx, "SELECT id, name, premium_only, max_players, ws_path FROM worlds ORDER BY id")
 	if err != nil {
@@ -114,6 +141,15 @@ func (s *Store) CreateCharacter(ctx context.Context, accountID string, slot int,
 	}
 	var c api.Character
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := lockAccount(ctx, tx, accountID); err != nil {
+			return err
+		}
+		var gone bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM deleted_accounts WHERE account_id = $1)", accountID).Scan(&gone); err != nil {
+			return err
+		} else if gone {
+			return api.ErrAccountDeleted
+		}
 		var id string
 		err := tx.QueryRow(ctx, `INSERT INTO characters (account_id, slot, name, appearance, created_at)
 			VALUES ($1, $2, $3, $4, $5) RETURNING id::text`, accountID, slot, name, look, now).Scan(&id)

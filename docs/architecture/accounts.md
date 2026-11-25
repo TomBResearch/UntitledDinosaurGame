@@ -12,7 +12,7 @@ The shared platform lives in `TomBResearch/UntitledAccountSystem`; its `docs/spe
 | Fresh role, Premium and ban state | `GET /service/accounts/:id` with `Authorization: Service <dinosaur key>`, cached for at most 30 s |
 | Friends (later: "friend online", join friend) | `GET /service/accounts/:id/friends` |
 | Player reports with chat context | `POST /service/reports` from the API or world, with `gameId: "dinosaur"` and the last chat lines the server saw |
-| Account deletion | The platform calls `DELETE http://udg-api:3000/internal/players/{id}` before it deletes the account |
+| Account deletion | Done on the untitledgames.co.uk website, never in the game. The platform calls `DELETE http://udg-api:3001/internal/players/{id}` with `Authorization: Service <dinosaur key>` before it deletes the account; the API's [deletion hook](backend.md#deletion-hook) deletes every character and answers `204`. |
 
 ## Roles
 
@@ -30,7 +30,7 @@ These go through the racing repo's `infra/production/docker-compose.yml` and `.e
 |---|---|
 | M1 (before our login goes live) | `ALLOWED_ORIGINS: https://${GAME_DOMAIN},https://dinosaur.untitledgames.co.uk`. **Live since 2026-11-25** ([racing PR #47](https://github.com/TomBResearch/UntitledRacingGame/pull/47)). `tools/deploy.sh` here refuses to deploy if the platform ever stops allowing it. |
 | M1 | `SERVICE_KEYS: racing=${PLATFORM_SERVICE_KEY},dinosaur=${DINOSAUR_SERVICE_KEY}` (same PR, **live since 2026-11-25**; the key is in `/opt/urg/.env`, `/opt/udg/.env` and the racing repo's `infra/production/.env` on the Mac). The racing repo's `tools/deploy.sh` adds the key to its `.env` (48 random letters and digits, like its other keys); the same value goes in `/opt/udg/.env`. The compose file insists on it, because the platform won't start with a key under 32 characters. |
-| M1, **only after** `udg-api` answers `204` on `/internal/players/{id}` and is on `urg_default` | `DELETION_HOOKS: racing=…,dinosaur=http://udg-api:3000/internal/players/{id}` |
+| M1, **ready** once the deletion hook is deployed (`udg-api` answers on port 3001 over `urg_default`; port 3000 is only for Caddy) | `DELETION_HOOKS: racing=…,dinosaur=http://udg-api:3001/internal/players/{id}`. Needs the owner's OK. The racing repo PR has the exact rollout steps: settings only, no `tools/deploy.sh`. |
 
 **After each change:** check racing by hand at `racing.untitledgames.co.uk`: log in, reload (still logged in, so refresh works), log out, and delete a throwaway account. The racing repo's smoke tests run against local servers, not the live platform, so they don't cover this. The racing repo's [deploy.md](https://github.com/TomBResearch/UntitledRacingGame/blob/main/docs/operations/deploy.md) lists these entries too.
 

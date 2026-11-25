@@ -26,6 +26,10 @@ The server decides everything that matters. The client sends **intents**, and th
 
 These live in environment variables only (`tools/set-secrets.sh` makes them on the server; [deploy.md](../operations/deploy.md#m1-secrets)). `.env` files are ignored by git, and gitleaks runs in CI. Logs never contain tokens, tickets, emails or service keys.
 
+## Internal routes
+
+The deletion hook (`DELETE /internal/players/:id`) is the only route the account platform calls on us. It's on its own listener (port 3001), which only the Docker networks reach, and it needs the service key. Caddy never proxies to it, and answers `404` for `/internal/*` ([backend.md](backend.md#deletion-hook)).
+
 ## Rate limits
 
 - **API:** per IP and per account ([backend.md](backend.md)).
@@ -49,4 +53,4 @@ Every security-relevant change comes with negative tests:
 - The item invariant test: random action sequences never create or destroy items except through sources and sinks.
 - Each staff action: every lower rank is refused.
 - Chat: a line over the rate limit or over 120 characters is dropped and counted as invalid; a muted player's line reaches nobody; control, bidi and zero-width characters never reach other players (`server/internal/region/chat_test.go`).
-- The deletion hook: a wrong or missing service key is refused, it answers `204` for an unknown account, it's idempotent, and characters are gone afterwards.
+- The deletion hook: a wrong or missing service key is refused, it answers `204` for an unknown account, it's idempotent, and characters are gone afterwards (`server/internal/api/internal_test.go`, `internal/joine2e/deletion_test.go`). It can't be reached through Caddy (`routing_test.go`, and `tools/deploy.sh` from outside).

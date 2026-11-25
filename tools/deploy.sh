@@ -118,8 +118,10 @@ dev="$(code "https://$DOMAIN/dev/")"
 world="$(code "https://$DOMAIN/w/1")"
 world2="$(code "https://$DOMAIN/w/2")"
 api="$(code "https://$DOMAIN/api/health")"
-echo "landing $landing (want 200), game $game (want 401), wiki $wiki (want 200), dev $dev (want 401), worlds without cookie $world and $world2 (want 403), api $api (want 200)"
-[[ "$landing" == 200 && "$game" == 401 && "$wiki" == 200 && "$dev" == 401 && "$world" == 403 && "$world2" == 403 && "$api" == 200 ]] || { echo "Something answered unexpectedly." >&2; exit 1; }
+# The deletion hook must never be reachable from outside (backend.md, "Deletion hook").
+hook="$(code "https://$DOMAIN/internal/players/00000000-0000-4000-8000-000000000000")"
+echo "landing $landing (want 200), game $game (want 401), wiki $wiki (want 200), dev $dev (want 401), worlds without cookie $world and $world2 (want 403), api $api (want 200), deletion hook from outside $hook (want 404)"
+[[ "$landing" == 200 && "$game" == 401 && "$wiki" == 200 && "$dev" == 401 && "$world" == 403 && "$world2" == 403 && "$api" == 200 && "$hook" == 404 ]] || { echo "Something answered unexpectedly." >&2; exit 1; }
 # The world list: the API must see both worlds (it caches each world's status for 5 s).
 online=0
 for _ in $(seq 1 10); do

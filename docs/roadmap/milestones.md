@@ -32,7 +32,7 @@ Each milestone ends with something **playable on the test server**. Tasks inside
 | Character creation **(built; the client joins with real tickets now)** | Name, appearance (body type, skin tone, hair style, hair colour, beard; S2, answered 2026-11-25), starting gear (pelt loincloth) |
 | World select **(built; World 2 starts on the next deploy)** | World 1 (free) and World 2 (premium only), with tests for premium refused and allowed |
 | Persistence | Position, region and HP saved. Online lease. Graceful shutdown saves everyone. Idle logout after 15 minutes with no input, with a 1-minute warning (S4). |
-| Deletion hook | `/internal/players/:id` is live, then `DELETION_HOOKS` is added to the platform, with an end-to-end deletion test |
+| Deletion hook **(endpoint built; live once deployed, then `DELETION_HOOKS` waits for the owner)** | `/internal/players/:id` is live, then `DELETION_HOOKS` is added to the platform, with an end-to-end deletion test |
 
 **Acceptance:** register on the platform, log in, create up to 3 characters, join either world (premium only if flagged), log out and back in where you left off, and delete your account with your characters gone too. The racing game is unaffected throughout.
 

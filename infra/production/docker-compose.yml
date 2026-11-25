@@ -39,6 +39,9 @@ services:
       - -public-ws=wss://${UDG_DOMAIN:?set in .env}
       - -world-status=http://world-{id}:8090/status
       - -trust-proxy
+      # The deletion hook, for the platform only: on the Docker networks, never behind Caddy
+      # (docs/architecture/backend.md, "Deletion hook"). No ports are published for it.
+      - -internal-addr=0.0.0.0:3001
     environment:
       # POSTGRES_PASSWORD is hex (tools/set-secrets.sh), so it's safe inside a URL.
       DATABASE_URL: postgres://udg:${POSTGRES_PASSWORD:?run tools/set-secrets.sh}@postgres:5432/udg?sslmode=disable

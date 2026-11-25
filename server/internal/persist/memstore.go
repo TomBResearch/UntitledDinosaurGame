@@ -52,6 +52,14 @@ func (m *MemStore) DeleteCharacter(id string) {
 	}
 }
 
+// RemoveCharacter removes a character's row altogether, as the API's account deletion (the
+// deletion hook) does, lease and all.
+func (m *MemStore) RemoveCharacter(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.chars, id)
+}
+
 // Get is a copy of a character's row (tests).
 func (m *MemStore) Get(id string) (MemCharacter, bool) {
 	m.mu.Lock()

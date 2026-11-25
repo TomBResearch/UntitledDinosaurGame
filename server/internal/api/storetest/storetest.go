@@ -306,6 +306,103 @@ func Run(t *testing.T, newStore func(t *testing.T) api.Store, hooks Hooks) {
 		}
 	})
 
+	t.Run("delete account: every character and name goes, at once", func(t *testing.T) {
+		s, acct, other := newStore(t), NewAccount(), NewAccount()
+		live, renamedFrom, renamedTo, soft, online := uniqueName("Ug"), uniqueName("Gr"), uniqueName("Gs"), uniqueName("Zo"), uniqueName("On")
+		a, err := s.CreateCharacter(ctx, acct, 1, live, look, T0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := s.CreateCharacter(ctx, acct, 2, renamedFrom, look, T0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.RenameCharacter(ctx, acct, b.ID, renamedTo, T0); err != nil {
+			t.Fatal(err)
+		}
+		c, err := s.CreateCharacter(ctx, acct, 3, soft, look, T0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DeleteCharacter(ctx, acct, c.ID, T0); err != nil {
+			t.Fatal(err)
+		}
+		d, err := s.CreateCharacter(ctx, acct, 3, online, look, T0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hooks.SetSkillXP(t, s, a.ID, "lumberjacking", 99)
+		hooks.SetOnline(t, s, d.ID, 1, T0.Add(time.Hour)) // online: deleted anyway
+		keep, err := s.CreateCharacter(ctx, other, 1, uniqueName("Ke"), look, T0)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		n, err := s.DeleteAccount(ctx, acct, T0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 4 {
+			t.Fatalf("removed %d characters, want 4 (live, renamed, soft-deleted, online)", n)
+		}
+		if list, _ := s.Characters(ctx, acct); len(list) != 0 {
+			t.Fatalf("characters left: %+v", list)
+		}
+		for _, id := range []string{a.ID, b.ID, c.ID, d.ID} {
+			if _, err := s.Character(ctx, acct, id); !errors.Is(err, api.ErrNotFound) {
+				t.Fatalf("character %s: %v", id, err)
+			}
+		}
+		if del, err := s.AccountDeleted(ctx, acct); err != nil || !del {
+			t.Fatalf("not recorded as deleted: %v %v", del, err)
+		}
+		// Names are free straight away: current, held after a rename, held after a soft delete.
+		for i, name := range []string{live, renamedFrom, renamedTo, soft, online} {
+			if _, err := s.CreateCharacter(ctx, NewAccount(), 1+i%3, name, look, T0); err != nil {
+				t.Fatalf("name %q after the account was deleted: %v", name, err)
+			}
+		}
+		// Nothing new is made for the account.
+		if _, err := s.CreateCharacter(ctx, acct, 1, uniqueName("Ne"), look, T0); !errors.Is(err, api.ErrAccountDeleted) {
+			t.Fatalf("create after deletion: %v, want ErrAccountDeleted", err)
+		}
+		// Other accounts are untouched.
+		if list, _ := s.Characters(ctx, other); len(list) != 1 || list[0].ID != keep.ID {
+			t.Fatalf("other account: %+v", list)
+		}
+		// Idempotent, and fine for an account never seen.
+		if n, err := s.DeleteAccount(ctx, acct, T0.Add(time.Minute)); err != nil || n != 0 {
+			t.Fatalf("second delete: %d %v", n, err)
+		}
+		if n, err := s.DeleteAccount(ctx, NewAccount(), T0); err != nil || n != 0 {
+			t.Fatalf("unknown account: %d %v", n, err)
+		}
+	})
+
+	t.Run("delete account racing creates leaves nothing behind", func(t *testing.T) {
+		for range 5 {
+			s, acct := newStore(t), NewAccount()
+			var wg sync.WaitGroup
+			for slot := 1; slot <= api.Slots; slot++ {
+				wg.Go(func() {
+					_, err := s.CreateCharacter(ctx, acct, slot, uniqueName("Ra"), look, T0)
+					if err != nil && !errors.Is(err, api.ErrAccountDeleted) {
+						t.Error(err)
+					}
+				})
+			}
+			wg.Go(func() {
+				if _, err := s.DeleteAccount(ctx, acct, T0); err != nil {
+					t.Error(err)
+				}
+			})
+			wg.Wait()
+			if list, _ := s.Characters(ctx, acct); len(list) != 0 {
+				t.Fatalf("a create racing the deletion left %d characters", len(list))
+			}
+		}
+	})
+
 	t.Run("deleted accounts", func(t *testing.T) {
 		s, acct := newStore(t), NewAccount()
 		if del, err := s.AccountDeleted(ctx, acct); err != nil || del {

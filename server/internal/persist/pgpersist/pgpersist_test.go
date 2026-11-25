@@ -177,6 +177,50 @@ func TestTheAPISeesTheWorldsLease(t *testing.T) {
 	}
 }
 
+// The deletion hook removes an account while a world holds a lease on one of its characters (the
+// player is online). The world's saves then change nothing and can't bring the row back (udg_world
+// can only update), its renewal reports the lease lost, so it disconnects the player, and a ticket
+// issued just before can't claim the character any more.
+func TestDeletingAnOnlineAccount(t *testing.T) {
+	db := testDBs(t)
+	ctx := context.Background()
+	apiStore := pgstore.New(db.admin)
+	world := pgpersist.New(db.world)
+	h := hooks(db)
+	acc := h.NewAccount(t)
+	id := h.AddCharacter(t, acc)
+	other := h.AddCharacter(t, acc)
+	now := persisttest.T0.Add(time.Hour)
+	lease := persist.NewLease()
+	if _, err := world.Claim(ctx, persist.Claim{AccountID: acc, CharacterID: id, World: 1, Lease: lease, Now: now,
+		Until: now.Add(persist.LeaseTTL)}); err != nil {
+		t.Fatal(err)
+	}
+
+	if n, err := apiStore.DeleteAccount(ctx, acc, now); err != nil || n != 2 {
+		t.Fatalf("DeleteAccount: %d %v", n, err)
+	}
+
+	later := now.Add(persist.RenewEvery)
+	lost, err := world.Write(ctx, 1, []persist.Save{{CharacterID: id, Lease: lease, Region: "test_greybox",
+		HP: persist.HPFull}}, later, later.Add(persist.LeaseTTL))
+	if err != nil || len(lost) != 1 || lost[0] != id {
+		t.Fatalf("save after deletion: lost %v, err %v (want the character lost)", lost, err)
+	}
+	gone, err := world.Renew(ctx, 1, []string{lease}, later.Add(persist.LeaseTTL))
+	if err != nil || len(gone) != 1 || gone[0] != lease {
+		t.Fatalf("renew after deletion: lost %v, err %v (want the lease lost)", gone, err)
+	}
+	var rows int
+	if err := db.admin.QueryRow(ctx, "SELECT count(*) FROM characters WHERE account_id = $1", acc).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("%d character rows after the world saved, err %v", rows, err)
+	}
+	if _, err := world.Claim(ctx, persist.Claim{AccountID: acc, CharacterID: other, World: 2, Lease: persist.NewLease(),
+		Now: later, Until: later.Add(persist.LeaseTTL)}); !errors.Is(err, persist.ErrNotFound) {
+		t.Fatalf("claim after deletion: %v, want ErrNotFound", err)
+	}
+}
+
 // udg_world can do what a world needs and nothing else.
 func TestTheWorldRoleIsRestricted(t *testing.T) {
 	db := testDBs(t)

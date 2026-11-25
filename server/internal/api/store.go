@@ -82,6 +82,8 @@ var (
 	ErrNameTaken     = errors.New("store: name taken")
 	ErrOnline        = errors.New("store: character is online")
 	ErrRenameTooSoon = errors.New("store: renamed too recently")
+	// ErrAccountDeleted: the account is on the deleted-accounts list, so nothing new is made for it.
+	ErrAccountDeleted = errors.New("store: account deleted")
 )
 
 // RenameTooSoonError says when the character may be renamed again. It matches ErrRenameTooSoon.
@@ -102,6 +104,13 @@ type Store interface {
 	Ping(ctx context.Context) error
 	// AccountDeleted reports whether the platform told us the account was deleted.
 	AccountDeleted(ctx context.Context, accountID string) (bool, error)
+	// DeleteAccount is the deletion hook's work, in one step: it removes every character of the
+	// account for good (soft-deleted ones too, online ones too), with their names (current and
+	// held), skills and everything else that hangs off a character, and records the account as
+	// deleted. It's idempotent, and fine for an account it never saw. It returns how many
+	// characters it removed. A CreateCharacter racing it either finishes first (and is removed)
+	// or fails with ErrAccountDeleted.
+	DeleteAccount(ctx context.Context, accountID string, now time.Time) (int, error)
 	// RecordDeletedAccount adds the account to the deleted-accounts list (idempotent). The deletion
 	// hook (a later M1 task) calls it and also removes the account's characters.
 	RecordDeletedAccount(ctx context.Context, accountID string, now time.Time) error
@@ -112,7 +121,7 @@ type Store interface {
 	// Character is one of the account's live characters, or ErrNotFound.
 	Character(ctx context.Context, accountID, id string) (Character, error)
 	// CreateCharacter makes a character in an empty slot (1..Slots) with a free name. The name must
-	// already have passed the name rules. ErrSlotUsed, ErrNameTaken.
+	// already have passed the name rules. ErrSlotUsed, ErrNameTaken, ErrAccountDeleted.
 	CreateCharacter(ctx context.Context, accountID string, slot int, name string, look Appearance, now time.Time) (Character, error)
 	// RenameCharacter renames a character if it hasn't been renamed within RenameGap and the new
 	// name is free (or is one this character holds). The old name is held for NameHold.

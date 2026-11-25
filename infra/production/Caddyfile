@@ -50,6 +50,13 @@
 
 	# The backend API (docs/architecture/backend.md). It rate-limits by client IP, which Caddy
 	# works out from nginx's X-Forwarded-For (trusted_proxies above) and passes on as X-Real-IP.
+	# The API's internal routes (the deletion hook) are on another port of the api container that
+	# only the platform calls. They're never proxied: this answers 404 even if someone adds a
+	# folder called "internal" to the landing page. server/internal/api/routing_test.go checks it.
+	handle /internal/* {
+		respond 404
+	}
+
 	handle /api/* {
 		reverse_proxy api:3000 {
 			header_up X-Real-IP {client_ip}

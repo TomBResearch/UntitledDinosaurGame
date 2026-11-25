@@ -40,6 +40,10 @@ To delete a character, type their name to confirm. **This can't be undone.** The
 
 You can't rename or delete a character while they're in a world.
 
+## Deleting your account
+
+Your Untitled Games account is deleted on the untitledgames.co.uk website, not in the game. Deleting it **deletes all your characters in this game at once, for good**, even one that's in a world at the time (it’s logged out within 20 seconds). Their names are free for anyone to use straight away.
+
 ## Playing
 
 Only one of your characters can be in a world at a time. Your character is the same on every world: see [Worlds and Premium](worlds-and-premium.md).
