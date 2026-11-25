@@ -17,6 +17,6 @@ Each significant technical choice gets a short record: the context, the decision
 | [0009](0009-fast-ci.md) | A fast CI lane on every push; slow tests nightly | Accepted |
 | [0010](0010-hosting-shared-server.md) | Host on the shared project server as a separate stack | Accepted |
 | [0011](0011-content-as-json-data.md) | Game content as JSON in `data/`, with a content hash | Accepted |
-| [0013](0013-region-streaming-web-threads.md) | Stream region chunks on the single-threaded web build; no cross-origin isolation | Proposed |
+| [0013](0013-region-streaming-web-threads.md) | Stream region chunks on the single-threaded web build; no cross-origin isolation | Accepted |
 
 Template: [0000-template.md](0000-template.md)

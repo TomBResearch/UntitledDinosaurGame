@@ -1,6 +1,6 @@
 # 0013: Stream region chunks on the single-threaded web build; no cross-origin isolation
 
-**Status:** Proposed (2026-11-25), for the owner to approve. Measured with real drawing in Chromium (headless Chrome on the GPU) and Safari, on desktop, and in a throttled browser. Only the 2020 integrated-GPU target is still unmeasured (see "Still to measure").
+**Status:** Accepted (2026-11-25, approved by the owner). Measured with real drawing in Chromium (headless Chrome on the GPU) and Safari, on desktop, and in a throttled browser. Only the 2020 integrated-GPU target is still unmeasured (see "Still to measure").
 
 ## Context
 
