@@ -1,11 +1,60 @@
 # The game's stack on the project server (/opt/udg, compose project "udg").
 # docs/operations/hosting.md and docs/operations/deploy.md. Deployed by tools/deploy.sh.
 #
-# M0: one world and Caddy. Postgres and the backend API join in M1, with platform login.
-# /opt/udg/.env (mode 600, never in git) is made by tools/set-passwords.sh.
+# M1: Postgres, the backend API (udg-api), world 1 and Caddy. World 2 (premium only) comes with the
+# world select task.
+# /opt/udg/.env (mode 600, never in git) is made by tools/set-passwords.sh and tools/set-secrets.sh.
 name: udg
 
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: udg
+      POSTGRES_DB: udg
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run tools/set-secrets.sh}
+    # Small settings for the shared 2 GB server (docs/operations/hosting.md, memory budget).
+    command: ["postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=30"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "udg", "-d", "udg"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    mem_limit: 160m
+    restart: unless-stopped
+
+  # The backend API (docs/architecture/backend.md). It applies migrations when it starts. It's also
+  # on the racing stack's network, to reach the account platform (accounts:3100), and so the
+  # platform can reach its deletion hook (a later M1 task).
+  api:
+    image: udg-server:prod
+    container_name: udg-api
+    entrypoint: ["/app/api"]
+    command:
+      - -addr=0.0.0.0:3000
+      - -data=/app/data
+      - -platform=http://accounts:3100
+      - -jwks=http://accounts:3100/.well-known/jwks.json
+      - -public-ws=wss://${UDG_DOMAIN:?set in .env}
+      - -world-status=http://world-{id}:8090/status
+      - -trust-proxy
+    environment:
+      # POSTGRES_PASSWORD is hex (tools/set-secrets.sh), so it's safe inside a URL.
+      DATABASE_URL: postgres://udg:${POSTGRES_PASSWORD:?run tools/set-secrets.sh}@postgres:5432/udg?sslmode=disable
+      WORLD_TICKET_KEY: ${WORLD_TICKET_KEY:?run tools/set-secrets.sh}
+      DINOSAUR_SERVICE_KEY: ${DINOSAUR_SERVICE_KEY:?the same value as in /opt/urg/.env; see docs/operations/deploy.md}
+    networks:
+      - default
+      - urg
+    read_only: true
+    mem_limit: 128m
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   world-1:
     image: udg-server:prod
     # Dev tickets are on only because the whole game sits behind the playtest password and
@@ -16,6 +65,9 @@ services:
       - -data=/app/data
       - -dev-tickets
       - -origins=${UDG_DOMAIN:?set in .env}
+    environment:
+      # Join tickets from the API. Dev tickets stay on too, until the client logs in (a later M1 task).
+      WORLD_TICKET_KEY: ${WORLD_TICKET_KEY:?run tools/set-secrets.sh}
     read_only: true
     mem_limit: 256m
     # SIGTERM: the server kicks everyone with "shutdown" and stops within 15 s.
@@ -38,8 +90,17 @@ services:
     mem_limit: 128m
     depends_on:
       - world-1
+      - api
     restart: unless-stopped
 
+networks:
+  # The racing stack's network (compose project urg), where the account platform runs.
+  urg:
+    name: urg_default
+    external: true
+
 volumes:
+  # Named udg_pgdata on the server (the compose project's prefix).
+  pgdata:
   caddy_data:
   caddy_config:

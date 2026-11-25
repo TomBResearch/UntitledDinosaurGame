@@ -18,13 +18,13 @@ Folders marked *(planned)* don't exist yet. They're created by the M0 task that 
 | `docs/` | Internal design, architecture, decisions, roadmap. Start at [docs/README.md](docs/README.md) | Private |
 | `web/` | The landing and login page: static HTML, CSS and JS modules with generated SVG art. See [web/README.md](web/README.md). | Private |
 | `client/` | Godot project: the web client. No game rules live here. GUT tests in `client/tests/`. | Private |
-| `server/` | Go module: `cmd/world` (world server), `cmd/dataval`, `cmd/protogen` and `cmd/sitegen` now, later `cmd/api` (backend API). Packages in `internal/…`: `region` (the simulation), `world` (WebSocket sessions), `navmesh`, `proto`, `content`, `sitegen`. | Private |
+| `server/` | Go module: `cmd/world` (world server), `cmd/api` (backend API), `cmd/dataval`, `cmd/protogen` and `cmd/sitegen`. Packages in `internal/…`: `region` (the simulation), `world` (WebSocket sessions), `api` (HTTP routes and the store; `pgstore` is Postgres), `platform` (tokens and the service API), `ticket` (join tickets), `names`, `navmesh`, `proto`, `content`, `sitegen`. Database migrations in `migrations/`. | Private |
 | `data/` | Game content as JSON: items, creatures, drop tables, skills, recipes, quests, XP curve. One source of truth for client and server. | Private |
 | `site/` | Theme for the built wiki and docs site: `page.html` and `site.css` ([ADR 0012](docs/decisions/0012-static-site-generator.md)) | Private |
 | `protocol/` | Network message schema (`messages.schema`) and shared test vectors. Go and GDScript codecs are generated from it. | Private |
 | `assets-src/` *(planned)* | Blender sources and licences (Git LFS) | Private |
-| `infra/` | `production/`: the live stack's Compose file, Caddyfile and nginx file. `server/`: the server image. | Private |
-| `tools/` | Scripts: `check.sh` (fast check), `slow-tests.sh`, `check-links.py`, `build-site.sh`, `export-regions.sh`, `deploy.sh`, `set-passwords.sh`. | Private |
+| `infra/` | `production/`: the live stack's Compose file, Caddyfile and nginx file. `server/`: the server image. `dev/`: local Postgres for the API. | Private |
+| `tools/` | Scripts: `check.sh` (fast check), `slow-tests.sh`, `check-links.py`, `build-site.sh`, `export-regions.sh`, `deploy.sh`, `set-passwords.sh`, `set-secrets.sh`. | Private |
 
 The **shared account platform** (login, roles, Premium, bans, friends) is a separate service in the owner's repo `TomBResearch/UntitledAccountSystem`, live at `accounts.untitledgames.co.uk`. What this game uses from it is in [docs/architecture/accounts.md](docs/architecture/accounts.md).
 
@@ -48,12 +48,13 @@ The **shared account platform** (login, roles, Premium, bans, friends) is a sepa
 | Regenerate protocol codecs (after editing `protocol/messages.schema`) | `tools/protogen.sh`. See [protocol/README.md](protocol/README.md). |
 | Docs link check | `python3 tools/check-links.py` |
 | Build the wiki and docs site (`build/site/wiki/` is published pages only, `build/site/dev/` is all docs plus a wiki preview). Fails if a published wiki page links into `docs/` or to a draft. | `tools/build-site.sh` (add `--serve` to view it at `http://localhost:8070/wiki/` and `/dev/`). See [site.md](docs/operations/site.md). |
-| Run the world server locally (dev tickets on; clients connect to `ws://127.0.0.1:8090/w/dev` with ticket `dev:<name>`) | `cd server && go run ./cmd/world -dev-tickets`. Flags: `-addr`, `-world`, `-data`, `-spawn-region`, `-origins`. Ctrl-C or SIGTERM shuts it down cleanly. See [networking.md](docs/architecture/networking.md#dev-tickets). |
+| Run the world server locally (dev tickets on; clients connect to `ws://127.0.0.1:8090/w/dev` with ticket `dev:<name>`) | `cd server && go run ./cmd/world -dev-tickets`. Flags: `-addr`, `-world`, `-data`, `-spawn-region`, `-origins`, `-premium-only`. With `WORLD_TICKET_KEY` set it also accepts the API's join tickets ([networking.md](docs/architecture/networking.md#join-tickets)). Ctrl-C or SIGTERM shuts it down cleanly. See [networking.md](docs/architecture/networking.md#dev-tickets). |
+| Run the backend API locally ([backend.md](docs/architecture/backend.md#running-it-locally)) | Once: `docker compose -f infra/dev/docker-compose.yml up -d` (Postgres on `127.0.0.1:5433`) and `cp infra/dev/api.env.example infra/dev/api.env`, then fill it in. Then: `cd server && set -a && . ../infra/dev/api.env && set +a && go run ./cmd/api` (listens on `127.0.0.1:3010`). For its join tickets, run the world with the same `WORLD_TICKET_KEY` and `-world=1`. |
 | Run the client against a local world server (start the server first, as above) | Desktop: `/Applications/Godot.app/Contents/MacOS/Godot --path client -- --name=Grug` (run it twice with different names to see each other). Web: `mkdir -p build/web && Godot --headless --path client --export-release Web ../build/web/index.html`, serve `build/web` (for example `python3 -m http.server 8060 -d build/web`) and open `http://localhost:8060/?name=Grug`. Options: `server`, `demo`, `lag=150`, `shot`, `quit` ([client.md](docs/architecture/client.md#launch-options-and-dev-aids)). |
-| Slow tests (race detector, protocol fuzzing, the pathfinding benchmark and the 50-bot walk test now; soak and builds later) | `tools/slow-tests.sh`. Runs nightly and on demand, never on every push. |
+| Slow tests (race detector, protocol fuzzing, the pathfinding benchmark, the 50-bot walk test and the API store against Postgres now; soak and builds later) | `tools/slow-tests.sh` (needs Docker for Postgres, or `UDG_TEST_DATABASE_URL`). Runs nightly and on demand, never on every push. |
 | Install staticcheck locally (optional; CI always runs it) | `go install honnef.co/go/tools/cmd/staticcheck@v0.8.2` |
 | Export regions to `data/regions/` (after editing a region scene; `--bake` re-bakes the navmesh first) | `tools/export-regions.sh [--bake] [region_id ...]` |
-| Deploy to `https://dinosaur.untitledgames.co.uk` (playtest password; see [deploy.md](docs/operations/deploy.md)) | `tools/deploy.sh`. Passwords: `tools/set-passwords.sh`. |
+| Deploy to `https://dinosaur.untitledgames.co.uk` (playtest password; see [deploy.md](docs/operations/deploy.md)) | `tools/deploy.sh`. Passwords: `tools/set-passwords.sh`. M1 secrets (once): `tools/set-secrets.sh`. |
 
 **MCP:** `.mcp.json` (Godot and Blender MCP servers) is local to the owner's Mac and ignored by git. Copy it from Untitled Racing Game if it's missing.
 

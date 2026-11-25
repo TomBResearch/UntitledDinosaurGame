@@ -3,6 +3,9 @@
 //
 //	go run ./cmd/world -dev-tickets     # local development: ws://127.0.0.1:8090/w/dev
 //
+// Join tickets from the backend API are accepted when WORLD_TICKET_KEY is set (the same key as the
+// API's), for this world only (-world). -premium-only refuses accounts without Premium.
+//
 // SIGTERM (or Ctrl-C) shuts it down cleanly: no new connections, every player is sent kick(shutdown)
 // and closed, then the regions stop.
 package main
@@ -24,6 +27,7 @@ import (
 
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/content"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/region"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/ticket"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/world"
 )
 
@@ -40,6 +44,7 @@ func run() error {
 	dataDir := flag.String("data", "../data", "the data/ directory")
 	spawnRegion := flag.String("spawn-region", "test_greybox", "region players join")
 	devTickets := flag.Bool("dev-tickets", false, `accept "dev:<name>" join tickets (development only)`)
+	premiumOnly := flag.Bool("premium-only", false, "only accounts with Premium (and staff) may join")
 	origins := flag.String("origins", "localhost:*,127.0.0.1:*",
 		"comma-separated browser origins allowed to connect besides the server's own host")
 	flag.Parse()
@@ -71,6 +76,14 @@ func run() error {
 
 	wcfg := world.DefaultConfig(*worldID, data.Hash)
 	wcfg.DevTickets = *devTickets
+	wcfg.PremiumOnly = *premiumOnly
+	if env := os.Getenv("WORLD_TICKET_KEY"); env != "" {
+		if wcfg.TicketKey, err = ticket.ParseKey(env); err != nil {
+			return err
+		}
+	} else if !*devTickets {
+		log.Warn("WORLD_TICKET_KEY is not set and dev tickets are off: nobody can join")
+	}
 	for _, o := range strings.Split(*origins, ",") {
 		if o = strings.TrimSpace(o); o != "" {
 			wcfg.OriginPatterns = append(wcfg.OriginPatterns, o)
@@ -98,7 +111,8 @@ func run() error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- httpSrv.Serve(ln) }()
 	log.Info("world server listening", "world", *worldID, "url", "ws://"+ln.Addr().String()+"/w/"+*worldID,
-		"regions", len(regions), "spawn_region", spawn.ID(), "tick_hz", hz, "content_hash", data.Hash[:12])
+		"regions", len(regions), "spawn_region", spawn.ID(), "tick_hz", hz, "content_hash", data.Hash[:12],
+		"join_tickets", wcfg.TicketKey != nil, "premium_only", wcfg.PremiumOnly)
 
 	sigs, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stopSignals()

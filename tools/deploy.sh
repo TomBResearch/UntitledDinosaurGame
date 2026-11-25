@@ -21,6 +21,13 @@ ssh "$HOST" 'test -f /opt/udg/.env' || {
   echo "No /opt/udg/.env on $HOST: run tools/set-passwords.sh first." >&2
   exit 1
 }
+# M1 secrets (docs/operations/deploy.md). Only the names are checked; the values never leave the server.
+missing="$(ssh "$HOST" 'for k in POSTGRES_PASSWORD WORLD_TICKET_KEY DINOSAUR_SERVICE_KEY; do grep -q "^$k=." /opt/udg/.env || printf "%s " "$k"; done')"
+if [[ -n "$missing" ]]; then
+  echo "Missing from /opt/udg/.env on $HOST: $missing" >&2
+  echo "Run tools/set-secrets.sh (it makes POSTGRES_PASSWORD and WORLD_TICKET_KEY, and tells you where DINOSAUR_SERVICE_KEY comes from)." >&2
+  exit 1
+fi
 
 if [[ "${SKIP_BUILD:-}" != 1 ]]; then
   echo "== Checking content and building the web client"
@@ -41,7 +48,9 @@ if [[ "${SKIP_BUILD:-}" != 1 ]]; then
   echo "== Building the server image (linux/arm64)"
   stage="$BUILD/server-image"
   rm -rf "$stage" && mkdir -p "$stage/data"
+  version="$(git -C "$REPO_ROOT" describe --always --dirty)"
   (cd "$REPO_ROOT/server" && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o "$stage/world" ./cmd/world)
+  (cd "$REPO_ROOT/server" && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X main.version=$version" -o "$stage/api" ./cmd/api)
   # Only what the server reads: content JSON and region files.
   (cd "$REPO_ROOT/data" && find . -name '*.json' -print0 | cpio -0 -pdm --quiet "$stage/data")
   docker build -q --platform linux/arm64 -f "$REPO_ROOT/infra/server/Dockerfile" -t "$IMAGE" "$stage" >/dev/null
@@ -96,6 +105,7 @@ game="$(code "https://$DOMAIN/play/")"
 wiki="$(code "https://$DOMAIN/wiki/")"
 dev="$(code "https://$DOMAIN/dev/")"
 world="$(code "https://$DOMAIN/w/1")"
-echo "landing $landing (want 200), game $game (want 401), wiki $wiki (want 200), dev $dev (want 401), world without cookie $world (want 403)"
-[[ "$landing" == 200 && "$game" == 401 && "$wiki" == 200 && "$dev" == 401 && "$world" == 403 ]] || { echo "Something answered unexpectedly." >&2; exit 1; }
+api="$(code "https://$DOMAIN/api/health")"
+echo "landing $landing (want 200), game $game (want 401), wiki $wiki (want 200), dev $dev (want 401), world without cookie $world (want 403), api $api (want 200)"
+[[ "$landing" == 200 && "$game" == 401 && "$wiki" == 200 && "$dev" == 401 && "$world" == 403 && "$api" == 200 ]] || { echo "Something answered unexpectedly." >&2; exit 1; }
 echo "Live: https://$DOMAIN"

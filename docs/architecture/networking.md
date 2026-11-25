@@ -20,7 +20,7 @@ See [ADR 0002](../decisions/0002-free-movement-server-paths.md) for the movement
 2. The server checks, in order:
    - `protocol_hash` (before decoding the rest, see [Protocol version](#wire-format)): a mismatch gets `kick(refresh)`.
    - `content_hash` against the server's `data/` hash (the client's `client/data/content_hash.txt`): a mismatch gets `kick(refresh)`.
-   - `ticket` (see [Dev tickets](#dev-tickets)): refused gets `kick(bad_ticket)`.
+   - `ticket` (see [Join tickets](#join-tickets)): refused gets `kick(bad_ticket)`.
 3. Accepted: the player joins the spawn region. The first frame back holds `welcome`, then `entity_enter` for **the player itself**, then `entity_enter` for everything in view.
 4. After that, intents and pings flow until either side closes.
 
@@ -37,15 +37,33 @@ Without a `kick`, the connection was dropped: a malformed frame (status 1002), a
 
 **Slow clients never hold up the tick.** Each session has a queue of 64 frames (3.2 s). The region hands a frame over without waiting; if the queue is full, the player is removed from the region and the connection dropped. A single frame that can't be written within 10 s also drops it.
 
+### Join tickets
+
+A player gets a join ticket from the backend API (`POST /api/join`) and sends it as `hello.ticket`. The format, and how the API decides to issue one, are in [backend.md](backend.md#join-tickets).
+
+- The world accepts tickets when **`WORLD_TICKET_KEY`** is set in its environment (the same value as the API's). Without it, every ticket except a dev ticket (below) is refused.
+- A ticket is accepted once only, and only if:
+  - its HMAC is right (anything else is forged);
+  - it hasn't expired (30 s), and its expiry isn't more than 60 s away;
+  - its `worldId` is this world (`-world`);
+  - its nonce hasn't been used before. The world remembers used nonces until their tickets expire.
+  - With **`-premium-only`**, it says `premium` (Premium or staff).
+- The ticket's `name` becomes the player's display name, and its `role` the chat badge.
+- Each refusal is logged with the reason (never the ticket itself). The player is only told `kick(bad_ticket)`.
+- Not yet: loading the character's saved region and position, and the online lease. Those come with persistence (a later M1 task). Until then everyone spawns at a `player_spawns` point of `test_greybox` (`-spawn-region`), as with dev tickets.
+- Code: `server/internal/ticket` (checked by `ticket.Guard`), called from `server/internal/world`. Tests: forged, expired, reused, wrong world and premium worlds in `internal/ticket/ticket_test.go` and `internal/world/ticket_test.go`.
+
+`GET /status` on the world server answers `{world, players}` for the API's world list. Caddy doesn't route it, so it's only reachable inside Docker.
+
 ### Dev tickets
 
-Until real join tickets arrive with the backend in M1, a development world server lets anyone in by name:
+For local development, and for the live world until the client logs in with the platform (a later M1 task), a world server can also let anyone in by name. This works exactly as in M0, alongside real tickets:
 
-- Start the server with **`-dev-tickets`**: `cd server && go run ./cmd/world -dev-tickets`. It logs a warning at startup. Never use it on a public server, except the live M0 world, which sits behind the playtest gate until M1 login ([ADR 0014](../decisions/0014-playtest-gate.md)).
+- Start the server with **`-dev-tickets`**: `cd server && go run ./cmd/world -dev-tickets`. It logs a warning at startup. Never use it on a public server, except the live world, which sits behind the playtest gate until the client logs in ([ADR 0014](../decisions/0014-playtest-gate.md)).
 - It listens on **`127.0.0.1:8090`** (`-addr`) and serves world **`dev`** (`-world`), so the client connects to **`ws://127.0.0.1:8090/w/dev`**.
-- The client sends `hello.ticket = "dev:<name>"`. `<name>` follows the character name rules ([backend.md](backend.md)): 3–12 characters, letters and digits with single spaces between words, no space at either end. Dev names are plain ASCII (`A–Z`, `a–z`, `0–9`) and aren't filtered or unique: two players can both be `Ugg`.
-- The name is the player's display name. Everyone spawns at a `player_spawns` point of `test_greybox` (`-spawn-region`), in turn.
-- Without `-dev-tickets`, every `dev:` ticket is refused, and so is anything else until M1: every `hello` gets `kick(bad_ticket)`.
+- The client sends `hello.ticket = "dev:<name>"`. `<name>` must have the shape of a character name ([backend.md](backend.md#routes)): 3–12 characters, ASCII letters and digits with single spaces between words, no space at either end. Dev names aren't filtered or unique: two players can both be `Ugg`. Dev players have the normal role.
+- Everyone spawns at a `player_spawns` point of `test_greybox` (`-spawn-region`), in turn.
+- Without `-dev-tickets`, every `dev:` ticket is refused.
 - `hello.content_hash` must match too, so run `tools/check.sh` (or `dataval -emit-client`) after changing `data/`, and restart the server.
 
 ### Rate limits

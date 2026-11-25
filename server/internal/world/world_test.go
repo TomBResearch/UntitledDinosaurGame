@@ -237,14 +237,14 @@ func TestTicketsAreRefused(t *testing.T) {
 		dev    bool
 		ticket string
 	}{
-		"dev ticket without -dev-tickets": {false, "dev:Ugg"},
-		"real ticket (not until M1)":      {true, "eyJhbGciOi.payload.sig"},
-		"empty ticket":                    {true, ""},
-		"name too short":                  {true, "dev:Ug"},
-		"name too long":                   {true, "dev:Ugg the Mighty"},
-		"double space":                    {true, "dev:Ugg  Two"},
-		"leading space":                   {true, "dev: Ugg"},
-		"symbol":                          {true, "dev:Ugg!"},
+		"dev ticket without -dev-tickets":  {false, "dev:Ugg"},
+		"real ticket without a ticket key": {true, "eyJhbGciOi.c2ln"},
+		"empty ticket":                     {true, ""},
+		"name too short":                   {true, "dev:Ug"},
+		"name too long":                    {true, "dev:Ugg the Mighty"},
+		"double space":                     {true, "dev:Ugg  Two"},
+		"leading space":                    {true, "dev: Ugg"},
+		"symbol":                           {true, "dev:Ugg!"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -374,17 +374,5 @@ func TestSessionQueueIsBounded(t *testing.T) {
 	s.Disconnect(region.DisconnectTooSlow)
 	if s.mode != endAbrupt {
 		t.Fatalf("too slow should drop the connection abruptly, got mode %d", s.mode)
-	}
-}
-
-func TestValidName(t *testing.T) {
-	for name, want := range map[string]bool{
-		"Ugg": true, "Grok Two": true, "abc123def456": true, "A1 B2 C3": true,
-		"Ug": false, "abcdefghijklm": false, " Ugg": false, "Ugg ": false, "Ugg  Two": false,
-		"Ugg_": false, "Úgg": false, "": false,
-	} {
-		if got := ValidName(name); got != want {
-			t.Errorf("ValidName(%q) = %v, want %v", name, got, want)
-		}
 	}
 }
