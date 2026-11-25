@@ -1,12 +1,34 @@
-# Docs-only lane (ADR 0009): docs and wiki changes skip the fast lane and only check links.
+# Docs lane (ADR 0009, ADR 0012): docs and wiki changes skip the fast lane. They check links and
+# build the site, which fails if a published wiki page links into docs/ or to a draft.
+# Changes to the generator or theme run it too.
 name: Docs
 
 on:
   push:
     branches: [main]
-    paths: ["docs/**", "wiki/**", "**.md"]
+    paths:
+      - "docs/**"
+      - "wiki/**"
+      - "**.md"
+      - "site/**"
+      - "server/cmd/sitegen/**"
+      - "server/internal/sitegen/**"
+      - "tools/build-site.sh"
+      - ".github/workflows/docs.yml"
   pull_request:
-    paths: ["docs/**", "wiki/**", "**.md"]
+    paths:
+      - "docs/**"
+      - "wiki/**"
+      - "**.md"
+      - "site/**"
+      - "server/cmd/sitegen/**"
+      - "server/internal/sitegen/**"
+      - "tools/build-site.sh"
+      - ".github/workflows/docs.yml"
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   links:
@@ -16,3 +38,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 tools/check-links.py
+
+  site:
+    name: Site build (leak guard)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.mod
+      - run: tools/build-site.sh
