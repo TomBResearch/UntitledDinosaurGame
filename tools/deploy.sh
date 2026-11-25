@@ -57,8 +57,11 @@ rsync -q "$REPO_ROOT/infra/production/docker-compose.yml" "$REPO_ROOT/infra/prod
 rsync -q "$REPO_ROOT/infra/production/nginx/dinosaur.conf.template" "$REPO_ROOT/infra/production/setup-nginx.sh" "$HOST:/opt/udg/nginx/"
 rsync -qa --delete "$BUILD/web/" "$HOST:/opt/udg/web/"
 rsync -qa --delete "$BUILD/site/" "$HOST:/opt/udg/site/"
-# The landing page is plain static files: copied as they are, without its README.
-rsync -qa --delete --exclude README.md "$REPO_ROOT/web/" "$HOST:/opt/udg/landing/"
+# The landing page: plain static files, stamped with a content version so browsers never mix
+# old and new files (Cloudflare tells browsers to cache them for hours).
+landing_version="$(python3 "$REPO_ROOT/tools/stage-landing.py" "$REPO_ROOT/web" "$BUILD/landing")"
+rsync -qa --delete "$BUILD/landing/" "$HOST:/opt/udg/landing/"
+echo "Landing page version $landing_version"
 CADDY_AFTER="$(ssh "$HOST" 'md5sum /opt/udg/Caddyfile | cut -d" " -f1')"
 
 echo "== Starting"

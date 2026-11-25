@@ -2,7 +2,7 @@
 
 The page players see first: the title, an animated prehistoric valley, and the "Base Camp" card for logging in, creating an account, resetting a password and, once signed in, playing and managing the account. It replaces the single-file mock-up the owner made at game.tomblundell.co.uk, keeping its look (jungle greens, bark browns, bone and amber, the cartoon title and the central card) with much more detailed art.
 
-Plain static files: no build step, no framework, no npm. Live at **`https://dinosaur.untitledgames.co.uk/`**, where `tools/deploy.sh` copies the folder as it is; the game is at `/play/` ([deploy.md](../docs/operations/deploy.md)).
+Plain static files: no build step, no framework, no npm. Live at **`https://dinosaur.untitledgames.co.uk/`**. `tools/deploy.sh` copies the folder there, adding `?v=<hash>` to every file reference (`tools/stage-landing.py`), so a deploy is never mixed with old cached files; the game is at `/play/` ([deploy.md](../docs/operations/deploy.md)).
 
 ```bash
 python3 -m http.server 8075 -d web

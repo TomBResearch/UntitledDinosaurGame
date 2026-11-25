@@ -27,6 +27,7 @@ On a deployed page the client connects to its own host's `/w/1` (`wss://` on htt
 | [`infra/production/nginx/dinosaur.conf.template`](../../infra/production/nginx/dinosaur.conf.template), [`setup-nginx.sh`](../../infra/production/setup-nginx.sh) | The host nginx file and the script that installs it |
 | [`tools/set-passwords.sh`](../../tools/set-passwords.sh) | Writes the password hashes and cookie secret to `/opt/udg/.env` |
 | [`tools/deploy.sh`](../../tools/deploy.sh) | Builds, copies, starts and checks |
+| [`tools/stage-landing.py`](../../tools/stage-landing.py) | Copies `web/` to `build/landing/` with version stamps on every file reference |
 
 ## First time
 
@@ -63,7 +64,7 @@ tools/deploy.sh
 ```
 
 1. Validates `data/`, exports the web client and precompresses it (Brotli and gzip), builds the wiki and docs site, cross-compiles the world server for `linux/arm64` and builds the image.
-2. Copies the image (`docker save | ssh docker load`), the stack files, `build/web/` to `/opt/udg/web/`, `build/site/` to `/opt/udg/site/` and `web/` (the landing page, as it is) to `/opt/udg/landing/`.
+2. Copies the image (`docker save | ssh docker load`), the stack files, `build/web/` to `/opt/udg/web/`, `build/site/` to `/opt/udg/site/` and `web/` (the landing page) to `/opt/udg/landing/`, through `tools/stage-landing.py`. That script stamps every file reference with `?v=<hash of web/>`, because Cloudflare overrides our `Cache-Control: no-cache` on static files and tells browsers to keep them for 4 hours. Without the stamp, a browser could mix a new page with an old script.
 3. Runs `docker compose up -d`, recreating Caddy if the Caddyfile changed, and removes old `udg-server` images (only those labelled `project=udg`).
 4. Checks `/healthz` on the server and from outside, and that everything answers as it should: the landing page 200, the game (`/play/`) 401, the wiki 200, `/dev/` 401 and the world without the cookie 403.
 
