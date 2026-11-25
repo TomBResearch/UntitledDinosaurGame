@@ -15,6 +15,7 @@ import (
 
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/content"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/navmesh"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/persist"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/proto"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/region"
 )
@@ -30,6 +31,12 @@ type testWorld struct {
 	srv  *Server
 	http *httptest.Server
 	data *content.Content
+	// regionDone is closed once the region has stopped (and saved everyone still in it).
+	regionDone chan struct{}
+	stopRegion context.CancelFunc
+	// For ticket worlds (ticketWorld).
+	store *persist.MemStore
+	saver *persist.Saver
 }
 
 func startWorld(t *testing.T, tweak func(*Config)) *testWorld {
@@ -44,7 +51,16 @@ func startWorld(t *testing.T, tweak func(*Config)) *testWorld {
 			rf = r
 		}
 	}
-	reg, err := region.New(rf, region.ConfigFor(data))
+	cfg := DefaultConfig("dev", data.Hash)
+	cfg.DevTickets = true
+	if tweak != nil {
+		tweak(&cfg)
+	}
+	rcfg := region.ConfigFor(data)
+	if cfg.Saver != nil {
+		rcfg.Saver = cfg.Saver
+	}
+	reg, err := region.New(rf, rcfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,12 +68,7 @@ func startWorld(t *testing.T, tweak func(*Config)) *testWorld {
 	ticking := make(chan struct{})
 	go func() { reg.Run(ctx, time.Millisecond); close(ticking) }()
 
-	cfg := DefaultConfig("dev", data.Hash)
-	cfg.DevTickets = true
-	if tweak != nil {
-		tweak(&cfg)
-	}
-	srv := New(cfg, reg, ctx.Done(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv := New(cfg, []*region.Region{reg}, reg, ctx.Done(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	hs := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -69,7 +80,7 @@ func startWorld(t *testing.T, tweak func(*Config)) *testWorld {
 		stop()
 		<-ticking
 	})
-	return &testWorld{t: t, srv: srv, http: hs, data: data}
+	return &testWorld{t: t, srv: srv, http: hs, data: data, regionDone: ticking, stopRegion: stop}
 }
 
 func testCtx(t *testing.T) context.Context {

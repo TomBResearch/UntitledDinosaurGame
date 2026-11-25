@@ -14,6 +14,7 @@ Welcome, caveman. This wiki explains how the world works: skills, items, creatur
 
 - [Controls](controls.md): walking and the camera
 - [Chat](chat.md): talking to players near you
+- [Logging out](logging-out.md): saving, the idle logout and world restarts
 - [Skills](skills.md): everything you can train
 - [Levels and XP](levels-and-xp.md): how levelling works, and the full XP table
 - [Worlds and Premium](worlds-and-premium.md): picking a world, and what Premium means

@@ -22,10 +22,10 @@ ssh "$HOST" 'test -f /opt/udg/.env' || {
   exit 1
 }
 # M1 secrets (docs/operations/deploy.md). Only the names are checked; the values never leave the server.
-missing="$(ssh "$HOST" 'for k in POSTGRES_PASSWORD WORLD_TICKET_KEY DINOSAUR_SERVICE_KEY; do grep -q "^$k=." /opt/udg/.env || printf "%s " "$k"; done')"
+missing="$(ssh "$HOST" 'for k in POSTGRES_PASSWORD WORLD_TICKET_KEY WORLD_DB_PASSWORD DINOSAUR_SERVICE_KEY; do grep -q "^$k=." /opt/udg/.env || printf "%s " "$k"; done')"
 if [[ -n "$missing" ]]; then
   echo "Missing from /opt/udg/.env on $HOST: $missing" >&2
-  echo "Run tools/set-secrets.sh (it makes POSTGRES_PASSWORD and WORLD_TICKET_KEY, and tells you where DINOSAUR_SERVICE_KEY comes from)." >&2
+  echo "Run tools/set-secrets.sh (it makes POSTGRES_PASSWORD, WORLD_TICKET_KEY and WORLD_DB_PASSWORD, and tells you where DINOSAUR_SERVICE_KEY comes from)." >&2
   exit 1
 fi
 

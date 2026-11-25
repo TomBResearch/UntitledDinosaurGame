@@ -20,7 +20,7 @@ awk '/^BenchmarkBots/ { for (i = 2; i <= NF; i++) if ($i == "p99-ns/tick") { fou
        printf "p99 tick: %.3f ms\n", p99 / 1e6; if (p99 + 0 > 2000000) { print "Over budget"; bad = 1 } } }
      END { if (!found) print "No bot benchmark ran"; exit bad || !found }' <<<"$bots"
 
-echo "== Backend API store against Postgres 17 (the same contract the fast check runs on the memory store)"
+echo "== Backend API and world stores against Postgres 17 (the same contracts the fast check runs in memory)"
 # Uses UDG_TEST_DATABASE_URL if set; otherwise starts a throwaway postgres:17-alpine in Docker.
 pg_container=""
 if [[ -z "${UDG_TEST_DATABASE_URL:-}" ]]; then
@@ -35,11 +35,12 @@ if [[ -z "${UDG_TEST_DATABASE_URL:-}" ]]; then
   port="$(docker port "$pg_container" 5432/tcp | head -n 1 | sed 's/.*://')"
   export UDG_TEST_DATABASE_URL="postgres://postgres:test@127.0.0.1:$port/udg_test?sslmode=disable"
 fi
-pg_out="$(cd "$REPO_ROOT/server" && go test -count=1 -v -run 'TestMigrations|TestPostgresContract' ./internal/api/pgstore/)" \
+pg_out="$(cd "$REPO_ROOT/server" && go test -count=1 -v ./internal/api/pgstore/ ./internal/persist/pgpersist/)" \
   || { echo "$pg_out"; exit 1; }
 grep -E '^(--- |ok|PASS)' <<<"$pg_out"
-# Without a database these tests skip; make sure they really ran.
-grep -q -- '--- PASS: TestPostgresContract ' <<<"$pg_out" || { echo "The Postgres contract didn't run"; exit 1; }
+# Without a database these tests skip; make sure they really ran (once for each package).
+[[ "$(grep -c -- '--- PASS: TestPostgresContract ' <<<"$pg_out")" == 2 ]] || { echo "A Postgres contract didn't run"; exit 1; }
+grep -q -- '--- PASS: TestTheWorldRoleIsRestricted ' <<<"$pg_out" || { echo "The world role test didn't run"; exit 1; }
 
 echo "== Protocol decoder fuzzing (60 s)"
 (cd "$REPO_ROOT/server" && go test -run '^$' -fuzz '^FuzzDecode$' -fuzztime "${PROTO_FUZZTIME:-60s}" ./internal/proto)

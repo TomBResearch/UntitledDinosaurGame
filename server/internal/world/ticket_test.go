@@ -2,11 +2,13 @@ package world
 
 import (
 	"bytes"
+	"context"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/persist"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/proto"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/ticket"
 )
@@ -19,22 +21,46 @@ var (
 	ticketNow = time.Unix(1_800_000_000, 0)
 )
 
+// The ticket's account and character (joinTicket's defaults), which the world's store knows.
+const (
+	ticketAccount   = "0b7c1e2a-2222-4000-8000-000000000001"
+	ticketCharacter = "0b7c1e2a-2222-4000-8000-0000000000c1"
+)
+
+// ticketWorld is a world that takes join tickets, saving to an in-memory store that has the default
+// ticket's character. Its saver runs for real (writes happen moments after they're queued); its clock
+// is fixed at ticketNow.
 func ticketWorld(t *testing.T, tweak func(*Config)) *testWorld {
-	return startWorld(t, func(c *Config) {
+	store := persist.NewMemStore()
+	store.AddCharacter(ticketAccount, ticketCharacter)
+	return ticketWorldWith(t, store, tweak)
+}
+
+func ticketWorldWith(t *testing.T, store *persist.MemStore, tweak func(*Config)) *testWorld {
+	saver := persist.NewSaver(persist.SaverConfig{Store: store, World: 1, Now: func() time.Time { return ticketNow }})
+	running, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { saver.Run(running); close(done) }()
+	t.Cleanup(func() { stop(); <-done }) // runs after the world's cleanup (LIFO)
+	w := startWorld(t, func(c *Config) {
 		c.WorldID = "1"
 		c.DevTickets = false
 		c.TicketKey = ticketKey
 		c.Now = func() time.Time { return ticketNow }
+		c.Saver = saver
 		if tweak != nil {
 			tweak(c)
 		}
 	})
+	saver.SetOnLost(w.srv.LostLease)
+	w.store, w.saver = store, saver
+	return w
 }
 
 func joinTicket(t *testing.T, key []byte, mod func(*ticket.Payload)) string {
 	t.Helper()
 	p := ticket.Payload{
-		AccountID: "0b7c1e2a-2222-4000-8000-000000000001", CharacterID: "0b7c1e2a-2222-4000-8000-0000000000c1",
+		AccountID: ticketAccount, CharacterID: ticketCharacter,
 		WorldID: "1", Name: "Grug", Role: "moderator", Premium: true,
 		Nonce: ticket.NewNonce(), Exp: ticketNow.Add(ticket.TTL).Unix(),
 	}
