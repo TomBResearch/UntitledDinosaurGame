@@ -6,7 +6,7 @@
 // seed so the valley is the same on every visit.
 
 import { rng, smooth, ridgePoints, hill, sway, bob, tuft, rock, cloud, conifer, cycad, treeFern, fernClump, INK } from "./svg.js";
-import { brachiosaurus, stegosaurus, pteranodon, birdV, dragonfly, nest, fossilSkeleton, ammonite, bone } from "./critters.js";
+import { brachiosaurus, stegosaurus, triceratops, pteranodon, birdV, dragonfly, nest, fossilSkeleton, ammonite, bone } from "./critters.js";
 
 const W = 1920, H = 1080;
 const at = (x, y, s, inner, extra = "") => `<g transform="translate(${x} ${y})${s !== 1 ? ` scale(${s})` : ""}"${extra}>${inner}</g>`;
@@ -285,10 +285,11 @@ export function buildScene() {
     + layer(0.18, farHills(rnd) + herd())
     + layer(0.3, `<g><animateTransform attributeName="transform" type="translate" values="-260 300;2200 220" dur="46s" repeatCount="indefinite"/>${`<g transform="scale(.9)">${pteranodon()}</g>`}</g>`)
     + layer(0.32, midHills(rnd) + midTrees(rnd)
-      + at(330, 916, 0.82, stegosaurus())
+      + at(215, 916, 0.82, stegosaurus())
+      + at(470, 916 - 166 * 0.95, 0.95, triceratops())
       + at(1660, 914, 0.86, brachiosaurus()))
     + layer(0.5, ground(rnd) + at(1560, 936, 0.85, nest())
-      + `<g><animateMotion path="M1440 800 C1500 760 1560 800 1520 840 C1480 880 1400 850 1440 800Z" dur="9s" repeatCount="indefinite"/>${`<g transform="scale(.7) rotate(-70)">${dragonfly()}</g>`}</g>`)
+      + `<g><animateMotion path="M1440 800 C1500 760 1560 800 1520 840 C1480 880 1400 850 1440 800Z" dur="9s" repeatCount="indefinite"/>${`<g transform="scale(.6) rotate(-80)">${dragonfly()}</g>`}</g>`)
     + layer(0.8, foreground(rnd))
     + layer(0.6, spores(rnd))
     + `</svg>`;

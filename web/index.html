@@ -7,9 +7,8 @@
 <meta name="description" content="A prehistoric sandbox adventure in your browser. Log in or create an account to play.">
 <meta name="theme-color" content="#1a3d22">
 <link rel="icon" href="img/favicon.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Luckiest+Guy&family=Baloo+2:wght@500;600;700;800&display=swap">
+<link rel="preload" href="fonts/luckiestguy-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/baloo2-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/main.css">
 <script type="module" src="js/main.js"></script>
 </head>
@@ -32,7 +31,6 @@
     <div class="card-zone" id="cardZone">
       <!-- Characters around the card are drawn by js/critters.js into these slots. -->
       <div class="peeker" id="peeker" aria-hidden="true"></div>
-      <div class="buddy" id="buddy" aria-hidden="true"></div>
 
       <section class="card" aria-labelledby="cardTitle">
         <div class="card-vines" id="cardVines" aria-hidden="true"></div>

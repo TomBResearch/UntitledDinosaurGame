@@ -6,7 +6,7 @@
 // Preview the signed-in card with ?demo=account (sample data, nothing is sent anywhere).
 
 import { buildScene, letterBird, cornerVine } from "./scene.js";
-import { triceratops, raptorPeek } from "./critters.js";
+import { raptorPeek } from "./critters.js";
 import * as auth from "./auth.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -17,7 +17,6 @@ const params = new URLSearchParams(location.search);
 
 $("#scene").innerHTML = buildScene();
 $("#peeker").innerHTML = raptorPeek();
-$("#buddy").innerHTML = triceratops();
 $("#sentArt").innerHTML = letterBird();
 $("#cardVines").innerHTML = cornerVine(1, 3).replace("<svg", `<svg class="vl"`) + cornerVine(-1, 8).replace("<svg", `<svg class="vr"`);
 

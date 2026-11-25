@@ -26,7 +26,7 @@ Each milestone ends with something **playable on the test server**. Tasks inside
 
 | Task | Done when |
 |---|---|
-| Platform login in the client | Log in, refresh (one at a time) and log out through `JavaScriptBridge` fetch, plus sign-up and resend verification screens |
+| Platform login on the landing page ([ADR 0015](../decisions/0015-login-on-the-landing-page.md)) | `web/js/auth.js` turned on: log in, sign up, password reset, resend verification and the account card on `/`. The game at `/play/` refreshes its own session (one refresh at a time) through `JavaScriptBridge` fetch, sends players with no session back to `/`, and logs out. |
 | Platform config (racing repo PR) | `ALLOWED_ORIGINS` and `SERVICE_KEYS` additions. Racing login is re-checked. |
 | `cmd/api` | JWKS check, service API client, worlds, character CRUD (3 slots, name rules), join tickets, deleted-accounts list |
 | Character creation | Name, a basic appearance (skin tone, hair, beard), starting gear (pelt loincloth) |

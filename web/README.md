@@ -2,7 +2,7 @@
 
 The page players see first: the title, an animated prehistoric valley, and the "Base Camp" card for logging in, creating an account, resetting a password and, once signed in, playing and managing the account. It replaces the single-file mock-up the owner made at game.tomblundell.co.uk, keeping its look (jungle greens, bark browns, bone and amber, the cartoon title and the central card) with much more detailed art.
 
-Plain static files: no build step, no framework, no npm. Live at **`https://dinosaur.untitledgames.co.uk/`**, where `tools/deploy.sh` copies the folder as it is; the game is at `/play/` ([deploy.md](../docs/operations/deploy.md)).
+Plain static files: no build step, no framework, no npm. Live at **`https://dinosaur.untitledgames.co.uk/`**. `tools/deploy.sh` copies the folder there, adding `?v=<hash>` to every file reference (`tools/stage-landing.py`), so a deploy is never mixed with old cached files; the game is at `/play/` ([deploy.md](../docs/operations/deploy.md)).
 
 ```bash
 python3 -m http.server 8075 -d web
@@ -22,6 +22,7 @@ Then open `http://localhost:8075/`. Add `?demo=account` to see the signed-in car
 | `js/svg.js` | Drawing helpers: a seeded random generator, smooth curves, and generators for ferns, grass, conifers, cycads, tree ferns, rocks and clouds |
 | `js/auth.js` | The account platform's API (log in, sign up, reset, refresh, profile, log out) and player-facing error text. **Off until M1** (`ENABLED = false`). |
 | `img/` | The wood grain texture, the show/hide password icons and the favicon |
+| `fonts/` | Luckiest Guy (Apache 2.0) and Baloo 2 (OFL 1.1), Latin subsets, self-hosted so no visitor data goes to Google. Licences alongside. |
 
 ## How the art works
 
@@ -41,6 +42,8 @@ Then open `http://localhost:8075/`. Add `?demo=account` to see the signed-in car
 
 ## Accounts (M1)
 
+Logging in happens here, not inside the game ([ADR 0015](../docs/decisions/0015-login-on-the-landing-page.md)). The game at `/play/` gets its own session by refreshing with the same cookie.
+
 The forms follow the platform's rules ([accounts.md](../docs/architecture/accounts.md), and the platform's `docs/spec.md`). They check these before sending, and the platform checks them again:
 - You log in with **email** and password.
 - Signing up takes a username (3–16 letters, numbers or underscores), an email, a password (10–200 characters, not containing the username or email), and a date of birth. You must be 13 or older, and the platform keeps only the year.
@@ -53,5 +56,4 @@ The access token is kept only in memory. The refresh token is the platform's Htt
 
 ## Not done yet
 
-- **Fonts:** Luckiest Guy and Baloo 2 still come from Google Fonts, as in the mock-up. Self-hosting them (both are under the OFL) would stop sending visitors' IP addresses to Google.
 - **The "Playtest" link** in the footer goes to the game at `/play/`, behind the playtest password. Remove it when accounts open and the Play button takes over.

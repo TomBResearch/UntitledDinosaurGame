@@ -18,12 +18,12 @@ Rows marked *(planned)* don't exist yet.
 | `net/clock_sync.gd` | `ClockSync`: the server clock estimate from pings |
 | `net/proto/` | **Generated** encoders and decoders. Never edit them by hand. |
 | `core/launch_options.gd` | Name, server URL and dev aids from the web query string or desktop arguments |
-| `screens/` | `game/` (the world) and `name_entry/` now. *(planned)* Boot (version check), Login, World select, Character select and create, Loading |
+| `screens/` | `game/` (the world) and `name_entry/` now. *(planned)* Boot (version check), World select, Character select and create, Loading. Login is on the landing page, not in the client ([ADR 0015](../decisions/0015-login-on-the-landing-page.md)). |
 | `world/` | `PathPlayback`, `MotionTrack`, `ErrorBlend`, the `EntityManager`, the `OrbitCamera` and the `ClickMarker`. *(planned)* chunk streaming, starting from the spike's `SpikeChunkStreamer` |
 | `spikes/streaming/` | The M0 streaming spike: region generator, chunk streamer, bench and web measuring tools ([README](../../client/spikes/streaming/README.md)). Not shipped. |
 | `entities/player/` | The player view: placeholder caveman and name label. *(planned)* creatures, nodes and ground items |
 | `ui/` | `ui/chat/`: the `ChatBox`, `ChatLog` and `SpeechBubble`. *(planned)* HUD, inventory, equipment, skills, bank, dialogue, context menu, ability bar |
-| `autoload/session.gd` *(planned, M1)* | Platform login, single-flight token refresh, `/api` calls (via a `JavaScriptBridge` fetch wrapper on the web) |
+| `autoload/session.gd` *(planned, M1)* | The platform session: refresh on start (no session sends you back to `/`), single-flight refresh before expiry, log out, and `/api` calls (via a `JavaScriptBridge` fetch wrapper on the web) |
 | `regions/<region>/` | Authoring scenes: terrain chunks, props, navmesh, marker nodes ([content-pipeline.md](content-pipeline.md)) |
 | `tools/export_region.gd` | Editor script that exports region data for the server |
 | `data/` | **Generated** from `data/` by `dataval -emit-client` (ignored by git). `content_hash.txt` goes in `hello`. |
