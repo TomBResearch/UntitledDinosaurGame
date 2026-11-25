@@ -52,18 +52,19 @@ A player gets a join ticket from the backend API (`POST /api/join`) and sends it
   - its `worldId` is this world (`-world`);
   - its nonce hasn't been used before. The world remembers used nonces until their tickets expire.
   - With **`-premium-only`**, it says `premium` (Premium or staff).
-- The ticket's `name` becomes the player's display name, and its `role` the chat badge. Its `characterId` must be a UUID.
+- The ticket's `name` becomes the player's display name, its `role` the chat badge, and its `appearance` the `look` everyone gets in `entity_enter`. A look with a part that isn't shaped like an id is dropped (the player is drawn with the default) rather than refusing the ticket. Dev players have no look. Its `characterId` must be a UUID.
 - The world then takes the character's online lease and loads where it was saved ([world-server.md](world-server.md#saving-characters)). So **a world that accepts tickets needs a database** (`DATABASE_URL`): without one it refuses every ticket, and `cmd/world` won't start with `WORLD_TICKET_KEY` but no `DATABASE_URL`.
 - Each refusal is logged with the reason (never the ticket itself). The player is only told `kick(bad_ticket)`.
-- Code: `server/internal/ticket` (checked by `ticket.Guard`), called from `server/internal/world`. Tests: forged, expired, reused, wrong world and premium worlds in `internal/ticket/ticket_test.go` and `internal/world/ticket_test.go`; the lease, a second login of the same account, and saving in `internal/world/persist_test.go`.
+- Code: `server/internal/ticket` (checked by `ticket.Guard`), called from `server/internal/world`. Tests: forged, expired, reused, wrong world and premium worlds in `internal/ticket/ticket_test.go` and `internal/world/ticket_test.go`; the lease, a second login of the same account, and saving in `internal/world/persist_test.go`; the API and both worlds together in `internal/joine2e` ([backend.md](backend.md#tests)).
+- The client gets its ticket after the player picks a character and a world, and sends it straight away (it lasts 30 s). A refused ticket (`kick(bad_ticket)`) takes the player back to the world list. Reconnecting after a drop or a restart asks the API for a new ticket, because each one works once ([client.md](client.md#characters-worlds-and-joining)).
 
 `GET /status` on the world server answers `{world, players}` for the API's world list. Caddy doesn't route it, so it's only reachable inside Docker.
 
 ### Dev tickets
 
-For local development, and for the live world until the client logs in with the platform (a later M1 task), a world server can also let anyone in by name. This works exactly as in M0, alongside real tickets:
+For local development (desktop runs, `?name=` and local pages), a world server can also let anyone in by name. This works exactly as in M0, alongside real tickets. The deployed client no longer uses dev tickets: it joins with the API's tickets. The live World 1 still has `-dev-tickets` on, behind the playtest gate, until the owner turns both off ([ADR 0014](../decisions/0014-playtest-gate.md)). World 2 never has it.
 
-- Start the server with **`-dev-tickets`**: `cd server && go run ./cmd/world -dev-tickets`. It logs a warning at startup. Never use it on a public server, except the live world, which sits behind the playtest gate until the client logs in ([ADR 0014](../decisions/0014-playtest-gate.md)).
+- Start the server with **`-dev-tickets`**: `cd server && go run ./cmd/world -dev-tickets`. It logs a warning at startup. Never use it on a public server, except the live World 1 behind the playtest gate ([ADR 0014](../decisions/0014-playtest-gate.md)).
 - It listens on **`127.0.0.1:8090`** (`-addr`) and serves world **`dev`** (`-world`), so the client connects to **`ws://127.0.0.1:8090/w/dev`**.
 - The client sends `hello.ticket = "dev:<name>"`. `<name>` must have the shape of a character name ([backend.md](backend.md#routes)): 3–12 characters, ASCII letters and digits with single spaces between words, no space at either end. Dev names aren't filtered or unique: two players can both be `Ugg`. Dev players have the normal role.
 - Everyone spawns at a `player_spawns` point of `test_greybox` (`-spawn-region`), in turn. **Dev players are never saved** and need no database; the idle logout and the shutdown warning apply to them as to everyone.
@@ -131,7 +132,7 @@ These are the messages for M0–M3. The schema, [`protocol/messages.schema`](../
 |---|---|
 | `welcome` **(M0)** | your entity id, character snapshot (skills, inventory, equipment; not yet), region id, server tick, tick rate |
 | `region_change` | region id, entry position (the client shows a loading screen) |
-| `entity_enter` **(M0)** | id, kind, type id, name, appearance (not yet), position, current path (if moving), HP fraction, in combat |
+| `entity_enter` **(M0)** | id, kind, type id, name, position, current path (if moving), HP fraction, in combat, look (a player's appearance ids, or none) |
 | `entity_leave` **(M0)** | id |
 | `path_started` / `path_stopped` **(M0)** | see above |
 | `attack_started` | attacker, target, attack style, impact tick |

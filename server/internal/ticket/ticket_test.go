@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/content"
 )
 
 var (
@@ -128,5 +130,22 @@ func TestNoncesForgottenAfterExpiry(t *testing.T) {
 	}
 	if g.Remembered() != 1 {
 		t.Fatalf("remembered %d after the first five expired, want 1", g.Remembered())
+	}
+}
+
+// The biggest ticket the API can make, with the longest name, role and look, must fit in hello's
+// ticket field (string<1024>), or the client couldn't send it.
+func TestLargestTicketFitsInHello(t *testing.T) {
+	id := strings.Repeat("f", 32)
+	p := Payload{AccountID: "0b7c1e2a-2222-4000-8000-000000000001", CharacterID: "0b7c1e2a-2222-4000-8000-0000000000c1",
+		WorldID: "9999", Name: strings.Repeat("W", 12), Role: "moderator", Premium: true,
+		Appearance: &content.Look{BodyType: id, SkinTone: id, HairStyle: id, HairColour: id, Beard: id},
+		Nonce:      NewNonce(), Exp: 1 << 40}
+	s, err := Sign(bytes.Repeat([]byte{1}, MinKeyBytes), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s) > 1024 {
+		t.Fatalf("largest ticket is %d bytes; hello.ticket holds 1024", len(s))
 	}
 }

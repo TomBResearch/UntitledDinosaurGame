@@ -8,6 +8,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/content"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/persist"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/proto"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/ticket"
@@ -183,5 +184,53 @@ func TestStatus(t *testing.T) {
 	_, _ = buf.ReadFrom(resp.Body)
 	if got := buf.String(); got != `{"world":"1","players":1}`+"\n" {
 		t.Fatalf("status %q", got)
+	}
+}
+
+// The look in a join ticket is shown to everyone: in the player's own entity_enter and in the one
+// other players get. Dev players have none (clients draw the default), and a look that isn't
+// shaped like ids is dropped rather than refusing the ticket.
+func TestJoinTicketLookIsShownToEveryone(t *testing.T) {
+	const zogAccount, zogCharacter = "0b7c1e2a-2222-4000-8000-000000000002", "0b7c1e2a-2222-4000-8000-0000000000c2"
+	store := persist.NewMemStore()
+	store.AddCharacter(ticketAccount, ticketCharacter)
+	store.AddCharacter(zogAccount, zogCharacter)
+	w := ticketWorldWith(t, store, func(c *Config) { c.DevTickets = true })
+	ctx := testCtx(t)
+	grugLook := content.Look{BodyType: "broad", SkinTone: "tone_5", HairStyle: "topknot", HairColour: "grey", Beard: "long"}
+	want := &proto.Look{BodyType: "broad", SkinTone: "tone_5", HairStyle: "topknot", HairColour: "grey", Beard: "long"}
+
+	grug := w.dial(ctx, "/w/1")
+	send(t, ctx, grug, w.hello(joinTicket(t, ticketKey, func(p *ticket.Payload) { p.Appearance = &grugLook })))
+	if self := readUntil[*proto.EntityEnter](t, ctx, grug); self.Look == nil || *self.Look != *want {
+		t.Fatalf("own entity_enter look %+v, want %+v", self.Look, want)
+	}
+
+	// Another player sees Grug's look; Grug sees the dev player with none.
+	ugg := w.dial(ctx, "/w/1")
+	send(t, ctx, ugg, w.hello("dev:Ugg"))
+	seen := map[string]*proto.Look{}
+	for len(seen) < 2 {
+		e := readUntil[*proto.EntityEnter](t, ctx, ugg)
+		seen[e.Name] = e.Look
+	}
+	if l := seen["Grug"]; l == nil || *l != *want {
+		t.Errorf("Ugg sees Grug's look as %+v, want %+v", l, want)
+	}
+	if seen["Ugg"] != nil {
+		t.Errorf("a dev player has a look: %+v", seen["Ugg"])
+	}
+	if e := readUntil[*proto.EntityEnter](t, ctx, grug); e.Name != "Ugg" || e.Look != nil {
+		t.Errorf("Grug sees %q with look %+v, want Ugg with none", e.Name, e.Look)
+	}
+
+	// A signed ticket with a badly shaped look still joins, with no look.
+	odd := content.Look{BodyType: "Broad Shoulders", SkinTone: "tone_5", HairStyle: "topknot", HairColour: "grey", Beard: "long"}
+	zog := w.dial(ctx, "/w/1")
+	send(t, ctx, zog, w.hello(joinTicket(t, ticketKey, func(p *ticket.Payload) {
+		p.AccountID, p.CharacterID, p.Name, p.Appearance = zogAccount, zogCharacter, "Zog", &odd
+	})))
+	if self := readUntil[*proto.EntityEnter](t, ctx, zog); self.Name != "Zog" || self.Look != nil {
+		t.Errorf("badly shaped look: got %q with %+v, want Zog with none", self.Name, self.Look)
 	}
 }

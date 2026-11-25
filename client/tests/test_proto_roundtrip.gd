@@ -60,11 +60,17 @@ func test_decoded_fields() -> void:
 		if enter.path != null:
 			assert_eq(enter.path.speed, 350)
 			assert_eq(enter.path.waypoints, [Vector3i(0, 0, 0), Vector3i(100, 0, 100)] as Array[Vector3i])
+		assert_not_null(enter.look)
+		if enter.look != null:
+			assert_eq(enter.look.body_type, "broad")
+			assert_eq(enter.look.hair_style, "topknot")
+			assert_eq(enter.look.beard, "none")
 
 	var still := _decode_one("entity_enter_still", Proto.Dir.FROM_SERVER) as Proto.EntityEnter
 	assert_not_null(still)
 	if still != null:
 		assert_null(still.path)
+		assert_null(still.look, "no look for a creature")
 		assert_false(still.in_combat)
 		assert_eq(still.kind, Proto.EntityKind.CREATURE)
 
@@ -115,7 +121,7 @@ func test_rejects_malformed_frames() -> void:
 
 	var server_cases: Dictionary[String, PackedByteArray] = {
 		"client message from the server": golden["move_to"],
-		"unused flag bit": _frame(Proto.MSG_ENTITY_ENTER, PackedByteArray([0x04, 1, 0, 0, 0, 0, 0, 0, 0])),
+		"unused flag bit": _frame(Proto.MSG_ENTITY_ENTER, PackedByteArray([0x08, 1, 0, 0, 0, 0, 0, 0, 0])),
 		"enum out of range": _frame(Proto.MSG_ENTITY_ENTER, PackedByteArray([0, 1, 5, 0, 0, 0, 0, 0, 0])),
 		"list over its limit": _frame(Proto.MSG_PATH_STARTED, PackedByteArray([1, 0, 0, 65]) + _zeros(65 * 3)),
 		"list longer than the bytes left": _frame(Proto.MSG_PATH_STARTED, PackedByteArray([1, 0, 0, 10, 0, 0, 0])),
@@ -227,6 +233,12 @@ func samples() -> Array[Sample]:
 	moving.path.waypoints = [Vector3i(0, 0, 0), Vector3i(100, 0, 100)]
 	moving.hp = 128
 	moving.in_combat = true
+	moving.look = Proto.Look.new()
+	moving.look.body_type = "broad"
+	moving.look.skin_tone = "tone_4"
+	moving.look.hair_style = "topknot"
+	moving.look.hair_colour = "auburn"
+	moving.look.beard = "none"
 
 	var leave := Proto.EntityLeave.new()
 	leave.entity = 300

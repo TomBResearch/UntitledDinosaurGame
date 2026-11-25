@@ -33,6 +33,7 @@ Internal documentation for Untitled Dinosaur Game. Players never see this; the p
 | [combat.md](design/combat.md) | Click-to-attack, combat bonuses, abilities 1–4, boss telegraphs |
 | [items-and-bank.md](design/items-and-bank.md) | Inventory, equipment, bank, drops, ground items |
 | [death.md](design/death.md) | Safe death and respawn |
+| [characters.md](design/characters.md) | Character slots, names, appearance, starting gear |
 | [worlds-and-premium.md](design/worlds-and-premium.md) | World list, premium worlds, content flags |
 | [quests.md](design/quests.md) | Quest structure |
 
@@ -41,4 +42,5 @@ Internal documentation for Untitled Dinosaur Game. Players never see this; the p
 - [operations/hosting.md](operations/hosting.md): the project server, Docker layout, domains, memory budget
 - [operations/deploy.md](operations/deploy.md): deploying to the live site, passwords, the playtest gate
 - [operations/site.md](operations/site.md): building the wiki and docs site, the leak guard, and serving `/wiki/` and `/dev/`
+- [operations/local-stack.md](operations/local-stack.md): the whole M1 flow on one machine (platform, API, both worlds, the web client)
 - [decisions/](decisions/README.md): every significant technical choice, with its reasons

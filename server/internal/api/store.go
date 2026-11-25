@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/content"
 )
 
 // Character rules (docs/architecture/backend.md). Player-facing numbers; change them only with the
@@ -32,16 +34,9 @@ type World struct {
 }
 
 // Appearance is what a player picks at character creation (open question S2, answered 2026-11-25):
-// body type, skin tone, hair style, hair colour and beard. Each is the id of a choice. The choices
-// themselves come with the character creation task's data file; until then the API checks only the
-// shape (ValidAppearance).
-type Appearance struct {
-	BodyType   string `json:"bodyType"`
-	SkinTone   string `json:"skinTone"`
-	HairStyle  string `json:"hairStyle"`
-	HairColour string `json:"hairColour"`
-	Beard      string `json:"beard"`
-}
+// body type, skin tone, hair style, hair colour and beard, each the id of a choice in
+// data/appearance.json. The API refuses ids that aren't there (content.Appearance.Valid).
+type Appearance = content.Look
 
 // Character is a live (not deleted) character.
 type Character struct {

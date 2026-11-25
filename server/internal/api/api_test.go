@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -261,7 +262,7 @@ func TestCreateRefused(t *testing.T) {
 		{map[string]any{"name": "Admin Ugg", "slot": 2, "appearance": look}, 400, "invalid_name", "reserved"},
 		{map[string]any{"name": "Ugg", "slot": 2}, 400, "invalid_appearance", ""},
 		{map[string]any{"name": "Ugg", "slot": 2, "appearance": map[string]string{"bodyType": "a"}}, 400, "invalid_appearance", ""},
-		{map[string]any{"name": "Ugg", "slot": 2, "appearance": Appearance{"a", "b", "c", "d", "Bad Id"}}, 400, "invalid_appearance", ""},
+		{map[string]any{"name": "Ugg", "slot": 2, "appearance": Appearance{BodyType: "a", SkinTone: "b", HairStyle: "c", HairColour: "d", Beard: "Bad Id"}}, 400, "invalid_appearance", ""},
 		{map[string]any{"name": "Ugg", "slot": 1, "appearance": look}, 409, "slot_used", ""},
 		{map[string]any{"name": "GRUG", "slot": 2, "appearance": look}, 409, "name_taken", ""},
 	}
@@ -282,6 +283,78 @@ func TestCreateRefused(t *testing.T) {
 	if rec.Code != 400 {
 		t.Errorf("bad JSON: %d", rec.Code)
 	}
+}
+
+// The appearance must be made of choices in data/appearance.json: every listed choice is accepted, and
+// an id that isn't listed is refused, in each of the five parts.
+func TestCreateChecksAppearanceAgainstData(t *testing.T) {
+	e := newEnv(t)
+	data, _ := loadData()
+	acct := e.account(platform.RoleNormal, false)
+	slot := 0
+	try := func(a Appearance) resp {
+		e.now = e.now.Add(time.Hour) // stay under the 10-an-hour create limit
+		slot++
+		r := e.do("POST", "/api/characters", acct, map[string]any{"name": fmt.Sprintf("Ugg%d", slot), "slot": 1, "appearance": a})
+		if r.code == 201 {
+			var c characterJSON
+			r.decode(t, &c)
+			if c.Appearance != a {
+				t.Errorf("stored %+v, sent %+v", c.Appearance, a)
+			}
+			e.do("DELETE", "/api/characters/"+c.ID, acct, map[string]string{"confirmName": c.Name})
+		}
+		return r
+	}
+	// Every choice of every part, on top of the default look.
+	file := readAppearanceFile(t)
+	parts := []struct {
+		ids []string
+		set func(*Appearance, string)
+	}{
+		{ids(file.BodyTypes, func(b content.BodyType) string { return b.ID }), func(a *Appearance, v string) { a.BodyType = v }},
+		{ids(file.SkinTones, func(c content.ColourChoice) string { return c.ID }), func(a *Appearance, v string) { a.SkinTone = v }},
+		{ids(file.HairStyles, func(c content.Choice) string { return c.ID }), func(a *Appearance, v string) { a.HairStyle = v }},
+		{ids(file.HairColours, func(c content.ColourChoice) string { return c.ID }), func(a *Appearance, v string) { a.HairColour = v }},
+		{ids(file.Beards, func(c content.Choice) string { return c.ID }), func(a *Appearance, v string) { a.Beard = v }},
+	}
+	for _, p := range parts {
+		for _, id := range p.ids {
+			a := data.Appearance.Default
+			p.set(&a, id)
+			if r := try(a); r.code != 201 {
+				t.Errorf("%+v refused: %d %s", a, r.code, r.body)
+			}
+		}
+		// Well formed, but not a choice.
+		a := data.Appearance.Default
+		p.set(&a, "purple_mohawk")
+		e.expect(try(a), 400, "invalid_appearance")
+		a = data.Appearance.Default
+		p.set(&a, "")
+		e.expect(try(a), 400, "invalid_appearance")
+	}
+}
+
+func ids[T any](list []T, id func(T) string) []string {
+	out := make([]string, len(list))
+	for i, v := range list {
+		out[i] = id(v)
+	}
+	return out
+}
+
+func readAppearanceFile(t *testing.T) content.AppearanceFile {
+	t.Helper()
+	raw, err := os.ReadFile("../../../data/appearance.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f content.AppearanceFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	return f
 }
 
 func TestRenameCharacter(t *testing.T) {
@@ -353,6 +426,11 @@ func TestJoinIssuesATicketTheWorldAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The ticket carries the character's look, so the world can show it to everyone.
+	if p.Appearance == nil || *p.Appearance != look {
+		t.Fatalf("ticket appearance %+v, want %+v", p.Appearance, look)
+	}
+	p.Appearance = nil
 	want := ticket.Payload{AccountID: acct, CharacterID: c.ID, WorldID: "1", Name: "Grug", Role: "moderator", Premium: true,
 		Nonce: p.Nonce, Exp: t0.Add(ticket.TTL).Unix()}
 	if p != want {
@@ -370,6 +448,13 @@ func TestJoinIssuesATicketTheWorldAccepts(t *testing.T) {
 	}
 	if _, err := ticket.NewGuard(ticketKey, "1").Check(again.Ticket, t0.Add(ticket.TTL)); !errors.Is(err, ticket.ErrExpired) {
 		t.Fatalf("after 30 s: %v", err)
+	}
+	// Local worlds on their own ports: {id} in PublicWS becomes the world's id.
+	e.srv.cfg.PublicWS = "ws://127.0.0.1:809{id}"
+	var local joinJSON
+	e.join(acct, c.ID, 1).decode(t, &local)
+	if local.WSURL != "ws://127.0.0.1:8091/w/1" {
+		t.Fatalf("local wsUrl %q", local.WSURL)
 	}
 }
 

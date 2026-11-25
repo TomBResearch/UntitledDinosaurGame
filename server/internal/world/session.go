@@ -166,7 +166,8 @@ func (s *session) handshake() bool {
 		return false
 	}
 	s.name = who.name
-	join := region.Input{Kind: region.InputJoin, Session: s.id, Client: s, Name: who.name, Role: who.role, HP: persist.HPFull}
+	join := region.Input{Kind: region.InputJoin, Session: s.id, Client: s, Name: who.name, Role: who.role, Look: who.look,
+		HP: persist.HPFull}
 	if who.characterID != "" && !s.claim(who, &join) {
 		return false
 	}

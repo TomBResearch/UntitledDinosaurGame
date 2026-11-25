@@ -78,6 +78,7 @@ type Input struct {
 	Client  Client        // InputJoin
 	Name    string        // InputJoin: the display name, already validated
 	Role    proto.Role    // InputJoin: the account's role, shown as a chat badge
+	Look    *proto.Look   // InputJoin: the character's appearance, or nil (dev players: the default)
 	Msg     proto.Message // InputIntent, InputNotice
 
 	// InputJoin, for a saved character (empty for dev players, who are never saved): its id and the
@@ -347,6 +348,7 @@ func (r *Region) join(in Input) {
 	e.kind = proto.EntityKindPlayer
 	e.name = in.Name
 	e.role = in.Role
+	e.look = in.Look
 	e.session = in.Session
 	e.client = in.Client
 	e.character, e.lease = in.Character, in.Lease
@@ -600,12 +602,14 @@ func (r *Region) sendEnter(to, e *entity) {
 		Name:     e.name,
 		Position: quantise(e.pos),
 		HP:       255,
+		Look:     e.look,
 	}
 	if e.moving {
 		r.mEnter.Path = &e.path
 	}
 	to.out = mustAppend(to.out, &r.mEnter)
 	r.mEnter.Path = nil
+	r.mEnter.Look = nil
 }
 
 func (r *Region) sendLeave(to, e *entity) {

@@ -45,7 +45,8 @@ func samples() []sample {
 		{"entity_enter_still", []Message{&EntityEnter{Entity: 300, Kind: EntityKindCreature,
 			TypeID: "raptor", Name: "Raptor", Position: Pos{100, 0, -100}, HP: 255}}},
 		{"entity_enter_moving", []Message{&EntityEnter{Entity: 1, Kind: EntityKindPlayer, Name: "Ugg",
-			Path: walking, HP: 128, InCombat: true}}},
+			Path: walking, HP: 128, InCombat: true,
+			Look: &Look{BodyType: "broad", SkinTone: "tone_4", HairStyle: "topknot", HairColour: "auburn", Beard: "none"}}}},
 		{"entity_leave", []Message{&EntityLeave{Entity: 300}}},
 		{"chat", []Message{&Chat{Entity: 1, Name: "Ugg", Role: RoleModerator, Text: "Rawr"}}},
 		{"chat_long", []Message{&Chat{Entity: 2, Name: "Grok", Role: RoleNormal, Text: strings.Repeat("a", 300)}}},
@@ -208,7 +209,7 @@ func TestDecodeRejectsMalformedInput(t *testing.T) {
 		{"non-minimal varint", FromServer, frame(MsgEntityLeave, 0x80, 0x00), ErrInvalid},
 		{"varint too long", FromClient, frame(MsgHello, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01), ErrInvalid},
 		{"u32 overflow", FromServer, frame(MsgEntityLeave, 0x80, 0x80, 0x80, 0x80, 0x10), ErrInvalid},
-		{"unused flag bit", FromServer, frame(MsgEntityEnter, 0x04, 1, 0, 0, 0, 0, 0, 0, 0), ErrInvalid},
+		{"unused flag bit", FromServer, frame(MsgEntityEnter, 0x08, 1, 0, 0, 0, 0, 0, 0, 0), ErrInvalid},
 		{"enum out of range", FromServer, frame(MsgEntityEnter, 0, 1, 5, 0, 0, 0, 0, 0, 0), ErrInvalid},
 		{"invalid UTF-8", FromClient, frame(MsgChatSay, 2, 0xc3, 0x28), ErrInvalid},
 		{"list over its limit", FromServer, frame(MsgPathStarted, append([]byte{1, 0, 0, 65}, make([]byte, 65*3)...)...), ErrInvalid},
@@ -272,7 +273,9 @@ func TestMaximalMessagesFitTheLimits(t *testing.T) {
 	hello := &Hello{ProtocolHash: 1<<32 - 1, Ticket: strings.Repeat("t", 1024),
 		ContentHash: strings.Repeat("c", 64), ClientVersion: strings.Repeat("v", 32)}
 	enter := &EntityEnter{Entity: 1<<32 - 1, Kind: EntityKindNPC, TypeID: strings.Repeat("t", 32),
-		Name: strings.Repeat("n", 64), Position: maxPos, Path: &maxPath, HP: 255, InCombat: true}
+		Name: strings.Repeat("n", 64), Position: maxPos, Path: &maxPath, HP: 255, InCombat: true,
+		Look: &Look{BodyType: strings.Repeat("b", 32), SkinTone: strings.Repeat("s", 32), HairStyle: strings.Repeat("h", 32),
+			HairColour: strings.Repeat("c", 32), Beard: strings.Repeat("d", 32)}}
 	for _, c := range []struct {
 		m    Message
 		want int

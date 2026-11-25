@@ -13,7 +13,19 @@ M0 ends with the game live at `dinosaur.untitledgames.co.uk`: you and another pe
   - **The world connection** (`/w/1`) is proxied only when that cookie is present; otherwise it gets 403. Browsers don't reliably send a page's Basic auth with a WebSocket, but they always send cookies.
 - The **landing page** (`/`), the **public wiki** (`/wiki/`) and the **health check** (`/healthz`) stay open. **`/dev/`** keeps its own staff password ([site.md](../operations/site.md)).
 - Changing the playtest password (`tools/set-passwords.sh play`) also makes a new cookie, so everyone signs in again.
-- **When M1 login lands, the gate and `-dev-tickets` both go.** Worlds then accept only the backend's join tickets.
+- **When M1 login lands, the gate and `-dev-tickets` both go.** Worlds then accept only the backend's join tickets. Turning them off is the owner's call at deploy time; what's ready is below.
+
+## When real join tickets exist: what's ready (2026-11-25)
+
+| Needed before the gate and dev tickets go | State |
+|---|---|
+| Players log in on the landing page and the game keeps the session ([ADR 0015](0015-login-on-the-landing-page.md)) | Built, merged |
+| The API issues join tickets, and the worlds check them (`WORLD_TICKET_KEY`) | Built, merged. The API isn't deployed yet: it needs `tools/set-secrets.sh` first ([deploy.md](../operations/deploy.md#m1-secrets)). |
+| The client makes characters, shows the world list and joins with a ticket, not a dev ticket | Built (character creation and world select task). Dev runs (`?name=`, desktop) still use dev tickets. |
+| World 2 (premium only) runs, with join tickets only | In the Compose file; starts on the next deploy. It never had dev tickets. |
+| Players come back where they left off, with online leases | Built, merged (persistence, #29). The worlds need `WORLD_DB_PASSWORD` in `/opt/udg/.env` (`tools/set-secrets.sh`). |
+
+**Still on, on purpose:** the playtest password on `/play/`, the `udg_play` cookie on `/w/1` and `/w/2`, and `-dev-tickets` on World 1. To turn them off once the owner decides: remove `-dev-tickets` from `world-1` in the Compose file, remove the `basic_auth`, `Set-Cookie` and cookie checks from the Caddyfile, and deploy. `/play/?name=` dev runs then stop working on the live site, which is the point.
 
 ## Consequences
 

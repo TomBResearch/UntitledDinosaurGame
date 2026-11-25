@@ -1,7 +1,8 @@
 class_name PlatformReply
 extends RefCounted
-## One answer from the account platform. Transports hand one back straight away and finish it
-## when the answer arrives; callers `await reply.wait()`.
+## One answer from the account platform, or from the game's own API (/api; its errors have the
+## same shape). Transports hand one back straight away and finish it when the answer arrives;
+## callers `await reply.wait()`.
 ##
 ## The platform's errors are {"error": "<code>", "message": "<text for players>"}
 ## (UntitledAccountSystem docs/spec.md). Status 0 with error "network" means no answer at all,
@@ -13,6 +14,8 @@ var done: bool = false
 ## The HTTP status, or 0 for no answer.
 var status: int = 0
 var data: Dictionary = {}
+## The answer's JSON when it's a list (the game API's GET /api/worlds and /api/characters).
+var list: Array = []
 ## The platform's error code, "network" or "unknown". Empty when the request worked.
 var error: String = ""
 
@@ -24,8 +27,11 @@ func finish(http_status: int, body: String) -> void:
 	status = http_status
 	# JSON.new().parse, not JSON.parse_string: a proxy's HTML error page isn't worth an engine error.
 	var json := JSON.new()
-	if body != "" and json.parse(body) == OK and json.data is Dictionary:
-		data = json.data
+	if body != "" and json.parse(body) == OK:
+		if json.data is Dictionary:
+			data = json.data
+		elif json.data is Array:
+			list = json.data
 	if not is_ok():
 		var code: Variant = data.get("error")
 		error = str(code) if code is String else ("network" if http_status == 0 else "unknown")

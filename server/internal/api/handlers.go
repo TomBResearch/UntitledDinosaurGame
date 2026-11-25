@@ -3,7 +3,6 @@ package api
 import (
 	"errors"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,20 +103,6 @@ func (s *Server) listCharacters(w http.ResponseWriter, r *http.Request, who *cal
 	writeJSON(w, http.StatusOK, out)
 }
 
-// choiceID is the shape of an appearance choice id, like the ids in data/.
-var choiceID = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
-
-// ValidAppearance checks that every field is set and looks like an id. Which ids exist is the
-// character creation task's data file; until it exists, any well-formed id is accepted.
-func ValidAppearance(a Appearance) bool {
-	for _, v := range []string{a.BodyType, a.SkinTone, a.HairStyle, a.HairColour, a.Beard} {
-		if !choiceID.MatchString(v) {
-			return false
-		}
-	}
-	return true
-}
-
 // nameError answers a name the rules refuse: 400 invalid_name, with a reason the client can show.
 func nameError(w http.ResponseWriter, err error) {
 	reason := "shape"
@@ -147,7 +132,7 @@ func (s *Server) createCharacter(w http.ResponseWriter, r *http.Request, who *ca
 		nameError(w, err)
 		return
 	}
-	if req.Appearance == nil || !ValidAppearance(*req.Appearance) {
+	if req.Appearance == nil || !s.cfg.Data.Appearance.Valid(*req.Appearance) {
 		writeError(w, http.StatusBadRequest, "invalid_appearance")
 		return
 	}
@@ -327,7 +312,7 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request, who *caller) {
 
 	tk, err := ticket.Sign(s.cfg.TicketKey, ticket.Payload{
 		AccountID: account, CharacterID: char.ID, WorldID: strconv.Itoa(world.ID), Name: char.Name,
-		Role: string(fresh.Role), Premium: premium, Nonce: ticket.NewNonce(), Exp: now.Add(ticket.TTL).Unix(),
+		Appearance: &char.Appearance, Role: string(fresh.Role), Premium: premium, Nonce: ticket.NewNonce(), Exp: now.Add(ticket.TTL).Unix(),
 	})
 	if err != nil {
 		s.cfg.Log.Error("signing a join ticket failed", "err", err)
@@ -335,7 +320,13 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request, who *caller) {
 		return
 	}
 	s.cfg.Log.Info("join ticket issued", "account", account, "character", char.ID, "world", world.ID)
-	writeJSON(w, http.StatusOK, joinJSON{Ticket: tk, WSURL: s.cfg.PublicWS + world.WSPath})
+	writeJSON(w, http.StatusOK, joinJSON{Ticket: tk, WSURL: s.wsURL(*world)})
+}
+
+// wsURL is where a player's browser connects to the world: PublicWS, with {id} replaced by the
+// world's id (for several local worlds on their own ports), then the world's path.
+func (s *Server) wsURL(wd World) string {
+	return strings.ReplaceAll(s.cfg.PublicWS, "{id}", strconv.Itoa(wd.ID)) + wd.WSPath
 }
 
 func (s *Server) storeError(w http.ResponseWriter, err error) {

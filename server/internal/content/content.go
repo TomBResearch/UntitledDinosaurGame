@@ -73,6 +73,8 @@ type Content struct {
 	ChatFilter *chat.Filter
 	// NameFilter is built from data/name_filter.json (and the chat word list): character names.
 	NameFilter *names.Filter
+	// Appearance is data/appearance.json: the character creation choices.
+	Appearance *Appearance
 	// Regions are data/regions/*.region.json, sorted by id, exported from the Godot scenes (ADR 0004).
 	// They're server-only and not part of Hash: the client has the scenes themselves.
 	Regions []*navmesh.Region
@@ -84,7 +86,7 @@ type Content struct {
 
 // The files that are copied to the client as they are. Everything server-only is left out (ADR 0011),
 // including chat_filter.json and name_filter.json: the client never filters, the server does.
-var clientFiles = []string{"progression.json", "skills.json"}
+var clientFiles = []string{"appearance.json", "progression.json", "skills.json"}
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,47}$`)
 var skillGroups = map[string]bool{"combat": true, "gathering": true, "processing": true, "other": true}
@@ -109,6 +111,10 @@ func Load(dir string) (*Content, error) {
 	}
 	var nameFilter names.FilterFile
 	if err := c.readJSON(dir, "name_filter.json", &nameFilter); err != nil {
+		problems = append(problems, err)
+	}
+	var appearance AppearanceFile
+	if err := c.readJSON(dir, "appearance.json", &appearance); err != nil {
 		problems = append(problems, err)
 	}
 	if len(problems) > 0 {
@@ -143,6 +149,9 @@ func Load(dir string) (*Content, error) {
 	} else {
 		c.NameFilter = f
 	}
+	var appearanceProblems []error
+	c.Appearance, appearanceProblems = buildAppearance(appearance)
+	problems = append(problems, appearanceProblems...)
 	table, err := progression.NewTable(p.XPCurve, p.MaxLevel, p.MaxXP)
 	if err != nil {
 		problems = append(problems, fmt.Errorf("progression.json: %w", err))

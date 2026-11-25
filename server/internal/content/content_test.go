@@ -110,7 +110,7 @@ func TestEmitClientWritesOnlyClientFiles(t *testing.T) {
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	if strings.Join(names, ",") != "content_hash.txt,progression.json,skills.json" {
+	if strings.Join(names, ",") != "appearance.json,content_hash.txt,progression.json,skills.json" {
 		t.Errorf("unexpected client files: %v", names)
 	}
 	if strings.TrimSpace(read(t, out, "content_hash.txt")) != c.Hash {
@@ -121,7 +121,7 @@ func TestEmitClientWritesOnlyClientFiles(t *testing.T) {
 func copyData(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, n := range []string{"progression.json", "skills.json", "chat_filter.json", "name_filter.json"} {
+	for _, n := range []string{"appearance.json", "progression.json", "skills.json", "chat_filter.json", "name_filter.json"} {
 		write(t, dir, n, read(t, repoData, n))
 	}
 	return dir
@@ -195,5 +195,52 @@ func TestChatFilterIsServerOnly(t *testing.T) {
 	text := []rune("oh sh1t")
 	if n, _ := c.ChatFilter.Mask(text, nil); n != 1 {
 		t.Errorf("the repo filter didn't mask %q", "oh sh1t")
+	}
+}
+
+func TestAppearanceChecksLooks(t *testing.T) {
+	c := mustLoad(t, repoData)
+	a := c.Appearance
+	if !a.Valid(a.Default) {
+		t.Fatal("the default look isn't valid")
+	}
+	look := a.Default
+	look.SkinTone = "tone_6"
+	look.Beard = "none"
+	if !a.Valid(look) {
+		t.Errorf("%+v should be valid", look)
+	}
+	for _, bad := range []Look{
+		{},
+		{BodyType: "sturdy", SkinTone: "tone_3", HairStyle: "shaggy", HairColour: "brown", Beard: "purple"},
+		{BodyType: "sturdy", SkinTone: "tone_3", HairStyle: "brown", HairColour: "shaggy", Beard: "none"}, // swapped parts
+		{BodyType: "Sturdy", SkinTone: "tone_3", HairStyle: "shaggy", HairColour: "brown", Beard: "none"},
+	} {
+		if a.Valid(bad) {
+			t.Errorf("%+v should be refused", bad)
+		}
+	}
+}
+
+func TestRejectsBadAppearance(t *testing.T) {
+	dir := copyData(t)
+	write(t, dir, "appearance.json", `{
+		"about": "",
+		"default": {"bodyType": "sturdy", "skinTone": "pale", "hairStyle": "shaggy", "hairColour": "brown", "beard": "none"},
+		"body_types": [{"id": "sturdy", "name": "Sturdy", "width": 3, "height": 1}],
+		"skin_tones": [{"id": "tone_1", "name": "", "colour": "#FFF"}],
+		"hair_styles": [{"id": "shaggy", "name": "Shaggy"}, {"id": "shaggy", "name": "Again"}],
+		"hair_colours": [{"id": "Brown", "name": "Brown", "colour": "#6b4226"}],
+		"beards": []
+	}`)
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected errors")
+	}
+	for _, want := range []string{"width must be", "skin_tones: \"tone_1\" has no name", "bad colour", "duplicate id \"shaggy\"",
+		"bad id \"Brown\"", "beards must have 1..", "default"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q, got: %v", want, err)
+		}
 	}
 }

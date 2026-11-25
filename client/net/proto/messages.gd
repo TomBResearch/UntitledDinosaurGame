@@ -7,7 +7,7 @@ extends RefCounted
 ## Proto.encode(msg), and pass each received frame to Proto.decode(frame, Proto.Dir.FROM_SERVER).
 
 ## Identifies this version of the schema. Sent as the first field of hello.
-const PROTOCOL_HASH: int = 0x499c4b56
+const PROTOCOL_HASH: int = 0xbc1ad179
 
 ## Who sends a message.
 enum Dir { FROM_CLIENT = 1, FROM_SERVER = 2 }
@@ -405,6 +405,30 @@ class Path extends RefCounted:
 			waypoints.append(r.vec3())
 
 
+## A player's appearance: the id of one choice for each part, from data/appearance.json (the
+## client has the same file, so it can draw them).
+class Look extends RefCounted:
+	var body_type: String = ""
+	var skin_tone: String = ""
+	var hair_style: String = ""
+	var hair_colour: String = ""
+	var beard: String = ""
+
+	func encode_body(w: Writer) -> void:
+		w.utf8(body_type, 32)
+		w.utf8(skin_tone, 32)
+		w.utf8(hair_style, 32)
+		w.utf8(hair_colour, 32)
+		w.utf8(beard, 32)
+
+	func decode_body(r: Reader) -> void:
+		body_type = r.utf8(32)
+		skin_tone = r.utf8(32)
+		hair_style = r.utf8(32)
+		hair_colour = r.utf8(32)
+		beard = r.utf8(32)
+
+
 ## The first message on a connection. Its id and first field never change, so a server can
 ## always read the protocol hash of an out-of-date client and tell it to refresh.
 class Hello extends Message:
@@ -650,6 +674,9 @@ class EntityEnter extends Message:
 	## HP as a fraction of maximum, 0-255.
 	var hp: int = 0
 	var in_combat: bool = false
+	## A player's appearance, from their character. Not set for dev players or other kinds: the
+	## client draws the default look.
+	var look: Look = null
 
 	func message_id() -> int:
 		return MSG_ENTITY_ENTER
@@ -661,7 +688,7 @@ class EntityEnter extends Message:
 		return Dir.FROM_SERVER
 
 	func max_body_size() -> int:
-		return 1092
+		return 1257
 
 	func encode_body(w: Writer) -> void:
 		var f: int = 0
@@ -669,6 +696,8 @@ class EntityEnter extends Message:
 			f |= 1 << 0
 		if in_combat:
 			f |= 1 << 1
+		if look != null:
+			f |= 1 << 2
 		w.flags(f, 1)
 		w.u32(entity)
 		w.enum8(kind, 5)
@@ -678,9 +707,11 @@ class EntityEnter extends Message:
 		if path != null:
 			path.encode_body(w)
 		w.u8(hp)
+		if look != null:
+			look.encode_body(w)
 
 	func decode_body(r: Reader) -> void:
-		var f: int = r.flags(1, 2)
+		var f: int = r.flags(1, 3)
 		entity = r.u32()
 		kind = r.enum8(5) as EntityKind
 		type_id = r.utf8(32)
@@ -691,6 +722,9 @@ class EntityEnter extends Message:
 			path.decode_body(r)
 		hp = r.u8()
 		in_combat = (f & (1 << 1)) != 0
+		if (f & (1 << 2)) != 0:
+			look = Look.new()
+			look.decode_body(r)
 
 
 ## An entity left view (or the region).

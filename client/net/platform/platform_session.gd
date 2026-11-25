@@ -106,9 +106,10 @@ static func refresh_delay_s(expires_in: float) -> float:
 	return maxf(expires_in - REFRESH_LEAD_S, MIN_REFRESH_DELAY_S)
 
 
-## A dev ticket name from a platform username, until characters and join tickets arrive in M1.
-## Usernames allow underscores and up to 16 characters; dev names are 3–12 letters and digits with
-## single spaces. The world still checks it and refuses a bad one (the name box then opens).
-static func dev_name_for(account_username: String) -> String:
-	var words := account_username.replace("_", " ").split(" ", false)
-	return " ".join(words).left(12).strip_edges()
+## Whether the account has Premium, as the profile from the last refresh says. Staff count as
+## Premium (a platform rule). Only for hints on screen (the world list): the API checks the
+## account's fresh state when it issues a join ticket.
+func has_premium() -> bool:
+	if account.get("premium") == true:
+		return true
+	return account.get("role") in ["premium", "moderator", "admin", "owner"]

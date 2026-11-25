@@ -51,6 +51,8 @@ type entity struct {
 	moveTokens, chatTokens, invalidTokens bucket
 	// role is the account role shown as a chat badge, from the join ticket (normal for dev tickets).
 	role proto.Role
+	// look is the character's appearance from the join ticket, shared read-only; nil for dev players.
+	look *proto.Look
 	// muted players' chat is dropped, and only they are told. Always false until staff tools (M7).
 	muted bool
 

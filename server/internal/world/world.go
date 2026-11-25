@@ -17,6 +17,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/content"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/names"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/persist"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/platform"
@@ -266,6 +267,7 @@ type joiner struct {
 	role        proto.Role
 	accountID   string // empty for dev tickets
 	characterID string
+	look        *proto.Look // nil for dev tickets: clients draw the default look
 }
 
 // track records which session plays a saved character (for LostLease); untrack forgets it.
@@ -310,5 +312,17 @@ func (s *Server) checkTicket(t string) (joiner, bool) {
 		s.log.Info("join ticket refused", "why", "premium world, no Premium", "account", p.AccountID)
 		return joiner{}, false
 	}
-	return joiner{name: p.Name, role: proto.Role(role.Rank()), accountID: p.AccountID, characterID: p.CharacterID}, true
+	return joiner{name: p.Name, role: proto.Role(role.Rank()), accountID: p.AccountID, characterID: p.CharacterID,
+		look: lookOf(p.Appearance)}, true
+}
+
+// lookOf turns a ticket's appearance into what entity_enter sends. One with a part that isn't
+// shaped like an id is dropped (the player is drawn with the default look) rather than refusing
+// the ticket: the API signed it, and the look is only cosmetic.
+func lookOf(a *content.Look) *proto.Look {
+	if a == nil || !a.WellFormed() {
+		return nil
+	}
+	return &proto.Look{BodyType: a.BodyType, SkinTone: a.SkinTone, HairStyle: a.HairStyle,
+		HairColour: a.HairColour, Beard: a.Beard}
 }

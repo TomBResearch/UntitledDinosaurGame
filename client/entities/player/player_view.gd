@@ -1,7 +1,7 @@
 class_name PlayerView
 extends Node3D
-## A player as the client draws it: the placeholder caveman (a capsule with a pelt and a club) and
-## a name label. It never decides where it is: its position is its MotionTrack at the tick the
+## A player as the client draws it: the placeholder caveman (CavemanModel, in his pelt loincloth)
+## and a name label. It never decides where it is: its position is its MotionTrack at the tick the
 ## entity manager passes in, plus any ErrorBlend correction still running. Its height comes from
 ## the path's waypoints (the server sends y), so it follows the navmesh up slopes and steps.
 
@@ -21,7 +21,7 @@ var _yaw: float = 0.0
 var _target_yaw: float = 0.0
 var _walked_m: float = 0.0
 
-@onready var _model: Node3D = $Model
+@onready var _model: CavemanModel = $Model
 @onready var _label: Label3D = $Name
 @onready var _bubble: SpeechBubble = $Bubble
 
@@ -35,16 +35,38 @@ func setup(enter: Proto.EntityEnter, tick_hz: int, self_entity: bool) -> void:
 		track.add(PathPlayback.from_proto(enter.path, tick_hz))
 	else:
 		track.add(PathPlayback.stationary(enter.position, 0, tick_hz))
+	var look := look_of(enter.look)
 	if is_node_ready():
 		_apply_label(enter.name)
+		apply_look(look)
 	else:
 		ready.connect(_apply_label.bind(enter.name), CONNECT_ONE_SHOT)
+		ready.connect(apply_look.bind(look), CONNECT_ONE_SHOT)
 
 
 func _apply_label(player_name: String) -> void:
 	_label.text = player_name
 	if is_self:
 		_label.modulate = SELF_NAME_COLOR
+
+
+## The look in an entity_enter as the API's JSON shape, or {} (the default look) if it has none:
+## dev players, and players from before looks were sent.
+static func look_of(l: Proto.Look) -> Dictionary:
+	if l == null:
+		return {}
+	return {"bodyType": l.body_type, "skinTone": l.skin_tone, "hairStyle": l.hair_style,
+			"hairColour": l.hair_colour, "beard": l.beard}
+
+
+## Draws the caveman with a look ({bodyType, skinTone, hairStyle, hairColour, beard}). Unknown ids
+## draw as the default.
+func apply_look(look: Dictionary) -> void:
+	_model.apply(look)
+
+
+func model() -> CavemanModel:
+	return _model
 
 
 ## Shows a chat line over the player's head for a few seconds.

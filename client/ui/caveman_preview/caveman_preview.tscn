@@ -1,0 +1,48 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://ui/caveman_preview/caveman_preview.gd" id="1_preview"]
+[ext_resource type="PackedScene" path="res://entities/player/caveman.tscn" id="2_caveman"]
+
+[sub_resource type="World3D" id="OwnWorld"]
+
+[sub_resource type="Environment" id="Env"]
+background_mode = 1
+background_color = Color(0.2, 0.25, 0.17, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.75, 0.72, 0.65, 1)
+ambient_light_energy = 0.6
+
+[sub_resource type="CylinderMesh" id="Plinth"]
+top_radius = 0.55
+bottom_radius = 0.6
+height = 0.08
+
+[node name="CavemanPreview" type="SubViewportContainer"]
+custom_minimum_size = Vector2(260, 340)
+stretch = true
+script = ExtResource("1_preview")
+
+[node name="View" type="SubViewport" parent="."]
+own_world_3d = true
+world_3d = SubResource("OwnWorld")
+handle_input_locally = false
+msaa_3d = 1
+size = Vector2i(260, 340)
+render_target_update_mode = 4
+
+[node name="Stage" type="Node3D" parent="View"]
+
+[node name="Env" type="WorldEnvironment" parent="View/Stage"]
+environment = SubResource("Env")
+
+[node name="Sun" type="DirectionalLight3D" parent="View/Stage"]
+light_energy = 1.1
+
+[node name="Plinth" type="MeshInstance3D" parent="View/Stage"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.04, 0)
+mesh = SubResource("Plinth")
+
+[node name="Caveman" parent="View/Stage" instance=ExtResource("2_caveman")]
+
+[node name="Camera" type="Camera3D" parent="View/Stage"]
+fov = 40.0

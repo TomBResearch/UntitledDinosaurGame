@@ -1,7 +1,7 @@
 ---
 title: Untitled Dinosaur Game wiki
 status: draft
-updated: 2026-11-24
+updated: 2026-11-25
 ---
 
 # Untitled Dinosaur Game wiki
@@ -12,6 +12,7 @@ Welcome, caveman. This wiki explains how the world works: skills, items, creatur
 
 ## Getting going
 
+- [Characters](characters.md): making a character, names, renaming and deleting
 - [Controls](controls.md): walking and the camera
 - [Chat](chat.md): talking to players near you
 - [Logging out](logging-out.md): saving, the idle logout and world restarts

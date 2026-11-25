@@ -32,7 +32,8 @@ type Config struct {
 	// TicketKey is WORLD_TICKET_KEY.
 	TicketKey []byte
 	// PublicWS is where players' browsers reach the worlds, without the path: for example
-	// wss://dinosaur.untitledgames.co.uk. A world's ws_path is added to it.
+	// wss://dinosaur.untitledgames.co.uk. A world's ws_path is added to it. {id} in it is replaced by
+	// the world's id, so local worlds can each have their own port (ws://127.0.0.1:809{id}).
 	PublicWS string
 	// Data is the game content: skills and the XP table (character levels), and the name filter.
 	Data *content.Content
