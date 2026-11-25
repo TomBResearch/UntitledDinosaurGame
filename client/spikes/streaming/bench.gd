@@ -1,7 +1,10 @@
 extends Node3D
 ## Streaming spike bench: walks a third-person camera across the generated chunked region
 ## (build_spike_region.gd) while SpikeChunkStreamer loads and frees chunks, and records frame times,
-## the hitch at each chunk load, load times and memory. Prints a summary at the end; on the web it
+## the hitch at each chunk load, load times and memory. Frame times are capped by vsync (16.7 ms at
+## 60 Hz), so it also records each frame's busy time: from the start of the bench's _process (it runs
+## first) to RenderingServer.frame_post_draw, which covers the streamer's work and submitting the draw
+## calls, but not the GPU's own time. Prints a summary at the end; on the web it
 ## also POSTs the JSON to /results on the page's server (serve.py saves it, and with --plan sends
 ## the page on to the next run).
 ##
@@ -38,6 +41,9 @@ var _hud: Label
 var _phase: Phase = Phase.INITIAL
 var _phase_started_us: int = 0
 var _last_frame_us: int = 0
+var _frame_start_us: int = 0
+var _settle_busy_ms: PackedFloat64Array = PackedFloat64Array()
+var _busy_by_frame: Dictionary[int, float] = {}
 var _focus: Vector3 = START
 var _speed_m_s: float = 12.0
 var _walk_s: float = 45.0
@@ -59,6 +65,8 @@ func _ready() -> void:
 
 	if _opts.get("norender", "0") == "1":
 		RenderingServer.render_loop_enabled = false
+	process_priority = -1000
+	RenderingServer.frame_post_draw.connect(_record_busy)
 
 	_streamer = SpikeChunkStreamer.new()
 	_streamer.name = "Chunks"
@@ -109,6 +117,7 @@ func _process(_delta: float) -> void:
 	if not RenderingServer.render_loop_enabled:
 		RenderingServer.force_sync()
 	var now := Time.get_ticks_usec()
+	_frame_start_us = now
 	var dt_ms := (now - _last_frame_us) / 1000.0
 	_last_frame_us = now
 	var phase_s := (now - _phase_started_us) / 1_000_000.0
@@ -145,6 +154,16 @@ func _process(_delta: float) -> void:
 		_hud.text = "%s  %.0f fps  chunks %d  %.0f m" % [
 			Phase.keys()[_phase], Engine.get_frames_per_second(), _streamer.loaded_count(),
 			(_focus - START).length()]
+	if not RenderingServer.render_loop_enabled:
+		_record_busy()  # nothing is drawn, so frame_post_draw doesn't come
+
+
+func _record_busy() -> void:
+	var busy_ms := (Time.get_ticks_usec() - _frame_start_us) / 1000.0
+	if _phase == Phase.SETTLE:
+		_settle_busy_ms.append(busy_ms)
+	elif _phase == Phase.WALK:
+		_busy_by_frame[Engine.get_process_frames()] = busy_ms
 
 
 func _set_phase(phase: Phase, now_us: int) -> void:
@@ -195,11 +214,22 @@ func _results(lines: PackedStringArray) -> Dictionary:
 		dt_by_frame[_walk_frames[i]] = _walk_dt_ms[i]
 	var after_work := PackedFloat64Array()
 	var quiet := PackedFloat64Array()
+	var busy_all := PackedFloat64Array()
+	var busy_work := PackedFloat64Array()
+	var busy_quiet := PackedFloat64Array()
 	for i in _walk_frames.size():
-		if _streamer.frame_work_us.has(_walk_frames[i] - 1):
+		var frame := _walk_frames[i]
+		if _streamer.frame_work_us.has(frame - 1):
 			after_work.append(_walk_dt_ms[i])
 		else:
 			quiet.append(_walk_dt_ms[i])
+		if _busy_by_frame.has(frame):
+			var busy: float = _busy_by_frame[frame]
+			busy_all.append(busy)
+			if _streamer.frame_work_us.has(frame):
+				busy_work.append(busy)
+			else:
+				busy_quiet.append(busy)
 
 	const COLUMNS: Array[String] = ["hitch_frame_ms", "request_call_ms", "poll_calls_ms", "wait_ms",
 		"get_ms", "instantiate_ms", "add_ms", "total_ms"]
@@ -228,6 +258,10 @@ func _results(lines: PackedStringArray) -> Dictionary:
 	var after := Stats.of(after_work)
 	var without := Stats.of(quiet)
 	var free := Stats.of(frees)
+	var busy_settle := Stats.of(_settle_busy_ms)
+	var busy_walk := Stats.of(busy_all)
+	var busy_stream := Stats.of(busy_work)
+	var busy_other := Stats.of(busy_quiet)
 	var initial_chunks: int = _initial.get("chunks", 0)
 	var initial_ms: float = _initial.get("ms", 0.0)
 	var static_mb := Performance.get_monitor(Performance.MEMORY_STATIC) / 1048576.0
@@ -240,7 +274,14 @@ func _results(lines: PackedStringArray) -> Dictionary:
 	var web := {}
 	lines.append("== streaming spike: %s  (%s, threads feature %s, %d cores)" % [
 		label, OS.get_name(), str(OS.has_feature("threads")), OS.get_processor_count()])
+	var gpu := "%s / %s" % [RenderingServer.get_video_adapter_vendor(), RenderingServer.get_video_adapter_name()]
+	if OS.has_feature("web"):
+		# Browsers mask GL_RENDERER; the debug extension gives the real adapter (or SwiftShader).
+		gpu = str(JavaScriptBridge.eval("(() => { const gl = document.createElement('canvas')"
+			+ ".getContext('webgl2'); const e = gl && gl.getExtension('WEBGL_debug_renderer_info');"
+			+ " return e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : 'unknown'; })()", true))
 	lines.append("options: %s" % JSON.stringify(_opts))
+	lines.append("gpu: %s" % gpu)
 	if OS.has_feature("web"):
 		var isolated := str(JavaScriptBridge.eval("String(self.crossOriginIsolated)", true))
 		web = {
@@ -260,6 +301,10 @@ func _results(lines: PackedStringArray) -> Dictionary:
 	for k in COLUMNS:
 		lines.append("  per chunk %-15s %s" % [k, per_chunk[k].text()])
 	lines.append("  free chunk ms:  %s" % free.text())
+	lines.append("busy ms (frame start to post-draw): idle %s" % busy_settle.text())
+	lines.append("  walking %s" % busy_walk.text())
+	lines.append("  frames with stream work %s" % busy_stream.text())
+	lines.append("  other frames            %s" % busy_other.text())
 	lines.append("memory: static %.0f MB, video %.0f MB, %d objects; %d draw calls, %d primitives" % [
 		static_mb, video_mb, objects, draw_calls, primitives])
 
@@ -273,6 +318,7 @@ func _results(lines: PackedStringArray) -> Dictionary:
 		"threads_feature": OS.has_feature("threads"),
 		"nothreads_feature": OS.has_feature("nothreads"),
 		"processors": OS.get_processor_count(),
+		"gpu": gpu,
 		"web": web,
 		"initial_load": _initial,
 		"settle_frame_ms": settle.to_dict(),
@@ -284,6 +330,12 @@ func _results(lines: PackedStringArray) -> Dictionary:
 			"chunks_loaded": chunks.size(),
 			"per_chunk": per_chunk_dicts,
 			"free_ms": free.to_dict(),
+		},
+		"busy_ms": {
+			"settle": busy_settle.to_dict(),
+			"walk": busy_walk.to_dict(),
+			"stream_work_frames": busy_stream.to_dict(),
+			"other_frames": busy_other.to_dict(),
 		},
 		"memory": {
 			"static_mb": static_mb,

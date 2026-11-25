@@ -2,7 +2,8 @@
 # Runs the streaming spike's web suite in one browser tab and prints the results table.
 #
 #   client/spikes/streaming/run_web_suite.sh safari         # Safari, in the foreground
-#   client/spikes/streaming/run_web_suite.sh chrome PATH    # headless Chrome/Chromium at PATH
+#   client/spikes/streaming/run_web_suite.sh chrome [PATH]  # headless Chrome at PATH (default: the
+#                                                           # chrome-headless-shell in build/chrome/)
 #   client/spikes/streaming/run_web_suite.sh manual         # prints the first URL; open it yourself
 #                                                           # (e.g. in the Claude app's browser pane,
 #                                                           # with the session's window in view)
@@ -14,7 +15,9 @@
 # It starts serve.py (the single-threaded build at http://localhost:8061/, the threaded one at /mt/
 # with COOP/COEP), plus cors_peer.py on :8063 and, if it isn't running, the world server on :8090 for
 # the cross-origin isolation check. Each page posts its results and is sent on to the next run.
-# Env: BUILD=1 rebuilds first (build_web.sh); WALK=40 seconds of walking per run; RUN=<id> names it.
+# Env: BUILD=1 rebuilds first (build_web.sh); WALK=40 seconds of walking per run; RUN=<id> names it;
+# UNCAPPED=1 (chrome only) turns off Chrome's frame-rate limit and vsync, so frame times show what a
+# frame costs instead of the 16.7 ms vsync interval.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 HERE="$REPO_ROOT/client/spikes/streaming"
@@ -54,7 +57,8 @@ python3 "$HERE/serve.py" build/spike-web-nothreads --isolated build/spike-web-th
   --plan "$PLAN" --results "$RESULTS" & pids+=($!)
 python3 "$HERE/cors_peer.py" 8063 & pids+=($!)
 if ! nc -z 127.0.0.1 8090 2>/dev/null; then
-  (cd server && exec go run ./cmd/world -dev-tickets >/dev/null 2>&1) & pids+=($!)
+  (cd server && go build -o ../build/spike-world ./cmd/world)
+  (cd server && exec ../build/spike-world -dev-tickets >/dev/null 2>&1) & pids+=($!)
 fi
 sleep 2
 
@@ -62,10 +66,13 @@ FIRST="$(head -1 "$PLAN")"
 case "$BROWSER" in
   safari) open -a Safari "$FIRST" ;;
   chrome)
-    CHROME="${2:?usage: run_web_suite.sh chrome /path/to/chrome}"
-    "$CHROME" --headless=new --window-size=1280,720 --user-data-dir="build/spike-chrome-profile" \
+    CHROME="${2:-$(find build/chrome -type f -name chrome-headless-shell -perm -u+x 2>/dev/null | head -1)}"
+    [[ -x "$CHROME" ]] || { echo "no Chrome: pass its path, or see README.md for chrome-headless-shell" >&2; exit 1; }
+    extra=()
+    [[ "${UNCAPPED:-0}" == 1 ]] && extra=(--disable-frame-rate-limit --disable-gpu-vsync)
+    "$CHROME" ${extra[@]+"${extra[@]}"} --headless=new --window-size=1280,720 --user-data-dir="build/spike-chrome-profile" \
       --disable-background-timer-throttling --disable-renderer-backgrounding \
-      --disable-backgrounding-occluded-windows --ignore-gpu-blocklist --enable-gpu \
+      --disable-backgrounding-occluded-windows --enable-gpu \
       "$FIRST" >/dev/null 2>&1 & pids+=($!) ;;
   *) echo "Open this in a visible, foreground browser tab: $FIRST" ;;
 esac

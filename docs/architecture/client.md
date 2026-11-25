@@ -121,11 +121,11 @@ Decided by the M0 streaming spike: [ADR 0013](../decisions/0013-region-streaming
 
 - Each region is split into **64 m chunks**, each its own scene with terrain, props and decoration.
 - The client keeps chunks within **about 160 m** loaded and frees those beyond about 220 m. The two distances differ (hysteresis) so a chunk near the edge doesn't load and unload repeatedly. Distance is from the player to the nearest point of the chunk.
-- Loading uses `ResourceLoader.load_threaded_request`, nearest chunk first. **The web build is single-threaded**, and there the call loads synchronously: the whole load runs inside it, on the main thread. That's about 2 ms for a spike chunk on an M5 Pro. The same code loads in the background on desktop, or on a threaded build.
+- Loading uses `ResourceLoader.load_threaded_request`, nearest chunk first. **The web build is single-threaded**, and there the call loads synchronously: the whole load runs inside it, on the main thread. For a spike chunk that's about 1.5 ms at 60 Hz on an M5 Pro (2.5 ms worst), in Chromium with drawing; frames with chunk work showed no visible hitch. The same code loads in the background on desktop, or on a threaded build.
 - To keep that from hitching:
-  - **at most one chunk is finished (get, instantiate, add) a frame, and at most one is freed a frame**, farthest first. Freeing a chunk occasionally costs about 10 ms;
+  - **at most one chunk is finished (get, instantiate, add) a frame, and at most one is freed a frame**, farthest first. Freeing a chunk costs up to about 3 ms on the web;
   - **chunks stay light.** Repeated props are one `MultiMeshInstance3D` per mesh per chunk, shared meshes, materials and prop scenes are their own files, instanced scenes are only for things that need collision, and small props have a visibility range.
-- Changing region shows a loading screen. The new region's nearby chunks load before you appear.
+- Changing region shows a loading screen. The new region's nearby chunks load before you appear. The loading screen may finish several chunks a frame: at one a frame, the 31-chunk first ring takes about 0.5 s at 60 Hz.
 
 ## Rendering budgets (desktop browser, first target)
 
