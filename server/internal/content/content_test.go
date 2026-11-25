@@ -121,7 +121,7 @@ func TestEmitClientWritesOnlyClientFiles(t *testing.T) {
 func copyData(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, n := range []string{"progression.json", "skills.json", "chat_filter.json"} {
+	for _, n := range []string{"progression.json", "skills.json", "chat_filter.json", "name_filter.json"} {
 		write(t, dir, n, read(t, repoData, n))
 	}
 	return dir

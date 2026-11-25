@@ -14,7 +14,7 @@ accounts.untitledgames.co.uk         dinosaur.untitledgames.co.uk ── nginx (
    └──────────── udg-api ─────────────────┘  /dev/        → private docs (static, password)
                     │
                     ▼
-               udg-postgres  ◄──── world servers (save characters, heartbeat)
+               udg-postgres  ◄──── world servers (save characters, online leases)
 ```
 
 | Component | Language | Responsibility |
@@ -35,7 +35,7 @@ accounts.untitledgames.co.uk         dinosaur.untitledgames.co.uk ── nginx (
    2. gets fresh ban and Premium state from the service API (cached for at most 30 s)
    3. refuses a premium world unless Premium is active (staff count as Premium)
    4. refuses if the account already has a character online anywhere
-   5. issues a **join ticket**: HMAC-signed with `WORLD_TICKET_KEY`, valid for 30 s, single use, and holding the account, character, world and a nonce
+   5. issues a **join ticket**: HMAC-signed with `WORLD_TICKET_KEY`, valid for 30 s, single use, and holding the account, character, world, name, role, Premium and a nonce ([backend.md](backend.md#join-tickets))
 5. **Connect.** The client opens `wss://dinosaur.untitledgames.co.uk/w/<world-id>` and sends `hello(ticket, protocol_hash, content_hash)`. The world server:
    1. checks the ticket and that the nonce is unused
    2. takes the character's **online lease** in Postgres
@@ -50,7 +50,7 @@ accounts.untitledgames.co.uk         dinosaur.untitledgames.co.uk ── nginx (
 |---|---|---|
 | Account, email, password, username, role, Premium, bans, friends | Account platform | Platform DB (never copied here, except account ids) |
 | Characters, skills, inventory, equipment, bank, quest progress, position | World server while the character is online, `udg-api` when offline | `udg-postgres` |
-| World list and status | `udg-api` (config), plus world heartbeats | `udg-postgres` |
+| World list and status | `udg-api`: the list from the `worlds` table, status from each world's `GET /status` | `udg-postgres` (the list) |
 | Content definitions | The repo | `data/` ([ADR 0011](../decisions/0011-content-as-json-data.md)) |
 | Level layout and navmesh | Godot scenes | Exported to `data/regions/` ([ADR 0004](../decisions/0004-navmesh-baked-in-godot.md)) |
 

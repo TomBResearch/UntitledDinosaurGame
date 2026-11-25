@@ -5,6 +5,8 @@
 .env
 .env.*
 !.env.example
+# Local API environment (copy of infra/dev/api.env.example)
+infra/dev/api.env
 
 # Local MCP config (absolute paths on the owner's Mac)
 .mcp.json

@@ -1,0 +1,23 @@
+# Local development: Postgres for the backend API (CLAUDE.md, "Commands").
+#
+#   docker compose -f infra/dev/docker-compose.yml up -d     # start (data kept in a volume)
+#   docker compose -f infra/dev/docker-compose.yml down -v   # stop and wipe
+#
+# Port 5433 so it doesn't clash with any other Postgres on the Mac. The password is for this
+# local database only.
+name: udg-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: udg
+      POSTGRES_PASSWORD: udg
+      POSTGRES_DB: udg
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

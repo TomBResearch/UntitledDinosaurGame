@@ -3,6 +3,7 @@
 # 127.0.0.1:8082, so Caddy only speaks plain HTTP inside the machine.
 #
 #   /healthz  the world server's health check (public, says "ok")
+#   /api/     the backend API (public; player routes need a platform access token)
 #   /wiki/    the public wiki (published pages only)
 #   /dev/     the internal docs, behind the staff password
 #   /w/1      world 1 (WebSocket), only with the playtest cookie
@@ -44,6 +45,14 @@
 
 	handle /healthz {
 		reverse_proxy world-1:8090
+	}
+
+	# The backend API (docs/architecture/backend.md). It rate-limits by client IP, which Caddy
+	# works out from nginx's X-Forwarded-For (trusted_proxies above) and passes on as X-Real-IP.
+	handle /api/* {
+		reverse_proxy api:3000 {
+			header_up X-Real-IP {client_ip}
+		}
 	}
 
 	# Wiki and dev docs (ADR 0012, docs/operations/site.md).

@@ -55,7 +55,7 @@ type SessionID uint64
 type InputKind uint8
 
 const (
-	// InputJoin adds a player: Session, Client and Name are set.
+	// InputJoin adds a player: Session, Client, Name and Role are set.
 	InputJoin InputKind = iota + 1
 	// InputLeave removes the session's player (it disconnected). Unknown sessions are ignored.
 	InputLeave
@@ -69,6 +69,7 @@ type Input struct {
 	Session SessionID
 	Client  Client        // InputJoin
 	Name    string        // InputJoin: the display name, already validated
+	Role    proto.Role    // InputJoin: the account's role, shown as a chat badge
 	Msg     proto.Message // InputIntent
 }
 
@@ -290,6 +291,7 @@ func (r *Region) join(in Input) {
 	e := r.alloc()
 	e.kind = proto.EntityKindPlayer
 	e.name = in.Name
+	e.role = in.Role
 	e.session = in.Session
 	e.client = in.Client
 	e.pos = r.spawns[r.nextSpawn%len(r.spawns)]

@@ -6,6 +6,7 @@ package world
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,7 +17,11 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/names"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/platform"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/proto"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/region"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/ticket"
 )
 
 // Config is a world server's network settings. DefaultConfig fills in the spec's values.
@@ -26,8 +31,16 @@ type Config struct {
 	// ContentHash is the server's data/ hash. A client whose hello has a different one is out of date
 	// and is told to refresh.
 	ContentHash string
+	// TicketKey is WORLD_TICKET_KEY, shared with the backend API, which signs join tickets with it.
+	// Without it, only dev tickets (if on) are accepted.
+	TicketKey []byte
+	// PremiumOnly refuses tickets from accounts without Premium (staff count as Premium). The API
+	// checks this before issuing a ticket; the world checks again.
+	PremiumOnly bool
 	// DevTickets accepts "dev:<name>" tickets (development only; see networking.md "Dev tickets").
 	DevTickets bool
+	// Now is the clock for ticket expiry (tests set it). Nil means time.Now.
+	Now func() time.Time
 	// OriginPatterns are the browser origins allowed to connect besides the server's own host, as
 	// github.com/coder/websocket AcceptOptions.OriginPatterns.
 	OriginPatterns []string
@@ -80,6 +93,8 @@ type Server struct {
 	regionDone <-chan struct{}
 	log        *slog.Logger
 
+	tickets *ticket.Guard
+
 	nextID atomic.Uint64
 	// keepalivesAnswered counts pongs to keepalive pings (tests and, later, metrics).
 	keepalivesAnswered atomic.Uint64
@@ -91,15 +106,36 @@ type Server struct {
 
 // New makes a server whose players join spawn. regionDone must be closed when the regions stop.
 func New(cfg Config, spawn *region.Region, regionDone <-chan struct{}, log *slog.Logger) *Server {
-	return &Server{cfg: cfg, spawn: spawn, regionDone: regionDone, log: log, sessions: map[*session]struct{}{}}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	s := &Server{cfg: cfg, spawn: spawn, regionDone: regionDone, log: log, sessions: map[*session]struct{}{}}
+	if len(cfg.TicketKey) > 0 {
+		s.tickets = ticket.NewGuard(cfg.TicketKey, cfg.WorldID)
+	}
+	return s
 }
 
-// Handler serves /w/<world-id> (WebSocket) and /healthz.
+// Handler serves /w/<world-id> (WebSocket), /healthz and /status.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /w/{world}", s.serveWS)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("GET /status", s.serveStatus)
 	return mux
+}
+
+// Status is GET /status: what the backend API shows in the world list. It's only reachable inside
+// Docker (Caddy doesn't route it).
+type Status struct {
+	World   string `json:"world"`
+	Players int    `json:"players"`
+}
+
+func (s *Server) serveStatus(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(Status{World: s.cfg.WorldID, Players: s.Sessions()})
 }
 
 func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
@@ -166,32 +202,40 @@ func (s *Server) Sessions() int {
 	return len(s.sessions)
 }
 
-// checkTicket returns the display name a ticket joins as. Real tickets (signed by the backend API)
-// arrive in M1; until then only dev tickets exist, and only with DevTickets on.
-func (s *Server) checkTicket(ticket string) (string, bool) {
-	name, ok := strings.CutPrefix(ticket, "dev:")
-	if !ok || !s.cfg.DevTickets || !ValidName(name) {
-		return "", false
-	}
-	return name, true
+// joiner is who a ticket lets in.
+type joiner struct {
+	name        string
+	role        proto.Role
+	accountID   string // empty for dev tickets
+	characterID string
 }
 
-// ValidName reports whether name follows the character name rules (docs/architecture/backend.md):
-// 3–12 characters, letters and numbers with single spaces between words, no space at either end.
-// Dev tickets use plain ASCII letters and digits; the word filter and uniqueness come with real
-// characters in M1.
-func ValidName(name string) bool {
-	if len(name) < 3 || len(name) > 12 || name[0] == ' ' || name[len(name)-1] == ' ' {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case c == ' ' && name[i-1] != ' ':
-		default:
-			return false
+// checkTicket checks hello's ticket. A real ticket is signed by the backend API with TicketKey, for
+// this world, unexpired and unused (docs/architecture/backend.md, "Join tickets"). A dev ticket is
+// "dev:<name>", accepted only with DevTickets on.
+func (s *Server) checkTicket(t string) (joiner, bool) {
+	if name, ok := strings.CutPrefix(t, "dev:"); ok {
+		if !s.cfg.DevTickets || !names.WellFormed(name) {
+			return joiner{}, false
 		}
+		return joiner{name: name, role: proto.RoleNormal}, true
 	}
-	return true
+	if s.tickets == nil {
+		return joiner{}, false
+	}
+	p, err := s.tickets.Check(t, s.cfg.Now())
+	if err != nil {
+		s.log.Info("join ticket refused", "why", err)
+		return joiner{}, false
+	}
+	role := platform.Role(p.Role)
+	switch {
+	case !names.WellFormed(p.Name) || !role.Valid() || !platform.ValidAccountID(p.AccountID) || p.CharacterID == "":
+		s.log.Warn("join ticket has a valid signature but bad contents", "account", p.AccountID)
+		return joiner{}, false
+	case s.cfg.PremiumOnly && !p.Premium:
+		s.log.Info("join ticket refused", "why", "premium world, no Premium", "account", p.AccountID)
+		return joiner{}, false
+	}
+	return joiner{name: p.Name, role: proto.Role(role.Rank()), accountID: p.AccountID, characterID: p.CharacterID}, true
 }
