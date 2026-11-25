@@ -9,9 +9,9 @@ M0 ends with the game live at `dinosaur.untitledgames.co.uk`: you and another pe
 ## Decision
 
 - The live world runs with dev tickets **only behind a playtest gate** in the stack's Caddy ([Caddyfile](../../infra/production/Caddyfile)):
-  - **The game page** (`/`) needs a shared playtest password (HTTP Basic, bcrypt in `/opt/udg/.env`). Every response from it sets an `HttpOnly`, `Secure`, `SameSite=Strict` cookie, `udg_play`, scoped to `/w/`, whose value is a random 40-character secret.
+  - **The game page** (`/play/`; it was `/` until the landing page took the root on 2026-11-25) needs a shared playtest password (HTTP Basic, bcrypt in `/opt/udg/.env`). Every response from it sets an `HttpOnly`, `Secure`, `SameSite=Strict` cookie, `udg_play`, scoped to `/w/`, whose value is a random 40-character secret.
   - **The world connection** (`/w/1`) is proxied only when that cookie is present; otherwise it gets 403. Browsers don't reliably send a page's Basic auth with a WebSocket, but they always send cookies.
-- The **public wiki** (`/wiki/`) and the **health check** (`/healthz`) stay open. **`/dev/`** keeps its own staff password ([site.md](../operations/site.md)).
+- The **landing page** (`/`), the **public wiki** (`/wiki/`) and the **health check** (`/healthz`) stay open. **`/dev/`** keeps its own staff password ([site.md](../operations/site.md)).
 - Changing the playtest password (`tools/set-passwords.sh play`) also makes a new cookie, so everyone signs in again.
 - **When M1 login lands, the gate and `-dev-tickets` both go.** Worlds then accept only the backend's join tickets.
 

@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Untitled Dinosaur Game</title>
+<meta name="description" content="A prehistoric sandbox adventure in your browser. Log in or create an account to play.">
+<meta name="theme-color" content="#1a3d22">
+<link rel="icon" href="img/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Luckiest+Guy&family=Baloo+2:wght@500;600;700;800&display=swap">
+<link rel="stylesheet" href="css/main.css">
+<script type="module" src="js/main.js"></script>
+</head>
+<body>
+
+<!-- The animated valley. js/scene.js draws it; without JS the sky gradient stays. -->
+<div class="scene" id="scene" aria-hidden="true"></div>
+
+<div class="page">
+  <header class="masthead">
+    <p class="eyebrow"><span aria-hidden="true">🦕</span> Est. 66 million years ago <span aria-hidden="true">🦖</span></p>
+    <h1 class="title">
+      <span class="word w1">Untitled</span>
+      <span class="word w2">Dinosaur Game</span>
+    </h1>
+    <p class="tagline">Swing from the canopy. Outrun the raptors. Don't sit on the eggs.</p>
+  </header>
+
+  <main class="stage">
+    <div class="card-zone" id="cardZone">
+      <!-- Characters around the card are drawn by js/critters.js into these slots. -->
+      <div class="peeker" id="peeker" aria-hidden="true"></div>
+      <div class="buddy" id="buddy" aria-hidden="true"></div>
+
+      <section class="card" aria-labelledby="cardTitle">
+        <div class="card-vines" id="cardVines" aria-hidden="true"></div>
+        <div class="plank"><span id="plankText">Base Camp</span></div>
+
+        <!-- Log in -->
+        <div class="panel" data-panel="login">
+          <h2 class="card-title" id="cardTitle">Welcome back, explorer</h2>
+          <p class="card-sub">Log in to return to the valley. The raptors already know your name.</p>
+          <form class="form" id="loginForm" novalidate>
+            <div class="field">
+              <label for="loginEmail">Email</label>
+              <div class="input-wrap">
+                <span class="glyph" aria-hidden="true">🦴</span>
+                <input id="loginEmail" name="email" type="email" autocomplete="email" inputmode="email"
+                       placeholder="you@example.com" autocapitalize="none" spellcheck="false" required>
+              </div>
+            </div>
+            <div class="field">
+              <label for="loginPassword">Password</label>
+              <div class="input-wrap">
+                <span class="glyph" aria-hidden="true">🥚</span>
+                <input id="loginPassword" name="password" type="password" autocomplete="current-password"
+                       placeholder="Your password" required>
+                <button class="peek" type="button" aria-label="Show password" aria-pressed="false" data-peek="loginPassword"></button>
+              </div>
+            </div>
+            <p class="note" role="alert" hidden></p>
+            <button class="btn btn-primary" type="submit">Log in</button>
+            <div class="btn-row">
+              <a class="btn btn-wood" href="#forgot">Forgotten password</a>
+              <a class="btn btn-wood" href="#join">Create account</a>
+            </div>
+          </form>
+        </div>
+
+        <!-- Create an account -->
+        <div class="panel" data-panel="join" hidden>
+          <h2 class="card-title">Join the expedition</h2>
+          <p class="card-sub">One Untitled Games account works in every Untitled game.</p>
+          <form class="form" id="joinForm" novalidate>
+            <div class="field">
+              <label for="joinUsername">Username</label>
+              <div class="input-wrap">
+                <span class="glyph" aria-hidden="true">🦖</span>
+                <input id="joinUsername" name="username" type="text" autocomplete="username" minlength="3" maxlength="16"
+                       pattern="[A-Za-z0-9_]{3,16}" placeholder="RaptorRanger99" autocapitalize="none" spellcheck="false" required>
+              </div>
+              <p class="hint">3–16 letters, numbers or underscores. Other players see this.</p>
+            </div>
+            <div class="field">
+              <label for="joinEmail">Email</label>
+              <div class="input-wrap">
+                <span class="glyph" aria-hidden="true">🦴</span>
+                <input id="joinEmail" name="email" type="email" autocomplete="email" inputmode="email"
+                       placeholder="you@example.com" autocapitalize="none" spellcheck="false" required>
+              </div>
+            </div>
+            <div class="field">
+              <label for="joinPassword">Password</label>
+              <div class="input-wrap">
+                <span class="glyph" aria-hidden="true">🥚</span>
+                <input id="joinPassword" name="password" type="password" autocomplete="new-password" minlength="10" maxlength="200"
+                       placeholder="At least 10 characters" required>
+                <button class="peek" type="button" aria-label="Show password" aria-pressed="false" data-peek="joinPassword"></button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="joinBirth">Date of birth</label>
+              <div class="input-wrap">
+                <span class="glyph" aria-hidden="true">🎂</span>
+                <input id="joinBirth" name="dateOfBirth" type="date" autocomplete="bday" required>
+              </div>
+              <p class="hint">You need to be 13 or older. We only keep the year.</p>
+            </div>
+            <p class="note" role="alert" hidden></p>
+            <button class="btn btn-primary" type="submit">Create account</button>
+            <div class="btn-row single">
+              <a class="btn btn-wood" href="#login">I already have an account</a>
+            </div>
+          </form>
+        </div>
+
+        <!-- Forgotten password -->
+        <div class="panel" data-panel="forgot" hidden>
+          <h2 class="card-title">Lost in the jungle?</h2>
+          <p class="card-sub">Tell us your email and we'll send a link to set a new password.</p>
+          <form class="form" id="forgotForm" novalidate>
+            <div class="field">
+              <label for="forgotEmail">Email</label>
+              <div class="input-wrap">
+                <span class="glyph" aria-hidden="true">🦴</span>
+                <input id="forgotEmail" name="email" type="email" autocomplete="email" inputmode="email"
+                       placeholder="you@example.com" autocapitalize="none" spellcheck="false" required>
+              </div>
+            </div>
+            <p class="note" role="alert" hidden></p>
+            <button class="btn btn-primary" type="submit">Send reset link</button>
+            <div class="btn-row single">
+              <a class="btn btn-wood" href="#login">Back to log in</a>
+            </div>
+          </form>
+        </div>
+
+        <!-- Check your inbox (after joining, or a reset request) -->
+        <div class="panel" data-panel="sent" hidden>
+          <h2 class="card-title">A pterodactyl is on its way</h2>
+          <p class="card-sub" id="sentText">Check your inbox for a link from Untitled Games. It works for one hour.</p>
+          <div class="sent-art" aria-hidden="true" id="sentArt"></div>
+          <div class="form">
+            <button class="btn btn-wood" type="button" id="resendBtn">Send it again</button>
+            <div class="btn-row single">
+              <a class="btn btn-wood" href="#login">Back to log in</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Signed in: account management -->
+        <div class="panel" data-panel="account" hidden>
+          <h2 class="card-title">Ready, <span id="accName">explorer</span>?</h2>
+          <div class="badges" id="accBadges"></div>
+          <div class="form">
+            <a class="btn btn-primary btn-play" href="play/" id="playBtn">Play</a>
+            <dl class="acct">
+              <div><dt>Email</dt><dd id="accEmail">–</dd></div>
+              <div><dt>Member since</dt><dd id="accSince">–</dd></div>
+              <div><dt>Username</dt><dd id="accUsernameNote">–</dd></div>
+            </dl>
+            <div class="btn-row">
+              <a class="btn btn-wood" href="#forgot">Change password</a>
+              <button class="btn btn-wood" type="button" id="logoutBtn">Log out</button>
+            </div>
+          </div>
+        </div>
+
+        <p class="footnote" id="footnote"><span aria-hidden="true">🥚</span> Tip: never feed the Rex after midnight.</p>
+      </section>
+    </div>
+  </main>
+
+  <footer class="foot">
+    <a href="wiki/">Wiki</a>
+    <span aria-hidden="true">·</span>
+    <a href="play/" title="For playtesters, until accounts open">Playtest</a>
+    <span aria-hidden="true">·</span>
+    <span>An Untitled Games project</span>
+  </footer>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
