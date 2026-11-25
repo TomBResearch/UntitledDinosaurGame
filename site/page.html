@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{- if eq .Site "dev"}}
+<meta name="robots" content="noindex, nofollow">
+{{- end}}
+<title>{{.Title}}{{if not .Home}} · {{if eq .Site "wiki"}}Untitled Dinosaur Game wiki{{else}}UDG dev docs{{end}}{{end}}</title>
+<link rel="stylesheet" href="{{.Root}}assets/site.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cg fill='none' stroke='%23b5651d' stroke-width='8' stroke-linecap='round'%3E%3Cpath d='M32 48V9'/%3E%3Cpath d='M29 47 11 21'/%3E%3Cpath d='M35 47 53 21'/%3E%3C/g%3E%3Ccircle cx='32' cy='50' r='9' fill='%23b5651d'/%3E%3C/svg%3E">
+</head>
+<body class="site-{{.Site}}">
+<header class="top">
+  <a class="brand" href="{{.Root}}index.html">
+    <svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round"><path d="M32 48V9"/><path d="M29 47 11 21"/><path d="M35 47 53 21"/></g><circle cx="32" cy="50" r="9" fill="currentColor"/></svg>
+    <span class="brand-text"><span class="brand-name">Untitled Dinosaur Game</span>
+    <span class="brand-sub">{{if eq .Site "wiki"}}Wiki{{else}}Developer docs{{end}}</span></span>
+  </a>
+  {{- if eq .Site "dev"}}<span class="chip">Staff only</span>{{end}}
+  <span class="spacer"></span>
+  {{- if eq .Site "wiki"}}
+  <a class="top-link" href="{{.Root}}../">Play</a>
+  {{- else}}
+  <a class="top-link" href="{{.Root}}../wiki/">Public wiki</a>
+  {{- end}}
+  <label for="menu" class="menu-button">Menu</label>
+</header>
+<input type="checkbox" id="menu" class="menu-toggle" aria-label="Show pages">
+<div class="layout">
+<nav class="side" aria-label="Pages">
+{{- range .Nav}}
+<section>
+  {{- if .Title}}<h2>{{.Title}}</h2>{{end}}
+  <ul>
+  {{- range .Items}}
+    <li><a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Title}}</a>{{if .Draft}} <span class="badge">draft</span>{{end}}</li>
+  {{- end}}
+  </ul>
+</section>
+{{- end}}
+</nav>
+<main>
+{{- if .Preview}}
+{{- if .Draft}}
+<p class="banner draft"><strong>Draft:</strong> not on the public wiki. It goes public when its front matter says <code>status: published</code>, which happens once the feature is in the game.</p>
+{{- else}}
+<p class="banner published"><strong>Published:</strong> this page is on the public wiki too. <a href="{{.PublicHref}}">See it there</a>.</p>
+{{- end}}
+{{- end}}
+{{- if .ComingSoon}}
+<section class="coming">
+  <svg class="coming-art" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round"><path d="M32 48V9"/><path d="M29 47 11 21"/><path d="M35 47 53 21"/></g><circle cx="32" cy="50" r="9" fill="currentColor"/></svg>
+  <h1>The wiki is coming</h1>
+  <p class="lead">Grug is still carving the stone tablets.</p>
+  <p>This wiki will explain how the world works: skills, items, creatures, quests and more. Untitled Dinosaur Game is in early development, and pages appear here as each feature arrives in the game.</p>
+  {{- if .ComingPages}}
+  <h2>Carved so far</h2>
+  <ul>
+  {{- range .ComingPages}}
+    <li><a href="{{.Href}}">{{.Title}}</a></li>
+  {{- end}}
+  </ul>
+  {{- else}}
+  <p>Check back soon.</p>
+  {{- end}}
+</section>
+{{- else}}
+<article class="prose">
+{{.Body}}
+</article>
+{{- end}}
+<footer class="foot">
+  {{- if .Updated}}<span>Updated {{.Updated}}</span>{{end}}
+  {{- if and (eq .Site "dev") .Source}}<span>Source: {{if .SourceURL}}<a href="{{.SourceURL}}">{{.Source}}</a>{{else}}{{.Source}}{{end}}</span>{{end}}
+  {{- if eq .Site "wiki"}}<span>Untitled Dinosaur Game is in early development. Things change.</span>{{end}}
+</footer>
+</main>
+</div>
+</body>
+</html>

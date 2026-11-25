@@ -28,7 +28,7 @@ How agents (and humans) pick up, do and finish work. Keep it light. The aim is s
 - [ ] The headless Godot run of the affected scenes shows 0 errors and 0 warnings.
 - [ ] Docs are updated if behaviour changed, with a new ADR for a significant technical choice.
 - [ ] **If a player can see the change**, the matching `wiki/` page and [wiki/changelog.md](../../wiki/changelog.md) are updated, and the page is set to `status: published` if the feature now exists.
-- [ ] Nothing internal was added to `wiki/` ([ADR 0008](../decisions/0008-public-wiki-private-docs.md)).
+- [ ] Nothing internal was added to `wiki/` ([ADR 0008](../decisions/0008-public-wiki-private-docs.md)). The site build in `tools/check.sh` fails if a published page links into `docs/` or to a draft ([site.md](../operations/site.md)).
 
 ## Changing the design
 

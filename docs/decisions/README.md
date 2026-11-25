@@ -17,5 +17,6 @@ Each significant technical choice gets a short record: the context, the decision
 | [0009](0009-fast-ci.md) | A fast CI lane on every push; slow tests nightly | Accepted |
 | [0010](0010-hosting-shared-server.md) | Host on the shared project server as a separate stack | Accepted |
 | [0011](0011-content-as-json-data.md) | Game content as JSON in `data/`, with a content hash | Accepted |
+| [0012](0012-static-site-generator.md) | A small Go generator (`sitegen`) builds the wiki and docs site | Accepted |
 
 Template: [0000-template.md](0000-template.md)

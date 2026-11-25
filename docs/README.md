@@ -39,4 +39,5 @@ Internal documentation for Untitled Dinosaur Game. Players never see this; the p
 ## Operations and decisions
 
 - [operations/hosting.md](operations/hosting.md): the project server, Docker layout, domains, memory budget
+- [operations/site.md](operations/site.md): building the wiki and docs site, the leak guard, and serving `/wiki/` and `/dev/`
 - [decisions/](decisions/README.md): every significant technical choice, with its reasons

@@ -17,7 +17,7 @@ Each milestone ends with something **playable on the test server**. Tasks inside
 | Client core **(done)** | Connect with a **dev ticket** (no platform login yet), clock sync, click-to-move, path playback for you and others, third-person camera, click marker. |
 | Local chat **(done)** | Within 40 m, rate limited, shown in a chat box and as a speech bubble. |
 | Streaming spike | Chunked loading measured on the web, with and without threads. An ADR records the choice. |
-| Static site for the wiki and docs | A generator is chosen (with an ADR) and builds `/wiki/` (published pages only) and `/dev/` (behind a password). |
+| Static site for the wiki and docs **(done)** | A generator is chosen (with an ADR) and builds `/wiki/` (published pages only) and `/dev/` (behind a password). |
 | Deploy | DNS, the nginx file, the certificate, `/opt/udg`, `tools/deploy.sh`. The game is live at `https://dinosaur.untitledgames.co.uk`, with the racing site and other sites unaffected. |
 
 **Acceptance:** you and one other person open the URL, each get a dev character, see each other moving smoothly with no visible jitter at 150 ms of latency, and chat. The world server's p99 tick time is under 2 ms with 50 bots walking around (nightly bot test).

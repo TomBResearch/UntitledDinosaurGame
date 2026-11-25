@@ -2,7 +2,7 @@
 # The fast check (ADR 0009). Same as the CI fast lane. Run it before every push; target under 60 s.
 #
 #   tools/check.sh          # everything
-#   tools/check.sh go       # Go only (format, vet, staticcheck, tests, data, protocol and region staleness)
+#   tools/check.sh go       # Go only (format, vet, staticcheck, tests, data, protocol and region staleness, site build)
 #   tools/check.sh godot    # data + Godot only (import, GUT)
 #
 # Env: GODOT (path to Godot 4.7.2; defaults to the Mac app), STATICCHECK (path, optional locally).
@@ -23,6 +23,12 @@ run_proto() {
 }
 
 # Each region scene's export must be current (ADR 0004). Hash only: no bake or export here.
+# The wiki and docs site (ADR 0012). Fails on a leak from the public wiki or a broken link or anchor.
+run_site() {
+  step "Site: build wiki and docs (leak guard)"
+  "$REPO_ROOT/tools/build-site.sh"
+}
+
 run_regions() {
   step "Regions: exports match their scenes"
   local stale=0 scene id export want have
@@ -87,8 +93,8 @@ run_godot() {
 }
 
 case "$PART" in
-  all) run_data; run_proto; run_regions; run_go; run_godot ;;
-  go) run_data; run_proto; run_regions; run_go ;;
+  all) run_data; run_proto; run_regions; run_site; run_go; run_godot ;;
+  go) run_data; run_proto; run_regions; run_site; run_go ;;
   godot) run_data; run_godot ;;
   *) echo "usage: tools/check.sh [all|go|godot]" >&2; exit 2 ;;
 esac
