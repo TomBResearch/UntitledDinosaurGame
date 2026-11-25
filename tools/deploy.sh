@@ -35,7 +35,7 @@ fi
 allowed="$(curl -s -o /dev/null -D - --max-time 15 -X OPTIONS https://accounts.untitledgames.co.uk/auth/refresh \
   -H "Origin: https://$DOMAIN" -H "Access-Control-Request-Method: POST" | tr -d '\r' | awk -F': ' 'tolower($1)=="access-control-allow-origin"{print $2}')"
 if [[ "$allowed" != "https://$DOMAIN" ]]; then
-  echo "The account platform doesn't allow https://$DOMAIN yet (ALLOWED_ORIGINS in the racing repo's infra/production)." >&2
+  echo "The account platform doesn't allow https://$DOMAIN yet (ALLOWED_ORIGINS in the platform repo's infra/production, TomBResearch/UntitledAccountSystem)." >&2
   echo "Roll that out first: docs/architecture/accounts.md, \"Configuration changes needed on the platform\"." >&2
   exit 1
 fi

@@ -70,7 +70,7 @@ From the `cmd/api` task on, the stack also needs four values in `/opt/udg/.env`,
 | `POSTGRES_PASSWORD` | The database password (hex, so it's safe in a URL) | `tools/set-secrets.sh`, on the server |
 | `WORLD_TICKET_KEY` | Signs join tickets; the API and every world share it | `tools/set-secrets.sh`, on the server |
 | `WORLD_DB_PASSWORD` | The worlds' database password, as the restricted `udg_world` role ([ADR 0017](../decisions/0017-world-saves-to-postgres-directly.md)). The API sets it on the role each time it starts, so it can be changed by editing `.env` and restarting the API, then the worlds. | `tools/set-secrets.sh`, on the server (added by the persistence task: run it once more before the next deploy) |
-| `DINOSAUR_SERVICE_KEY` | This game's key for the platform's service API | The platform config step ([accounts.md](../architecture/accounts.md#configuration-changes-needed-on-the-platform)): it goes in `/opt/urg/.env` first, then `tools/set-secrets.sh` copies it across |
+| `DINOSAUR_SERVICE_KEY` | This game's key for the platform's service API | The platform config step ([accounts.md](../architecture/accounts.md#configuration-changes-needed-on-the-platform)): it goes in the platform's `/opt/accounts/.env` first, then `tools/set-secrets.sh` copies it across |
 
 ```bash
 tools/set-secrets.sh
