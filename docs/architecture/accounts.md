@@ -6,8 +6,8 @@ The shared platform lives in `TomBResearch/UntitledAccountSystem`; its `docs/spe
 
 | Need | How |
 |---|---|
-| Log in, refresh, log out (client) | `POST https://accounts.untitledgames.co.uk/auth/login`, `/auth/refresh` and `/auth/logout`, all with `credentials: "include"`. The refresh token is an HttpOnly cookie on the accounts domain that the client never sees. The access token is kept in memory and refreshed about 60 s before it expires, **one refresh at a time** (two at once count as reuse and log you out). |
-| Sign up, verify, reset password | The platform's `/auth/*` routes. The game shows the forms. |
+| Log in (landing page), refresh and log out (page and client) | `POST https://accounts.untitledgames.co.uk/auth/login`, `/auth/refresh` and `/auth/logout`, all with `credentials: "include"`. The refresh token is an HttpOnly cookie on the accounts domain that the client never sees. The access token is kept in memory and refreshed about 60 s before it expires, **one refresh at a time** (two at once count as reuse and log you out). |
+| Sign up, verify, reset password | The platform's `/auth/*` routes. The landing page (`web/`) shows the forms ([ADR 0015](../decisions/0015-login-on-the-landing-page.md)). |
 | Who is this (API) | Verify the JWT with the JWKS. Claims: `sub` (account id), `username`, `role` (effective), `premium`. |
 | Fresh role, Premium and ban state | `GET /service/accounts/:id` with `Authorization: Service <dinosaur key>`, cached for at most 30 s |
 | Friends (later: "friend online", join friend) | `GET /service/accounts/:id/friends` |

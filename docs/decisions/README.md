@@ -20,5 +20,6 @@ Each significant technical choice gets a short record: the context, the decision
 | [0012](0012-static-site-generator.md) | A small Go generator (`sitegen`) builds the wiki and docs site | Accepted |
 | [0013](0013-region-streaming-web-threads.md) | Stream region chunks on the single-threaded web build; no cross-origin isolation | Accepted |
 | [0014](0014-playtest-gate.md) | A playtest password over the live game until platform login | Accepted |
+| [0015](0015-login-on-the-landing-page.md) | Log in on the landing page, not inside the game | Accepted |
 
 Template: [0000-template.md](0000-template.md)

@@ -22,6 +22,7 @@ Then open `http://localhost:8075/`. Add `?demo=account` to see the signed-in car
 | `js/svg.js` | Drawing helpers: a seeded random generator, smooth curves, and generators for ferns, grass, conifers, cycads, tree ferns, rocks and clouds |
 | `js/auth.js` | The account platform's API (log in, sign up, reset, refresh, profile, log out) and player-facing error text. **Off until M1** (`ENABLED = false`). |
 | `img/` | The wood grain texture, the show/hide password icons and the favicon |
+| `fonts/` | Luckiest Guy (Apache 2.0) and Baloo 2 (OFL 1.1), Latin subsets, self-hosted so no visitor data goes to Google. Licences alongside. |
 
 ## How the art works
 
@@ -41,6 +42,8 @@ Then open `http://localhost:8075/`. Add `?demo=account` to see the signed-in car
 
 ## Accounts (M1)
 
+Logging in happens here, not inside the game ([ADR 0015](../docs/decisions/0015-login-on-the-landing-page.md)). The game at `/play/` gets its own session by refreshing with the same cookie.
+
 The forms follow the platform's rules ([accounts.md](../docs/architecture/accounts.md), and the platform's `docs/spec.md`). They check these before sending, and the platform checks them again:
 - You log in with **email** and password.
 - Signing up takes a username (3–16 letters, numbers or underscores), an email, a password (10–200 characters, not containing the username or email), and a date of birth. You must be 13 or older, and the platform keeps only the year.
@@ -53,5 +56,4 @@ The access token is kept only in memory. The refresh token is the platform's Htt
 
 ## Not done yet
 
-- **Fonts:** Luckiest Guy and Baloo 2 still come from Google Fonts, as in the mock-up. Self-hosting them (both are under the OFL) would stop sending visitors' IP addresses to Google.
 - **The "Playtest" link** in the footer goes to the game at `/play/`, behind the playtest password. Remove it when accounts open and the Play button takes over.

@@ -1,6 +1,22 @@
 /* Untitled Dinosaur Game: the landing and login page.
    Palette: jungle greens, bark browns, bone cream and amber, as in the first mock-up. */
 
+/* Fonts are self-hosted (fonts/README.txt has their licences), so no visitor data goes to a font CDN. */
+@font-face {
+  font-family: "Luckiest Guy";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fonts/luckiestguy-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Baloo 2";
+  font-style: normal;
+  font-weight: 500 800;
+  font-display: swap;
+  src: url("../fonts/baloo2-latin.woff2") format("woff2");
+}
+
 :root {
   --jungle-950: #0a2012;
   --jungle-900: #0f2b17;
@@ -394,15 +410,7 @@ button.btn { font-family: var(--display); }
   width: 190px;
   height: 145px;
 }
-.buddy {
-  position: absolute;
-  z-index: 3;
-  left: -226px;
-  bottom: -26px;
-  width: 230px;
-  height: 180px;
-}
-.peeker svg, .buddy svg { width: 100%; height: 100%; overflow: visible; }
+.peeker svg { width: 100%; height: 100%; overflow: visible; }
 
 /* ---------- Footer and toast ---------- */
 
@@ -442,12 +450,8 @@ button.btn { font-family: var(--display); }
 
 /* ---------- Small screens ---------- */
 
-@media (max-width: 900px) {
-  .buddy { left: -40px; bottom: -150px; width: 170px; height: 132px; }
-}
 @media (max-width: 560px) {
   .peeker { right: -14px; top: -92px; width: 160px; height: 122px; }
-  .buddy { display: none; }
   .card { border-radius: 20px; }
   .card-vines { inset: -16px; }
 }

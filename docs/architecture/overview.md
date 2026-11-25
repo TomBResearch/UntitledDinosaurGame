@@ -27,7 +27,7 @@ accounts.untitledgames.co.uk         dinosaur.untitledgames.co.uk ── nginx (
 
 ## How a player gets into a world
 
-1. **Log in.** The client posts to `accounts.untitledgames.co.uk/auth/login`, using `fetch` with credentials through `JavaScriptBridge`. It gets a 15-minute access token, kept in memory only. The refresh cookie is never visible to the client.
+1. **Log in** on the landing page at `/` ([ADR 0015](../decisions/0015-login-on-the-landing-page.md)). It posts to `accounts.untitledgames.co.uk/auth/login` with credentials, and the platform sets the HttpOnly refresh cookie. **Play** opens the game at `/play/`, which gets its own 15-minute access token by refreshing (`fetch` with credentials through `JavaScriptBridge`). The token is kept in memory only, and the refresh cookie is never visible to the page or the client.
 2. **Pick a world.** `GET /api/worlds` returns every world's name, whether it's premium-only, how busy it is (as a band, not a count) and its status.
 3. **Pick or create a character.** `GET /api/characters` lists up to 3 slots. `POST /api/characters` creates one.
 4. **Join.** The client calls `POST /api/join {characterId, worldId}` with the access token. The API then:

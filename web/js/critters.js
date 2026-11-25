@@ -107,12 +107,16 @@ export function stegosaurus() {
     + `</g></g>`;
 }
 
-/** The triceratops buddy beside the card, facing right, in a 240 x 180 box. */
+/**
+ * A triceratops facing left (its head at the left, tail at the right), in a 240 x 180 box with
+ * its feet at y = 162. The head is drawn facing right and mirrored, so the frill sits behind
+ * the face, against the body.
+ */
 export function triceratops() {
   const c = { body: "#d6904c", dark: "#ad6a30", belly: "#f0cd96", frill: "#e7a35e", frillIn: "#f6c48a", spot: "#b76a2e", rim: "#9b5a28" };
   const scallops = [[30, 52], [24, 76], [28, 100], [42, 120], [44, 32], [62, 18], [84, 14]]
     .map(([x, y]) => `<circle cx="${x}" cy="${y}" r="11" fill="${c.rim}" ${ink(2.6)}/>`).join("");
-  return `<svg viewBox="0 0 240 180">`
+  return `<g>`
     + `<g transform="translate(0 4)">`
     + `<g transform="translate(206 104)">${sway(7, 1.8)}<path d="M-14 -10 C10 -14 26 -2 34 18 C24 10 8 6 -12 12Z" fill="${c.dark}" ${ink()}/></g>`
     + `<path d="M150 128 l-2 30 h26 l-2 -30z M196 124 l0 34 h24 l-2 -34z" fill="${c.dark}" ${ink()}/>`
@@ -122,7 +126,8 @@ export function triceratops() {
     + `<path d="M98 76 C120 52 190 50 214 80 C230 100 226 132 200 138 C170 146 120 146 104 132 C92 120 88 96 98 76Z" fill="none" ${ink()}/>`
     + `<path d="M112 132 l-2 30 h28 l-2 -30z M168 134 l0 28 h26 l-2 -30z" fill="${c.body}" ${ink()}/>`
     + [112, 168].map((x) => [0, 1, 2].map((i) => `<path d="M${x + 1 + i * 9} 162 q3 -6 7 0" fill="#f4e7c3" ${ink(1.8)}/>`).join("")).join("")
-    + `<g transform="translate(72 84)">${`<animateTransform attributeName="transform" type="rotate" values="0;-4;0;3;0" dur="5s" repeatCount="indefinite" additive="sum"/>`}<g transform="translate(-72 -84)">`
+    + `<g transform="translate(118 92)">${`<animateTransform attributeName="transform" type="rotate" values="0;4;0;-3;0" dur="5s" repeatCount="indefinite" additive="sum"/>`}<g transform="translate(-118 -92)">`
+    + `<g transform="translate(190 0) scale(-1 1)">`
     + scallops
     + `<path d="M84 14 C120 18 134 60 128 92 C122 120 96 134 70 128 C44 122 24 96 26 70 C28 40 52 12 84 14Z" fill="${c.frill}" ${ink()}/>`
     + `<path d="M82 30 C106 34 116 62 112 86 C106 108 88 116 70 112 C52 108 40 90 42 72 C44 50 62 28 82 30Z" fill="${c.frillIn}"/>`
@@ -136,7 +141,7 @@ export function triceratops() {
     + `<path d="M120 132 C132 138 146 138 154 134" stroke="${INK}" stroke-width="2.6" fill="none" stroke-linecap="round"/>`
     + `<ellipse cx="118" cy="122" rx="8" ry="5" fill="#ef8f7a" opacity=".55"/>`
     + eye(128, 110, 8, c.body, 4.2, 0.5)
-    + `</g></g></g></svg>`;
+    + `</g></g></g></g></g>`;
 }
 
 /** The raptor peeking over the card's top-right corner, facing left, in a 210 x 160 box. */
@@ -189,16 +194,28 @@ export function birdV(dur = 0.9) {
     + `<animate attributeName="d" values="M-12 -4 Q-6 -8 0 0 Q6 -8 12 -4;M-12 4 Q-6 -2 0 0 Q6 -2 12 4;M-12 -4 Q-6 -8 0 0 Q6 -8 12 -4" dur="${dur}s" repeatCount="indefinite"/></path>`;
 }
 
-/** Meganeura, a giant dragonfly, hovering. About 90 wide. */
+/**
+ * Meganeura, a giant dragonfly, hovering, with its head up (y < 0). Each wing hinges at its own
+ * root on the thorax: the forewings sweep forward and the hindwings back, so no two wings
+ * cross, and they flicker by narrowing. About 120 wide.
+ */
 export function dragonfly() {
-  const wing = (x, y, rx, a, delay) => `<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="${rx * 0.26}" fill="#dff4ff" fill-opacity=".55" ${ink(1.6)} transform="rotate(${a} 0 0)">`
-    + `<animate attributeName="ry" values="${rx * 0.26};${rx * 0.06};${rx * 0.26}" dur="0.12s" begin="${delay}s" repeatCount="indefinite"/></ellipse>`;
+  const wing = (side, rootY, len, sweep, delay) => {
+    const rx = len / 2, ry = len * 0.15;
+    const cx = side * (4 + rx);
+    return `<g transform="rotate(${side * sweep} ${side * 4} ${rootY})">`
+      + `<ellipse cx="${cx}" cy="${rootY}" rx="${rx}" ry="${ry}" fill="#dff4ff" fill-opacity=".6" ${ink(1.6)}>`
+      + `<animate attributeName="ry" values="${ry};${(ry * 0.3).toFixed(1)};${ry}" dur="0.12s" begin="${delay}s" repeatCount="indefinite"/></ellipse>`
+      + `<path d="M${side * 6} ${rootY} H${side * (2 + len)}" stroke="#7fb8c8" stroke-width="1.2"/></g>`;
+  };
   return `<g>${bob(-6, 2.2)}`
-    + wing(-22, -6, 26, -14, 0) + wing(22, -6, 26, 14, 0.03) + wing(-20, 4, 22, 10, 0.06) + wing(20, 4, 22, -10, 0.09)
-    + `<path d="M0 -8 L0 44" stroke="${INK}" stroke-width="7" stroke-linecap="round"/>`
-    + `<path d="M0 -8 L0 44" stroke="#3aa0a8" stroke-width="4" stroke-linecap="round"/>`
-    + [6, 14, 22, 30, 38].map((y) => `<path d="M-2 ${y} h4" stroke="${INK}" stroke-width="1.4"/>`).join("")
-    + `<circle cx="0" cy="-12" r="7" fill="#2f7f86" ${ink(2)}/><circle cx="-3" cy="-14" r="2" fill="#fff"/>`
+    + wing(-1, 0, 52, -14, 0) + wing(1, 0, 52, -14, 0.03)
+    + wing(-1, 12, 46, 12, 0.06) + wing(1, 12, 46, 12, 0.09)
+    + `<path d="M0 -2 L0 56" stroke="${INK}" stroke-width="7" stroke-linecap="round"/>`
+    + `<path d="M0 -2 L0 56" stroke="#3aa0a8" stroke-width="4" stroke-linecap="round"/>`
+    + [18, 26, 34, 42, 50].map((y) => `<path d="M-2 ${y} h4" stroke="${INK}" stroke-width="1.4"/>`).join("")
+    + `<ellipse cx="0" cy="6" rx="5" ry="9" fill="#2f7f86" ${ink(2)}/>`
+    + `<circle cx="0" cy="-8" r="7" fill="#2f7f86" ${ink(2)}/><circle cx="-3" cy="-10" r="2" fill="#fff"/>`
     + `</g>`;
 }
 
