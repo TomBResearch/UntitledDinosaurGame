@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/chat"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/names"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/navmesh"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/progression"
 )
@@ -63,6 +64,8 @@ type Content struct {
 	XP          *progression.Table
 	// ChatFilter is built from data/chat_filter.json.
 	ChatFilter *chat.Filter
+	// NameFilter is built from data/name_filter.json (and the chat word list): character names.
+	NameFilter *names.Filter
 	// Regions are data/regions/*.region.json, sorted by id, exported from the Godot scenes (ADR 0004).
 	// They're server-only and not part of Hash: the client has the scenes themselves.
 	Regions []*navmesh.Region
@@ -73,7 +76,7 @@ type Content struct {
 }
 
 // The files that are copied to the client as they are. Everything server-only is left out (ADR 0011),
-// including chat_filter.json: the client never filters, the server does.
+// including chat_filter.json and name_filter.json: the client never filters, the server does.
 var clientFiles = []string{"progression.json", "skills.json"}
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,47}$`)
@@ -97,6 +100,10 @@ func Load(dir string) (*Content, error) {
 	if err := c.readJSON(dir, "chat_filter.json", &filter); err != nil {
 		problems = append(problems, err)
 	}
+	var nameFilter names.FilterFile
+	if err := c.readJSON(dir, "name_filter.json", &nameFilter); err != nil {
+		problems = append(problems, err)
+	}
 	if len(problems) > 0 {
 		return nil, errors.Join(problems...)
 	}
@@ -118,6 +125,11 @@ func Load(dir string) (*Content, error) {
 		problems = append(problems, fmt.Errorf("chat_filter.json: %w", err))
 	} else {
 		c.ChatFilter = f
+	}
+	if f, err := names.NewFilter(nameFilter, c.ChatFilter); err != nil {
+		problems = append(problems, fmt.Errorf("name_filter.json: %w", err))
+	} else {
+		c.NameFilter = f
 	}
 	table, err := progression.NewTable(p.XPCurve, p.MaxLevel, p.MaxXP)
 	if err != nil {

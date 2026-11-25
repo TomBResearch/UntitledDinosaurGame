@@ -20,16 +20,16 @@ The server decides everything that matters. The client sends **intents**, and th
 | Secret | Where |
 |---|---|
 | `WORLD_TICKET_KEY` | API and worlds (`/opt/udg/.env`) |
-| `DINOSAUR_SERVICE_KEY` | API and worlds, plus the platform's `SERVICE_KEYS` |
+| `DINOSAUR_SERVICE_KEY` | API (and worlds, once staff actions need fresh roles in M7), plus the platform's `SERVICE_KEYS` |
 | `POSTGRES_PASSWORD` | `/opt/udg/.env` |
 
-These live in environment variables only. `.env` files are ignored by git, and gitleaks runs in CI. Logs never contain tokens, tickets, emails or service keys.
+These live in environment variables only (`tools/set-secrets.sh` makes them on the server; [deploy.md](../operations/deploy.md#m1-secrets)). `.env` files are ignored by git, and gitleaks runs in CI. Logs never contain tokens, tickets, emails or service keys.
 
 ## Rate limits
 
 - **API:** per IP and per account ([backend.md](backend.md)).
 - **World:** per message type, plus a limit on bytes per second per connection (4 KB/s, burst 16 KB). The numbers and where each is checked are in [networking.md](networking.md#rate-limits).
-- **Join tickets:** single use, 30 s.
+- **Join tickets:** single use, 30 s ([backend.md](backend.md#join-tickets)).
 - **Connections per IP:** at most 10 to a world.
 
 ## Staff actions (from M7)

@@ -146,18 +146,18 @@ func (s *session) handshake() bool {
 		s.end(endKick, proto.KickReasonRefresh)
 		return false
 	}
-	name, ok := s.srv.checkTicket(hello.Ticket)
+	who, ok := s.srv.checkTicket(hello.Ticket)
 	if !ok {
 		s.end(endKick, proto.KickReasonBadTicket)
 		return false
 	}
-	s.name = name
-	if !s.toRegion(region.Input{Kind: region.InputJoin, Session: s.id, Client: s, Name: name}) {
+	s.name = who.name
+	if !s.toRegion(region.Input{Kind: region.InputJoin, Session: s.id, Client: s, Name: who.name, Role: who.role}) {
 		s.end(endKick, kickShutdown)
 		return false
 	}
-	s.srv.log.Info("player joined", "session", s.id, "name", name, "region", s.srv.spawn.ID(),
-		"client_version", hello.ClientVersion)
+	s.srv.log.Info("player joined", "session", s.id, "name", who.name, "account", who.accountID,
+		"character", who.characterID, "region", s.srv.spawn.ID(), "client_version", hello.ClientVersion)
 	return true
 }
 
