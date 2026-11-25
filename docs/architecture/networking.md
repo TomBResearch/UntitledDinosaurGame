@@ -48,7 +48,7 @@ A player gets a join ticket from the backend API (`POST /api/join`) and sends it
   - its `worldId` is this world (`-world`);
   - its nonce hasn't been used before. The world remembers used nonces until their tickets expire.
   - With **`-premium-only`**, it says `premium` (Premium or staff).
-- The ticket's `name` becomes the player's display name, and its `role` the chat badge.
+- The ticket's `name` becomes the player's display name, its `role` the chat badge, and its `appearance` the `look` everyone gets in `entity_enter`. A look with a part that isn't shaped like an id is dropped (the player is drawn with the default) rather than refusing the ticket. Dev players have no look.
 - Each refusal is logged with the reason (never the ticket itself). The player is only told `kick(bad_ticket)`.
 - Not yet: loading the character's saved region and position, and the online lease. Those come with persistence (a later M1 task). Until then everyone spawns at a `player_spawns` point of `test_greybox` (`-spawn-region`), as with dev tickets.
 - Code: `server/internal/ticket` (checked by `ticket.Guard`), called from `server/internal/world`. Tests: forged, expired, reused, wrong world and premium worlds in `internal/ticket/ticket_test.go` and `internal/world/ticket_test.go`, and the API and both worlds together in `internal/joine2e` ([backend.md](backend.md#tests)).
@@ -128,7 +128,7 @@ These are the messages for M0–M3. The schema, [`protocol/messages.schema`](../
 |---|---|
 | `welcome` **(M0)** | your entity id, character snapshot (skills, inventory, equipment; not yet), region id, server tick, tick rate |
 | `region_change` | region id, entry position (the client shows a loading screen) |
-| `entity_enter` **(M0)** | id, kind, type id, name, appearance (not yet), position, current path (if moving), HP fraction, in combat |
+| `entity_enter` **(M0)** | id, kind, type id, name, position, current path (if moving), HP fraction, in combat, look (a player's appearance ids, or none) |
 | `entity_leave` **(M0)** | id |
 | `path_started` / `path_stopped` **(M0)** | see above |
 | `attack_started` | attacker, target, attack style, impact tick |

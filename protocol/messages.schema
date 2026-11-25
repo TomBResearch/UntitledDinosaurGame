@@ -68,6 +68,16 @@ struct Path {
   waypoints: list<pos, 64>
 }
 
+# A player's appearance: the id of one choice for each part, from data/appearance.json (the
+# client has the same file, so it can draw them).
+struct Look {
+  body_type: string<32>
+  skin_tone: string<32>
+  hair_style: string<32>
+  hair_colour: string<32>
+  beard: string<32>
+}
+
 ## Client -> server (intents) ##
 
 # The first message on a connection. Its id and first field never change, so a server can
@@ -147,6 +157,9 @@ message entity_enter = 68 server {
   # HP as a fraction of maximum, 0-255.
   hp: u8
   in_combat: bool
+  # A player's appearance, from their character. Not set for dev players or other kinds: the
+  # client draws the default look.
+  look: Look?
 }
 
 # An entity left view (or the region).

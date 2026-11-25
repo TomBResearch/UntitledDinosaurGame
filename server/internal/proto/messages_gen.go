@@ -14,13 +14,13 @@ import (
 
 // ProtocolHash identifies this version of the schema. Clients send it as the first field of
 // hello; a mismatch means the client is out of date.
-const ProtocolHash uint32 = 0x5cee648b
+const ProtocolHash uint32 = 0x95dc59af
 
 // MaxClientMessageSize is the largest encoded client-to-server message, header included.
 const MaxClientMessageSize = 1132
 
 // MaxServerMessageSize is the largest encoded server-to-client message, header included.
-const MaxServerMessageSize = 1095
+const MaxServerMessageSize = 1260
 
 // Message ids.
 const (
@@ -92,7 +92,7 @@ func (id MsgID) info() (dir Direction, maxBody int, ok bool) {
 	case MsgPathStopped:
 		return FromServer, 25, true
 	case MsgEntityEnter:
-		return FromServer, 1092, true
+		return FromServer, 1257, true
 	case MsgEntityLeave:
 		return FromServer, 5, true
 	case MsgChat:
@@ -222,6 +222,32 @@ func (m *Path) decode(d *decoder) {
 			m.Waypoints[i] = d.pos()
 		}
 	}
+}
+
+// A player's appearance: the id of one choice for each part, from data/appearance.json (the
+// client has the same file, so it can draw them).
+type Look struct {
+	BodyType   string
+	SkinTone   string
+	HairStyle  string
+	HairColour string
+	Beard      string
+}
+
+func (m *Look) encode(e *encoder) {
+	e.str(m.BodyType, 32)
+	e.str(m.SkinTone, 32)
+	e.str(m.HairStyle, 32)
+	e.str(m.HairColour, 32)
+	e.str(m.Beard, 32)
+}
+
+func (m *Look) decode(d *decoder) {
+	m.BodyType = d.str(32)
+	m.SkinTone = d.str(32)
+	m.HairStyle = d.str(32)
+	m.HairColour = d.str(32)
+	m.Beard = d.str(32)
 }
 
 // The first message on a connection. Its id and first field never change, so a server can
@@ -409,6 +435,9 @@ type EntityEnter struct {
 	// HP as a fraction of maximum, 0-255.
 	HP       uint8
 	InCombat bool
+	// A player's appearance, from their character. Not set for dev players or other kinds: the
+	// client draws the default look.
+	Look *Look
 }
 
 func (m *EntityEnter) encode(e *encoder) {
@@ -418,6 +447,9 @@ func (m *EntityEnter) encode(e *encoder) {
 	}
 	if m.InCombat {
 		f |= 1 << 1
+	}
+	if m.Look != nil {
+		f |= 1 << 2
 	}
 	e.flags(f, 1)
 	e.u32(m.Entity)
@@ -429,10 +461,13 @@ func (m *EntityEnter) encode(e *encoder) {
 		m.Path.encode(e)
 	}
 	e.u8(m.HP)
+	if m.Look != nil {
+		m.Look.encode(e)
+	}
 }
 
 func (m *EntityEnter) decode(d *decoder) {
-	f := d.flags(1, 2)
+	f := d.flags(1, 3)
 	m.Entity = d.u32()
 	m.Kind = EntityKind(d.enum(entityKindCount))
 	m.TypeID = d.str(32)
@@ -444,6 +479,10 @@ func (m *EntityEnter) decode(d *decoder) {
 	}
 	m.HP = d.u8()
 	m.InCombat = f&(1<<1) != 0
+	if f&(1<<2) != 0 {
+		m.Look = new(Look)
+		m.Look.decode(d)
+	}
 }
 
 // MessageID returns MsgEntityEnter.

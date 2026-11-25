@@ -35,10 +35,13 @@ func setup(enter: Proto.EntityEnter, tick_hz: int, self_entity: bool) -> void:
 		track.add(PathPlayback.from_proto(enter.path, tick_hz))
 	else:
 		track.add(PathPlayback.stationary(enter.position, 0, tick_hz))
+	var look := look_of(enter.look)
 	if is_node_ready():
 		_apply_label(enter.name)
+		apply_look(look)
 	else:
 		ready.connect(_apply_label.bind(enter.name), CONNECT_ONE_SHOT)
+		ready.connect(apply_look.bind(look), CONNECT_ONE_SHOT)
 
 
 func _apply_label(player_name: String) -> void:
@@ -47,7 +50,17 @@ func _apply_label(player_name: String) -> void:
 		_label.modulate = SELF_NAME_COLOR
 
 
-## Draws the caveman with a look ({bodyType, skinTone, hairStyle, hairColour, beard}).
+## The look in an entity_enter as the API's JSON shape, or {} (the default look) if it has none:
+## dev players, and players from before looks were sent.
+static func look_of(l: Proto.Look) -> Dictionary:
+	if l == null:
+		return {}
+	return {"bodyType": l.body_type, "skinTone": l.skin_tone, "hairStyle": l.hair_style,
+			"hairColour": l.hair_colour, "beard": l.beard}
+
+
+## Draws the caveman with a look ({bodyType, skinTone, hairStyle, hairColour, beard}). Unknown ids
+## draw as the default.
 func apply_look(look: Dictionary) -> void:
 	_model.apply(look)
 

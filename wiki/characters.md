@@ -20,7 +20,7 @@ Pick an empty slot, give your character a name, and choose how they look:
 | Hair colour | Black, Dark brown, Brown, Auburn, Blond, Grey |
 | Beard | None, Stubble, Short, Long |
 
-Use the arrows to go through each one, or press **Randomise**. Every character starts in a pelt loincloth.
+Use the arrows to go through each one, or press **Randomise**. Every character starts in a pelt loincloth. Everyone in the world sees your character the way you made them.
 
 ## Names
 

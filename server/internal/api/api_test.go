@@ -426,6 +426,11 @@ func TestJoinIssuesATicketTheWorldAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The ticket carries the character's look, so the world can show it to everyone.
+	if p.Appearance == nil || *p.Appearance != look {
+		t.Fatalf("ticket appearance %+v, want %+v", p.Appearance, look)
+	}
+	p.Appearance = nil
 	want := ticket.Payload{AccountID: acct, CharacterID: c.ID, WorldID: "1", Name: "Grug", Role: "moderator", Premium: true,
 		Nonce: p.Nonce, Exp: t0.Add(ticket.TTL).Unix()}
 	if p != want {

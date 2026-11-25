@@ -16,9 +16,6 @@ const INTERPOLATION_DELAY_MS := 100.0
 
 var net: NetClient = null
 var self_view: PlayerView = null
-## Your own character's look, from the character you joined with. Everyone else is drawn with the
-## default look until the world sends appearance in entity_enter (a later task).
-var self_look: Dictionary = {}
 var _views: Dictionary[int, PlayerView] = {}
 var _last_frame_ms: float = 0.0
 
@@ -85,8 +82,6 @@ func _on_entity_entered(m: Proto.EntityEnter) -> void:
 	_views[m.entity] = v
 	v.update_view(draw_tick(m.entity, net.server_tick_now()), 0.0)
 	if v.is_self:
-		if not self_look.is_empty():
-			v.apply_look(self_look)
 		self_view = v
 		self_spawned.emit(v)
 

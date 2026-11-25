@@ -312,7 +312,7 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request, who *caller) {
 
 	tk, err := ticket.Sign(s.cfg.TicketKey, ticket.Payload{
 		AccountID: account, CharacterID: char.ID, WorldID: strconv.Itoa(world.ID), Name: char.Name,
-		Role: string(fresh.Role), Premium: premium, Nonce: ticket.NewNonce(), Exp: now.Add(ticket.TTL).Unix(),
+		Appearance: &char.Appearance, Role: string(fresh.Role), Premium: premium, Nonce: ticket.NewNonce(), Exp: now.Add(ticket.TTL).Unix(),
 	})
 	if err != nil {
 		s.cfg.Log.Error("signing a join ticket failed", "err", err)

@@ -3,7 +3,7 @@
 // "Join tickets").
 //
 //	ticket  = base64url(payload) + "." + base64url(HMAC-SHA256(WORLD_TICKET_KEY, payload))
-//	payload = JSON {accountId, characterId, worldId, name, role, premium, nonce, exp}
+//	payload = JSON {accountId, characterId, worldId, name, appearance, role, premium, nonce, exp}
 //
 // base64url has no padding. exp is in Unix seconds.
 package ticket
@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/content"
 )
 
 // TTL is how long a ticket is valid for.
@@ -47,6 +49,9 @@ type Payload struct {
 	WorldID     string `json:"worldId"`
 	// Name is the character's display name.
 	Name string `json:"name"`
+	// Appearance is the character's look, so the world can show it to everyone. Nil in tickets
+	// from before it was added.
+	Appearance *content.Look `json:"appearance,omitempty"`
 	// Role is the account's platform role ("normal", "premium", "moderator", "admin", "owner").
 	Role string `json:"role"`
 	// Premium is true for Premium accounts and for staff (staff count as Premium).

@@ -50,10 +50,10 @@ Errors are JSON: `{"error": "<code>"}`, sometimes with more fields. A missing or
 
 ```
 ticket  = base64url(payload) + "." + base64url(HMAC-SHA256(WORLD_TICKET_KEY, payload))
-payload = JSON {accountId, characterId, worldId, name, role, premium, nonce, exp}
+payload = JSON {accountId, characterId, worldId, name, appearance, role, premium, nonce, exp}
 ```
 
-- base64url without padding. `worldId` is the world's id as a string (`"1"`), the same as the world server's `-world`. `name` is the character's display name. `role` is the platform role name. `premium` is true for Premium accounts and staff. `nonce` is 16 random bytes (base64url). `exp` is Unix seconds.
+- base64url without padding. `worldId` is the world's id as a string (`"1"`), the same as the world server's `-world`. `name` is the character's display name, and `appearance` its look (the same JSON as in the character), so the world can show it to everyone. `role` is the platform role name. `premium` is true for Premium accounts and staff. `nonce` is 16 random bytes (base64url). `exp` is Unix seconds.
 - Valid for 30 s. The world keeps each used nonce until the ticket expires, so a ticket can't be used twice. It also refuses a ticket whose `exp` is more than 60 s away, even with a good signature.
 - `WORLD_TICKET_KEY` (at least 32 characters; `openssl rand -base64 36`) is shared only by the API and the world servers, through their environment.
 - The ticket carries the role and Premium status as they were at join time. Staff actions inside the world still re-check the service API ([security.md](security.md)). A world started with `-premium-only` refuses tickets without `premium`, as a second check after the API's.

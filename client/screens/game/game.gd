@@ -62,13 +62,11 @@ func _ready() -> void:
 
 
 ## Connects to the world with these options. join_ticket is the API's ticket for options.server_url
-## (platform session); without one it's a dev ticket for options.name. look is your character's
-## appearance.
-func start(opts: LaunchOptions, client: NetClient, join_ticket: String = "", look: Dictionary = {}) -> void:
+## (platform session); without one it's a dev ticket for options.name.
+func start(opts: LaunchOptions, client: NetClient, join_ticket: String = "") -> void:
 	options = opts
 	net = client
 	ticket = join_ticket if join_ticket != "" else LaunchOptions.dev_ticket(opts.name)
-	_entities.self_look = look
 	net.sim_latency_ms = opts.lag_ms
 	_entities.attach(net)
 	_entities.self_spawned.connect(_on_self_spawned)

@@ -152,7 +152,7 @@ func (s *session) handshake() bool {
 		return false
 	}
 	s.name = who.name
-	if !s.toRegion(region.Input{Kind: region.InputJoin, Session: s.id, Client: s, Name: who.name, Role: who.role}) {
+	if !s.toRegion(region.Input{Kind: region.InputJoin, Session: s.id, Client: s, Name: who.name, Role: who.role, Look: who.look}) {
 		s.end(endKick, kickShutdown)
 		return false
 	}

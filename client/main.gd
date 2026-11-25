@@ -105,10 +105,10 @@ func _enter_world(ticket: String, ws_url: String, world: Dictionary) -> void:
 	_world = world
 	_options.name = JsonRead.text(_character, "name")
 	_options.server_url = ws_url
-	_open_game(ticket, JsonRead.object(_character, "appearance"))
+	_open_game(ticket)
 
 
-func _open_game(ticket: String = "", look: Dictionary = {}) -> void:
+func _open_game(ticket: String = "") -> void:
 	var game: GameScreen = GAME_SCENE.instantiate()
 	_swap(game)
 	game.name_refused.connect(_ask_name)
@@ -122,7 +122,7 @@ func _open_game(ticket: String = "", look: Dictionary = {}) -> void:
 	game.log_out_requested.connect(func() -> void:
 		Net.close()
 		Session.log_out())
-	game.start(_options, Net, ticket, look)
+	game.start(_options, Net, ticket)
 
 
 ## Reconnecting after a drop or a world restart needs a new ticket: each one works only once.

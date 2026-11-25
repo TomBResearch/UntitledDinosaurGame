@@ -3,6 +3,7 @@ extends GutTest
 ## (CavemanModel).
 
 const CAVEMAN := preload("res://entities/player/caveman.tscn")
+const PLAYER := preload("res://entities/player/player_view.tscn")
 
 
 func _catalog() -> AppearanceCatalog:
@@ -88,3 +89,37 @@ func test_a_look_applied_before_the_model_is_ready_still_shows() -> void:
 	add_child_autofree(model)
 	assert_eq(model.showing("hair"), "long")
 	assert_eq(model.showing("beard"), "stubble")
+
+
+func _enter(look: Proto.Look) -> Proto.EntityEnter:
+	var e := Proto.EntityEnter.new()
+	e.entity = 7
+	e.kind = Proto.EntityKind.PLAYER
+	e.name = "Grug"
+	e.look = look
+	return e
+
+
+func test_other_players_are_drawn_with_their_own_look() -> void:
+	var l := Proto.Look.new()
+	l.body_type = "lean"
+	l.skin_tone = "tone_5"
+	l.hair_style = "long"
+	l.hair_colour = "auburn"
+	l.beard = "stubble"
+	var view: PlayerView = PLAYER.instantiate()
+	view.setup(_enter(l), 20, false)
+	add_child_autofree(view)
+	var model := view.model()
+	assert_eq(model.showing("hair"), "long")
+	assert_eq(model.showing("beard"), "stubble")
+	assert_eq(model.skin_colour(), _catalog().colour_of("skinTone", "tone_5"))
+	assert_eq(model.look, PlayerView.look_of(l))
+
+
+func test_a_player_without_a_look_is_drawn_with_the_default() -> void:
+	var view: PlayerView = PLAYER.instantiate()
+	add_child_autofree(view)
+	view.setup(_enter(null), 20, false)
+	assert_eq(view.model().look, _catalog().default_look, "dev players")
+	assert_eq(PlayerView.look_of(null), {})

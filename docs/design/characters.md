@@ -29,7 +29,8 @@ The choices are content, in [`data/appearance.json`](../../data/appearance.json)
 | Hair colour | Black, Dark brown, Brown, Auburn, Blond, Grey |
 | Beard | None, Stubble, Short, Long |
 
-- `default` in the file is how a character with no valid choice is drawn (and dev players, and for now everyone else you see in the world).
+- `default` in the file is how a character with no valid choice is drawn, and dev players too.
+- **Everyone sees your look.** The API puts it in your join ticket, the world sends it to every player who sees you (`entity_enter`), and each client draws it from its own copy of the file.
 - **Adding a choice:** add it to the file. A colour needs only its `colour`. A new hair style or beard also needs a piece in the placeholder model (`client/entities/player/caveman.tscn`): a child of `Hair` or `Beard` named after the id. The client's tests check every listed style and beard has one.
 - **Removing a choice** doesn't break old characters: they keep the id, and are drawn with the default for that part. But players lose that look, so it's the owner's call.
 - The placeholder caveman is a capsule with box pieces until the art pass (M7). Its look is drawn from the same ids, so real models can replace the pieces without changing data.
@@ -40,5 +41,4 @@ Every character starts in a **pelt loincloth**, drawn on the model. Items don't 
 
 ## Not yet
 
-- **Other players' looks in the world:** the client draws your own character with your look and everyone else with the default. Showing everyone's needs the join ticket to carry the look, the world to keep it, and `entity_enter` to send it. That touches the region code, which the persistence task is changing, so it's a follow-up.
 - Combat level on the character list (open question C2, M3).

@@ -64,6 +64,18 @@ func (a *Appearance) Valid(l Look) bool {
 	return true
 }
 
+// WellFormed reports whether every part has the shape of an appearance id (lower-case letters,
+// digits and underscores, up to 32 characters), whether or not it's a current choice. A world
+// server uses it to check a look from a join ticket before sending it to clients.
+func (l Look) WellFormed() bool {
+	for _, id := range l.parts() {
+		if !appearanceIDPattern.MatchString(id) {
+			return false
+		}
+	}
+	return true
+}
+
 func (l Look) parts() [5]string {
 	return [5]string{l.BodyType, l.SkinTone, l.HairStyle, l.HairColour, l.Beard}
 }

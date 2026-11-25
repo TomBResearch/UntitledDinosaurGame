@@ -222,7 +222,8 @@ func (s *stack) enter(worldID int, tk string) (*proto.EntityEnter, *proto.Kick) 
 	}
 }
 
-// mustEnter joins and checks the world shows the character's name.
+// mustEnter joins and checks the world shows the character's name, and the look it was made with
+// (createCharacter uses the default look).
 func (s *stack) mustEnter(worldID int, tk, name string) {
 	s.t.Helper()
 	self, kick := s.enter(worldID, tk)
@@ -231,6 +232,11 @@ func (s *stack) mustEnter(worldID int, tk, name string) {
 	}
 	if self.Name != name {
 		s.t.Fatalf("world %d: joined as %q, want %q", worldID, self.Name, name)
+	}
+	d := s.data.Appearance.Default
+	want := proto.Look{BodyType: d.BodyType, SkinTone: d.SkinTone, HairStyle: d.HairStyle, HairColour: d.HairColour, Beard: d.Beard}
+	if self.Look == nil || *self.Look != want {
+		s.t.Fatalf("world %d: %s's look is %+v, want %+v", worldID, name, self.Look, want)
 	}
 }
 
