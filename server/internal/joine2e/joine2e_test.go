@@ -3,6 +3,10 @@
 // World 1 is free and World 2 is premium only (-premium-only), as on the live server
 // (docs/design/worlds-and-premium.md).
 //
+// Live, the API and the worlds share one Postgres. Here the API has its memory store and the worlds
+// share a persist.MemStore, and each character the API makes is added to both. Leases the worlds
+// take aren't seen by the API's store here; the slow lane checks that on Postgres.
+//
 // The regions tick every millisecond instead of every 50 ms, and every wait is bounded by a context
 // deadline, never a sleep (CLAUDE.md rule 5).
 package joine2e
@@ -26,6 +30,7 @@ import (
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/api"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/content"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/navmesh"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/persist"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/platform"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/platform/platformtest"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/proto"
@@ -45,6 +50,8 @@ type stack struct {
 	plat   *platformtest.Platform
 	api    *httptest.Server
 	worlds map[int]*httptest.Server
+	// chars is the worlds' side of the shared database: saved positions and online leases.
+	chars *persist.MemStore
 }
 
 // statusByID asks each test world's real GET /status.
@@ -63,7 +70,7 @@ func start(t *testing.T) *stack {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &stack{t: t, data: data, plat: platformtest.New(), worlds: map[int]*httptest.Server{}}
+	s := &stack{t: t, data: data, plat: platformtest.New(), worlds: map[int]*httptest.Server{}, chars: persist.NewMemStore()}
 	status := statusByID{}
 	for id, premiumOnly := range map[int]bool{1: false, 2: true} {
 		hs := s.startWorld(strconv.Itoa(id), premiumOnly)
@@ -90,16 +97,25 @@ func start(t *testing.T) *stack {
 	return s
 }
 
-// startWorld runs a world server as cmd/world does, with join tickets on and dev tickets off.
+// startWorld runs a world server as cmd/world does, with join tickets on and dev tickets off, and a
+// saver over the shared character store.
 func (s *stack) startWorld(id string, premiumOnly bool) *httptest.Server {
 	t := s.t
+	worldNum, _ := strconv.Atoi(id)
+	saver := persist.NewSaver(persist.SaverConfig{Store: s.chars, World: worldNum})
+	saving, stopSaving := context.WithCancel(context.Background())
+	saverDone := make(chan struct{})
+	go func() { saver.Run(saving); close(saverDone) }()
+	t.Cleanup(func() { stopSaving(); <-saverDone }) // after the world's own cleanup (LIFO)
 	var rf *navmesh.Region
 	for _, r := range s.data.Regions {
 		if r.ID == "test_greybox" {
 			rf = r
 		}
 	}
-	reg, err := region.New(rf, region.ConfigFor(s.data))
+	rcfg := region.ConfigFor(s.data)
+	rcfg.Saver = saver
+	reg, err := region.New(rf, rcfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +125,9 @@ func (s *stack) startWorld(id string, premiumOnly bool) *httptest.Server {
 	cfg := world.DefaultConfig(id, s.data.Hash)
 	cfg.TicketKey = ticketKey
 	cfg.PremiumOnly = premiumOnly
-	srv := world.New(cfg, reg, ctx.Done(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cfg.Saver = saver
+	srv := world.New(cfg, []*region.Region{reg}, reg, ctx.Done(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	saver.SetOnLost(srv.LostLease)
 	hs := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -174,6 +192,7 @@ func (s *stack) createCharacter(account, name string) character {
 		map[string]any{"name": name, "slot": 1, "appearance": s.data.Appearance.Default}, &c); code != 201 {
 		s.t.Fatalf("create %s: %d %s", name, code, e)
 	}
+	s.chars.AddCharacter(account, c.ID) // the shared database
 	return c
 }
 
@@ -226,6 +245,12 @@ func (s *stack) enter(worldID int, tk string) (*proto.EntityEnter, *proto.Kick) 
 // (createCharacter uses the default look).
 func (s *stack) mustEnter(worldID int, tk, name string) {
 	s.t.Helper()
+	s.mustEnterAt(worldID, tk, name)
+}
+
+// mustEnterAt is mustEnter, returning the player's own entity_enter.
+func (s *stack) mustEnterAt(worldID int, tk, name string) *proto.EntityEnter {
+	s.t.Helper()
 	self, kick := s.enter(worldID, tk)
 	if kick != nil {
 		s.t.Fatalf("world %d kicked %s: %v", worldID, name, kick.Reason)
@@ -238,6 +263,7 @@ func (s *stack) mustEnter(worldID int, tk, name string) {
 	if self.Look == nil || *self.Look != want {
 		s.t.Fatalf("world %d: %s's look is %+v, want %+v", worldID, name, self.Look, want)
 	}
+	return self
 }
 
 func (s *stack) mustBeRefused(worldID int, tk string) {
@@ -341,4 +367,39 @@ func TestPremiumAllowed(t *testing.T) {
 		t.Fatalf("after Premium: %d %s", code, e)
 	}
 	s.mustEnter(2, j.Ticket, "Late")
+}
+
+// With persistence: a new character starts at a spawn point, and one saved earlier starts where it
+// was saved. Both arrive with the look they were made with.
+func TestJoinStartsWhereSaved(t *testing.T) {
+	s := start(t)
+	fresh := s.account(platform.RoleNormal, false)
+	c := s.createCharacter(fresh, "Newbie")
+	_, _, j := s.join(fresh, c.ID, 1)
+	self := s.mustEnterAt(1, j.Ticket, "Newbie")
+	spawn := self.Position
+
+	// A character saved somewhere else on the region by an earlier session.
+	saved := proto.Pos{X: 2000, Y: 100, Z: 1000}
+	if saved == spawn {
+		t.Fatal("pick a saved position that isn't the spawn point")
+	}
+	back := s.account(platform.RoleNormal, false)
+	old := s.createCharacter(back, "Oldtimer")
+	ctx := context.Background()
+	lease := persist.NewLease()
+	then := time.Now().Add(-time.Hour)
+	if _, err := s.chars.Claim(ctx, persist.Claim{AccountID: back, CharacterID: old.ID, World: 1, Lease: lease,
+		Now: then, Until: then.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.chars.Write(ctx, 1, []persist.Save{{CharacterID: old.ID, Lease: lease, Region: "test_greybox",
+		Pos: saved, HP: persist.HPFull, Release: true}}, then, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	_, _, j = s.join(back, old.ID, 1)
+	self = s.mustEnterAt(1, j.Ticket, "Oldtimer")
+	if self.Position.X != saved.X || self.Position.Z != saved.Z {
+		t.Fatalf("rejoined at %+v, want the saved %+v", self.Position, saved)
+	}
 }

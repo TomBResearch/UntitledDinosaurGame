@@ -44,6 +44,8 @@ services:
       DATABASE_URL: postgres://udg:${POSTGRES_PASSWORD:?run tools/set-secrets.sh}@postgres:5432/udg?sslmode=disable
       WORLD_TICKET_KEY: ${WORLD_TICKET_KEY:?run tools/set-secrets.sh}
       DINOSAUR_SERVICE_KEY: ${DINOSAUR_SERVICE_KEY:?the same value as in /opt/urg/.env; see docs/operations/deploy.md}
+      # The API sets this as the password of udg_world, the worlds' restricted database role (ADR 0017).
+      WORLD_DB_PASSWORD: ${WORLD_DB_PASSWORD:?run tools/set-secrets.sh}
     networks:
       - default
       - urg
@@ -69,10 +71,19 @@ services:
     environment:
       # Join tickets from the API. Dev tickets stay on too, until the owner turns them off (ADR 0014).
       WORLD_TICKET_KEY: ${WORLD_TICKET_KEY:?run tools/set-secrets.sh}
+      # Saving ticket players, as the restricted udg_world role (ADR 0017). Dev players aren't saved.
+      DATABASE_URL: postgres://udg_world:${WORLD_DB_PASSWORD:?run tools/set-secrets.sh}@postgres:5432/udg?sslmode=disable
     read_only: true
     mem_limit: 256m
-    # SIGTERM: the server kicks everyone with "shutdown" and stops within 15 s.
-    stop_grace_period: 20s
+    # SIGTERM (world-server.md, "Shutdown"): if anyone is playing, a 60 s warning; then everyone is
+    # kicked (up to 10 s), saved and their leases released (up to 15 s). 100 s covers it all.
+    stop_grace_period: 100s
+    depends_on:
+      # The API applies the migrations and sets udg_world's password; the world waits for the database.
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
     restart: unless-stopped
 
   # World 2: premium only (docs/design/worlds-and-premium.md). It takes only the API's join tickets,
@@ -87,9 +98,17 @@ services:
       - -origins=${UDG_DOMAIN:?set in .env}
     environment:
       WORLD_TICKET_KEY: ${WORLD_TICKET_KEY:?run tools/set-secrets.sh}
+      # Saving players, as the restricted udg_world role (ADR 0017), like world-1.
+      DATABASE_URL: postgres://udg_world:${WORLD_DB_PASSWORD:?run tools/set-secrets.sh}@postgres:5432/udg?sslmode=disable
     read_only: true
     mem_limit: 256m
-    stop_grace_period: 20s
+    # The same shutdown as world-1: warning, kick, save and release leases. 100 s covers it all.
+    stop_grace_period: 100s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
     restart: unless-stopped
 
   caddy:

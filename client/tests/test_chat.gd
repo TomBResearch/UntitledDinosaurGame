@@ -29,6 +29,13 @@ func test_badges_and_system_text() -> void:
 	assert_eq(ChatLog.badge(Proto.Role.NORMAL), "", "normal players have no badge")
 	assert_eq(ChatLog.badge(Proto.Role.MODERATOR), "Mod")
 	assert_ne(ChatLog.system_text(Proto.SystemKey.CHAT_MUTED), "")
+	assert_eq(ChatLog.system_text(Proto.SystemKey.IDLE_WARNING, 60),
+		"You've been idle for a while. You'll be logged out in 1 minute unless you do something.")
+	assert_eq(ChatLog.system_text(Proto.SystemKey.SHUTDOWN_WARNING, 60),
+		"The world is restarting in 1 minute. Your progress will be saved.")
+	assert_eq(ChatLog.duration_text(120), "2 minutes")
+	assert_eq(ChatLog.duration_text(90), "90 seconds")
+	assert_eq(ChatLog.duration_text(1), "1 second")
 	assert_true(ChatLog.Line.new("", "x", Proto.Role.NORMAL, false).is_system())
 
 

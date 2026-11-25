@@ -10,7 +10,7 @@ See [ADR 0002](../decisions/0002-free-movement-server-paths.md) for the movement
 - **Keepalive:** the server sends a WebSocket ping every 5 s. The connection drops after 20 s in which the server hears nothing: no message and no pong.
   - Browsers answer WebSocket pings themselves. A background tab pauses the game loop but stays connected, so switching tabs doesn't log you out.
   - The client's own `ping` every 5 s is for clock sync. It pauses with the game in a background tab, and that's fine.
-  - While paused, the browser keeps receiving. Frames wait in the client's receive buffer (8 MB, 65,536 frames: about an hour of a quiet area) and are played through when the tab comes back. A longer absence can overflow it. The idle logout (15 minutes with no input, from M1) keeps absences shorter than that.
+  - While paused, the browser keeps receiving. Frames wait in the client's receive buffer (8 MB, 65,536 frames: about an hour of a quiet area) and are played through when the tab comes back. A longer absence can overflow it. The [idle logout](world-server.md#idle-logout) (15 minutes with no input) keeps absences shorter than that.
 - **Library:** the world server uses [`github.com/coder/websocket`](https://github.com/coder/websocket) (v1.8.15), the server's first Go dependency. It's small, has no dependencies of its own, takes a `context` on every read and write (so the silence and write timeouts are plain deadlines), and is safe to close from another goroutine, which is how a slow client is dropped without the tick waiting.
 - **Origins:** browsers may connect from the server's own host, plus the patterns in `-origins` (default `localhost:*,127.0.0.1:*`, for a locally served web export). Production sets it to the game's domain.
 
@@ -21,7 +21,8 @@ See [ADR 0002](../decisions/0002-free-movement-server-paths.md) for the movement
    - `protocol_hash` (before decoding the rest, see [Protocol version](#wire-format)): a mismatch gets `kick(refresh)`.
    - `content_hash` against the server's `data/` hash (the client's `client/data/content_hash.txt`): a mismatch gets `kick(refresh)`.
    - `ticket` (see [Join tickets](#join-tickets)): refused gets `kick(bad_ticket)`.
-3. Accepted: the player joins the spawn region. The first frame back holds `welcome`, then `entity_enter` for **the player itself**, then `entity_enter` for everything in view.
+   - For a join ticket, the character's online lease and saved state ([world-server.md](world-server.md#saving-characters)): `kick(already_online)` or `kick(unavailable)` if it can't be had.
+3. Accepted: the player joins their saved region at their saved position, or the spawn region at a spawn point. The first frame back holds `welcome`, then `entity_enter` for **the player itself**, then `entity_enter` for everything in view.
 4. After that, intents and pings flow until either side closes.
 
 **The server closing a connection.** `kick(reason)` is always the last frame before a close the client should explain:
@@ -32,6 +33,9 @@ See [ADR 0002](../decisions/0002-free-movement-server-paths.md) for the movement
 | `bad_ticket` | the ticket was refused | 1008 | go back to the login or world list |
 | `shutdown` | the world is stopping (SIGTERM) | 1001 | say so and offer to reconnect |
 | `misbehaving` | too many invalid or rate-limited messages, or over the upload limit | 1008 | show an error |
+| `idle` | no input for 15 minutes (the [idle logout](world-server.md#idle-logout)); you were saved | 1000 | say so and offer to log in again |
+| `already_online` | that character, or another on the account, is online in some world (a second login, or another world took the character) | 1008 | say so, and go back to the character list |
+| `unavailable` | the world couldn't load the character (its database didn't answer) | 1013 | say so and offer to try again |
 
 Without a `kick`, the connection was dropped: a malformed frame (status 1002), a silent or too-slow connection (no close handshake). The client may reconnect.
 
@@ -48,10 +52,10 @@ A player gets a join ticket from the backend API (`POST /api/join`) and sends it
   - its `worldId` is this world (`-world`);
   - its nonce hasn't been used before. The world remembers used nonces until their tickets expire.
   - With **`-premium-only`**, it says `premium` (Premium or staff).
-- The ticket's `name` becomes the player's display name, its `role` the chat badge, and its `appearance` the `look` everyone gets in `entity_enter`. A look with a part that isn't shaped like an id is dropped (the player is drawn with the default) rather than refusing the ticket. Dev players have no look.
+- The ticket's `name` becomes the player's display name, its `role` the chat badge, and its `appearance` the `look` everyone gets in `entity_enter`. A look with a part that isn't shaped like an id is dropped (the player is drawn with the default) rather than refusing the ticket. Dev players have no look. Its `characterId` must be a UUID.
+- The world then takes the character's online lease and loads where it was saved ([world-server.md](world-server.md#saving-characters)). So **a world that accepts tickets needs a database** (`DATABASE_URL`): without one it refuses every ticket, and `cmd/world` won't start with `WORLD_TICKET_KEY` but no `DATABASE_URL`.
 - Each refusal is logged with the reason (never the ticket itself). The player is only told `kick(bad_ticket)`.
-- Not yet: loading the character's saved region and position, and the online lease. Those come with persistence (a later M1 task). Until then everyone spawns at a `player_spawns` point of `test_greybox` (`-spawn-region`), as with dev tickets.
-- Code: `server/internal/ticket` (checked by `ticket.Guard`), called from `server/internal/world`. Tests: forged, expired, reused, wrong world and premium worlds in `internal/ticket/ticket_test.go` and `internal/world/ticket_test.go`, and the API and both worlds together in `internal/joine2e` ([backend.md](backend.md#tests)).
+- Code: `server/internal/ticket` (checked by `ticket.Guard`), called from `server/internal/world`. Tests: forged, expired, reused, wrong world and premium worlds in `internal/ticket/ticket_test.go` and `internal/world/ticket_test.go`; the lease, a second login of the same account, and saving in `internal/world/persist_test.go`; the API and both worlds together in `internal/joine2e` ([backend.md](backend.md#tests)).
 - The client gets its ticket after the player picks a character and a world, and sends it straight away (it lasts 30 s). A refused ticket (`kick(bad_ticket)`) takes the player back to the world list. Reconnecting after a drop or a restart asks the API for a new ticket, because each one works once ([client.md](client.md#characters-worlds-and-joining)).
 
 `GET /status` on the world server answers `{world, players}` for the API's world list. Caddy doesn't route it, so it's only reachable inside Docker.
@@ -63,7 +67,7 @@ For local development (desktop runs, `?name=` and local pages), a world server c
 - Start the server with **`-dev-tickets`**: `cd server && go run ./cmd/world -dev-tickets`. It logs a warning at startup. Never use it on a public server, except the live World 1 behind the playtest gate ([ADR 0014](../decisions/0014-playtest-gate.md)).
 - It listens on **`127.0.0.1:8090`** (`-addr`) and serves world **`dev`** (`-world`), so the client connects to **`ws://127.0.0.1:8090/w/dev`**.
 - The client sends `hello.ticket = "dev:<name>"`. `<name>` must have the shape of a character name ([backend.md](backend.md#routes)): 3–12 characters, ASCII letters and digits with single spaces between words, no space at either end. Dev names aren't filtered or unique: two players can both be `Ugg`. Dev players have the normal role.
-- Everyone spawns at a `player_spawns` point of `test_greybox` (`-spawn-region`), in turn.
+- Everyone spawns at a `player_spawns` point of `test_greybox` (`-spawn-region`), in turn. **Dev players are never saved** and need no database; the idle logout and the shutdown warning apply to them as to everyone.
 - Without `-dev-tickets`, every `dev:` ticket is refused.
 - `hello.content_hash` must match too, so run `tools/check.sh` (or `dataval -emit-client`) after changing `data/`, and restart the server.
 
@@ -141,10 +145,10 @@ These are the messages for M0–M3. The schema, [`protocol/messages.schema`](../
 | `xp_gained` | skill, amount, new total XP, level (if it changed) |
 | `skilling` | entity, action animation, node (for others to see) |
 | `chat` **(M0)** | sender entity, name, role badge, text. Sent to every player within 40 m of the speaker, the speaker included. |
-| `system_message` **(M0)** | key (the client localises it). M0 has one key, `chat_muted`; parameters come with the first key that needs them. |
+| `system_message` **(M0)** | key (the client localises it) and `seconds`, for keys that count down. Keys: `chat_muted`; `idle_warning` (you'll be logged out in `seconds`); `shutdown_warning` (the world restarts in `seconds`). |
 | `dialogue` | NPC, text key, options |
 | `pong` **(M0)** | see clock sync |
-| `kick` **(M0)** | reason: `refresh`, `bad_ticket`, `shutdown` or `misbehaving` (see [Connection lifecycle](#connection-lifecycle)) |
+| `kick` **(M0)** | reason: `refresh`, `bad_ticket`, `shutdown`, `misbehaving`, `idle`, `already_online` or `unavailable` (see [Connection lifecycle](#connection-lifecycle)) |
 
 ## Bandwidth budget
 

@@ -23,7 +23,7 @@ M0 ends with the game live at `dinosaur.untitledgames.co.uk`: you and another pe
 | The API issues join tickets, and the worlds check them (`WORLD_TICKET_KEY`) | Built, merged. The API isn't deployed yet: it needs `tools/set-secrets.sh` first ([deploy.md](../operations/deploy.md#m1-secrets)). |
 | The client makes characters, shows the world list and joins with a ticket, not a dev ticket | Built (character creation and world select task). Dev runs (`?name=`, desktop) still use dev tickets. |
 | World 2 (premium only) runs, with join tickets only | In the Compose file; starts on the next deploy. It never had dev tickets. |
-| Players come back where they left off | The persistence task |
+| Players come back where they left off, with online leases | Built, merged (persistence, #29). The worlds need `WORLD_DB_PASSWORD` in `/opt/udg/.env` (`tools/set-secrets.sh`). |
 
 **Still on, on purpose:** the playtest password on `/play/`, the `udg_play` cookie on `/w/1` and `/w/2`, and `-dev-tickets` on World 1. To turn them off once the owner decides: remove `-dev-tickets` from `world-1` in the Compose file, remove the `basic_auth`, `Set-Cookie` and cookie checks from the Caddyfile, and deploy. `/play/?name=` dev runs then stop working on the live site, which is the point.
 

@@ -55,10 +55,11 @@ func (c *Clock) set(tick uint32, due time.Time) {
 // logs any tick that takes longer.
 const TickBudget = 10 * time.Millisecond
 
-// Run steps the region every interval until ctx is done. A late tick is followed straight away by the
+// Run steps the region every interval until ctx is done, then calls Stop. A late tick is followed straight away by the
 // next one, so the simulation catches up rather than skipping. Normally interval is 1 s / TickHz;
 // tests may run faster.
 func (r *Region) Run(ctx context.Context, interval time.Duration) {
+	defer r.Stop() // save everyone still here
 	r.clock.interval.Store(int64(interval))
 	timer := time.NewTimer(0)
 	defer timer.Stop()

@@ -8,6 +8,8 @@
 //	DATABASE_URL          Postgres, for example postgres://udg:udg@127.0.0.1:5433/udg?sslmode=disable
 //	WORLD_TICKET_KEY      signs join tickets; the world servers have the same value
 //	DINOSAUR_SERVICE_KEY  this game's key for the platform's service API
+//	WORLD_DB_PASSWORD     optional: the password the world servers log in to Postgres with, as
+//	                      the udg_world role (ADR 0017). The API sets it on the role at start.
 //
 // SIGTERM (or Ctrl-C) stops it cleanly.
 package main
@@ -97,11 +99,18 @@ func run() error {
 	}
 	defer pool.Close()
 	ran, err := migrations.Apply(ctx, pool)
+	if err == nil {
+		log.Info("migrations", "ran", ran)
+		if pw := os.Getenv("WORLD_DB_PASSWORD"); pw != "" {
+			err = migrations.SetWorldPassword(ctx, pool, pw)
+		} else {
+			log.Warn("WORLD_DB_PASSWORD is not set: the world servers can't log in to the database to save characters")
+		}
+	}
 	cancel()
 	if err != nil {
 		return err
 	}
-	log.Info("migrations", "ran", ran)
 
 	store := pgstore.New(pool)
 	srv := api.New(api.Config{

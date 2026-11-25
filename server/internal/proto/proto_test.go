@@ -53,6 +53,8 @@ func samples() []sample {
 		{"kick", []Message{&Kick{Reason: KickReasonRefresh}}},
 		{"kick_misbehaving", []Message{&Kick{Reason: KickReasonMisbehaving}}},
 		{"system_message", []Message{&SystemMessage{Key: SystemKeyChatMuted}}},
+		{"system_message_idle", []Message{&SystemMessage{Key: SystemKeyIdleWarning, Seconds: 60}}},
+		{"kick_idle", []Message{&Kick{Reason: KickReasonIdle}}},
 		{"server_frame", []Message{
 			&PathStopped{Entity: 7, Tick: 1300, Position: Pos{1, 2, 3}},
 			&EntityLeave{Entity: 8},

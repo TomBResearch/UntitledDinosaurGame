@@ -261,6 +261,11 @@ func samples() -> Array[Sample]:
 	kick_misbehaving.reason = Proto.KickReason.MISBEHAVING
 	var system := Proto.SystemMessage.new()
 	system.key = Proto.SystemKey.CHAT_MUTED
+	var system_idle := Proto.SystemMessage.new()
+	system_idle.key = Proto.SystemKey.IDLE_WARNING
+	system_idle.seconds = 60
+	var kick_idle := Proto.Kick.new()
+	kick_idle.reason = Proto.KickReason.IDLE
 
 	var f_stopped := Proto.PathStopped.new()
 	f_stopped.entity = 7
@@ -293,6 +298,8 @@ func samples() -> Array[Sample]:
 		Sample.new("kick", [kick]),
 		Sample.new("kick_misbehaving", [kick_misbehaving]),
 		Sample.new("system_message", [system]),
+		Sample.new("system_message_idle", [system_idle]),
+		Sample.new("kick_idle", [kick_idle]),
 		Sample.new("server_frame", [f_stopped, f_leave, f_chat]),
 	]
 

@@ -14,7 +14,7 @@ import (
 
 // ProtocolHash identifies this version of the schema. Clients send it as the first field of
 // hello; a mismatch means the client is out of date.
-const ProtocolHash uint32 = 0x95dc59af
+const ProtocolHash uint32 = 0xbc1ad179
 
 // MaxClientMessageSize is the largest encoded client-to-server message, header included.
 const MaxClientMessageSize = 1132
@@ -100,7 +100,7 @@ func (id MsgID) info() (dir Direction, maxBody int, ok bool) {
 	case MsgKick:
 		return FromServer, 1, true
 	case MsgSystemMessage:
-		return FromServer, 1, true
+		return FromServer, 3, true
 	}
 	return 0, 0, false
 }
@@ -178,9 +178,15 @@ const (
 	KickReasonShutdown KickReason = 2
 	// Too many invalid or rate-limited messages.
 	KickReasonMisbehaving KickReason = 3
+	// Logged out after too long with no input (the idle logout). You were saved where you stood.
+	KickReasonIdle KickReason = 4
+	// That character, or another on the same account, is already online in some world.
+	KickReasonAlreadyOnline KickReason = 5
+	// The world couldn't load your character just then (its database didn't answer). Try again.
+	KickReasonUnavailable KickReason = 6
 )
 
-const kickReasonCount = 4
+const kickReasonCount = 7
 
 // A line of game text the client shows in the chat box, in the player's language.
 type SystemKey uint8
@@ -189,9 +195,13 @@ type SystemKey uint8
 const (
 	// You're muted: your chat line wasn't sent.
 	SystemKeyChatMuted SystemKey = 0
+	// You'll be logged out for being idle in `seconds` unless you do something.
+	SystemKeyIdleWarning SystemKey = 1
+	// The world is restarting in `seconds`. Everyone is saved before it stops.
+	SystemKeyShutdownWarning SystemKey = 2
 )
 
-const systemKeyCount = 1
+const systemKeyCount = 3
 
 // A path an entity walks: start at waypoints[0] at start_tick, then move at speed along the
 // waypoints, stopping at the last one. Position at tick t is speed * (t - start_tick) along it.
@@ -548,14 +558,18 @@ func (*Kick) MessageID() MsgID { return MsgKick }
 // A line of game text for the chat box, sent only to you.
 type SystemMessage struct {
 	Key SystemKey
+	// For a key that counts down (idle_warning, shutdown_warning): how many seconds are left. 0 otherwise.
+	Seconds uint16
 }
 
 func (m *SystemMessage) encode(e *encoder) {
 	e.enum(uint8(m.Key), systemKeyCount)
+	e.u16(m.Seconds)
 }
 
 func (m *SystemMessage) decode(d *decoder) {
 	m.Key = SystemKey(d.enum(systemKeyCount))
+	m.Seconds = d.u16()
 }
 
 // MessageID returns MsgSystemMessage.

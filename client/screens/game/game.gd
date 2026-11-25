@@ -166,7 +166,7 @@ func _on_chat(m: Proto.Chat) -> void:
 
 
 func _on_system_message(m: Proto.SystemMessage) -> void:
-	_chat.add_system(ChatLog.system_text(m.key))
+	_chat.add_system(ChatLog.system_text(m.key, m.seconds))
 
 
 func _on_chat_submitted(text: String) -> void:
@@ -270,6 +270,12 @@ func _on_kicked(reason: Proto.KickReason) -> void:
 			_show_overlay("The world is restarting.", "Reconnect", _reconnect)
 		Proto.KickReason.MISBEHAVING:
 			_show_overlay("Disconnected: too many invalid messages.", "Reconnect", _reconnect)
+		Proto.KickReason.IDLE:
+			_show_overlay("You were logged out for being idle. You're saved where you stood.", "Log in again", _reconnect)
+		Proto.KickReason.ALREADY_ONLINE:
+			_show_overlay("That character, or another on your account, is already online.", "Try again", _reconnect)
+		Proto.KickReason.UNAVAILABLE:
+			_show_overlay("The world couldn't load your character just now.", "Try again", _reconnect)
 
 
 func _on_disconnected(detail: String, was_kicked: bool) -> void:

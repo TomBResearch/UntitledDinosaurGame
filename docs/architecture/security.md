@@ -21,7 +21,8 @@ The server decides everything that matters. The client sends **intents**, and th
 |---|---|
 | `WORLD_TICKET_KEY` | API and worlds (`/opt/udg/.env`) |
 | `DINOSAUR_SERVICE_KEY` | API (and worlds, once staff actions need fresh roles in M7), plus the platform's `SERVICE_KEYS` |
-| `POSTGRES_PASSWORD` | `/opt/udg/.env` |
+| `POSTGRES_PASSWORD` | `/opt/udg/.env` (the API's database user, `udg`) |
+| `WORLD_DB_PASSWORD` | `/opt/udg/.env`: the worlds' restricted database role, `udg_world` ([ADR 0017](../decisions/0017-world-saves-to-postgres-directly.md)) |
 
 These live in environment variables only (`tools/set-secrets.sh` makes them on the server; [deploy.md](../operations/deploy.md#m1-secrets)). `.env` files are ignored by git, and gitleaks runs in CI. Logs never contain tokens, tickets, emails or service keys.
 
@@ -42,7 +43,8 @@ Every security-relevant change comes with negative tests:
 - An invalid ticket, an expired ticket, a reused nonce, or a ticket for the wrong world is refused.
 - A premium world refuses a non-premium account, and accepts a premium account and staff.
 - A banned account can't get a join ticket.
-- An account can't have two characters online at the same time.
+- An account can't have two characters online at the same time (`internal/world/persist_test.go`, `internal/persist/persisttest`, and against Postgres in the slow lane).
+- The worlds' database role can't read or change anything a world doesn't need (`TestTheWorldRoleIsRestricted`, slow lane).
 - An action on an out-of-range target, a missing item, or a slot the player doesn't own changes nothing.
 - The item invariant test: random action sequences never create or destroy items except through sources and sinks.
 - Each staff action: every lower rank is refused.

@@ -62,6 +62,23 @@ func All() ([]Migration, error) {
 	return out, nil
 }
 
+// WorldRole is the database role the world servers log in as (migration 0002, ADR 0017).
+const WorldRole = "udg_world"
+
+var passwordPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{24,128}$`)
+
+// SetWorldPassword lets the world servers' role log in with this password. The API calls it when it
+// starts, after Apply, with WORLD_DB_PASSWORD (made by tools/set-secrets.sh). The password must be
+// 24 to 128 letters, digits, _ or -, so it's safe in a database URL and in SQL.
+func SetWorldPassword(ctx context.Context, pool *pgxpool.Pool, password string) error {
+	if !passwordPattern.MatchString(password) {
+		return fmt.Errorf("WORLD_DB_PASSWORD must be 24 to 128 letters, digits, _ or - (openssl rand -hex 24)")
+	}
+	// ALTER ROLE can't take a parameter; the pattern above keeps the literal safe.
+	_, err := pool.Exec(ctx, "ALTER ROLE "+WorldRole+" WITH LOGIN PASSWORD '"+password+"'")
+	return err
+}
+
 // Apply runs every migration the database hasn't had yet and returns the names it ran.
 func Apply(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
 	all, err := All()

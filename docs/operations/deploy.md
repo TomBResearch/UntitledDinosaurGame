@@ -63,12 +63,13 @@ Testers log in at `https://dinosaur.untitledgames.co.uk/`, press Play and give t
 
 ## M1 secrets
 
-From the `cmd/api` task on, the stack also needs three values in `/opt/udg/.env`, and `tools/deploy.sh` stops before building if any is missing:
+From the `cmd/api` task on, the stack also needs four values in `/opt/udg/.env`, and `tools/deploy.sh` stops before building if any is missing:
 
 | Value | What | Made by |
 |---|---|---|
 | `POSTGRES_PASSWORD` | The database password (hex, so it's safe in a URL) | `tools/set-secrets.sh`, on the server |
 | `WORLD_TICKET_KEY` | Signs join tickets; the API and every world share it | `tools/set-secrets.sh`, on the server |
+| `WORLD_DB_PASSWORD` | The worlds' database password, as the restricted `udg_world` role ([ADR 0017](../decisions/0017-world-saves-to-postgres-directly.md)). The API sets it on the role each time it starts, so it can be changed by editing `.env` and restarting the API, then the worlds. | `tools/set-secrets.sh`, on the server (added by the persistence task: run it once more before the next deploy) |
 | `DINOSAUR_SERVICE_KEY` | This game's key for the platform's service API | The platform config step ([accounts.md](../architecture/accounts.md#configuration-changes-needed-on-the-platform)): it goes in `/opt/urg/.env` first, then `tools/set-secrets.sh` copies it across |
 
 ```bash
@@ -88,7 +89,7 @@ tools/deploy.sh
 3. Runs `docker compose up -d`, recreating Caddy if the Caddyfile changed, and removes old `udg-server` images (only those labelled `project=udg`).
 4. Checks `/healthz` on the server and from outside, and that everything answers as it should: the landing page 200, the game (`/play/`) 401, the wiki 200, `/dev/` 401, both worlds without the cookie 403 and `/api/health` 200. Then it waits up to 20 s for `/api/worlds` to show both worlds online.
 
-A deploy restarts the world: everyone gets "The world is restarting." and can reconnect. `SKIP_BUILD=1` re-sends config and files without rebuilding.
+A deploy restarts the world. If anyone is playing, they get a "restarting in 1 minute" warning in the chat box and a minute to finish what they're doing, then "The world is restarting." with a button to reconnect. Everyone with a character is saved where they stand. So a deploy with players on takes about a minute longer; an empty world restarts at once. `SKIP_BUILD=1` re-sends config and files without rebuilding.
 
 ## Changing a password
 

@@ -2,12 +2,14 @@ package world
 
 import (
 	"bytes"
+	"context"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/content"
+	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/persist"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/proto"
 	"github.com/TomBResearch/UntitledDinosaurGame/server/internal/ticket"
 )
@@ -20,22 +22,46 @@ var (
 	ticketNow = time.Unix(1_800_000_000, 0)
 )
 
+// The ticket's account and character (joinTicket's defaults), which the world's store knows.
+const (
+	ticketAccount   = "0b7c1e2a-2222-4000-8000-000000000001"
+	ticketCharacter = "0b7c1e2a-2222-4000-8000-0000000000c1"
+)
+
+// ticketWorld is a world that takes join tickets, saving to an in-memory store that has the default
+// ticket's character. Its saver runs for real (writes happen moments after they're queued); its clock
+// is fixed at ticketNow.
 func ticketWorld(t *testing.T, tweak func(*Config)) *testWorld {
-	return startWorld(t, func(c *Config) {
+	store := persist.NewMemStore()
+	store.AddCharacter(ticketAccount, ticketCharacter)
+	return ticketWorldWith(t, store, tweak)
+}
+
+func ticketWorldWith(t *testing.T, store *persist.MemStore, tweak func(*Config)) *testWorld {
+	saver := persist.NewSaver(persist.SaverConfig{Store: store, World: 1, Now: func() time.Time { return ticketNow }})
+	running, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { saver.Run(running); close(done) }()
+	t.Cleanup(func() { stop(); <-done }) // runs after the world's cleanup (LIFO)
+	w := startWorld(t, func(c *Config) {
 		c.WorldID = "1"
 		c.DevTickets = false
 		c.TicketKey = ticketKey
 		c.Now = func() time.Time { return ticketNow }
+		c.Saver = saver
 		if tweak != nil {
 			tweak(c)
 		}
 	})
+	saver.SetOnLost(w.srv.LostLease)
+	w.store, w.saver = store, saver
+	return w
 }
 
 func joinTicket(t *testing.T, key []byte, mod func(*ticket.Payload)) string {
 	t.Helper()
 	p := ticket.Payload{
-		AccountID: "0b7c1e2a-2222-4000-8000-000000000001", CharacterID: "0b7c1e2a-2222-4000-8000-0000000000c1",
+		AccountID: ticketAccount, CharacterID: ticketCharacter,
 		WorldID: "1", Name: "Grug", Role: "moderator", Premium: true,
 		Nonce: ticket.NewNonce(), Exp: ticketNow.Add(ticket.TTL).Unix(),
 	}
@@ -165,7 +191,11 @@ func TestStatus(t *testing.T) {
 // other players get. Dev players have none (clients draw the default), and a look that isn't
 // shaped like ids is dropped rather than refusing the ticket.
 func TestJoinTicketLookIsShownToEveryone(t *testing.T) {
-	w := ticketWorld(t, func(c *Config) { c.DevTickets = true })
+	const zogAccount, zogCharacter = "0b7c1e2a-2222-4000-8000-000000000002", "0b7c1e2a-2222-4000-8000-0000000000c2"
+	store := persist.NewMemStore()
+	store.AddCharacter(ticketAccount, ticketCharacter)
+	store.AddCharacter(zogAccount, zogCharacter)
+	w := ticketWorldWith(t, store, func(c *Config) { c.DevTickets = true })
 	ctx := testCtx(t)
 	grugLook := content.Look{BodyType: "broad", SkinTone: "tone_5", HairStyle: "topknot", HairColour: "grey", Beard: "long"}
 	want := &proto.Look{BodyType: "broad", SkinTone: "tone_5", HairStyle: "topknot", HairColour: "grey", Beard: "long"}
@@ -197,7 +227,9 @@ func TestJoinTicketLookIsShownToEveryone(t *testing.T) {
 	// A signed ticket with a badly shaped look still joins, with no look.
 	odd := content.Look{BodyType: "Broad Shoulders", SkinTone: "tone_5", HairStyle: "topknot", HairColour: "grey", Beard: "long"}
 	zog := w.dial(ctx, "/w/1")
-	send(t, ctx, zog, w.hello(joinTicket(t, ticketKey, func(p *ticket.Payload) { p.Name = "Zog"; p.Appearance = &odd })))
+	send(t, ctx, zog, w.hello(joinTicket(t, ticketKey, func(p *ticket.Payload) {
+		p.AccountID, p.CharacterID, p.Name, p.Appearance = zogAccount, zogCharacter, "Zog", &odd
+	})))
 	if self := readUntil[*proto.EntityEnter](t, ctx, zog); self.Name != "Zog" || self.Look != nil {
 		t.Errorf("badly shaped look: got %q with %+v, want Zog with none", self.Name, self.Look)
 	}
