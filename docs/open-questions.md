@@ -9,12 +9,6 @@ Agents: if your task depends on one of these, **ask the owner** before building.
 | C2 | How is **combat level** worked out? | Based on the best of Strength, Ranged and Voodoo, plus Defence and Hitpoints, scaled to a maximum of 100 | M3 |
 | C4 | What does **Voodoo** use up when casting? | Craftable "fetishes" or charm stones, made with Crafting or Herbology | M5 |
 
-## Characters and social
-
-| # | Question | Proposal | Blocks |
-|---|---|---|---|
-| S2 | **Appearance options at creation?** | Body type, skin tone, hair style and colour, beard. More options later through items. | M1 |
-
 ## Platform and operations
 
 | # | Question | Proposal | Blocks |
@@ -47,5 +41,6 @@ Agents: if your task depends on one of these, **ask the owner** before building.
 | 2026-11-23 | E2: Drop visibility | Only the killer, for 120 s, then they disappear (until trading exists) |
 | 2026-11-23 | E3: Currency | Shells |
 | 2026-11-24 | S3: Chat radius | 40 m. A whole-region "shout" may come later. |
+| 2026-11-25 | S2: Appearance at creation | Body type, skin tone, hair style, hair colour and beard. More options later through items. |
 | 2026-11-24 | S4: Idle logout | 15 minutes without a click, key press or chat, with a 1-minute warning. Logging out saves you where you stand. Built in M1 with persistence ([architecture/networking.md](architecture/networking.md)). |
 | 2026-11-23 | P2: Platform email links | Moved to generic confirmation pages on `accounts.untitledgames.co.uk` ([architecture/accounts.md](architecture/accounts.md)) |
