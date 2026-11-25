@@ -41,7 +41,7 @@ Without a `kick`, the connection was dropped: a malformed frame (status 1002), a
 
 Until real join tickets arrive with the backend in M1, a development world server lets anyone in by name:
 
-- Start the server with **`-dev-tickets`**: `cd server && go run ./cmd/world -dev-tickets`. It logs a warning at startup. Never use it on a public server.
+- Start the server with **`-dev-tickets`**: `cd server && go run ./cmd/world -dev-tickets`. It logs a warning at startup. Never use it on a public server, except the live M0 world, which sits behind the playtest gate until M1 login ([ADR 0014](../decisions/0014-playtest-gate.md)).
 - It listens on **`127.0.0.1:8090`** (`-addr`) and serves world **`dev`** (`-world`), so the client connects to **`ws://127.0.0.1:8090/w/dev`**.
 - The client sends `hello.ticket = "dev:<name>"`. `<name>` follows the character name rules ([backend.md](backend.md)): 3–12 characters, letters and digits with single spaces between words, no space at either end. Dev names are plain ASCII (`A–Z`, `a–z`, `0–9`) and aren't filtered or unique: two players can both be `Ugg`.
 - The name is the player's display name. Everyone spawns at a `player_spawns` point of `test_greybox` (`-spawn-region`), in turn.

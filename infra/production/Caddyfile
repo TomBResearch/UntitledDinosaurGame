@@ -1,0 +1,93 @@
+# The game's routes on the project server (docs/operations/hosting.md, deploy.md).
+# The host's nginx terminates HTTPS and passes dinosaur.untitledgames.co.uk to this Caddy on
+# 127.0.0.1:8082, so Caddy only speaks plain HTTP inside the machine.
+#
+#   /healthz  the world server's health check (public, says "ok")
+#   /wiki/    the public wiki (published pages only)
+#   /dev/     the internal docs, behind the staff password
+#   /w/1      world 1 (WebSocket), only with the playtest cookie
+#   /*        the web client, behind the playtest password
+#
+# Playtest gate (until platform login in M1, owner's decision 2026-11-25): the game page needs
+# the playtest password, and every response from it sets the udg_play cookie. The world
+# connection checks that cookie, because browsers don't reliably send a page's Basic auth with
+# a WebSocket, and cookies they always do.
+#
+# Environment (from /opt/udg/.env, written by tools/set-passwords.sh):
+#   UDG_PLAY_USER, UDG_PLAY_PASSWORD_HASH   the playtest login (bcrypt)
+#   UDG_PLAY_COOKIE                         the cookie value (random, letters and digits)
+#   UDG_DEV_USER, UDG_DEV_PASSWORD_HASH     the staff login for /dev/ (bcrypt)
+#
+# No COOP/COEP headers: the client is single-threaded (ADR 0013).
+{
+	auto_https off
+	admin off
+	servers {
+		# nginx (via the Docker bridge) is the only client; it sets X-Forwarded-For to the
+		# player's real IP (from Cloudflare's CF-Connecting-IP).
+		trusted_proxies static private_ranges
+	}
+}
+
+:80 {
+	encode zstd gzip
+
+	# Security headers (docs/architecture/security.md), as on the racing game.
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "frame-ancestors 'self'"
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	handle /healthz {
+		reverse_proxy world-1:8090
+	}
+
+	# Wiki and dev docs (ADR 0012, docs/operations/site.md).
+	redir /wiki /wiki/ 308
+	redir /dev /dev/ 308
+
+	handle /wiki/* {
+		root * /srv/site
+		file_server
+		header Cache-Control "no-cache"
+	}
+
+	handle /dev/* {
+		basic_auth {
+			{$UDG_DEV_USER} {$UDG_DEV_PASSWORD_HASH}
+		}
+		header X-Robots-Tag "noindex, nofollow"
+		header Cache-Control "private, no-cache"
+		root * /srv/site
+		file_server
+	}
+
+	# World 1. The page sets the cookie; without it, no connection.
+	handle /w/1 {
+		@noPlaytestCookie not header Cookie *udg_play={$UDG_PLAY_COOKIE}*
+		respond @noPlaytestCookie "Open the game page and sign in with the playtest password first." 403
+		reverse_proxy world-1:8090
+	}
+	handle /w/* {
+		respond 404
+	}
+
+	# The web client.
+	handle {
+		basic_auth {
+			{$UDG_PLAY_USER} {$UDG_PLAY_PASSWORD_HASH}
+		}
+		header Set-Cookie "udg_play={$UDG_PLAY_COOKIE}; Path=/w/; Max-Age=2592000; Secure; HttpOnly; SameSite=Strict"
+		header X-Robots-Tag "noindex, nofollow"
+		# Filenames aren't content-hashed yet, so always revalidate (ETags keep it cheap).
+		# "private" keeps Cloudflare from caching password-protected files.
+		header Cache-Control "private, no-cache"
+		root * /srv/web
+		file_server {
+			precompressed br gzip
+		}
+	}
+}

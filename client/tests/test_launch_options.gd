@@ -38,3 +38,20 @@ func test_demo_can_be_turned_off() -> void:
 
 func test_dev_ticket() -> void:
 	assert_eq(LaunchOptions.dev_ticket("Grug"), "dev:Grug")
+
+
+func test_server_given_is_marked() -> void:
+	assert_false(LaunchOptions.parse_query("?name=Grug").server_given)
+	assert_true(LaunchOptions.parse_query("?server=ws%3A%2F%2Fexample.com%2Fw%2F1").server_given)
+
+
+func test_local_pages_use_the_local_dev_server() -> void:
+	for host: String in ["localhost:8060", "127.0.0.1:8060", "[::1]:8060", "localhost", ""]:
+		assert_eq(LaunchOptions.default_server_for_page("http:", host), LaunchOptions.DEFAULT_SERVER_URL, host)
+	assert_eq(LaunchOptions.default_server_for_page("file:", ""), LaunchOptions.DEFAULT_SERVER_URL)
+
+
+func test_deployed_pages_use_their_own_host() -> void:
+	assert_eq(LaunchOptions.default_server_for_page("https:", "dinosaur.untitledgames.co.uk"),
+			"wss://dinosaur.untitledgames.co.uk/w/1")
+	assert_eq(LaunchOptions.default_server_for_page("http:", "192.168.1.20:8080"), "ws://192.168.1.20:8080/w/1")
