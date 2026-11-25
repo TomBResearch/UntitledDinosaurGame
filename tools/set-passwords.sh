@@ -47,7 +47,7 @@ fi
 
 keys="$(printf '%s\n' "${lines[@]}" | cut -d= -f1 | tr '\n' ' ')"
 # Replace those keys in /opt/udg/.env (mode 600), keeping any others.
-printf '%s\n' "${lines[@]}" | ssh "$HOST" "set -e; umask 077; mkdir -p /opt/udg; f=/opt/udg/.env; touch \"\$f\"; chmod 600 \"\$f\";
+printf '%s\n' "${lines[@]}" | ssh "$HOST" "set -e; umask 077; [ -d /opt/udg ] || sudo install -d -o \"\$(id -un)\" -g \"\$(id -gn)\" -m 755 /opt/udg; f=/opt/udg/.env; touch \"\$f\"; chmod 600 \"\$f\";
   new=\"\$(cat)\"; tmp=\"\$(mktemp /opt/udg/.env.XXXXXX)\";
   awk -v keys='$keys' 'BEGIN { n = split(keys, k, \" \"); for (i = 1; i <= n; i++) drop[k[i]] = 1 }
     { split(\$0, p, \"=\"); if (!(p[1] in drop)) print }' \"\$f\" >\"\$tmp\";

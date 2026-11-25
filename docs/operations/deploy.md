@@ -1,5 +1,7 @@
 # Deploying
 
+First deployed on 2026-11-25. The certificate (Let's Encrypt, renewed by certbot's timer) is for `dinosaur.untitledgames.co.uk` only.
+
 The live game is at **`https://dinosaur.untitledgames.co.uk`**, on the shared project server ([hosting.md](hosting.md), [ADR 0010](../decisions/0010-hosting-shared-server.md)). Everything is built on the Mac and copied over SSH; nothing is compiled on the server. Only `/opt/udg`, the `udg` compose project and one nginx file belong to this game.
 
 ## What's live (M0)
@@ -33,7 +35,7 @@ On a deployed page the client connects to its own host's `/w/1` (`wss://` on htt
    tools/set-passwords.sh
    ```
 
-   This writes `/opt/udg/.env` (mode `600`) with the domain, the playtest login (user `play`), the cookie secret and the staff login for `/dev/` (user `staff`). Only bcrypt hashes leave the Mac.
+   This creates `/opt/udg` if needed (with sudo, owned by your server user) and writes `/opt/udg/.env` (mode `600`) with the domain, the playtest login (user `play`), the cookie secret and the staff login for `/dev/` (user `staff`). Only bcrypt hashes leave the Mac.
 
 2. **Deploy** the stack:
 
