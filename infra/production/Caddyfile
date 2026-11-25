@@ -6,7 +6,8 @@
 #   /wiki/    the public wiki (published pages only)
 #   /dev/     the internal docs, behind the staff password
 #   /w/1      world 1 (WebSocket), only with the playtest cookie
-#   /*        the web client, behind the playtest password
+#   /play/    the web client (the game), behind the playtest password
+#   /*        the landing and login page (web/), public
 #
 # Playtest gate (until platform login in M1, owner's decision 2026-11-25): the game page needs
 # the playtest password, and every response from it sets the udg_play cookie. The world
@@ -75,8 +76,9 @@
 		respond 404
 	}
 
-	# The web client.
-	handle {
+	# The web client (the game), at /play/. Its files use relative paths, so it runs from any folder.
+	redir /play /play/ 308
+	handle_path /play/* {
 		basic_auth {
 			{$UDG_PLAY_USER} {$UDG_PLAY_PASSWORD_HASH}
 		}
@@ -89,5 +91,12 @@
 		file_server {
 			precompressed br gzip
 		}
+	}
+
+	# The landing and login page (web/ in the repo), public.
+	handle {
+		header Cache-Control "no-cache"
+		root * /srv/landing
+		file_server
 	}
 }

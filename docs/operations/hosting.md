@@ -20,7 +20,7 @@ Decision: [ADR 0010](../decisions/0010-hosting-shared-server.md).
 | `api` (container `udg-api`) | `udg-server:<ver>` (`/app/api`) | `udg_default` + **`urg_default` (external)** | Reaches `accounts:3100`, and the platform reaches its deletion hook |
 | `world-1` | `udg-server:<ver>` (`/app/world`) | `udg_default` | World 1, free |
 | `world-2` | `udg-server:<ver>` (`/app/world`) | `udg_default` | World 2, premium only |
-| `caddy` | `caddy:2-alpine` | `udg_default` | Listens on `127.0.0.1:8082`. Serves the web client, `/wiki/` and `/dev/` ([site.md](site.md)), and proxies `/api/*` and `/w/<id>`. The client is single-threaded, so **no COOP/COEP (cross-origin isolation) headers** ([ADR 0013](../decisions/0013-region-streaming-web-threads.md)). |
+| `caddy` | `caddy:2-alpine` | `udg_default` | Listens on `127.0.0.1:8082`. Serves the landing page at `/`, the web client at `/play/`, `/wiki/` and `/dev/` ([site.md](site.md)), and proxies `/api/*` and `/w/<id>`. The client is single-threaded, so **no COOP/COEP (cross-origin isolation) headers** ([ADR 0013](../decisions/0013-region-streaming-web-threads.md)). |
 
 ## nginx
 

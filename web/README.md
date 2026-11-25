@@ -2,7 +2,7 @@
 
 The page players see first: the title, an animated prehistoric valley, and the "Base Camp" card for logging in, creating an account, resetting a password and, once signed in, playing and managing the account. It replaces the single-file mock-up the owner made at game.tomblundell.co.uk, keeping its look (jungle greens, bark browns, bone and amber, the cartoon title and the central card) with much more detailed art.
 
-Plain static files: no build step, no framework, no npm. Any static server can serve it.
+Plain static files: no build step, no framework, no npm. Live at **`https://dinosaur.untitledgames.co.uk/`**, where `tools/deploy.sh` copies the folder as it is; the game is at `/play/` ([deploy.md](../docs/operations/deploy.md)).
 
 ```bash
 python3 -m http.server 8075 -d web
@@ -54,4 +54,4 @@ The access token is kept only in memory. The refresh token is the platform's Htt
 ## Not done yet
 
 - **Fonts:** Luckiest Guy and Baloo 2 still come from Google Fonts, as in the mock-up. Self-hosting them (both are under the OFL) would stop sending visitors' IP addresses to Google.
-- **Where it's served:** not decided. It isn't deployed anywhere yet.
+- **The "Playtest" link** in the footer goes to the game at `/play/`, behind the playtest password. Remove it when accounts open and the Play button takes over.

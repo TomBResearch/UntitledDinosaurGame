@@ -8,13 +8,14 @@ The live game is at **`https://dinosaur.untitledgames.co.uk`**, on the shared pr
 
 | URL | What | Who |
 |---|---|---|
-| `/` | The web client | Playtest password ([ADR 0014](../decisions/0014-playtest-gate.md)) |
+| `/` | The landing and login page ([web/](../../web/README.md)). Accounts are off until M1, so its footer has a "Playtest" link to `/play/`. | Everyone |
+| `/play/` | The web client (the game) | Playtest password ([ADR 0014](../decisions/0014-playtest-gate.md)) |
 | `/w/1` | World 1 (WebSocket), with dev tickets on | Needs the cookie the game page sets |
 | `/wiki/` | The public wiki | Everyone |
 | `/dev/` | These docs | Staff password ([site.md](site.md)) |
 | `/healthz` | The world server's health check (`ok`) | Everyone |
 
-On a deployed page the client connects to its own host's `/w/1` (`wss://` on https), so testers only need the URL, the password and a name. `?name=Grug` skips the name box. Postgres and the backend API join the stack in M1.
+On a deployed page the client connects to its own host's `/w/1` (`wss://` on https), so testers only need `https://dinosaur.untitledgames.co.uk/play/`, the password and a name. `?name=Grug` skips the name box. Postgres and the backend API join the stack in M1.
 
 ## The pieces
 
@@ -62,9 +63,9 @@ tools/deploy.sh
 ```
 
 1. Validates `data/`, exports the web client and precompresses it (Brotli and gzip), builds the wiki and docs site, cross-compiles the world server for `linux/arm64` and builds the image.
-2. Copies the image (`docker save | ssh docker load`), the stack files, `build/web/` to `/opt/udg/web/` and `build/site/` to `/opt/udg/site/`.
+2. Copies the image (`docker save | ssh docker load`), the stack files, `build/web/` to `/opt/udg/web/`, `build/site/` to `/opt/udg/site/` and `web/` (the landing page, as it is) to `/opt/udg/landing/`.
 3. Runs `docker compose up -d`, recreating Caddy if the Caddyfile changed, and removes old `udg-server` images (only those labelled `project=udg`).
-4. Checks `/healthz` on the server and from outside, and that the gate answers as it should: the game 401, the wiki 200, `/dev/` 401 and the world without the cookie 403.
+4. Checks `/healthz` on the server and from outside, and that everything answers as it should: the landing page 200, the game (`/play/`) 401, the wiki 200, `/dev/` 401 and the world without the cookie 403.
 
 A deploy restarts the world: everyone gets "The world is restarting." and can reconnect. `SKIP_BUILD=1` re-sends config and files without rebuilding.
 

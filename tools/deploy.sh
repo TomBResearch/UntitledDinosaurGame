@@ -52,11 +52,13 @@ fi
 
 echo "== Copying the stack files, web client and site"
 CADDY_BEFORE="$(ssh "$HOST" 'md5sum /opt/udg/Caddyfile 2>/dev/null | cut -d" " -f1')"
-ssh "$HOST" 'mkdir -p /opt/udg/nginx /opt/udg/web /opt/udg/site'
+ssh "$HOST" 'mkdir -p /opt/udg/nginx /opt/udg/web /opt/udg/site /opt/udg/landing'
 rsync -q "$REPO_ROOT/infra/production/docker-compose.yml" "$REPO_ROOT/infra/production/Caddyfile" "$HOST:/opt/udg/"
 rsync -q "$REPO_ROOT/infra/production/nginx/dinosaur.conf.template" "$REPO_ROOT/infra/production/setup-nginx.sh" "$HOST:/opt/udg/nginx/"
 rsync -qa --delete "$BUILD/web/" "$HOST:/opt/udg/web/"
 rsync -qa --delete "$BUILD/site/" "$HOST:/opt/udg/site/"
+# The landing page is plain static files: copied as they are, without its README.
+rsync -qa --delete --exclude README.md "$REPO_ROOT/web/" "$HOST:/opt/udg/landing/"
 CADDY_AFTER="$(ssh "$HOST" 'md5sum /opt/udg/Caddyfile | cut -d" " -f1')"
 
 echo "== Starting"
@@ -86,10 +88,11 @@ if [[ "$health" != 200 ]]; then
   echo "If nginx isn't set up yet: ssh $HOST 'sudo bash /opt/udg/nginx/setup-nginx.sh $DOMAIN'" >&2
   exit 1
 fi
-game="$(code "https://$DOMAIN/")"
+landing="$(code "https://$DOMAIN/")"
+game="$(code "https://$DOMAIN/play/")"
 wiki="$(code "https://$DOMAIN/wiki/")"
 dev="$(code "https://$DOMAIN/dev/")"
 world="$(code "https://$DOMAIN/w/1")"
-echo "game $game (want 401), wiki $wiki (want 200), dev $dev (want 401), world without cookie $world (want 403)"
-[[ "$game" == 401 && "$wiki" == 200 && "$dev" == 401 && "$world" == 403 ]] || { echo "Something answered unexpectedly." >&2; exit 1; }
+echo "landing $landing (want 200), game $game (want 401), wiki $wiki (want 200), dev $dev (want 401), world without cookie $world (want 403)"
+[[ "$landing" == 200 && "$game" == 401 && "$wiki" == 200 && "$dev" == 401 && "$world" == 403 ]] || { echo "Something answered unexpectedly." >&2; exit 1; }
 echo "Live: https://$DOMAIN"
