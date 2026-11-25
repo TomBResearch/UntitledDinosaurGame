@@ -22,6 +22,17 @@ ssh "$HOST" 'test -f /opt/udg/.env' || {
   exit 1
 }
 
+# The landing page and the game log in through the account platform, which must allow this
+# site's origin first (docs/architecture/accounts.md). Without it every visitor would see
+# "couldn't reach the accounts server", so don't deploy until it does.
+allowed="$(curl -s -o /dev/null -D - --max-time 15 -X OPTIONS https://accounts.untitledgames.co.uk/auth/refresh \
+  -H "Origin: https://$DOMAIN" -H "Access-Control-Request-Method: POST" | tr -d '\r' | awk -F': ' 'tolower($1)=="access-control-allow-origin"{print $2}')"
+if [[ "$allowed" != "https://$DOMAIN" ]]; then
+  echo "The account platform doesn't allow https://$DOMAIN yet (ALLOWED_ORIGINS in the racing repo's infra/production)." >&2
+  echo "Roll that out first: docs/architecture/accounts.md, \"Configuration changes needed on the platform\"." >&2
+  exit 1
+fi
+
 if [[ "${SKIP_BUILD:-}" != 1 ]]; then
   echo "== Checking content and building the web client"
   (cd "$REPO_ROOT/server" && go run ./cmd/dataval -data ../data -emit-client ../client/data >/dev/null)

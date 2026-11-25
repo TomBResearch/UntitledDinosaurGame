@@ -12,22 +12,39 @@ Rows marked *(planned)* don't exist yet.
 
 | Path | What |
 |---|---|
-| `main.tscn` | The entry scene: reads the launch options, asks for a dev name if needed, opens the game screen |
+| `main.tscn` | The entry scene: reads the launch options, checks the platform session on the deployed page (or asks for a dev name in a dev run), opens the game screen |
 | `autoload/net.gd` | The `Net` autoload: the world connection, so it outlives screen changes. All its code is `NetClient`. |
 | `net/net_client.gd` | `NetClient`: `WebSocketPeer`, the `hello` handshake, pings, decoding frames into typed signals, kicks |
 | `net/clock_sync.gd` | `ClockSync`: the server clock estimate from pings |
 | `net/proto/` | **Generated** encoders and decoders. Never edit them by hand. |
 | `core/launch_options.gd` | Name, server URL and dev aids from the web query string or desktop arguments |
-| `screens/` | `game/` (the world) and `name_entry/` now. *(planned)* Boot (version check), World select, Character select and create, Loading. Login is on the landing page, not in the client ([ADR 0015](../decisions/0015-login-on-the-landing-page.md)). |
+| `screens/` | `game/` (the world), `name_entry/` (dev runs) and `account_check/` ("Checking your account…", or Try again when the platform can't be reached) now. *(planned)* Boot (version check), World select, Character select and create, Loading. Login is on the landing page, not in the client ([ADR 0015](../decisions/0015-login-on-the-landing-page.md)). |
 | `world/` | `PathPlayback`, `MotionTrack`, `ErrorBlend`, the `EntityManager`, the `OrbitCamera` and the `ClickMarker`. *(planned)* chunk streaming, starting from the spike's `SpikeChunkStreamer` |
 | `spikes/streaming/` | The M0 streaming spike: region generator, chunk streamer, bench and web measuring tools ([README](../../client/spikes/streaming/README.md)). Not shipped. |
 | `entities/player/` | The player view: placeholder caveman and name label. *(planned)* creatures, nodes and ground items |
 | `ui/` | `ui/chat/`: the `ChatBox`, `ChatLog` and `SpeechBubble`. *(planned)* HUD, inventory, equipment, skills, bank, dialogue, context menu, ability bar |
-| `autoload/session.gd` *(planned, M1)* | The platform session: refresh on start (no session sends you back to `/`), single-flight refresh before expiry, log out, and `/api` calls (via a `JavaScriptBridge` fetch wrapper on the web) |
+| `autoload/session.gd` | The `Session` autoload: the account platform session ([below](#platform-session)). All its code is `SessionKeeper` (`core/session_keeper.gd`). *(planned)* `/api` calls with the access token. |
+| `net/platform/` | `PlatformSession` (token, profile, one refresh at a time), `PlatformReply`, and the transports: `WebPlatformTransport` (a `JavaScriptBridge` fetch) and the `PlatformTransport` base |
 | `regions/<region>/` | Authoring scenes: terrain chunks, props, navmesh, marker nodes ([content-pipeline.md](content-pipeline.md)) |
 | `tools/export_region.gd` | Editor script that exports region data for the server |
 | `data/` | **Generated** from `data/` by `dataval -emit-client` (ignored by git). `content_hash.txt` goes in `hello`. |
-| `tests/` | GUT unit tests (path playback, clock, error blend, frame dispatch, proto round-trips, launch options, chat) |
+| `tests/` | GUT unit tests (path playback, clock, error blend, frame dispatch, proto round-trips, launch options, chat, platform session) |
+
+## Platform session
+
+Login is on the landing page ([ADR 0015](../decisions/0015-login-on-the-landing-page.md)). The game only keeps the session going, in the `Session` autoload (`SessionKeeper`, `PlatformSession`):
+
+- **When:** on the web, on a deployed page with no `name` option (`LaunchOptions.use_platform`). Desktop runs and local pages without `accounts=` never touch the platform, so dev tickets, `?name=` and `-- --name=` work as before.
+- **Start:** `main.gd` shows "Checking your account…" and calls `Session.begin()`, which refreshes once (`POST /auth/refresh`, with the cookie).
+  - Signed in: the player joins. **Until characters and join tickets exist** they join with a dev ticket named after the account (`PlatformSession.dev_name_for`: underscores become spaces, cut to 12 characters). If the world refuses that name, the name box opens.
+  - No session (401, or 403 for a ban or an origin the platform doesn't allow): straight back to `/` (`location.replace`, so Back doesn't return to the game).
+  - No usable answer (offline, rate limited, platform down): Try again, or back to Base Camp.
+- **Keeping it:** a one-shot timer refreshes 60 s before the access token expires (`PlatformSession.refresh_delay_s`; 840 s for the platform's 15-minute tokens). If the platform can't be reached it retries every 15 s; the world connection doesn't need the token. A refresh that finds the session gone (logged out on the landing page, banned, reused) goes back to `/`.
+- **One refresh at a time:** a second caller waits for the refresh already running and gets the same answer. Across tabs, refresh and log out run under the Web Lock `udg-platform-session`, which the landing page takes too (`navigator.locks`), so the page and the game never refresh with the same cookie at once.
+- **Log out:** the HUD's Log out button (shown only with a platform session) closes the world connection, waits for any running refresh, calls `/auth/logout` and goes to `/`.
+- **Transport:** Godot's `HTTPRequest` can't send credentialed cross-origin requests, so `WebPlatformTransport` adds a small `window.udgPlatform.send` helper and calls `fetch(..., { credentials: "include" })` through `JavaScriptBridge`, with a callback per request.
+- **The join-ticket seam:** when `cmd/api` arrives, `main.gd`'s `_on_signed_in()` asks `/api` for a join ticket with `Session.platform.access_token` instead of making a dev ticket. Then the playtest gate and `-dev-tickets` go ([ADR 0014](../decisions/0014-playtest-gate.md)).
+- **Tests** (`tests/test_platform_session.gd`, headless, no real time): single-flight refresh, log out waiting for a refresh, what each answer means, the timer's delay and retries, and when to go back to `/`, with a fake transport and the timer's handler called directly.
 
 ## Input
 
@@ -98,6 +115,8 @@ Local chat as the client shows it. The rules (40 m, the rate limit, cleaning, th
 
 - **Web:** query string, for example `index.html?name=Grug&server=ws://127.0.0.1:8090/w/dev`.
 - **Desktop:** user arguments, for example `godot --path client -- --name=Grug`.
+- **Deployed page, no `name`:** the game uses the account platform ([Platform session](#platform-session)). A `name` makes it a dev run, without the platform, on any page.
+- `accounts=http://localhost:3110` points the game at a local copy of the platform, on a page served from this machine only; a deployed page ignores it. With it, a local page uses the platform too ([web/README.md](../../web/README.md#testing-against-a-local-platform)).
 - `server` defaults to `ws://127.0.0.1:8090/w/dev` on desktop and on a page served from this machine (localhost or 127.0.0.1). A page served from anywhere else connects to its own host's `/w/1`, over `wss://` when the page is https ([deploy.md](../operations/deploy.md)). Without a `name` (or after the server refuses it) the client asks for one in a small text box.
 - Dev aids for trying several clients at once:
   - `demo` clicks a random spot within 9 m every 2.5–5 s.

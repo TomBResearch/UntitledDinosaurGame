@@ -17,6 +17,7 @@ config/features=PackedStringArray("4.7", "GL Compatibility")
 [autoload]
 
 Net="*res://autoload/net.gd"
+Session="*res://autoload/session.gd"
 
 [debug]
 
