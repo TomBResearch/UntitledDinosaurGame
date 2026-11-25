@@ -16,6 +16,7 @@ Folders marked *(planned)* don't exist yet. They're created by the M0 task that 
 |---|---|---|
 | `wiki/` | Player-facing wiki (Markdown with front matter) | **Public** |
 | `docs/` | Internal design, architecture, decisions, roadmap. Start at [docs/README.md](docs/README.md) | Private |
+| `web/` | The landing and login page: static HTML, CSS and JS modules with generated SVG art. See [web/README.md](web/README.md). | Private |
 | `client/` | Godot project: the web client. No game rules live here. GUT tests in `client/tests/`. | Private |
 | `server/` | Go module: `cmd/world` (world server), `cmd/dataval`, `cmd/protogen` and `cmd/sitegen` now, later `cmd/api` (backend API). Packages in `internal/…`: `region` (the simulation), `world` (WebSocket sessions), `navmesh`, `proto`, `content`, `sitegen`. | Private |
 | `data/` | Game content as JSON: items, creatures, drop tables, skills, recipes, quests, XP curve. One source of truth for client and server. | Private |
