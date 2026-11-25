@@ -7,6 +7,8 @@ extends Node3D
 
 ## The server refused the dev name: main goes back to the name box with this message.
 signal name_refused(message: String)
+## The player pressed Log out (only shown with a platform session): main ends the session.
+signal log_out_requested
 
 const REGION_PATH := "res://regions/%s/region.tscn"
 ## How far a ground click ray reaches.
@@ -40,6 +42,7 @@ var _rng := RandomNumberGenerator.new()
 @onready var _overlay_text: Label = $Hud/Overlay/Panel/Box/Message
 @onready var _overlay_button: Button = $Hud/Overlay/Panel/Box/Button
 @onready var _chat: ChatBox = $Hud/ChatBox
+@onready var _log_out: Button = $Hud/LogOut
 
 
 ## Connects to the world with these options.
@@ -57,6 +60,10 @@ func start(opts: LaunchOptions, client: NetClient) -> void:
 	_chat.submitted.connect(_on_chat_submitted)
 	net.disconnected.connect(_on_disconnected)
 	_overlay_button.pressed.connect(func() -> void: _overlay_action.call())
+	_log_out.visible = opts.use_platform
+	_log_out.pressed.connect(func() -> void:
+		_log_out.disabled = true
+		log_out_requested.emit())
 	_demo_timer = DEMO_MIN_S
 	_connect()
 

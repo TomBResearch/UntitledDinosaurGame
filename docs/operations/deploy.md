@@ -8,14 +8,14 @@ The live game is at **`https://dinosaur.untitledgames.co.uk`**, on the shared pr
 
 | URL | What | Who |
 |---|---|---|
-| `/` | The landing and login page ([web/](../../web/README.md)). Accounts are off until M1, so its footer has a "Playtest" link to `/play/`. | Everyone |
-| `/play/` | The web client (the game) | Playtest password ([ADR 0014](../decisions/0014-playtest-gate.md)) |
+| `/` | The landing and login page ([web/](../../web/README.md)): log in, sign up, reset a password, and the signed-in card with Play | Everyone |
+| `/play/` | The web client (the game). It refreshes the player's platform session and sends anyone without one back to `/`. | Playtest password ([ADR 0014](../decisions/0014-playtest-gate.md)) and a logged-in account |
 | `/w/1` | World 1 (WebSocket), with dev tickets on | Needs the cookie the game page sets |
 | `/wiki/` | The public wiki | Everyone |
 | `/dev/` | These docs | Staff password ([site.md](site.md)) |
 | `/healthz` | The world server's health check (`ok`) | Everyone |
 
-On a deployed page the client connects to its own host's `/w/1` (`wss://` on https), so testers only need `https://dinosaur.untitledgames.co.uk/play/`, the password and a name. `?name=Grug` skips the name box. Postgres and the backend API join the stack in M1.
+On a deployed page the client connects to its own host's `/w/1` (`wss://` on https), so testers log in at `https://dinosaur.untitledgames.co.uk/`, press Play and give the playtest password. Until characters exist they join under their username (spaces for underscores, cut to 12 characters). `/play/?name=Grug` is still a dev run that skips the account check, which works only while the world has dev tickets on. Postgres and the backend API join the stack in M1.
 
 ## The pieces
 
@@ -57,6 +57,8 @@ On a deployed page the client connects to its own host's `/w/1` (`wss://` on htt
    It only writes `/etc/nginx/conf.d/dinosaur.untitledgames.co.uk.conf`, tests with `nginx -t` (rolling back on failure), reloads rather than restarts, gets a certificate with `certbot --webroot` for this one name, and checks every other site answers the same before and after. Cloudflare already has a proxied DNS record for the name; until this step, requests for it fell through to another site on the box.
 
 4. **Check** with `SKIP_BUILD=1 tools/deploy.sh`.
+
+**The account platform must allow this site's origin** before a deploy with login on it. `tools/deploy.sh` checks the platform's CORS answer first and stops if `https://dinosaur.untitledgames.co.uk` isn't allowed ([accounts.md](../architecture/accounts.md#configuration-changes-needed-on-the-platform)).
 
 ## M1 secrets
 
